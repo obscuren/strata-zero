@@ -525,12 +525,17 @@ impl Minimap<'_> {
         let dim = |t: String| Span::styled(t, Style::default().fg(DIM));
         match self.map {
             MapRef::Stratum(m) if self.beyond.is_some_and(|b| !b.live_owns(self.focus())) => {
-                // on the Net another city's or town's cells are named as HERE names them
-                let owner = self.beyond.and_then(|b| b.owner_name(self.focus()));
-                let label = match (m.stratum == StratumKind::Net, owner) {
-                    (true, Some(name)) => crate::outside::here::on_the_net(&name),
-                    (true, None) => "the open Net".to_string(),
-                    (false, _) => "open ground".to_string(),
+                // off the live city's cells, named as HERE names them: on the Net the
+                // city or town, the trunk or the dead grid; on foot the city or town,
+                // else the open ground
+                let label = match self.beyond {
+                    Some(b) if m.stratum == StratumKind::Net => {
+                        crate::outside::here::on_the_net(&b.net_name(self.focus()))
+                    }
+                    Some(b) => b
+                        .street_name(self.focus())
+                        .unwrap_or_else(|| "open ground".to_string()),
+                    None => "open ground".to_string(),
                 };
                 vec![dim(label)]
             }
@@ -1328,8 +1333,13 @@ mod tests {
         };
         let said = bottom(theirs);
         assert!(said.contains(&format!("the Net · {name}")), "{said:?}");
+        // off every settlement's: the trunk or the dead grid, as HERE names it
         let said = bottom(open);
-        assert!(said.contains("the open Net"), "{said:?}");
+        assert!(
+            said.contains(&format!("the Net · {}", b.net_name(open))),
+            "{said:?}"
+        );
+        assert!(!said.contains("the open Net"), "{said:?}");
     }
 
     #[test]

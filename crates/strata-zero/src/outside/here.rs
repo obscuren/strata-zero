@@ -2,7 +2,7 @@
 //! hour, and NEAR's places with how far and which way. The overworld's panel says them,
 //! and so does the city screen's sidebar off the live city's cells.
 
-use super::{At, TILE};
+use super::{At, Outside, Settlement, TILE};
 use crate::app::AppState;
 use crate::ui::chrome::{CYAN, DIM, TEXT};
 use citygen::Pos;
@@ -21,11 +21,43 @@ pub fn tile(st: &AppState) -> Option<Pos> {
     })
 }
 
-/// The place word for where you stand.
+/// The place word for where you stand: the overworld, the street of a city or town
+/// (its cells, though it isn't the live one), or the open ground.
 fn where_label(st: &AppState) -> &'static str {
-    match st.outside.as_ref().map(|o| o.at) {
-        Some(At::Overworld(_)) => "overworld",
+    let Some(o) = st.outside.as_ref() else {
+        return "open ground";
+    };
+    match (o.at, tile(st)) {
+        (At::Overworld(_), _) => "overworld",
+        (_, Some(t)) if super::tile_owner(st, t).is_some() => "street",
         _ => "open ground",
+    }
+}
+
+/// What the street of overworld tile `t` is part of, `owner` the city or town that owns
+/// it: that one, else the city whose outskirts it is; none on the open ground. HERE,
+/// the top band and the minimap name the street by it.
+pub fn street_name(o: &Outside, owner: Option<Settlement>, t: Pos) -> Option<String> {
+    let w = o.world();
+    match (owner, w.tile(t)?.urban) {
+        (Some(s), _) => Some(o.name(s)),
+        (_, Some(u)) => Some(
+            w.cities
+                .get(u.city as usize)
+                .map_or("the edge of town".to_string(), |c| c.name.clone()),
+        ),
+        _ => None,
+    }
+}
+
+/// What the Net over overworld tile `t` is called, `owner` the city or town that owns
+/// it: that one, else the trunk over the tile, else the dead grid. HERE, the top band,
+/// the minimap and the status bar name a cell of the Net by it.
+pub fn net_name(o: &Outside, owner: Option<Settlement>, t: Pos) -> String {
+    match (owner, o.world().routes.iter().find(|r| r.path.contains(&t))) {
+        (Some(s), _) => o.name(s),
+        (None, Some(r)) => format!("{} trunk", r.name),
+        (None, None) => "dead grid".to_string(),
     }
 }
 
@@ -33,19 +65,13 @@ fn where_label(st: &AppState) -> &'static str {
 fn place_and_road(st: &AppState) -> Option<String> {
     let (o, t) = (st.outside.as_ref()?, tile(st)?);
     let w = o.world();
-    let tile = w.tile(t)?;
-    let place = match (super::tile_owner(st, t), tile.urban) {
-        (Some(s), _) => o.name(s),
-        (_, Some(u)) => w
-            .cities
-            .get(u.city as usize)
-            .map_or("the edge of town".to_string(), |c| c.name.clone()),
-        _ => w
-            .regions
+    w.tile(t)?;
+    let place = street_name(o, super::tile_owner(st, t), t).unwrap_or_else(|| {
+        w.regions
             .iter()
             .min_by_key(|r| (r.at.x - t.x).pow(2) + (4 * (r.at.y - t.y).pow(2)))
-            .map_or("the open ground".to_string(), |r| r.name.clone()),
-    };
+            .map_or("the open ground".to_string(), |r| r.name.clone())
+    });
     let road = w
         .routes
         .iter()
@@ -102,16 +128,7 @@ fn net_over(st: &AppState) -> Option<String> {
 /// owns the tile, or the trunk over it off every settlement's, or the dead grid.
 fn net_over_at(st: &AppState, t: Pos) -> Option<String> {
     let o = st.outside.as_ref()?;
-    let w = o.world();
-    let over = match (
-        super::tile_owner(st, t),
-        w.routes.iter().find(|r| r.path.contains(&t)),
-    ) {
-        (Some(s), _) => o.name(s),
-        (None, Some(r)) => format!("{} trunk", r.name),
-        (None, None) => "dead grid".to_string(),
-    };
-    Some(on_the_net(&over))
+    Some(on_the_net(&net_name(o, super::tile_owner(st, t), t)))
 }
 
 /// The words for being jacked in over `over` (a city, a trunk, the dead grid), as HERE

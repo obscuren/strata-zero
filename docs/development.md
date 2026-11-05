@@ -99,7 +99,9 @@ open -a "Strata Zero" --args --dev   # the Mac app
 ```
 
 It then starts on, `` ` `` flips it, Settings has a row for it, `?` lists its keys,
-and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on.
+and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on. The
+overworld and the Net overworld take the keys that need no street: `` ` ``, the `:`
+console (`tp X Y` moves you over the world there) and F5's inspector of the tile.
 The game opens on a five-second splash (`screens/splash.rs`) before the title, in
 dev mode too; any key skips it.
 `STRATA_DEV` reaches the game only when a shell starts it: the Mac app opened from

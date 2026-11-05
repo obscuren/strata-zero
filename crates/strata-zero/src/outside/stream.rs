@@ -560,14 +560,25 @@ impl<'a> Beyond<'a> {
         self.stream
     }
 
-    /// The name of the city or town that owns the overworld tile local cell `p` lies
-    /// in: none on the open ground.
-    pub fn owner_name(&self, p: Pos) -> Option<String> {
+    /// The overworld tile local cell `p` lies in, and who owns it.
+    fn tile_and_owner(&self, p: Pos) -> (Pos, Option<Settlement>) {
         let at = self.live.2.offset(p.x, p.y);
-        let s = self
-            .outside
-            .owner(Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE)))?;
-        Some(self.outside.name(s))
+        let t = Pos::new(at.x.div_euclid(TILE), at.y.div_euclid(TILE));
+        (t, self.outside.owner(t))
+    }
+
+    /// What the Net at local cell `p` is called, as HERE calls it (`here::net_name`):
+    /// the city or town owning its tile, else the trunk, else the dead grid.
+    pub fn net_name(&self, p: Pos) -> String {
+        let (t, owner) = self.tile_and_owner(p);
+        super::here::net_name(self.outside, owner, t)
+    }
+
+    /// What the street at local cell `p` is part of, as HERE names it
+    /// (`here::street_name`): none on the open ground.
+    pub fn street_name(&self, p: Pos) -> Option<String> {
+        let (t, owner) = self.tile_and_owner(p);
+        super::here::street_name(self.outside, owner, t)
     }
 
     /// Who answers for local cell `p` when the live city doesn't: the area owning its

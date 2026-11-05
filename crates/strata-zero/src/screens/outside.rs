@@ -4,6 +4,7 @@
 //! walked on the city screen. See `2026-11-04-overworld-screen-design.md` and
 //! `2026-11-05-streamed-world-design.md`.
 
+use crate::actions::report;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::outside::At;
 use crate::outside::here;
@@ -13,7 +14,9 @@ use crate::render::{Cell, Rgb};
 use crate::screens::explore::{dir_for, layout};
 use crate::screens::pause::Pause;
 use crate::ui::chrome::CYAN;
+use crate::ui::console::{Console, ConsoleEvent};
 use crate::ui::hud;
+use crate::ui::sidebar::Section;
 use citygen::overworld::Overworld;
 use citygen::{Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -55,6 +58,13 @@ pub const NET_UP_KEYS: &[(&str, &str)] = &[
     ("esc q", "pause menu"),
 ];
 
+/// The dev keys out here, on both overworlds, listed once dev mode is unlocked.
+pub const DEV_KEYS: &[(&str, &str)] = &[
+    ("F5", "inspect the tile (dev mode)"),
+    (":", "dev console (dev mode)"),
+    ("`", "dev mode on / off"),
+];
+
 /// The overworld as a level of play, or the Net over it.
 pub struct OutsideScreen {
     help: bool,
@@ -62,6 +72,8 @@ pub struct OutsideScreen {
     pub(crate) net_up: Option<NetUp>,
     /// The world jacked in, drawn from once it's first looked at.
     net_atlas: std::cell::OnceCell<crate::render::overworld::NetAtlas>,
+    /// The dev console while it is open; it takes every key.
+    pub(crate) console: Option<Console>,
 }
 
 /// On the Net over the world: over which tile, walked from the one your Net self is
@@ -83,6 +95,7 @@ impl OutsideScreen {
             help: false,
             net_up: None,
             net_atlas: Default::default(),
+            console: None,
         }
     }
 
@@ -96,6 +109,7 @@ impl OutsideScreen {
                 tile: here::tile(st).unwrap_or(Pos::new(0, 0)),
             }),
             net_atlas: Default::default(),
+            console: None,
         }
     }
 
@@ -153,10 +167,103 @@ impl OutsideScreen {
         }
     }
 
+    /// The map's dev keys that mean something without a street, on both overworlds:
+    /// `` ` `` turns dev mode on or off (once unlocked), `:` opens the console and F5 the
+    /// inspector of the tile you're over (in dev mode). Whether the key was one.
+    fn dev_key(&mut self, st: &mut AppState, k: &KeyEvent) -> bool {
+        match k.code {
+            KeyCode::Char('`') if st.dev_unlocked => {
+                st.set_dev(!st.dev);
+                st.say(if st.dev {
+                    "dev mode on"
+                } else {
+                    "dev mode off"
+                });
+            }
+            KeyCode::Char(':') if st.dev => self.console = Some(Console::default()),
+            KeyCode::F(5) if st.dev => st.sidebar.toggle(Section::Inspect),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Keys to the open console: a line run (`run_line`), esc closing it.
+    fn feed_console(&mut self, st: &mut AppState, keys: &[KeyEvent]) {
+        let Some(mut con) = self.console.take() else {
+            return;
+        };
+        for k in keys {
+            match con.key(*k, &|head, word| {
+                crate::screens::console::complete(st, head, word)
+            }) {
+                ConsoleEvent::Run(line) => {
+                    let result = self.run_line(st, &line);
+                    report(st, result);
+                }
+                ConsoleEvent::Close => return,
+                ConsoleEvent::None => {}
+            }
+        }
+        self.console = Some(con);
+    }
+
+    /// A console line out here: `tp` over the world (`teleport`); what acts through the
+    /// map (a window over it, `target`'s free camera) refused; the rest run as on the
+    /// map, on where your body stands.
+    fn run_line(&mut self, st: &mut AppState, line: &str) -> Result<String, String> {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.first() == Some(&"tp") {
+            return self.teleport(st, &words[1..]);
+        }
+        if words.first() == Some(&"target") || crate::screens::console::opens(st, line).is_some() {
+            return Err("not out here".to_string());
+        }
+        let street = citygen::Place::Stratum(StratumKind::Street);
+        let (place, pos) = st.player.as_ref().map_or((street, Pos::new(0, 0)), |p| {
+            p.body.unwrap_or((p.place, p.pos))
+        });
+        crate::screens::console::run(st, game::At { place, pos }, line)
+    }
+
+    /// `tp x y` out here: you onto overworld tile (x, y) if it can be stood on, or the Net
+    /// overworld over any tile of the world.
+    fn teleport(&mut self, st: &mut AppState, args: &[&str]) -> Result<String, String> {
+        let usage = || "tp <x> <y>".to_string();
+        let (x, y) = match args {
+            [x, y] => (
+                x.parse::<i32>().map_err(|_| usage())?,
+                y.parse::<i32>().map_err(|_| usage())?,
+            ),
+            _ => return Err(usage()),
+        };
+        let t = Pos::new(x, y);
+        let o = st
+            .outside
+            .as_mut()
+            .ok_or_else(|| "there is no world out here".to_string())?;
+        let w = o.world();
+        if w.tile(t).is_none() {
+            return Err("the world ends here".to_string());
+        }
+        if let Some(up) = self.net_up.as_mut() {
+            up.tile = t;
+            return Ok(format!("{x},{y} · the Net overworld"));
+        }
+        if moves::step_cost(w, t).is_none() {
+            return Err(moves::closed(w, t).to_string());
+        }
+        o.at = At::Overworld(t);
+        crate::outside::reached_mark(st);
+        Ok(format!("{x},{y} · overworld"))
+    }
+
     fn key(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
         let at = st.outside.as_ref().map(|o| o.at);
         if self.help {
             self.help = false;
+            return ScreenCmd::Stay;
+        }
+        if self.dev_key(st, k) {
             return ScreenCmd::Stay;
         }
         if self.net_up.is_some() {
@@ -225,7 +332,12 @@ impl Screen for OutsideScreen {
         if self.net_up.is_none() {
             crate::clock::run(st, Some(1), crate::clock::PATHS_PER_FRAME);
         }
-        for k in keys {
+        for (i, k) in keys.iter().enumerate() {
+            // the console takes every key while it is open, the rest of the frame's too
+            if self.console.is_some() {
+                self.feed_console(st, &keys[i..]);
+                break;
+            }
             let cmd = self.key(st, k);
             if !matches!(cmd, ScreenCmd::Stay) {
                 return cmd;
@@ -343,26 +455,27 @@ impl Screen for OutsideScreen {
             hollow: true,
             budgets: None,
             acting: None,
-            prompt: Some((
-                String::new(),
-                if up {
-                    "arrows walk · enter goes down · J jack out · esc menu · ? keys"
-                } else {
-                    "arrows walk · enter goes down · esc menu · ? keys"
-                }
-                .to_string(),
-            )),
+            // no line of keys: `?` lists them, as on the map
+            prompt: None,
             act: None,
             flash_pools: false,
         };
+        let recent = st.log.recent(st.tick);
         for (i, row) in hud::footer_rows(&footer, area.width)
             .into_iter()
             .enumerate()
         {
+            let row = match (&self.console, i) {
+                (Some(con), 3) => crate::screens::console::line(con, st.tick, recent),
+                _ => row,
+            };
             Paragraph::new(row).render(r.footer[i], buf);
         }
         // With no room for the LOG pane, the newest entry on the footer's free row.
-        if !log_drawn && let Some(e) = st.log.recent(st.tick) {
+        if !log_drawn
+            && self.console.is_none()
+            && let Some(e) = recent
+        {
             let fg = match e.kind {
                 crate::messages::Kind::Warn => crate::ui::chrome::MAGENTA,
                 crate::messages::Kind::Story => CYAN,
@@ -375,11 +488,13 @@ impl Screen for OutsideScreen {
             .render(r.footer[2], buf);
         }
         if self.help {
-            if self.net_up.is_some() {
-                crate::screens::help::draw_keys(f, "KEYS · THE NET OVERWORLD", NET_UP_KEYS);
-            } else {
-                crate::screens::help::draw_keys(f, "KEYS · OUTSIDE", KEYS);
-            }
+            let (title, keys) = match self.net_up {
+                Some(_) => ("KEYS · THE NET OVERWORLD", NET_UP_KEYS),
+                None => ("KEYS · OUTSIDE", KEYS),
+            };
+            let dev = if st.dev_unlocked { DEV_KEYS } else { &[] };
+            let rows: Vec<(&str, &str)> = keys.iter().chain(dev).copied().collect();
+            crate::screens::help::draw_keys(f, title, &rows);
         }
     }
 }
@@ -533,12 +648,63 @@ fn draw_panel(
             .unwrap_or_default(),
     );
     put(buf, near, &mut y, 5);
+    // dev mode's inspector: the tile you're over
+    if st.dev
+        && st.sidebar.is_on(Section::Inspect)
+        && let Some(t) = over
+    {
+        let mut lines = vec![title("INSPECT")];
+        lines.extend(inspect_lines(st, net_up, t));
+        let rows = lines.len() as u16;
+        put(buf, vec![rule.clone()], &mut y, 1);
+        put(buf, lines, &mut y, rows);
+    }
     if y + 2 < bottom {
         put(buf, vec![rule], &mut y, 1);
         crate::ui::sidebar::draw_log(&st.log, st.tick, Rect::new(side.x, y, w, bottom - y), buf);
         return true;
     }
     false
+}
+
+/// The dev inspector's lines for overworld tile `t`: where it is, its ground and water,
+/// its road, whose it is, what stands on it, and what a step onto it costs.
+fn inspect_lines(st: &AppState, net_up: bool, t: Pos) -> Vec<Line<'static>> {
+    use crate::ui::panel::kv;
+    let Some(o) = st.outside.as_ref() else {
+        return Vec::new();
+    };
+    let w = o.world();
+    let layer = if net_up {
+        "the Net overworld"
+    } else {
+        "overworld"
+    };
+    let mut out = vec![kv(" pos", format!("{},{}  {layer}", t.x, t.y))];
+    let Some(tile) = w.tile(t) else {
+        out.push(kv(" ground", "past the world's edge"));
+        return out;
+    };
+    let mut ground = format!("{:?}", tile.ground).to_lowercase();
+    if tile.water != citygen::overworld::Water::None {
+        ground = format!("{ground} · {:?}", tile.water).to_lowercase();
+    }
+    out.push(kv(" ground", ground));
+    let road = w
+        .routes
+        .iter()
+        .find(|r| r.path.contains(&t))
+        .map_or("none".to_string(), |r| r.name.clone());
+    out.push(kv(" road", road));
+    let owner = crate::outside::tile_owner(st, t).map_or("open ground".to_string(), |s| o.name(s));
+    out.push(kv(" owner", owner));
+    if let Some(p) = w.pois.iter().find(|p| p.at == t) {
+        let kind = format!("{:?}", p.kind).to_lowercase();
+        out.push(kv(" poi", format!("{} · {kind}", p.name)));
+    }
+    let cost = moves::step_cost(w, t).map_or("closed".to_string(), |c| format!("{c} ticks"));
+    out.push(kv(" step", cost));
+    out
 }
 
 /// The whole world scaled into the pane, two tiles a row in half blocks, `@` on tile
@@ -671,7 +837,6 @@ mod tests {
         let named = w.cities.iter().any(|c| page.contains(&c.name))
             || w.pois.iter().any(|p| page.contains(&p.name));
         assert!(named, "a city or place named in NEAR: {page}");
-        assert!(page.contains("enter goes down"));
     }
 
     #[test]
@@ -1654,7 +1819,6 @@ mod tests {
         let (st, _m, up) = looking_up();
         let page = text(&st, up.as_ref(), 100, 30);
         assert!(page.contains("the Net overworld"), "{page}");
-        assert!(page.contains("enter goes down"), "{page}");
         assert!(!page.contains("look only"), "{page}");
     }
 
@@ -1662,10 +1826,6 @@ mod tests {
     fn the_net_overworlds_help_says_it_walks() {
         let (mut st, _m, mut up) = looking_up();
         let page = text(&st, up.as_ref(), 120, 40);
-        assert!(
-            page.contains("arrows walk · enter goes down · J jack out · esc menu · ? keys"),
-            "{page}"
-        );
         assert!(!page.contains("look only"), "{page}");
         up.update(&mut st, &[key(KeyCode::Char('?'))]);
         let page = text(&st, up.as_ref(), 120, 40);
@@ -1739,5 +1899,187 @@ mod tests {
             "{:?}",
             st.log.recent(st.tick).map(|e| e.text.clone())
         );
+    }
+
+    /// The hints the overworlds' footers once carried.
+    const HINTS: [&str; 5] = [
+        "arrows walk",
+        "enter goes down",
+        "J jack out",
+        "esc menu",
+        "? keys",
+    ];
+
+    #[test]
+    fn the_overworlds_draw_no_hint_line() {
+        // the overworld: no line of keys, `?` still lists them
+        let (mut st, mut s) = out_there();
+        for (w, h) in [(120, 40), (100, 30)] {
+            let page = text(&st, &s, w, h);
+            for hint in HINTS {
+                assert!(!page.contains(hint), "{hint}: {page}");
+            }
+        }
+        s.update(&mut st, &[key(KeyCode::Char('?'))]);
+        assert!(text(&st, &s, 120, 40).contains("KEYS · OUTSIDE"));
+        // the Net over it, the same
+        let (mut st, _m, mut up) = looking_up();
+        for (w, h) in [(120, 40), (100, 30)] {
+            let page = text(&st, up.as_ref(), w, h);
+            for hint in HINTS {
+                assert!(!page.contains(hint), "{hint}: {page}");
+            }
+        }
+        up.update(&mut st, &[key(KeyCode::Char('?'))]);
+        assert!(text(&st, up.as_ref(), 120, 40).contains("THE NET OVERWORLD"));
+    }
+
+    /// `line` typed into the console, then enter.
+    fn type_line(st: &mut AppState, s: &mut OutsideScreen, line: &str) {
+        let mut keys: Vec<KeyEvent> = line.chars().map(|c| key(KeyCode::Char(c))).collect();
+        keys.push(key(KeyCode::Enter));
+        s.update(st, &keys);
+    }
+
+    /// The tile the screen is over: the Net overworld's, else where you stand.
+    fn over_tile(st: &AppState, s: &OutsideScreen) -> Pos {
+        match s.net_up.as_ref() {
+            Some(u) => u.tile,
+            None => match st.outside.as_ref().unwrap().at {
+                At::Overworld(t) => t,
+                at => panic!("not on the overworld: {at:?}"),
+            },
+        }
+    }
+
+    #[test]
+    fn the_overworld_takes_dev_commands() {
+        for net in [false, true] {
+            let (mut st, mut s) = if net {
+                let (st, _m, up) = up_here();
+                (st, up)
+            } else {
+                out_there()
+            };
+            let w = st.outside.as_ref().unwrap().world().clone();
+            let from = over_tile(&st, &s);
+            // somewhere to go: a tile you can stand on, three east or so
+            let to = (3..12)
+                .map(|dx| from.offset(dx, 1))
+                .find(|t| step_cost(&w, *t).is_some())
+                .expect("ground to stand on nearby");
+            // locked, as a player's game starts: not the console, not the inspector
+            assert!(!st.dev_unlocked);
+            let credits = st.character.credits;
+            s.update(&mut st, &[key(KeyCode::Char('`'))]);
+            assert!(!st.dev, "dev mode stays off");
+            s.update(&mut st, &[key(KeyCode::Char(':'))]);
+            assert!(s.console.is_none(), "no console");
+            s.update(&mut st, &[key(KeyCode::F(5))]);
+            assert!(!text(&st, &s, 120, 40).contains("INSPECT"));
+            assert_eq!(over_tile(&st, &s), from);
+            s.update(&mut st, &[key(KeyCode::Char('?'))]);
+            assert!(!text(&st, &s, 120, 40).contains("dev console"), "{net}");
+            s.update(&mut st, &[key(KeyCode::Char('?'))]);
+            // unlocked: the console runs a line
+            st.unlock_dev();
+            s.update(&mut st, &[key(KeyCode::Char(':'))]);
+            assert!(s.console.is_some(), "the console opens (net {net})");
+            let page = text(&st, &s, 120, 40);
+            assert!(page.contains(": ▮"), "drawn on the footer: {page}");
+            type_line(&mut st, &mut s, "give 100");
+            assert_eq!(st.character.credits, credits + 100, "net {net}");
+            // a teleport to a tile of the world
+            type_line(&mut st, &mut s, &format!("tp {} {}", to.x, to.y));
+            assert_eq!(over_tile(&st, &s), to, "net {net}: {:?}", st.log.latest());
+            type_line(&mut st, &mut s, "tp -5 -5");
+            assert_eq!(over_tile(&st, &s), to, "off the world: refused");
+            // what acts through the map waits for it
+            type_line(&mut st, &mut s, "wait");
+            assert_eq!(
+                st.log.latest().map(|e| e.text.as_str()),
+                Some("not out here")
+            );
+            // esc closes it; the inspector reads the tile you're over
+            s.update(&mut st, &[key(KeyCode::Esc)]);
+            assert!(s.console.is_none());
+            s.update(&mut st, &[key(KeyCode::F(5))]);
+            let page = text(&st, &s, 140, 50);
+            assert!(page.contains("INSPECT"), "net {net}: {page}");
+            assert!(page.contains(&format!("{},{}", to.x, to.y)), "{page}");
+            // `?` lists them once unlocked
+            s.update(&mut st, &[key(KeyCode::Char('?'))]);
+            let page = text(&st, &s, 120, 40);
+            assert!(
+                page.contains("dev console") && page.contains("inspect"),
+                "{page}"
+            );
+            s.update(&mut st, &[key(KeyCode::Char('?'))]);
+            // dev mode off: none of it
+            s.update(&mut st, &[key(KeyCode::Char('`'))]);
+            assert!(!st.dev);
+            assert!(!text(&st, &s, 140, 50).contains("INSPECT"));
+            s.update(&mut st, &[key(KeyCode::Char(':'))]);
+            assert!(s.console.is_none());
+        }
+    }
+
+    #[test]
+    fn a_drop_waits_for_what_holds_you() {
+        // what holds you in the city holds your Net self out of a drop elsewhere, with
+        // walking's own words: a call, a scene, a run in flight
+        type Hold = fn(&mut AppState);
+        let holds: [(&str, Hold); 3] = [
+            ("not with a call on the line", |st| {
+                st.missions.call = Some(crate::missions::Call {
+                    story: None,
+                    from: "mezz".into(),
+                    lines: vec!["you there?".into()],
+                    rang: st.clock_tick(),
+                    answered: None,
+                    line: 0,
+                    shown: 0,
+                    full: false,
+                })
+            }),
+            ("not now", |st| {
+                st.missions.scenes.push_back((None, "waking".to_string()))
+            }),
+            ("finish the run first", |st| {
+                st.net.run = Some(game::Run {
+                    program: game::ItemId::new("crack"),
+                    target: game::HackTarget::Deck,
+                    done: 0,
+                    work: 3,
+                })
+            }),
+        ];
+        for (line, hold) in holds {
+            let (mut st, _m, mut up) = up_here();
+            let from = over(&up);
+            let was = st.player.as_ref().map(|p| p.pos);
+            hold(&mut st);
+            put_over(&mut up, from.offset(3, 0));
+            assert!(matches!(
+                up.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Stay
+            ));
+            assert_eq!(
+                st.player.as_ref().map(|p| p.pos),
+                was,
+                "{line}: not dropped"
+            );
+            assert_eq!(
+                st.log.latest().map(|e| e.text.as_str()),
+                Some(line),
+                "the words walking says"
+            );
+            // over your own tile, ↵ is where you are: nothing to refuse
+            put_over(&mut up, from);
+            assert!(matches!(
+                up.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Pop { .. }
+            ));
+        }
     }
 }

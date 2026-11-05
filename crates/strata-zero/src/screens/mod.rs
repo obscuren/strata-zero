@@ -295,4 +295,7 @@ pub(crate) mod testutil {
 }
 
 #[cfg(test)]
+mod everywhere;
+
+#[cfg(test)]
 pub(crate) mod shots;

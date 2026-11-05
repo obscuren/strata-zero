@@ -218,6 +218,17 @@ some cities' light as overblown and stitched on, and the overworld as static. So
   dark, the checkpoint's red cross, and the rest of round 2's), no lights on the roads.
   No traffic. The Net overworld stays as it is: its calm suits it. The overworld's
   hint line goes. Rates and the Rust notes are in `round2.html`.
+- **One set of rules everywhere.** The open ground, the live city, a city held but not
+  live and the Net behave the same however you got there (walked in, ↵ down, your Net
+  self walked in and jacked out, a run reopened there). A refused step says why by
+  what's there, whoever's cell it is: water, a climb and the world's end in the outside
+  screen's words; a wall, or anything standing in the way, nothing, as in the city. On
+  the Net the status bar, HERE and the minimap name a cell by who owns its tile (the
+  city or town, else the trunk, else the dead grid); on foot the minimap and the run's
+  card name a city's or town's street as HERE does. A drop from the Net overworld is
+  refused for what refuses walking across. The overworlds take the map's dev keys that
+  need no street (`` ` ``, the console with `tp` over the world, F5's inspector of the
+  tile) and carry no line of keys: `?` lists them.
 
 ## Constraints
 

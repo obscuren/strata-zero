@@ -54,9 +54,9 @@ pub fn header(st: &AppState, death: Option<Death>) -> RunHeader {
 }
 
 /// Where you stand, as the run's card says it: `{building} {floor} · at home` in the
-/// flat, `{building} {floor}` on another floor, the district on the street, `open
-/// ground` on the street past the city's cells, `on the Net` jacked in. Empty before
-/// you stand anywhere.
+/// flat, `{building} {floor}` on another floor, the district on the street, past the
+/// city's cells the city or town owning them as HERE names it, else `open ground`, `on
+/// the Net` jacked in. Empty before you stand anywhere.
 pub fn place_line(st: &AppState) -> String {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return String::new();
@@ -70,7 +70,9 @@ pub fn place_line(st: &AppState) -> String {
         _ => {}
     }
     if p.place.is_street() && !crate::outside::stream::live_owns(st, p.pos) {
-        return "open ground".to_string();
+        return crate::outside::stream::Beyond::of(st)
+            .and_then(|b| b.street_name(p.pos))
+            .unwrap_or_else(|| "open ground".to_string());
     }
     match p.place {
         Place::Floor { building, level } => {

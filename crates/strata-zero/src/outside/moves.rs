@@ -75,7 +75,7 @@ pub fn world_step(st: &mut AppState, d: Dir) -> Moved {
 }
 
 /// Why a tile can't be walked onto.
-fn closed(world: &Overworld, to: Pos) -> &'static str {
+pub(crate) fn closed(world: &Overworld, to: Pos) -> &'static str {
     match world.tile(to) {
         None => "the world ends here",
         Some(t) if t.water == Water::Sea => "open sea",
@@ -148,6 +148,8 @@ pub fn net_world_step(st: &mut AppState, tile: &mut Pos, d: Dir) -> Moved {
 /// first, and a city or town owning the tile that isn't built yet is built now, as
 /// stepping into one builds it (and the map hands it over on its next frame, as a step
 /// onto it does). Over the tile your Net self is over already, it stays where it is.
+/// Elsewhere it's refused for what refuses walking across (`can_cross`: a fight, a
+/// call, a scene, a run in flight), in the same words.
 pub fn net_down(st: &mut AppState, tile: Pos) -> Result<(), &'static str> {
     use crate::render::map::{MapRef, TileMap};
     use citygen::Terrain;
@@ -161,15 +163,13 @@ pub fn net_down(st: &mut AppState, tile: Pos) -> Result<(), &'static str> {
         if !p.jacked_in() || p.place != net {
             return Err("not on the Net");
         }
-        if st.net.engaged.is_some() {
-            return Err("not in a fight");
-        }
         if o.world.is_none() || o.world().tile(tile).is_none() {
             return Err("the world ends here");
         }
         if o.tile_of(city, p.pos) == tile {
             return Ok(());
         }
+        crate::outside::can_cross(st)?;
         let origin = o.origin(city);
         let mid = Pos::new(
             TILE * tile.x + TILE / 2 - origin.x,

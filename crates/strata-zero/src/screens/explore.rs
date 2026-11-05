@@ -397,35 +397,39 @@ fn jack_in_on_the_ground(st: &mut AppState) {
     st.say("jacked in · the open Net");
 }
 
-/// Why the open ground won't take a step onto `tile`, in the outside screen's words:
-/// water, a climb, the world's end (past it, or ground not made), anything else.
-fn ground_refusal(tile: Option<&citygen::Tile>) -> &'static str {
+/// Why a step on foot onto `tile` doesn't go, by what's there and nothing else, in the
+/// outside screen's words: water, a climb, the world's end (past it, or ground not made).
+/// A wall, or anything standing in the way, says nothing, as in the city: the same
+/// wherever it is, the live city's, another's or the open ground's.
+fn why_not(tile: Option<&citygen::Tile>) -> Option<&'static str> {
     use citygen::Terrain;
     match tile.map(|t| t.terrain) {
-        None | Some(Terrain::Void) => "the world ends here",
-        Some(Terrain::Water | Terrain::Shallows) => "too deep to wade",
-        Some(Terrain::Cliff | Terrain::Rock) => "too steep to climb",
-        Some(_) => "something in the way",
+        None | Some(Terrain::Void) => Some("the world ends here"),
+        Some(Terrain::Water | Terrain::Shallows) => Some("too deep to wade"),
+        Some(Terrain::Cliff | Terrain::Rock) => Some("too steep to climb"),
+        Some(_) => None,
     }
 }
 
-/// A step `dir` on foot that didn't go, onto a cell off the city's own: the ground says
-/// why. In the city, and on the Net, a wall says nothing.
+/// A step `dir` on foot on the street that didn't go: what's there says why
+/// (`why_not`), whoever's cell it is. On the Net nothing is said.
 fn say_why_not(st: &mut AppState, dir: Dir) {
     let Some(p) = st.player.as_ref() else {
         return;
     };
     let to = p.pos.step(dir);
-    if !p.place.is_street() || p.jacked_in() || crate::outside::stream::live_owns(st, to) {
+    if !p.place.is_street() || p.jacked_in() {
         return;
     }
     let line = {
         let (Some(city), Some(b)) = (st.city.as_ref(), Beyond::of(st)) else {
             return;
         };
-        ground_refusal(walked_map(st, city, p.place, Some(&b)).tile(to))
+        why_not(walked_map(st, city, p.place, Some(&b)).tile(to))
     };
-    st.warn(line);
+    if let Some(line) = line {
+        st.warn(line);
+    }
 }
 
 /// Whether a step `dir` on the Net goes onto a gate of another city's or town's Net
@@ -1293,8 +1297,13 @@ impl MapScreen {
                 }
             }
             (true, Some(_)) => {
+                // off the live city's cells, the Net is named as HERE names it
                 let pos = st.player.as_ref().map(|q| q.pos).unwrap_or(Pos::new(0, 0));
-                format!("{} · grid", crate::net::district_name(city, pos))
+                let name = match Beyond::of(st) {
+                    Some(b) if !b.live_owns(pos) => b.net_name(pos),
+                    _ => crate::net::district_name(city, pos),
+                };
+                format!("{name} · grid")
             }
             _ => self.place_label(st),
         };
@@ -15644,16 +15653,17 @@ mod tests {
             s.update(&mut st, &[key(dir_key(d))]);
             assert_eq!(you(&st), from);
             assert_eq!(last(&st), Some("too deep to wade"));
-            // a pump: something in the way
+            // a pump: in the way, and nothing said, as a vending machine in the city
             let by = by_a_pump(&st);
             stand(&mut st, &mut s, street, by);
             let pump = Dir::ALL
                 .into_iter()
                 .find(|d| !open_at(&st, street, by.step(*d)))
                 .expect("the pump beside you");
+            let before = st.log.len();
             s.update(&mut st, &[key(dir_key(pump))]);
             assert_eq!(you(&st), by);
-            assert_eq!(last(&st), Some("something in the way"));
+            assert_eq!(st.log.len(), before, "{:?}", last(&st));
             // on the Net out there a wall stops you as one does in the city: nothing said
             s.update(&mut st, &[key(KeyCode::Char(' '))]);
             assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
@@ -15675,15 +15685,19 @@ mod tests {
 
         #[test]
         fn the_grounds_refusals_are_the_outside_screens_words() {
-            use citygen::{Terrain, Tile};
-            let line = |t: Terrain| ground_refusal(Some(&Tile::new(t)));
-            assert_eq!(ground_refusal(None), "the world ends here");
-            assert_eq!(line(Terrain::Void), "the world ends here");
-            assert_eq!(line(Terrain::Water), "too deep to wade");
-            assert_eq!(line(Terrain::Shallows), "too deep to wade");
-            assert_eq!(line(Terrain::Cliff), "too steep to climb");
-            assert_eq!(line(Terrain::Rock), "too steep to climb");
-            assert_eq!(line(Terrain::Wall), "something in the way");
+            use citygen::{Feature, Terrain, Tile};
+            let line = |t: Terrain| why_not(Some(&Tile::new(t)));
+            assert_eq!(why_not(None), Some("the world ends here"));
+            assert_eq!(line(Terrain::Void), Some("the world ends here"));
+            assert_eq!(line(Terrain::Water), Some("too deep to wade"));
+            assert_eq!(line(Terrain::Shallows), Some("too deep to wade"));
+            assert_eq!(line(Terrain::Cliff), Some("too steep to climb"));
+            assert_eq!(line(Terrain::Rock), Some("too steep to climb"));
+            // a wall, and anything standing in the way, say nothing, as in the city
+            assert_eq!(line(Terrain::Wall), None);
+            let mut pump = Tile::new(Terrain::Gravel);
+            pump.feature = Some(Feature::Terminal);
+            assert_eq!(why_not(Some(&pump)), None);
         }
 
         #[test]
