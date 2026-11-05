@@ -3570,7 +3570,12 @@ impl Screen for MapScreen {
             if self.mode == Mode::Walk && carries_on(st, self.place) {
                 let origin = self.cam.origin(map.width, map.height);
                 let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
-                crate::outside::stream::run_neighbours(st, view, crate::clock::PATHS_PER_FRAME);
+                crate::outside::stream::run_neighbours(
+                    st,
+                    view,
+                    crate::clock::PATHS_PER_FRAME,
+                    elapsed,
+                );
             }
         }
         // The mails landed since the map's last frame, here or under a screen on top.
