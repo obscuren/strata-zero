@@ -4746,9 +4746,11 @@ fn streamed_world_shots() {
 /// and forty, beside the next city; jacked in deep in its Net, four steps out on the
 /// open Net and forty. Beside the next city, its people out and its packets running, by
 /// day as well, and beside a busy one by day, and what the whole frame costs there (the
-/// screen run, the city's people's day with it, then drawn). Built with `--release`, it says what play pays:
-/// `cargo test -p strata-zero --release --target-dir target/smoke -- --ignored
-/// streamed_draw_cost --nocapture`.
+/// screen run, the city's people's day with it, then drawn). And what a look round costs
+/// (the sight update every step makes, out to `LIT_RADIUS`): deep in the city, far out on
+/// the ground and beside the next city; and a step on over the ground far out. Built with
+/// `--release`, it says what play pays: `cargo test -p strata-zero --release --target-dir
+/// target/smoke -- --ignored streamed_draw_cost --nocapture`.
 #[test]
 #[ignore]
 fn streamed_draw_cost() {
@@ -4804,6 +4806,26 @@ fn streamed_draw_cost() {
     rows.push(("street, ground beside the city", cost(&mut st, &map)));
     walk_on(&mut st, &mut map, d, 40, SIZE);
     rows.push(("street, ground far out", cost(&mut st, &map)));
+    let mut sights = vec![
+        ("street, ground far out", sight_cost(&mut st)),
+        ("street, deep in the city", {
+            let mut deep_in = sited_run(22 * 60);
+            handover::on_foot(&mut deep_in, deep);
+            map_on_you(&mut deep_in, SIZE);
+            sight_cost(&mut deep_in)
+        }),
+    ];
+    // steps on over the open ground: each a frame run, the ground ahead built and sight
+    // looked again
+    let steps = {
+        const STEPS: u32 = 24;
+        let start = std::time::Instant::now();
+        for _ in 0..STEPS {
+            st.tick += 1;
+            map.update(&mut st, &[step_key(d)]);
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(STEPS)
+    };
     // beside the next city, built as you came near and drawn from its own map, its
     // people out by night and by day; then jacked in beside its Net
     let (next, at, _) = beside_the_next_city();
@@ -4815,6 +4837,7 @@ fn streamed_draw_cost() {
         handover::on_foot(&mut beside, at);
         let mut map = map_on_you(&mut beside, SIZE);
         rows.push((what, cost(&mut beside, &map)));
+        sights.push((what, sight_cost(&mut beside)));
         frames.push((what, frame(&mut beside, &mut map), alive(&beside, next)));
     }
     let (busy, by) = beside_the_busy_city();
@@ -4850,6 +4873,115 @@ fn streamed_draw_cost() {
     for (what, (mean, worst), alive) in frames {
         println!("{what:<36} {mean:>7.2} ms a whole frame, worst {worst:.2} ({alive})");
     }
+    for (what, ms) in sights {
+        println!("{what:<36} {ms:>7.2} ms a sight update");
+    }
+    println!(
+        "{:<36} {steps:>7.2} ms a step",
+        "street, ground far out, stepping on"
+    );
+}
+
+/// What a look round costs where you stand on a stratum (`Player::update_fov` over the
+/// map carried on past the city's edge, as every step looks again), in ms: the mean of a
+/// few.
+fn sight_cost(st: &mut AppState) -> f64 {
+    const LOOKS: u32 = 20;
+    let bonus = st.sight_bonus();
+    let mut p = st.player.take().unwrap();
+    let start = std::time::Instant::now();
+    {
+        let city = st.city.as_ref().unwrap();
+        let b = crate::outside::stream::Beyond::of(st);
+        let k = p.place.stratum().unwrap();
+        let bare = crate::render::map::MapRef::stratum_at(city, k, st.minute_of_day());
+        let map = match b.as_ref() {
+            Some(b) => bare.beyond(b),
+            None => bare,
+        };
+        for _ in 0..LOOKS {
+            p.update_fov(&map, bonus);
+        }
+    }
+    let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(LOOKS);
+    st.player = Some(p);
+    ms
+}
+
+/// A city's lights from afar (`2026-11-05-streamed-world-design.md`, Task 16): at night
+/// on the open ground across from the next city's east or west side, 30, 60 and 90 cells
+/// from a lamp of its (the nearest open ground at or past each), at 250x60 (the map wide
+/// enough to take in 90 cells either side of you); its lamps in sight where nothing stands
+/// between, its dark unseen.
+#[test]
+#[ignore]
+fn far_lights_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (250, 60);
+    for (k, at, away) in across_from_the_next_city(&[30, 60, 90]) {
+        let mut st = sited_run(22 * 60);
+        handover::on_foot(&mut st, at);
+        let map = map_on_you(&mut st, WIDE);
+        println!("far_lights_{k}: {away} cells from the lamp");
+        shot_stack(&format!("far_lights_{k}"), &st, &[&map], WIDE);
+    }
+}
+
+/// The next city of seed 3's world (as `handover::beside_a_city` finds it), a street lamp
+/// of its with nothing standing between it and its map's east or west edge along its
+/// row, and for each of `out` the open ground straight out past the edge at least that
+/// far from the lamp (the lamp whose ground lies nearest those): each with the cell (in
+/// the home city's frame) and how far it is from the lamp.
+fn across_from_the_next_city(out: &[i32]) -> Vec<(i32, Pos, i32)> {
+    use crate::outside::TILE;
+    use crate::outside::stream::tests::handover;
+    use citygen::Dir;
+    use citygen::overworld::detail;
+    /// How far past each distance the open ground is looked for.
+    const SLIDE: i32 = 40;
+    let mut probe = sited_run(22 * 60);
+    let (next, _, _) = handover::beside_a_city(&mut probe);
+    let o = probe.outside.as_ref().unwrap();
+    let (w, city) = (o.world(), o.held_city(next).unwrap());
+    let origin = o.origin(city);
+    let tile = |c: Pos| Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE));
+    let street = city.stratum(StratumKind::Street).unwrap();
+    let lamp = |q: Pos| street.tiles[q].feature == Some(citygen::Feature::Lamp);
+    let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+    let ground = |c: Pos| {
+        w.tile(tile(c)).is_some()
+            && o.owner(tile(c)).is_none()
+            && detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+    };
+    // along a row in from an edge: the first lamp before anything stands in the way
+    let first_lamp = |cells: &mut dyn Iterator<Item = Pos>| {
+        cells
+            .take_while(|q| !street.tiles[*q].blocks_sight())
+            .find(|q| lamp(*q))
+    };
+    (0..ch)
+        .flat_map(|y| {
+            let west = first_lamp(&mut (0..cw).map(|x| Pos::new(x, y)));
+            let east = first_lamp(&mut (0..cw).rev().map(|x| Pos::new(x, y)));
+            [west.map(|q| (q, Dir::W)), east.map(|q| (q, Dir::E))]
+        })
+        .flatten()
+        .filter_map(|(q, d)| {
+            let (dx, dy) = d.delta();
+            let at = origin.offset(q.x, q.y);
+            out.iter()
+                .map(|k| {
+                    let away = (*k..k + SLIDE).find(|i| ground(at.offset(i * dx, i * dy)))?;
+                    let stand = handover::local(&probe, at.offset(away * dx, away * dy));
+                    Some((*k, stand, away))
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .min_by_key(|stands| stands.iter().map(|(k, _, away)| away - k).sum::<i32>())
+        .expect("open ground across from the next city")
 }
 
 /// Seed 3's city 2, whose people are out and about all day (the next city's stay at

@@ -472,6 +472,7 @@ impl Tile {
                     | Feature::Ice(_)
                     | Feature::Pylon
                     | Feature::FireBarrel
+                    | Feature::Sign(_)
             )
         );
         terrain_ok && feature_ok
@@ -596,6 +597,22 @@ mod tests {
         }
         assert_eq!(Furniture::Vending.label(), "vending machine");
         assert!(ALL_FEATURES.contains(&Feature::Awning));
+    }
+
+    #[test]
+    fn a_sign_stands_in_the_way_and_is_seen_past() {
+        // a billboard's cap and letters on a lot, a road sign on the open ground
+        for (terrain, ch) in [
+            (Terrain::Plaza, '▣'),
+            (Terrain::Plaza, 'K'),
+            (Terrain::Dirt, '▣'),
+            (Terrain::Gravel, '!'),
+        ] {
+            let mut t = Tile::new(terrain);
+            t.feature = Some(Feature::Sign(ch));
+            assert!(!t.is_walkable(), "{terrain:?} {ch}");
+            assert!(!t.blocks_sight(), "{terrain:?} {ch}");
+        }
     }
 
     #[test]

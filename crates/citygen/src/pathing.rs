@@ -1,6 +1,6 @@
 //! Grid search helpers shared by generation stages: flood fill, components, A*, BFS, Bresenham.
 
-use crate::geom::{Grid, Pos, Size};
+use crate::geom::{Dir, Grid, Pos, Rect, Size};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
@@ -190,6 +190,68 @@ pub fn bfs_nearest(
     None
 }
 
+/// Whether making the cells of `solid` stand in the way parts walkable cells of `window`
+/// that were joined within it, four ways or eight. When it doesn't, no way anywhere is
+/// cut: a way that crossed `solid` came into the window and went out again, and a way
+/// round is left inside it. `solid` lies inside the window, off its rim.
+pub fn cuts(window: Rect, walkable: impl Fn(Pos) -> bool, solid: &[Pos]) -> bool {
+    let size = Size {
+        w: window.w as u32,
+        h: window.h as u32,
+    };
+    let at = |l: Pos| l.offset(window.x, window.y);
+    let mut open = Grid::filled(size, false);
+    for y in 0..window.h {
+        for x in 0..window.w {
+            let l = Pos::new(x, y);
+            open.set(l, walkable(at(l)));
+        }
+    }
+    let mut kept = open.clone();
+    for p in solid {
+        kept.set(Pos::new(p.x - window.x, p.y - window.y), false);
+    }
+    [false, true].into_iter().any(|eight| {
+        let (before, n) = labels(&open, eight);
+        let (after, _) = labels(&kept, eight);
+        // each part before lies in one part after, or none
+        let mut into: Vec<Option<u32>> = vec![None; n as usize];
+        before.iter().zip(after.iter()).any(|((_, b), (_, a))| {
+            let (Some(b), Some(a)) = (*b, *a) else {
+                return false;
+            };
+            *into[b as usize].get_or_insert(a) != a
+        })
+    })
+}
+
+/// The part of `open` each open cell is in, joined four ways or `eight`, and how many
+/// parts.
+fn labels(open: &Grid<bool>, eight: bool) -> (Grid<Option<u32>>, u32) {
+    let size = open.size();
+    let mut part: Grid<Option<u32>> = Grid::filled(size, None);
+    let mut n = 0;
+    let mut stack = Vec::new();
+    for (start, _) in open.iter().filter(|(_, o)| **o) {
+        if part[start].is_some() {
+            continue;
+        }
+        part.set(start, Some(n));
+        stack.push(start);
+        while let Some(p) = stack.pop() {
+            let ways: &[Dir] = if eight { &Dir::ALL } else { &Dir::CARDINAL };
+            for q in ways.iter().map(|d| p.step(*d)) {
+                if open.get(q).copied().unwrap_or(false) && part[q].is_none() {
+                    part.set(q, Some(n));
+                    stack.push(q);
+                }
+            }
+        }
+        n += 1;
+    }
+    (part, n)
+}
+
 /// Integer line from `a` to `b`, both inclusive.
 pub fn bresenham(a: Pos, b: Pos) -> Vec<Pos> {
     let mut out = Vec::new();
@@ -279,6 +341,24 @@ mod tests {
             Some(2)
         );
         assert!(cheapest_to(size, Pos::new(0, 0), wall, |p| p.x == 6).is_none());
+    }
+
+    #[test]
+    fn a_post_in_the_open_cuts_nothing_and_a_bar_across_a_lane_does() {
+        // a lane two rows wide between walls, x 0..12
+        let lane = |p: Pos| (3..=4).contains(&p.y);
+        let window = Rect::new(0, 0, 12, 8);
+        assert!(!cuts(window, |_| true, &[Pos::new(5, 3), Pos::new(5, 4)]));
+        assert!(!cuts(window, lane, &[Pos::new(5, 3)]), "one cell: round it");
+        assert!(cuts(window, lane, &[Pos::new(5, 3), Pos::new(5, 4)]));
+        // a pocket a sign shuts away is cut too
+        let pocket = |p: Pos| lane(p) || p == Pos::new(6, 2);
+        assert!(cuts(window, pocket, &[Pos::new(6, 3)]));
+        // joined only corner to corner: a step is a step, eight ways
+        let corner = |p: Pos| matches!((p.x, p.y), (2, 2) | (3, 3) | (4, 4));
+        assert!(cuts(window, corner, &[Pos::new(3, 3)]));
+        // a cell no longer walkable that nothing went through
+        assert!(!cuts(window, lane, &[Pos::new(5, 6)]));
     }
 
     #[test]

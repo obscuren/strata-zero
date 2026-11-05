@@ -2,11 +2,17 @@
 
 use citygen::pathing::astar;
 use citygen::world::{City, StratumKind};
-use citygen::{Pos, Terrain};
+use citygen::{Feature, Pos, Terrain};
 
 /// The cost of stepping onto `to` on foot: street tiles at 1, roads at 3, nothing else.
+/// A sign (a billboard on a lot) stands in a walker's way as it stands in yours; what
+/// else stands on the street a walker goes by (a stall's keeper stands in hers).
 pub fn walk_cost(city: &City, _from: Pos, to: Pos) -> Option<u32> {
-    match city.tile(StratumKind::Street, to)?.terrain {
+    let tile = city.tile(StratumKind::Street, to)?;
+    if matches!(tile.feature, Some(Feature::Sign(_))) {
+        return None;
+    }
+    match tile.terrain {
         Terrain::Sidewalk
         | Terrain::Plaza
         | Terrain::Alley
@@ -52,4 +58,33 @@ pub fn walk_path(city: &City, from: Pos, to: Pos) -> Option<Vec<Pos>> {
 
 pub fn drive_path(city: &City, from: Pos, to: Pos) -> Option<Vec<Pos>> {
     astar(city.size, from, to, |f, t| drive_cost(city, f, t))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use citygen::{GenParams, Generator, SizePreset};
+
+    #[test]
+    fn a_sign_stands_in_a_walkers_way() {
+        let mut c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let k = StratumKind::Street;
+        let p = c
+            .stratum(k)
+            .unwrap()
+            .tiles
+            .iter()
+            .find(|(_, t)| t.terrain == Terrain::Plaza && t.feature.is_none())
+            .map(|(p, _)| p)
+            .unwrap();
+        assert_eq!(walk_cost(&c, p, p), Some(1));
+        c.tile_mut(k, p).unwrap().feature = Some(Feature::Sign('▣'));
+        assert_eq!(walk_cost(&c, p, p), None, "a billboard on a lot");
+    }
 }

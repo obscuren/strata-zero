@@ -201,8 +201,35 @@ fn bare(ctx: &mut GenCtx, r: Rect) {
     }
 }
 
+/// How far past a billboard's block a way round it is looked for: the street round it.
+const ROUND: i32 = 3;
+
+/// Whether a billboard standing on `shape` in block `r` (its letters and posts, all
+/// solid) would part a way through: a scrapyard's gate, a gap between shacks, a pocket
+/// behind its posts. A way round it is looked for in the block and the street round it,
+/// four ways and eight (as the street's reach is found, and as you walk).
+fn cuts_a_way(ctx: &GenCtx, r: Rect, shape: &[Pos]) -> bool {
+    crate::pathing::cuts(
+        r.grow(ROUND),
+        |p| ctx.tile(K, p).is_some_and(|t| t.is_walkable()),
+        shape,
+    )
+}
+
+/// Where a billboard may stand: a cell off the centre of its side (-1, 0 or 1), and its
+/// posts a cell in from its ends or under them.
+#[derive(Clone, Copy)]
+struct Spot {
+    shift: i32,
+    under_caps: bool,
+}
+
 /// A billboard along the block's north or south side, whichever faces the denser city
-/// (the other if that one is built on): a brand between two caps, on two posts behind.
+/// (the other if that one is built on, or a billboard there would cut a way through; the
+/// next brand, of another length, if neither side takes it): a brand between two caps,
+/// on two posts behind, centred. One that would cut a way through wherever it fits so
+/// stands a cell off the centre, or on posts under its caps; nowhere at all if none of
+/// those will do. It stands in the way, as its posts do.
 fn billboard(ctx: &mut GenCtx, b: Block, h: u64) {
     let r = b.rect;
     let Some(site) = ctx.scratch.site.as_ref() else {
@@ -223,33 +250,59 @@ fn billboard(ctx: &mut GenCtx, b: Block, h: u64) {
             Terrain::Wall | Terrain::Door | Terrain::Floor | Terrain::Window
         ) || ctx.tile(K, p).is_some_and(|t| t.building.is_some())
     };
-    let brands = (0..BRANDS.len()).map(|k| BRANDS[(h as usize + k) % BRANDS.len()]);
-    for brand in brands {
-        let text: Vec<char> = std::iter::once('▣')
-            .chain(brand.chars())
-            .chain(std::iter::once('▣'))
-            .collect();
-        let n = text.len() as i32;
-        if n + 2 > r.w {
-            continue;
+    let brands: Vec<&str> = (0..BRANDS.len())
+        .map(|k| BRANDS[(h as usize + k) % BRANDS.len()])
+        .collect();
+    let centred = [Spot {
+        shift: 0,
+        under_caps: false,
+    }];
+    let off = [(-1, false), (1, false), (0, true), (-1, true), (1, true)]
+        .map(|(shift, under_caps)| Spot { shift, under_caps });
+    let mut refused = 0;
+    for (pass, spots) in [&centred[..], &off[..]].into_iter().enumerate() {
+        // off the centre only to move one that would cut a way through
+        if pass > 0 && refused == 0 {
+            break;
         }
-        let x0 = r.x + (r.w - n) / 2;
-        for (y, inward) in sides {
-            let cells: Vec<Pos> = (0..n).map(|k| Pos::new(x0 + k, y)).collect();
-            let posts = [
-                Pos::new(x0 + 1, y + inward),
-                Pos::new(x0 + n - 2, y + inward),
-            ];
-            if cells.iter().chain(&posts).any(|p| built(ctx, *p)) {
+        for brand in &brands {
+            let text: Vec<char> = std::iter::once('▣')
+                .chain(brand.chars())
+                .chain(std::iter::once('▣'))
+                .collect();
+            let n = text.len() as i32;
+            if n + 2 > r.w {
                 continue;
             }
-            for (p, ch) in cells.iter().zip(&text) {
-                ctx.set_feature(K, *p, Some(Feature::Sign(*ch)));
+            for (y, inward) in sides {
+                for spot in spots {
+                    let x0 = r.x + (r.w - n) / 2 + spot.shift;
+                    if x0 < r.x + 1 || x0 + n > r.right() - 1 {
+                        continue;
+                    }
+                    let cells: Vec<Pos> = (0..n).map(|k| Pos::new(x0 + k, y)).collect();
+                    let inset = if spot.under_caps { 0 } else { 1 };
+                    let posts = [
+                        Pos::new(x0 + inset, y + inward),
+                        Pos::new(x0 + n - 1 - inset, y + inward),
+                    ];
+                    let shape: Vec<Pos> = cells.iter().chain(&posts).copied().collect();
+                    if shape.iter().any(|p| built(ctx, *p)) {
+                        continue;
+                    }
+                    if cuts_a_way(ctx, r, &shape) {
+                        refused += 1;
+                        continue;
+                    }
+                    for (p, ch) in cells.iter().zip(&text) {
+                        ctx.set_feature(K, *p, Some(Feature::Sign(*ch)));
+                    }
+                    for p in posts {
+                        ctx.set_feature(K, p, Some(Feature::Pipe));
+                    }
+                    return;
+                }
             }
-            for p in posts {
-                ctx.set_feature(K, p, Some(Feature::Pipe));
-            }
-            return;
         }
     }
 }
@@ -397,6 +450,82 @@ mod tests {
         assert!(fires >= 2, "{fires} fires");
         assert!(shanties >= 3, "{shanties} shanties");
         assert!(boards >= 2, "{boards} billboard caps");
+    }
+
+    /// Every billboard of `c`'s street: its letters and caps on the ground (not a
+    /// building's wall) where the city builds (past its outline a sign is a POI's), and
+    /// the posts behind them (a cell in from its ends, or under them).
+    fn billboards(c: &City, site: &Site) -> Vec<Vec<Pos>> {
+        let st = street(c);
+        let ground_sign = |p: Pos| {
+            st.get(p).is_some_and(|t| {
+                matches!(t.feature, Some(Feature::Sign(_)))
+                    && !matches!(t.terrain, Terrain::Wall | Terrain::Window | Terrain::Mass)
+                    && site.builds(p)
+            })
+        };
+        let pipe = |p: Pos| st.get(p).is_some_and(|t| t.feature == Some(Feature::Pipe));
+        st.iter()
+            .map(|(p, _)| p)
+            .filter(|p| ground_sign(*p) && !ground_sign(p.offset(-1, 0)))
+            .map(|p| {
+                let n = (0..).take_while(|k| ground_sign(p.offset(*k, 0))).count() as i32;
+                let mut shape: Vec<Pos> = (0..n).map(|k| p.offset(k, 0)).collect();
+                for x in [p.x, p.x + 1, p.x + n - 2, p.x + n - 1] {
+                    for dy in [-1, 1] {
+                        let q = Pos::new(x, p.y + dy);
+                        if pipe(q) {
+                            shape.push(q);
+                        }
+                    }
+                }
+                shape
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_billboard_never_cuts_a_way_through() {
+        // where it stands, every way through the street that was there without it is
+        // still there (four ways and eight); and it stands whole, a brand between its
+        // caps (nothing after it took a letter down)
+        use crate::pathing::cuts;
+        let mut boards = 0;
+        for (seed, c, site) in homes() {
+            let st = street(c);
+            for shape in billboards(c, site) {
+                let text: String = shape
+                    .iter()
+                    .filter_map(|p| match st[*p].feature {
+                        Some(Feature::Sign(ch)) => Some(ch),
+                        _ => None,
+                    })
+                    .collect();
+                let brand = text.strip_prefix('▣').and_then(|t| t.strip_suffix('▣'));
+                assert!(
+                    brand.is_some_and(|b| super::BRANDS.contains(&b)),
+                    "seed {seed}: the billboard at {:?} reads {text}",
+                    shape[0]
+                );
+                let window = c.size.rect().grow(1);
+                let without = |q: Pos| {
+                    st.get(q).is_some_and(|t| {
+                        let mut t = *t;
+                        if shape.contains(&q) {
+                            t.feature = None;
+                        }
+                        t.is_walkable()
+                    })
+                };
+                assert!(
+                    !cuts(window, without, &shape),
+                    "seed {seed}: the billboard at {:?} cuts a way through",
+                    shape[0]
+                );
+                boards += 1;
+            }
+        }
+        assert!(boards >= 2, "{boards} billboards");
     }
 
     #[test]

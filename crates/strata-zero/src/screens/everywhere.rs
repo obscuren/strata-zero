@@ -49,6 +49,7 @@ fn kind(t: Option<&Tile>) -> &'static str {
         (Some(Feature::Pylon), _) => "pylon",
         (Some(Feature::FireBarrel), _) => "fire barrel",
         (Some(Feature::Ice(_)), _) => "ice",
+        (Some(Feature::Sign(_)), _) => "sign",
         (_, Terrain::Wall | Terrain::Window | Terrain::Mass) => "wall",
         (_, Terrain::NetWall) => "construct wall",
         (_, Terrain::Railing) => "railing",
@@ -592,7 +593,7 @@ fn every_object_blocks_the_same_everywhere() {
         let mut street = vec!["open", "open again"];
         let mut net = vec!["open", "open again"];
         if name == "open ground" {
-            street.push("vending machine");
+            street.extend(["vending machine", "sign"]);
         } else if name.starts_with("held") {
             street.extend(["wall", "terminal"]);
         } else {
@@ -644,6 +645,60 @@ fn every_object_blocks_the_same_everywhere() {
             );
         }
     }
+}
+
+/// A sign standing on the ground in `area` within `scope` (a billboard's letters or
+/// caps, a road sign: not one on a building's wall) on a tile `which` takes, nearest you,
+/// and a cell of the area beside it with the step onto it from there.
+fn a_ground_sign(
+    st: &AppState,
+    area: Area,
+    scope: Scope,
+    which: impl Fn(&Tile) -> bool,
+) -> Option<(Pos, Dir)> {
+    let city = st.city.as_ref().unwrap();
+    let b = Beyond::of(st).unwrap();
+    let map = MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day()).beyond(&b);
+    let world = st.world.as_ref();
+    let clear = |q: Pos| world.is_none_or(|w| w.person_at(q).is_none() && w.car_at(q).is_none());
+    cells(st, area, scope).into_iter().find_map(|to| {
+        let t = map.tile(to)?;
+        let mut bare = *t;
+        bare.feature = None;
+        if !matches!(t.feature, Some(Feature::Sign(_))) || !bare.is_walkable() || !which(t) {
+            return None;
+        }
+        Dir::CARDINAL
+            .into_iter()
+            .map(|d| (to.step(d.opposite()), d))
+            .find(|(from, _)| {
+                in_area(st, area, *from)
+                    && map.walkable(*from)
+                    && clear(*from)
+                    && map.tile(*from).is_some_and(|t| t.terrain != Terrain::Door)
+            })
+    })
+}
+
+#[test]
+fn a_sign_blocks_you() {
+    // a billboard on the city's street and a truck stop's sign on the open ground stand
+    // in your way as anything else does, and say nothing
+    let stopped = Outcome {
+        moved: false,
+        said: Vec::new(),
+    };
+    let (mut st, mut m) = at_home();
+    // the city's own (a district's), not the world's ground on its map
+    let (from, d) = a_ground_sign(&st, Area::Live, Scope::Map, |t| t.district.is_some())
+        .expect("a billboard in the home city");
+    let street = try_step(&mut st, m.as_mut(), STREET, from, d, from);
+    assert_eq!(street, stopped, "a billboard at {:?}", from.step(d));
+    let (mut st, mut m) = on_the_ground();
+    let (from, d) =
+        a_ground_sign(&st, Area::Ground, Scope::Near(40), |_| true).expect("the stop's sign");
+    let ground = try_step(&mut st, m.as_mut(), STREET, from, d, from);
+    assert_eq!(ground, stopped, "a road sign at {:?}", from.step(d));
 }
 
 /// The screen drawn at `w`×`h`, as text, and its footer's rows alone.

@@ -10,7 +10,7 @@
 
 use super::field::Fbm;
 use super::{Ground, Overworld, Water, WorldTile};
-use crate::geom::{Dir, Grid, Pos, Size};
+use crate::geom::{Dir, Grid, Pos, Rect, Size};
 use crate::rng::{hash64, tile_hash};
 use crate::tile::{Feature, Terrain, Tile};
 use crate::world::StratumKind;
@@ -28,13 +28,25 @@ pub fn ground(world: &Overworld, tx: i32, ty: i32) -> Grid<Tile> {
 
 /// Any rectangle of detail coordinates; cells outside the world are `Void`.
 pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile> {
+    build(world, Rect::new(x0, y0, w as i32, h as i32), true).crop(x0, y0, w, h)
+}
+
+/// The ground over world-wide `rect` as `region` lays it, but no POI's sign stood up:
+/// what a sign is tried against (`poi_ground`), the same whichever patch asks.
+pub(crate) fn signless(world: &Overworld, rect: Rect) -> Patch<'_> {
+    build(world, rect, false)
+}
+
+/// `rect` and the margin round it built, every rule laid; POIs' signs stood up or not.
+fn build(world: &Overworld, rect: Rect, signs: bool) -> Patch<'_> {
     let mut p = Patch::new(
         world,
-        x0 - MARGIN,
-        y0 - MARGIN,
-        w + 2 * MARGIN as u32,
-        h + 2 * MARGIN as u32,
+        rect.x - MARGIN,
+        rect.y - MARGIN,
+        (rect.w + 2 * MARGIN) as u32,
+        (rect.h + 2 * MARGIN) as u32,
     );
+    p.signs = signs;
     p.cover();
     p.water();
     p.rivers();
@@ -44,7 +56,7 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
     super::poi_ground::lay(&mut p);
     p.power_lines();
     p.litter();
-    p.crop(x0, y0, w, h)
+    p
 }
 
 /// Where you stand coming down onto tile `t`: its road nearest the middle, else the dry
@@ -130,6 +142,9 @@ pub(crate) struct Patch<'a> {
     grid: Grid<Tile>,
     /// What water a cell is: 0 none, 1 the sea, 2 a lake, 3 a river.
     wet: Grid<u8>,
+    /// Whether POIs stand their signs up here (not in the ground a sign is tried
+    /// against).
+    pub(crate) signs: bool,
 }
 
 const SEA: u8 = 1;
@@ -144,6 +159,7 @@ impl<'a> Patch<'a> {
             y0,
             grid: Grid::filled(Size { w, h }, Tile::new(Terrain::Void)),
             wet: Grid::filled(Size { w, h }, 0),
+            signs: true,
         }
     }
 

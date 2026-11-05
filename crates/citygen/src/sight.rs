@@ -6,7 +6,8 @@ use crate::lighting::tuning::LIT_SIGHT;
 use crate::pathing::bresenham;
 
 /// A tile already in line of sight from `origin` counts as seen when it lies within
-/// `dark_radius`, throws `LIT_SIGHT` or more of its own light, or is itself a fixture.
+/// `dark_radius` (a circle in cells, as `fov::compute` casts), throws `LIT_SIGHT` or more
+/// of its own light, or is itself a fixture.
 pub fn lit_or_near(
     origin: Pos,
     p: Pos,
@@ -14,7 +15,8 @@ pub fn lit_or_near(
     emitted: impl Fn(Pos) -> u8,
     is_emitter: impl Fn(Pos) -> bool,
 ) -> bool {
-    origin.chebyshev(p) <= dark_radius || emitted(p) >= LIT_SIGHT || is_emitter(p)
+    let r = dark_radius as i64;
+    origin.dist2(p) <= r * r || emitted(p) >= LIT_SIGHT || is_emitter(p)
 }
 
 /// Whether someone at `from` sees the tile `to`: a clear line between them, and `to`
@@ -51,6 +53,24 @@ mod tests {
         assert!(lit_or_near(o, Pos::new(9, 9), 5, |_| LIT_SIGHT, none));
         assert!(!lit_or_near(o, Pos::new(9, 9), 5, |_| LIT_SIGHT - 1, none));
         assert!(lit_or_near(o, Pos::new(9, 9), 5, dark, |p| p == Pos::new(9, 9)));
+    }
+
+    #[test]
+    fn the_dark_radius_is_round() {
+        // a circle in cells, as the field of view casts it: (r, 0) and (3, 4) on it, a
+        // corner of the square round it past it
+        let o = Pos::new(10, 10);
+        let dark = |_: Pos| 0u8;
+        let none = |_: Pos| false;
+        assert!(lit_or_near(o, o.offset(5, 0), 5, dark, none));
+        assert!(lit_or_near(o, o.offset(0, -5), 5, dark, none));
+        assert!(lit_or_near(o, o.offset(-3, 4), 5, dark, none));
+        assert!(!lit_or_near(o, o.offset(4, 4), 5, dark, none));
+        assert!(!lit_or_near(o, o.offset(-5, 1), 5, dark, none));
+        // and anyone looking back sees by the same circle
+        let open = |_: Pos| false;
+        assert!(sees(o, o.offset(5, 0), 5, open, dark, none));
+        assert!(!sees(o, o.offset(4, -4), 5, open, dark, none));
     }
 
     #[test]

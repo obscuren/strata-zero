@@ -60,8 +60,9 @@ pub const NET_LANE_LIGHT: u8 = 255;
 /// Emitted light (ambient excluded) at or above which a tile in line of sight is seen
 /// past the dark radius. A street lamp passes within four tiles, neon within two.
 pub const LIT_SIGHT: u8 = 40;
-/// How far the player's cast reaches when looking for lit tiles.
-pub const LIT_RADIUS: i32 = 40;
+/// How far the player's cast reaches when looking for lit tiles: a city's lamps are
+/// seen from the open ground well before you reach it, where nothing stands between.
+pub const LIT_RADIUS: i32 = 96;
 /// The dark radius at full day on a sunlit stratum: past the viewport's half-diagonal.
 pub const DAY_RADIUS: i32 = 60;
 

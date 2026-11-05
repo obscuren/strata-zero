@@ -235,10 +235,20 @@ some cities' light as overblown and stitched on, and the overworld as static. So
   refused for what refuses walking across. The overworlds take the map's dev keys that
   need no street (`` ` ``, the console with `tp` over the world, F5's inspector of the
   tile) and carry no line of keys: `?` lists them.
+- **Signs stand in the way; the night is round; cities glow from afar** (Jeff, after
+  playing the above). A sign on the ground (a billboard's caps and letters, a truck
+  stop's road sign, a test range's warnings) is solid for you, a city's walkers and
+  every path. Where one would cut a way through (a scrapyard's gate, a pocket by the
+  road), the generator stands it at its next spot or leaves it out, the same in every
+  build. The dark radius at night is a circle, as the day's sight and the field of view
+  are, for you and for anyone looking back. A lit cell is seen wherever nothing stands
+  between, up to 96 cells: a neighbour's lamps show from the open ground well before
+  you reach it.
 
 ## Constraints
 
-- Seeds: nothing generated changes. Worlds and cities come out cell for cell as before.
+- Seeds: nothing generated changes. Worlds and cities come out cell for cell as before,
+  but for a sign moved or left out where it would cut a way through (above).
 - No stutter: cities build, and their people are seeded, off the main thread; the
   frame never waits for one except when you step into a city before its build has
   finished. Coming home after a long trip still runs the home city's people on to the

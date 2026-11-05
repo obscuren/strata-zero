@@ -152,6 +152,30 @@ fn on_road(world: &Overworld, q: Pos) -> bool {
         || (band(x) && (m & LINK_S != 0 && y >= 3 || m & LINK_N != 0 && y <= 4))
 }
 
+/// How far round a sign a way past it is looked for.
+const SIGN_ROUND: i32 = 3;
+
+/// Whether `q` of patch `p` may be built on: in the world, not water, not a road's lanes.
+fn open_in(p: &Patch, q: Pos) -> bool {
+    p.in_world(q)
+        && p.wet_at(q) == 0
+        && p.get(q).is_some_and(|t| {
+            !matches!(
+                t.terrain,
+                Terrain::Road
+                    | Terrain::Bridge
+                    | Terrain::Railing
+                    | Terrain::Water
+                    | Terrain::Cliff
+                    | Terrain::Wall
+                    | Terrain::Window
+                    | Terrain::Door
+                    | Terrain::Floor
+                    | Terrain::Mass
+            )
+        })
+}
+
 /// The cells of `r`.
 fn cells(r: Rect) -> impl Iterator<Item = Pos> {
     (r.y..r.y + r.h).flat_map(move |y| (r.x..r.x + r.w).map(move |x| Pos::new(x, y)))
@@ -164,23 +188,55 @@ impl Site<'_, '_> {
 
     /// Whether `q` may be built on: in the world, not water, not a road's lanes.
     fn open(&self, q: Pos) -> bool {
-        self.p.in_world(q)
-            && self.p.wet_at(q) == 0
-            && self.p.get(q).is_some_and(|t| {
-                !matches!(
-                    t.terrain,
-                    Terrain::Road
-                        | Terrain::Bridge
-                        | Terrain::Railing
-                        | Terrain::Water
-                        | Terrain::Cliff
-                        | Terrain::Wall
-                        | Terrain::Window
-                        | Terrain::Door
-                        | Terrain::Floor
-                        | Terrain::Mass
-                )
-            })
+        open_in(self.p, q)
+    }
+
+    /// Signs stood up where they part no way through. Each of `signs` is its spots in
+    /// turn (every cell of a spot with what stands on it, posts and all): the first spot
+    /// that cuts nothing is taken, and a sign none of whose spots will do is left out.
+    /// They're tried against the ground round them as it lies with no POI's sign on it
+    /// (but those taken before), built alone, so every patch that lays the POI decides
+    /// the same.
+    fn signs(&mut self, signs: &[Vec<Vec<(Pos, Feature)>>]) {
+        if !self.p.signs {
+            return;
+        }
+        let cells_of = |spot: &[(Pos, Feature)]| spot.iter().map(|(q, _)| *q).collect::<Vec<_>>();
+        // the ground round every sign's first spot, built once; round a later spot
+        // only when one past it is tried
+        let firsts: Vec<Pos> = signs
+            .iter()
+            .filter_map(|spots| spots.first())
+            .flat_map(|spot| cells_of(spot))
+            .collect();
+        if firsts.is_empty() {
+            return;
+        }
+        let mut core = Rect::around(&firsts).grow(SIGN_ROUND);
+        let mut ground = super::detail::signless(self.world, core);
+        let mut taken: Vec<Pos> = Vec::new();
+        for spots in signs {
+            for spot in spots {
+                let at = cells_of(spot);
+                let window = Rect::around(&at).grow(SIGN_ROUND);
+                if window.intersection(core) != Some(window) {
+                    core = window;
+                    ground = super::detail::signless(self.world, core);
+                }
+                // the cells it would stand on, as `put` lays it
+                let solid: Vec<Pos> = at.into_iter().filter(|q| open_in(&ground, *q)).collect();
+                let walkable =
+                    |q: Pos| !taken.contains(&q) && ground.get(q).is_some_and(|t| t.is_walkable());
+                if crate::pathing::cuts(window, walkable, &solid) {
+                    continue;
+                }
+                for (q, f) in spot {
+                    self.put(*q, *f);
+                }
+                taken.extend(solid);
+                break;
+            }
+        }
     }
 
     fn ground(&mut self, r: Rect, t: Terrain) {
@@ -357,24 +413,31 @@ impl Site<'_, '_> {
             let r = self.roll(20 + k);
             self.put(f.at((r % 40) as i32, ((r >> 8) % 6) as i32), Feature::Trash);
         }
-        // the sign by the road: the stop's name between two caps, on posts
+        // the sign by the road: the stop's name between two caps, on posts; past the
+        // forecourt's far end, else past its near end where it would cut a way there
         let name: String = poi
             .name
             .split_whitespace()
             .next()
             .unwrap_or("STOP")
             .to_uppercase();
-        let sign = std::iter::once('▣')
+        let text: Vec<char> = std::iter::once('▣')
             .chain(name.chars().take(8))
-            .chain(std::iter::once('▣'));
-        for (k, ch) in sign.enumerate() {
-            // a letter a cell either way the road runs (a unit is half a row along a
-            // north-south one)
-            let step = if f.across { 1 } else { 2 };
-            self.put(f.at(41 + step * k as i32, 2), Feature::Sign(ch));
-        }
-        self.put(f.at(43, 0), Feature::Pipe);
-        self.put(f.at(43, 1), Feature::Pipe);
+            .chain(std::iter::once('▣'))
+            .collect();
+        // a letter a cell either way the road runs (a unit is half a row along a
+        // north-south one)
+        let step = if f.across { 1 } else { 2 };
+        let n = text.len() as i32;
+        let spot = |first: i32, post: i32| -> Vec<(Pos, Feature)> {
+            let letters = text
+                .iter()
+                .enumerate()
+                .map(|(k, ch)| (f.at(first + step * k as i32, 2), Feature::Sign(*ch)));
+            let posts = [0, 1].map(|v| (f.at(post, v), Feature::Pipe));
+            letters.chain(posts).collect()
+        };
+        self.signs(&[vec![spot(41, 43), spot(-2 - step * (n - 1), -4)]]);
     }
 
     /// The checkpoint: a gate across one lane with the other open, a booth on each side
@@ -736,12 +799,14 @@ impl Site<'_, '_> {
         let pen = Self::centred(c, 30, 13);
         let gate = self.gate(pen, pen.x + 3);
         self.fence(pen, Some(gate));
-        for k in 0..4 {
-            let x = pen.x + 4 + 7 * k;
-            for q in [Pos::new(x, pen.y - 1), Pos::new(x, pen.y + pen.h)] {
-                self.put(q, Feature::Sign('!'));
-            }
-        }
+        let warnings: Vec<Vec<Vec<(Pos, Feature)>>> = (0..4)
+            .flat_map(|k| {
+                let x = pen.x + 4 + 7 * k;
+                [Pos::new(x, pen.y - 1), Pos::new(x, pen.y + pen.h)]
+            })
+            .map(|q| vec![vec![(q, Feature::Sign('!'))]])
+            .collect();
+        self.signs(&warnings);
         for k in 0..5 {
             let r = self.roll(10 + k);
             let at = Pos::new(
@@ -910,6 +975,83 @@ mod tests {
                 assert!(signs.len() >= 4, "seed {seed} {:?}: {signs:?}", poi.at);
             }
         }
+    }
+
+    #[test]
+    fn a_sign_never_cuts_a_way_through() {
+        // a truck stop's road sign and a test range's warnings: every way round each
+        // that was there without it is still there (four ways and eight), within a few
+        // cells of it
+        use crate::geom::Rect;
+        use crate::pathing::cuts;
+        let mut signs = 0;
+        for seed in 0..12 {
+            let w = small(seed);
+            for poi in w
+                .pois
+                .iter()
+                .filter(|p| matches!(p.kind, PoiKind::TruckStop | PoiKind::TestRange))
+            {
+                let (o, g) = round(&w, poi, 6);
+                let sign = |p: Pos| {
+                    g.get(p)
+                        .is_some_and(|t| matches!(t.feature, Some(Feature::Sign(_))))
+                };
+                // each sign: its cells joined eight ways, and its posts
+                let mut seen = Grid::filled(g.size(), false);
+                for (p, _) in g.iter() {
+                    if !sign(p) || seen[p] {
+                        continue;
+                    }
+                    let mut shape = vec![p];
+                    seen[p] = true;
+                    let mut k = 0;
+                    while k < shape.len() {
+                        for q in shape[k].neighbors8() {
+                            if sign(q) && !seen[q] {
+                                seen[q] = true;
+                                shape.push(q);
+                            }
+                        }
+                        k += 1;
+                    }
+                    let posts: Vec<Pos> = Rect::new(0, 0, g.size().w as i32, g.size().h as i32)
+                        .iter()
+                        .filter(|q| {
+                            g[*q].feature == Some(Feature::Pipe)
+                                && shape.iter().any(|s| s.chebyshev(*q) <= 2)
+                        })
+                        .collect();
+                    shape.extend(posts);
+                    let (x0, x1) = (
+                        shape.iter().map(|p| p.x).min().unwrap(),
+                        shape.iter().map(|p| p.x).max().unwrap(),
+                    );
+                    let (y0, y1) = (
+                        shape.iter().map(|p| p.y).min().unwrap(),
+                        shape.iter().map(|p| p.y).max().unwrap(),
+                    );
+                    let window = Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1).grow(3);
+                    let without = |q: Pos| {
+                        g.get(q).is_some_and(|t| {
+                            let mut t = *t;
+                            if shape.contains(&q) {
+                                t.feature = None;
+                            }
+                            t.is_walkable()
+                        })
+                    };
+                    assert!(
+                        !cuts(window, without, &shape),
+                        "seed {seed} {:?}: the sign at {:?} cuts a way through",
+                        poi.kind,
+                        p.offset(o.x, o.y)
+                    );
+                    signs += 1;
+                }
+            }
+        }
+        assert!(signs >= 20, "{signs} signs");
     }
 
     #[test]

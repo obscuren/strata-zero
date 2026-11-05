@@ -1554,6 +1554,113 @@ pub(crate) mod tests {
             assert!(!map.walkable(wall), "{wall:?}");
         }
 
+        /// Whether `p` saw the live city's cell `c` at its last look: on the map or past
+        /// its edge.
+        fn saw(p: &Player, c: Pos) -> bool {
+            p.vis().get(c) == Some(&crate::render::Visibility::Visible)
+                || p.beyond_sight().contains(&c)
+        }
+
+        #[test]
+        fn the_night_sight_is_round() {
+            // at 22:00 on the open ground, nothing in the way and nothing lit near: a
+            // cell the dark radius straight off is seen, one a cell short of it both ways
+            // (past the circle, inside the square round it) isn't
+            use citygen::lighting::tuning::LIT_SIGHT;
+            let mut st = home_run();
+            let (e, d) = edge(&st);
+            let (dx, dy) = d.delta();
+            cover_round(&mut st, e.offset(40 * dx, 40 * dy), 64);
+            let city = st.city.as_ref().unwrap();
+            let b = Beyond::of(&st).unwrap();
+            let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+            let mut p = Player::at(Place::Stratum(StratumKind::Street), e);
+            let r = p.radius_at(map.daylight());
+            assert_eq!(r, crate::walker::RADIUS_STREET, "the night's radius");
+            let quiet = |c: Pos| {
+                matches!(b.elsewhere(c), Some(Owner::Ground(..)))
+                    && Rect::new(c.x - r - 1, c.y - r - 1, 2 * r + 3, 2 * r + 3)
+                        .iter()
+                        .all(|q| {
+                            map.tile(q).is_some_and(|t| !t.blocks_sight())
+                                && map.emitted(q) < LIT_SIGHT
+                                && !map.emits(q)
+                        })
+            };
+            let stand = (r + 2..72)
+                .map(|k| e.offset(k * dx, k * dy))
+                .find(|c| quiet(*c))
+                .expect("open ground, dark and clear");
+            p.pos = stand;
+            p.update_fov(&map, 0);
+            for (x, y) in [(r, 0), (-r, 0), (0, r), (0, -r)] {
+                assert!(saw(&p, stand.offset(x, y)), "({x}, {y}) off is seen");
+            }
+            let c = r - 1;
+            for (x, y) in [(c, c), (-c, c), (c, -c), (-c, -c)] {
+                assert!(
+                    !saw(&p, stand.offset(x, y)),
+                    "({x}, {y}) off is past the circle"
+                );
+            }
+        }
+
+        #[test]
+        fn a_city_glows_from_afar() {
+            // at night on the open ground 60 to 90 cells from the next city, straight
+            // back off its edge: its lit cells are in sight, and none of its dark ones
+            use citygen::lighting::tuning::LIT_SIGHT;
+            let mut st = home_run();
+            let (s, x, d) = super::handover::beside_a_city(&mut st);
+            let (dx, dy) = d.opposite().delta();
+            let mut lit_seen = Vec::new();
+            for k in [60, 70, 80, 90] {
+                let stand = x.offset(k * dx, k * dy);
+                if !matches!(
+                    Beyond::of(&st).unwrap().elsewhere(stand),
+                    Some(Owner::Ground(..))
+                ) {
+                    continue;
+                }
+                cover_round(&mut st, stand, 100);
+                let city = st.city.as_ref().unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let map = MapRef::stratum_at(city, StratumKind::Street, NIGHT).beyond(&b);
+                let mut p = Player::at(Place::Stratum(StratumKind::Street), stand);
+                p.update_fov(&map, 0);
+                let theirs = |c: Pos| {
+                    matches!(b.elsewhere(c), Some(Owner::City(..)))
+                        && st
+                            .outside
+                            .as_ref()
+                            .unwrap()
+                            .owner(tile_of(world_cell(&st, c)))
+                            == Some(s)
+                };
+                let seen: Vec<Pos> = p
+                    .beyond_sight()
+                    .iter()
+                    .copied()
+                    .chain(
+                        p.vis()
+                            .iter()
+                            .filter(|(_, v)| **v == crate::render::Visibility::Visible)
+                            .map(|(c, _)| c),
+                    )
+                    .filter(|c| theirs(*c))
+                    .collect();
+                let lit = |c: Pos| map.emitted(c) >= LIT_SIGHT || map.emits(c);
+                let dark: Vec<&Pos> = seen.iter().filter(|c| !lit(**c)).collect();
+                assert!(dark.is_empty(), "{k} out: their dark cells seen: {dark:?}");
+                let far = seen.iter().filter(|c| c.dist2(stand) >= 60 * 60).count();
+                lit_seen.push((k, far));
+            }
+            assert!(
+                lit_seen.iter().any(|(_, n)| *n > 0),
+                "their lit cells from 60 to 90 out: {lit_seen:?}"
+            );
+        }
+
         #[test]
         fn an_unbuilt_cell_cannot_be_walked() {
             let st = home_run();
