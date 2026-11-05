@@ -72,7 +72,11 @@ over, and a save taken a step later opens in it. Every other city or town you've
 this session is kept whole in memory (`Outside.kept`, `#[serde(skip)]`: its people, its
 ground, its foes, as you left them) and put back as it was when you walk in again; a
 save keeps only the home city and the one you're in, so after a reopen the rest are made
-again from the world.
+again from the world. A city or town held but not live whose map is in view runs its
+people's day on the clock (`outside::stream::run_neighbours`: the home city set aside,
+those kept, and those built in the background with the people their build seeded), so
+the home city set aside is saved with its people as they've run; nothing about it is
+saved besides.
 
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on
@@ -133,7 +137,7 @@ Go through this whenever you add or change something that lives through play.
 11. **Set-up done in `enter_city_at`, `MapScreen::walking`'s first placement or `missions::begin`** doesn't run when a run is reopened. If a new system starts there, its state must be saved, or rebuilt in `after_restore`.
 12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
 13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
-14. **The map screen's own state isn't saved.** The open Net's packets (`MapScreen.traffic`) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
+14. **The map screen's own state isn't saved.** The Nets' packets (`MapScreen.traffic`: each city's and town's on its lanes, and the open Net's on its trunks) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
 15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. State that belongs to the runner (the character, the deck's failsafe and cooling, the mask and the shield on your Net self, the bots out, the log) stays put; `enter` carries the deck's (`net::Carried`: a new runner's field of `NetState` goes in it) and the bots across, and you on the same world cell, your Net self too with the body where it stands.
 16. **A cache in a saved type** may also be rebuilt when first needed rather than in `after_restore` (`Outside.built`, `Outside.blocks`), so long as it's `#[serde(skip)]` and made from saved state only.
 

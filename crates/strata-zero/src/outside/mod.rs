@@ -800,6 +800,20 @@ pub(crate) fn held_stays_mut(st: &mut AppState) -> impl Iterator<Item = &mut Sta
     st.away.as_deref_mut().into_iter().chain(kept)
 }
 
+/// The people of city or town `s` held but not live: the home city's set aside, one
+/// kept whole's, or those its build in the background seeded. None for the live city
+/// (`st.world`) and one not held, or built with none.
+pub fn people_of(st: &AppState, s: Settlement) -> Option<&sim::World> {
+    let o = st.outside.as_ref()?;
+    if s == o.here() {
+        return None;
+    }
+    match stay_of(st, s) {
+        Some(stay) => stay.world.as_ref(),
+        None => o.stream.people(s),
+    }
+}
+
 /// Jacked in, your body as another city's frame can hold it (`stand_in`), in the live
 /// city's frame: none when you're not jacked in or it can't be held there.
 pub(crate) fn body_stand_in(st: &AppState) -> Option<(citygen::Place, Pos)> {

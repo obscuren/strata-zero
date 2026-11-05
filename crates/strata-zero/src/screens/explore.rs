@@ -195,8 +195,9 @@ pub struct MapScreen {
     /// Where your Net self stood as the Net over the world opened over the map: back
     /// from it somewhere else, the map goes with you.
     up_from: Option<Pos>,
-    /// The open Net's traffic: packets hopping node to node along the lanes.
-    traffic: RefCell<crate::render::netlook::packets::Traffic>,
+    /// The Nets' traffic: packets hopping node to node along the lanes, each city's
+    /// and the open Net's.
+    traffic: RefCell<crate::render::netlook::packets::Nets>,
     /// Where the occupants of the floor the player walks stand, keyed by the place
     /// and the world's minute it was worked out for.
     placement: Option<(Place, u64, crate::interiors::Placement)>,
@@ -475,7 +476,11 @@ fn step(st: &mut AppState, dir: Dir) -> bool {
 /// What the street or the Net shows past the city's edge, drawn before the city draws
 /// on the cells it owns: the open ground's layer on every cell nobody held answers for,
 /// then each other city and town held this session on the cells it owns, each with its
-/// own map and its own Net. `vis` says how well a cell of the city's frame is seen.
+/// own map and its own Net. Alive as the city is: on the street each city's people
+/// (theirs in sight as yours are), on the Net each city's packets on its own lanes and
+/// the open Net's on its trunks, all moved on in `nets`. `vis` says how well a cell of
+/// the city's frame is seen.
+#[allow(clippy::too_many_arguments)]
 fn draw_beyond(
     st: &AppState,
     b: &Beyond,
@@ -483,32 +488,45 @@ fn draw_beyond(
     origin: Pos,
     area: Rect,
     vis: &dyn Fn(Pos) -> crate::render::Visibility,
+    nets: &mut crate::render::netlook::packets::Nets,
     buf: &mut ratatui::buffer::Buffer,
 ) {
+    use crate::render::netlook::packets::{Lit, Traffic};
     use crate::render::netlook::{NetArea, NetLookView, draw_area};
+    use crate::render::people::StreetPeople;
     let minute = st.minute_of_day();
     let net = stratum == StratumKind::Net;
-    // the Net out here: no traffic, nothing tracked, nobody's home
-    let plain = NetLookView {
-        tick: st.tick,
-        ..Default::default()
-    };
-    // each area in its own frame: its cell `q` is the city's `q - shift`
+    let (hour, _) = st.clock();
+    let night = hour >= 18 || hour <= 5;
+    // the view in the live city's frame
+    let view = TileRect::new(origin.x, origin.y, area.width as i32, area.height as i32);
+    // each area in its own frame: its cell `q` is the city's `q - shift`; on the
+    // street its people over its ground, on the Net its packets on its lanes
     let draw = |map: &dyn TileMap,
                 city: Option<&citygen::City>,
+                people: Option<&sim::World>,
+                lit: Lit,
                 shift: Pos,
                 keep: &dyn Fn(Pos) -> bool,
                 buf: &mut ratatui::buffer::Buffer| {
         let corner = origin.offset(shift.x, shift.y);
+        let seen = |q: Pos| vis(Pos::new(q.x - shift.x, q.y - shift.y));
         if net {
             let area_net = NetArea {
                 map,
                 city,
                 keep: Some(keep),
             };
-            draw_area(area_net, &plain, corner, area, buf, &st.style);
+            // the Net out here: nothing tracked, nobody's home
+            let (packets, soaks) = lit;
+            let look = NetLookView {
+                tick: st.tick,
+                packets,
+                soaks,
+                ..Default::default()
+            };
+            draw_area(area_net, &look, corner, area, buf, &st.style);
         } else {
-            let seen = |q: Pos| vis(Pos::new(q.x - shift.x, q.y - shift.y));
             TilePass {
                 map,
                 stratum,
@@ -529,11 +547,22 @@ fn draw_beyond(
             };
             fall.draw(corner, area, st.tick, buf, &st.style);
         }
+        // its people out on its street, in sight as the city's own are
+        if let Some(world) = people.filter(|_| !net) {
+            StreetPeople {
+                world,
+                night,
+                seen: &seen,
+                keep: Some(keep),
+                eyes: &[],
+            }
+            .draw(corner, area, buf, &st.style);
+        }
         // and the dev light view greys every area by its own light, as the city's
         if st.show_light {
             let seen = |q: Pos| match net {
                 true => crate::render::Visibility::Visible,
-                false => vis(Pos::new(q.x - shift.x, q.y - shift.y)),
+                false => seen(q),
             };
             crate::render::lighting::LightPass {
                 map,
@@ -543,7 +572,8 @@ fn draw_beyond(
             .draw(corner, area, buf);
         }
     };
-    // the open ground, and every settlement not held, in world cells
+    // the open ground, and every settlement not held, in world cells: on the Net its
+    // trunks' packets, on the cells it draws
     let live = b.origin();
     let ground = GroundMap {
         stream: b.stream(),
@@ -556,10 +586,32 @@ fn draw_beyond(
             Some(Owner::Ground(..))
         )
     };
-    draw(&ground, None, live, &open, buf);
+    let lit = match st.outside.as_ref().and_then(|o| o.world.as_ref()) {
+        Some(world) if net => {
+            let layer = &b.stream().net;
+            let tile = |w: Pos| layer.tile(w).filter(|_| open(w));
+            let at = TileRect::new(view.x + live.x, view.y + live.y, view.w, view.h);
+            let near = layer
+                .cells_in(Traffic::seeds(at))
+                .filter(|(_, t)| {
+                    t.terrain == citygen::Terrain::NetLane
+                        || matches!(t.feature, Some(citygen::Feature::Node(_)))
+                })
+                .map(|(w, _)| w);
+            nets.open(world.seed).run_sparse(
+                |w| tile(w).is_some_and(|t| t.terrain == citygen::Terrain::NetLane),
+                |w| tile(w).is_some_and(|t| matches!(t.feature, Some(citygen::Feature::Node(_)))),
+                near,
+                at,
+                st.tick,
+            )
+        }
+        _ => Default::default(),
+    };
+    draw(&ground, None, None, lit, live, &open, buf);
     // the other cities and towns held, each on the cells it owns
-    let view = TileRect::new(origin.x, origin.y, area.width as i32, area.height as i32);
-    for (city, at) in b.held() {
+    for held in b.held() {
+        let (city, at) = (held.city, held.origin);
         let shift = Pos::new(live.x - at.x, live.y - at.y);
         let theirs = TileRect::new(view.x + shift.x, view.y + shift.y, view.w, view.h);
         if !theirs.intersects(city.size.rect()) {
@@ -571,8 +623,12 @@ fn draw_beyond(
                 Some(Owner::City(c, _)) if std::ptr::eq(c, city)
             )
         };
+        let lit = match net {
+            true => nets.city(city.seed).run_city(city, theirs, st.tick),
+            false => Default::default(),
+        };
         let map = MapRef::stratum_at(city, stratum, minute);
-        draw(&map, Some(city), shift, &own, buf);
+        draw(&map, Some(city), held.people, lit, shift, &own, buf);
     }
 }
 
@@ -2605,8 +2661,12 @@ impl MapScreen {
             hi = Pos::new(hi.x.max(p.pos.x + r + 1), hi.y.max(p.pos.y + r + 1));
         }
         let area = TileRect::new(lo.x, lo.y, hi.x - lo.x, hi.y - lo.y);
-        if crate::outside::stream::tend(st, area) && here {
-            look(st);
+        if crate::outside::stream::tend(st, area) {
+            // the open Net's packets find their ways again over what came in
+            self.traffic.borrow_mut().open_changed();
+            if here {
+                look(st);
+            }
         }
     }
 
@@ -3506,6 +3566,12 @@ impl Screen for MapScreen {
                 (self.mode == Mode::Walk).then_some(elapsed),
                 crate::clock::PATHS_PER_FRAME,
             );
+            // The cities and towns next door in view live on the same clock.
+            if self.mode == Mode::Walk && carries_on(st, self.place) {
+                let origin = self.cam.origin(map.width, map.height);
+                let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
+                crate::outside::stream::run_neighbours(st, view, crate::clock::PATHS_PER_FRAME);
+            }
         }
         // The mails landed since the map's last frame, here or under a screen on top.
         crate::mail_mark::notice(st);
@@ -3729,28 +3795,18 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
-        // The open Net's traffic moves on with the clock round the view.
+        // The city's Net's traffic moves on with the clock round the view.
         let (packets, soaks) = if self.place == Place::Stratum(StratumKind::Net) {
-            let mut traffic = self.traffic.borrow_mut();
-            if traffic.seed() != city.seed {
-                *traffic = crate::render::netlook::packets::Traffic::new(city.seed);
-            }
-            let net = city.stratum(StratumKind::Net);
-            let tile = |p: Pos| net.and_then(|s| s.tiles.get(p));
             let view = citygen::Rect::new(
                 origin.x,
                 origin.y,
                 map_area.width as i32,
                 map_area.height as i32,
             );
-            traffic.advance(
-                |p| tile(p).is_some_and(|t| t.terrain == citygen::Terrain::NetLane),
-                |p| tile(p).is_some_and(|t| matches!(t.feature, Some(citygen::Feature::Node(_)))),
-                city.net.nodes.iter().map(|n| n.cyber),
-                view,
-                st.tick,
-            );
-            (traffic.glows(st.tick), traffic.soaks(st.tick))
+            self.traffic
+                .borrow_mut()
+                .city(city.seed)
+                .run_city(city, view, st.tick)
         } else {
             Default::default()
         };
@@ -3862,6 +3918,7 @@ impl Screen for MapScreen {
             eyes: &eyes,
             foes: &st.foes,
             bodies: &st.missions.bodies,
+            keep,
         });
         if let Some(p) = people.as_ref() {
             overlays.push(p);
@@ -4135,7 +4192,17 @@ impl Screen for MapScreen {
                     Visibility::Unseen
                 }
             };
-            draw_beyond(st, b, stratum, origin, map_area, &past, f.buffer_mut());
+            let mut nets = self.traffic.borrow_mut();
+            draw_beyond(
+                st,
+                b,
+                stratum,
+                origin,
+                map_area,
+                &past,
+                &mut nets,
+                f.buffer_mut(),
+            );
             if self.place.is_street() {
                 held_ads = hijacked_beyond(st, b, &past);
             }
@@ -16422,9 +16489,11 @@ mod tests {
                 "their ICE out"
             );
             draw_buffer(&s, &st, 120, 40);
-            assert_eq!(
-                s.traffic.borrow().seed(),
-                st.city.as_ref().unwrap().seed,
+            assert!(
+                s.traffic
+                    .borrow()
+                    .of_city(st.city.as_ref().unwrap().seed)
+                    .is_some_and(|t| t.len() > 0),
                 "packets on their lanes"
             );
         }
@@ -16543,6 +16612,385 @@ mod tests {
                 "not through the city's gate on the town's cell: {:?}",
                 last(&st)
             );
+        }
+
+        /// The cities next door alive in view (`2026-11-05-streamed-world-design.md`,
+        /// "After the first play"): their people's day, and the packets on their lanes
+        /// and on the open Net's trunks.
+        mod next_door {
+            use super::*;
+            use std::collections::BTreeMap;
+
+            /// The view the screen is drawn at.
+            const SIZE: (u16, u16) = (200, 60);
+
+            /// A cell of the open ground you can stand on a step short of held
+            /// settlement `c`'s map, where its buildings are nearest as a wide view takes
+            /// them in (a step north or south counting three), and the step onto its
+            /// cells: in the live city's frame.
+            fn beside_its_buildings(st: &AppState, c: Settlement) -> (Pos, Dir) {
+                use citygen::overworld::detail;
+                let o = st.outside.as_ref().unwrap();
+                let w = o.world();
+                let city = o.held_city(c).unwrap();
+                let origin = o.origin(city);
+                let tile = |p: Pos| Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
+                let built: Vec<Pos> = city
+                    .stratum(StratumKind::Street)
+                    .unwrap()
+                    .tiles
+                    .iter()
+                    .filter(|(_, t)| t.building.is_some())
+                    .map(|(p, _)| p)
+                    .collect();
+                let map = TileRect::new(0, 0, city.size.w as i32, city.size.h as i32);
+                map.border()
+                    .flat_map(|q| Dir::CARDINAL.map(|d| (q, d)))
+                    .filter(|(q, d)| {
+                        let x = origin.offset(q.x, q.y).step(d.opposite());
+                        !map.contains(q.step(d.opposite()))
+                            && city.walkable(StratumKind::Street, *q)
+                            && o.owner(tile(origin.offset(q.x, q.y))) == Some(c)
+                            && w.tile(tile(x)).is_some()
+                            && o.owner(tile(x)).is_none()
+                            && detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+                    })
+                    .min_by_key(|(q, _)| {
+                        built
+                            .iter()
+                            .map(|b| (b.x - q.x).abs().max(3 * (b.y - q.y).abs()))
+                            .min()
+                            .unwrap_or(i32::MAX)
+                    })
+                    .map(|(q, d)| {
+                        let x = origin.offset(q.x, q.y).step(d.opposite());
+                        (handover::local(st, x), d)
+                    })
+                    .expect("open ground beside its buildings")
+            }
+
+            /// Seed 3's home run at one in the afternoon, the next city held beside it
+            /// with its people seeded as its build seeds them, you on foot on the open
+            /// ground a step short of its map by its buildings, the screen on you: the
+            /// run, the screen, the city, your cell and the step in.
+            fn beside_its_people() -> (AppState, MapScreen, Settlement, Pos, Dir) {
+                let mut st = AppState::new();
+                st.enter_city_at(crate::outside::tests::sited().clone(), 13 * 60);
+                st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
+                crate::outside::ensure(&mut st);
+                st.rain = false;
+                let (c, ..) = handover::beside_a_city(&mut st);
+                handover::seed_its_people(&mut st, c);
+                let (x, d) = beside_its_buildings(&st, c);
+                handover::on_foot(&mut st, x);
+                let mut s = MapScreen::walking(&mut st);
+                draw_buffer(&s, &st, SIZE.0, SIZE.1);
+                s.update(&mut st, &[]);
+                (st, s, c, x, d)
+            }
+
+            /// `n` frames of play, the clock a tick on each, every one drawn: the last.
+            fn play(st: &mut AppState, s: &mut MapScreen, n: usize) -> ratatui::buffer::Buffer {
+                let mut buf = draw_buffer(s, st, SIZE.0, SIZE.1);
+                for _ in 0..n {
+                    st.tick += 1;
+                    s.update(st, &[]);
+                    buf = draw_buffer(s, st, SIZE.0, SIZE.1);
+                }
+                buf
+            }
+
+            /// Settlement `c`'s people, held (not live).
+            fn people(st: &AppState, c: Settlement) -> &sim::World {
+                crate::outside::people_of(st, c).expect("its people")
+            }
+
+            /// Where settlement `c`'s walkers stand on the street, by who: world cells.
+            fn walkers(st: &AppState, c: Settlement) -> BTreeMap<sim::PersonId, Pos> {
+                let o = st.outside.as_ref().unwrap();
+                let city = o.held_city(c).unwrap();
+                let at = o.origin(city);
+                people(st, c)
+                    .visible(city.size.rect())
+                    .into_iter()
+                    .filter_map(|m| match m.kind {
+                        sim::MoverKind::Walker { id, .. } => {
+                            Some((id, at.offset(m.pos.x, m.pos.y)))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+
+            /// Whether the live city's cell `p` is in sight: on its map by your sight of
+            /// it, past it by what you see out there.
+            fn in_sight(st: &AppState, p: Pos) -> bool {
+                let you = st.player.as_ref().unwrap();
+                match you.vis().get(p) {
+                    Some(v) => *v == Visibility::Visible,
+                    None => you.beyond_sight().binary_search(&p).is_ok(),
+                }
+            }
+
+            /// The screen cell the live city's cell `p` is drawn on, if the view holds it.
+            fn screen_cell(s: &MapScreen, p: Pos) -> Option<(u16, u16)> {
+                let area = s.last_map.get();
+                tile_to_screen(area, s.cam.origin(area.width, area.height), p)
+            }
+
+            #[test]
+            fn a_neighbours_people_walk_while_in_view() {
+                let (mut st, mut s, c, ..) = beside_its_people();
+                let (t0, before) = (people(&st, c).tick(), walkers(&st, c));
+                let buf = play(&mut st, &mut s, 3 * sim::TICKS_PER_MINUTE as usize);
+                assert_eq!(people(&st, c).tick(), st.clock_tick(), "on the clock");
+                assert!(people(&st, c).tick() > t0);
+                let after = walkers(&st, c);
+                assert!(
+                    after.iter().any(|(id, p)| before.get(id) != Some(p)),
+                    "they walk on"
+                );
+                // drawn on the cells it owns that are in sight, as the live city's are
+                let mut shown = 0;
+                for w in after.values() {
+                    let p = handover::local(&st, *w);
+                    let Some(at) = screen_cell(&s, p) else {
+                        continue;
+                    };
+                    if crate::outside::stream::owner_of(&st, p) != Some(c) {
+                        continue;
+                    }
+                    let drawn = buf[at].symbol() == "@";
+                    if in_sight(&st, p) {
+                        assert!(drawn, "a walker of theirs in sight at {w:?}");
+                        shown += 1;
+                    } else {
+                        assert!(!drawn, "a walker of theirs out of sight at {w:?}");
+                    }
+                }
+                assert!(shown > 0, "some of their walkers in sight");
+            }
+
+            #[test]
+            fn a_neighbour_out_of_view_holds_still() {
+                let (mut st, mut s, c, x, _) = beside_its_people();
+                // the city or town farthest from you held too, its people seeded
+                let far = {
+                    let o = st.outside.as_ref().unwrap();
+                    let you = handover::world_of(&st, x);
+                    let you = Pos::new(you.x.div_euclid(TILE), you.y.div_euclid(TILE));
+                    o.others()
+                        .into_iter()
+                        .filter(|(f, _)| *f != c)
+                        .max_by_key(|(_, b)| Pos::new(b.x, b.y).manhattan(you))
+                        .map(|(f, _)| f)
+                        .unwrap()
+                };
+                handover::hold(&mut st, far);
+                handover::seed_its_people(&mut st, far);
+                let (t0, before) = (people(&st, far).tick(), walkers(&st, far));
+                play(&mut st, &mut s, 3 * sim::TICKS_PER_MINUTE as usize);
+                assert_eq!(people(&st, far).tick(), t0, "held still");
+                assert_eq!(walkers(&st, far), before);
+                assert_eq!(
+                    people(&st, c).tick(),
+                    st.clock_tick(),
+                    "the one in view runs"
+                );
+            }
+
+            #[test]
+            fn handing_over_keeps_its_people_where_they_were_drawn() {
+                let (mut st, mut s, c, _, d) = beside_its_people();
+                play(&mut st, &mut s, 2 * sim::TICKS_PER_MINUTE as usize);
+                let before = walkers(&st, c);
+                let (tick, count) = (people(&st, c).tick(), people(&st, c).people().len());
+                assert!(!before.is_empty());
+                // the step in, on the same tick
+                s.update(&mut st, &[key(dir_key(d))]);
+                assert_eq!(st.outside.as_ref().unwrap().here(), c, "walked in");
+                let w = st.world.as_ref().unwrap();
+                assert_eq!(w.tick(), tick, "nothing to catch up");
+                assert_eq!(w.people().len(), count, "not seeded again");
+                let at = {
+                    let o = st.outside.as_ref().unwrap();
+                    o.origin(st.city.as_ref().unwrap())
+                };
+                // you on the cell stepped onto; whoever stood there is held a step back
+                let you = handover::world_of(&st, you(&st));
+                for (id, p) in before.iter().filter(|(_, p)| **p != you) {
+                    assert_eq!(
+                        w.pos_of(*id).map(|q| at.offset(q.x, q.y)),
+                        Some(*p),
+                        "{id:?} where they were drawn"
+                    );
+                }
+            }
+
+            /// The cells of `traffic`'s lanes a packet lights at `tick`, each with whether
+            /// it's the head: in the live city's frame, its own frame `shift` cells off.
+            fn lit(
+                traffic: &crate::render::netlook::packets::Traffic,
+                tick: u64,
+                shift: Pos,
+            ) -> Vec<(Pos, bool)> {
+                traffic
+                    .glows(tick)
+                    .into_iter()
+                    .map(|(p, (_, head))| (Pos::new(p.x - shift.x, p.y - shift.y), head))
+                    .collect()
+            }
+
+            /// The lane cells a Net's packets light this frame, each with whether it's
+            /// the head: cells of the live city's frame.
+            type Lit<'a> = dyn Fn(&AppState, &MapScreen) -> Vec<(Pos, bool)> + 'a;
+
+            /// Over `n` frames of play, how many times a packet's head was drawn (white
+            /// on its lane) on a cell `mine` takes, of those `lit` gives each frame: not
+            /// where your cord or you are drawn over it.
+            fn heads_drawn(
+                st: &mut AppState,
+                s: &mut MapScreen,
+                n: usize,
+                lit: &Lit<'_>,
+                mine: &dyn Fn(&AppState, Pos) -> bool,
+            ) -> usize {
+                let mut heads = 0;
+                for _ in 0..n {
+                    let buf = play(st, s, 1);
+                    let over: Vec<Pos> = s
+                        .cord_walk
+                        .borrow()
+                        .iter()
+                        .flat_map(|(_, _, walk)| walk.clone())
+                        .chain([you(st)])
+                        .collect();
+                    for (p, head) in lit(st, s) {
+                        let Some(at) =
+                            screen_cell(s, p).filter(|_| head && mine(st, p) && !over.contains(&p))
+                        else {
+                            continue;
+                        };
+                        assert_eq!(buf[at].fg, Color::Rgb(255, 255, 255), "a head at {p:?}");
+                        heads += 1;
+                    }
+                }
+                heads
+            }
+
+            #[test]
+            fn a_neighbours_lanes_carry_packets() {
+                let (mut st, mut s, c, x, d) = beside_its_people();
+                jacked_near(&mut st, &mut s, x);
+                assert_ne!(st.outside.as_ref().unwrap().here(), c, "beside it");
+                let seed = st.outside.as_ref().unwrap().held_city(c).unwrap().seed;
+                let lit = |st: &AppState, s: &MapScreen| {
+                    let o = st.outside.as_ref().unwrap();
+                    let (live, theirs) = (
+                        o.origin(st.city.as_ref().unwrap()),
+                        o.origin(o.held_city(c).unwrap()),
+                    );
+                    let shift = Pos::new(live.x - theirs.x, live.y - theirs.y);
+                    let nets = s.traffic.borrow();
+                    let traffic = nets.of_city(seed).expect("its own traffic");
+                    lit(traffic, st.tick, shift)
+                };
+                let theirs = |st: &AppState, p: Pos| {
+                    crate::outside::stream::owner_of(st, p) == Some(c)
+                        && !crate::outside::stream::live_owns(st, p)
+                };
+                let heads = heads_drawn(&mut st, &mut s, 90, &lit, &theirs);
+                assert!(heads > 0, "packets run on its lanes");
+                // your Net self onto its Net on the same tick: live now, its packets
+                // where they were (world cells)
+                let world = |st: &AppState, lit: Vec<(Pos, bool)>| {
+                    lit.into_iter()
+                        .map(|(p, head)| (handover::world_of(st, p), head))
+                        .collect::<std::collections::BTreeSet<_>>()
+                };
+                let before = world(&st, lit(&st, &s));
+                assert!(!before.is_empty());
+                s.update(&mut st, &[key(dir_key(d))]);
+                assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+                draw_buffer(&s, &st, SIZE.0, SIZE.1);
+                let after = {
+                    let nets = s.traffic.borrow();
+                    let traffic = nets.of_city(seed).expect("its own traffic, still");
+                    world(&st, self::lit(traffic, st.tick, Pos::new(0, 0)))
+                };
+                assert_eq!(after, before, "its packets carry on");
+            }
+
+            #[test]
+            fn the_open_nets_trunks_carry_packets() {
+                let mut st = home_run();
+                st.rain = false;
+                let mut s = MapScreen::walking(&mut st);
+                s.update(&mut st, &[]);
+                jacked_at_a_port(&mut st, &mut s);
+                // a cell of a trunk on the open ground, its lane running straight on 24
+                // cells each way and no node of the open Net's anywhere near (its
+                // packets from no node's), nearest the city
+                let on = {
+                    let city = st.city.as_ref().unwrap();
+                    let (w, h) = (city.size.w as i32, city.size.h as i32);
+                    crate::outside::stream::tend(
+                        &mut st,
+                        TileRect::new(-160, -80, w + 320, h + 160),
+                    );
+                    let o = st.outside.as_ref().unwrap();
+                    let origin = o.origin(st.city.as_ref().unwrap());
+                    let open_lane = |p: Pos| {
+                        crate::outside::stream::owner_of(&st, p).is_none()
+                            && o.stream
+                                .net
+                                .tile(origin.offset(p.x, p.y))
+                                .is_some_and(|t| t.terrain == citygen::Terrain::NetLane)
+                    };
+                    let middle = Pos::new(w / 2, h / 2);
+                    let around = TileRect::new(-160, -80, w + 320, h + 160);
+                    let nodes: Vec<Pos> = o
+                        .stream
+                        .net
+                        .cells_in(TileRect::new(
+                            around.x + origin.x,
+                            around.y + origin.y,
+                            around.w,
+                            around.h,
+                        ))
+                        .filter(|(_, t)| matches!(t.feature, Some(citygen::Feature::Node(_))))
+                        .map(|(c, _)| Pos::new(c.x - origin.x, c.y - origin.y))
+                        .collect();
+                    TileRect::new(-150, -70, w + 300, h + 140)
+                        .iter()
+                        .filter(|p| {
+                            (-24..=24).all(|i| open_lane(p.offset(i, 0)))
+                                || (-12..=12).all(|i| open_lane(p.offset(0, i)))
+                        })
+                        .filter(|p| {
+                            nodes
+                                .iter()
+                                .all(|n| (n.x - p.x).abs() > 140 || (n.y - p.y).abs() > 50)
+                        })
+                        .min_by_key(|p| p.manhattan(middle))
+                        .expect("a trunk on the open ground")
+                };
+                stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), on);
+                assert!(st.player.as_ref().unwrap().jacked_in());
+                let lit = |st: &AppState, s: &MapScreen| {
+                    let o = st.outside.as_ref().unwrap();
+                    let live = o.origin(st.city.as_ref().unwrap());
+                    let nets = s.traffic.borrow();
+                    let traffic = nets.open_net().expect("the open Net's traffic");
+                    lit(traffic, st.tick, live)
+                };
+                let open = |st: &AppState, p: Pos| {
+                    crate::outside::stream::owner_of(st, p).is_none()
+                        && !crate::outside::stream::live_owns(st, p)
+                };
+                let heads = heads_drawn(&mut st, &mut s, 90, &lit, &open);
+                assert!(heads > 0, "packets run on the trunks");
+            }
         }
 
         /// The long walk: out across the open ground and back on foot, then jacked in

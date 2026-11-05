@@ -304,9 +304,13 @@ impl Stream {
 
     /// The people seeded with settlement `s` when it was built here, until you walk
     /// in.
-    #[cfg(test)]
     pub fn people(&self, s: Settlement) -> Option<&sim::World> {
         self.builds.people.get(&s)
+    }
+
+    /// `people`, to run on.
+    fn people_mut(&mut self, s: Settlement) -> Option<&mut sim::World> {
+        self.builds.people.get_mut(&s)
     }
 
     /// Both layers built over `area` (world cells) and a ring past it; far tiles
@@ -497,9 +501,20 @@ pub struct Beyond<'a> {
     outside: &'a Outside,
     /// The live city and the world cell of its `(0, 0)`.
     live: (Settlement, &'a City, Pos),
-    /// The other cities and towns held this session, each with its origin.
-    held: Vec<(Settlement, &'a City, Pos)>,
+    /// The other cities and towns held this session.
+    held: Vec<Held<'a>>,
     stream: &'a Stream,
+}
+
+/// A city or town held this session but not live, as `Beyond` sees it.
+#[derive(Clone, Copy)]
+pub struct Held<'a> {
+    pub settlement: Settlement,
+    pub city: &'a City,
+    /// The world cell of its `(0, 0)`.
+    pub origin: Pos,
+    /// Its people (`outside::people_of`): none for one built with none.
+    pub people: Option<&'a sim::World>,
 }
 
 /// Who answers for a cell of the live city's frame that the live city doesn't own.
@@ -529,7 +544,12 @@ impl<'a> Beyond<'a> {
             .into_iter()
             .chain(o.held())
             .filter(|(s, _)| *s != here)
-            .map(|(s, c)| (s, c, o.origin(c)))
+            .map(|(s, city)| Held {
+                settlement: s,
+                city,
+                origin: o.origin(city),
+                people: super::people_of(st, s),
+            })
             .collect();
         Some(Beyond {
             outside: o,
@@ -549,10 +569,9 @@ impl<'a> Beyond<'a> {
         self.live.2
     }
 
-    /// The other cities and towns held this session, each with the world cell of its
-    /// `(0, 0)`.
-    pub fn held(&self) -> impl Iterator<Item = (&'a City, Pos)> + '_ {
-        self.held.iter().map(|&(_, city, origin)| (city, origin))
+    /// The other cities and towns held this session.
+    pub fn held(&self) -> impl Iterator<Item = Held<'a>> + '_ {
+        self.held.iter().copied()
     }
 
     /// The open ground round the view.
@@ -594,9 +613,9 @@ impl<'a> Beyond<'a> {
             return None;
         }
         let theirs = owner.and_then(|s| {
-            let &(_, city, origin) = self.held.iter().find(|h| h.0 == s)?;
-            let q = Pos::new(at.x - origin.x, at.y - origin.y);
-            city.size.contains(q).then_some(Owner::City(city, q))
+            let h = self.held.iter().find(|h| h.settlement == s)?;
+            let q = Pos::new(at.x - h.origin.x, at.y - h.origin.y);
+            h.city.size.contains(q).then_some(Owner::City(h.city, q))
         });
         Some(theirs.unwrap_or(Owner::Ground(self.stream, at)))
     }
@@ -691,6 +710,79 @@ fn tend_builds(st: &mut AppState, area: Rect) -> bool {
         return false;
     };
     o.stream.tend(&mut o.built, wanted, &st.people, now, minute)
+}
+
+/// Cells past the view a held city's or town's map may lie and its people still live:
+/// the people overlay's bubble.
+pub const ALIVE: i32 = crate::render::people::MARGIN;
+
+/// The most game minutes a held city's or town's people catch up on in a frame, come
+/// back into view after a while out of it: a day spread over 24 frames.
+pub const CATCH_UP: u64 = 60;
+
+/// Every city and town held but the live one whose map comes within `ALIVE` cells of
+/// `view` (cells of the live city's frame): its people's day run on to the live city's
+/// clock and up to `paths` of the walks they've asked for found, as the live city's
+/// are, nobody held back for you (their day only: no story, no cameras, no foes). Back
+/// in view after a while, one catches up `CATCH_UP` minutes a frame; one built here and
+/// not walked into whose people are more than `RUN_ON` behind has them seeded afresh,
+/// as walking in would. Those out of view hold still. How many ran.
+pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize) -> usize {
+    let near: Vec<Settlement> = {
+        let Some(b) = Beyond::of(st) else {
+            return 0;
+        };
+        let live = b.origin();
+        let wide = view.grow(ALIVE);
+        b.held()
+            .filter(|h| {
+                let (w, hh) = (h.city.size.w as i32, h.city.size.h as i32);
+                let map = Rect::new(h.origin.x - live.x, h.origin.y - live.y, w, hh);
+                h.people.is_some() && wide.intersects(map)
+            })
+            .map(|h| h.settlement)
+            .collect()
+    };
+    if near.is_empty() {
+        return 0;
+    }
+    let (now, minute) = (st.clock_tick(), st.minute_of_day());
+    let people = &st.people;
+    let mut away = st.away.as_deref_mut();
+    let Some(o) = st.outside.as_mut() else {
+        return 0;
+    };
+    let home = o.home();
+    let mut ran = 0;
+    for s in near {
+        let (city, world, built) = if s == home {
+            let Some(stay) = away.as_deref_mut() else {
+                continue;
+            };
+            (&stay.city, stay.world.as_mut(), false)
+        } else if let Some(stay) = o.kept.0.get_mut(&s) {
+            (&stay.city, stay.world.as_mut(), false)
+        } else {
+            let Some(city) = o.built.get(&s) else {
+                continue;
+            };
+            (city, o.stream.people_mut(s), true)
+        };
+        let Some(world) = world else {
+            continue;
+        };
+        if built && now.saturating_sub(world.tick()) > super::RUN_ON {
+            *world = super::seed_people(city, people, now, minute);
+        }
+        world.set_blocker(None);
+        if world.tick() < now {
+            let most = world.tick() + CATCH_UP * sim::TICKS_PER_MINUTE;
+            world.advance(city, now.min(most));
+        }
+        world.path_some(city, paths);
+        ran += 1;
+    }
+    ran
 }
 
 /// The builds finished collected, wherever you are: indoors too, so one that broke
@@ -2018,6 +2110,15 @@ pub(crate) mod tests {
             (s, local(st, x), d)
         }
 
+        /// The people of settlement `s` (held, built and not walked into) seeded for the
+        /// hour, as its build in the background seeds them.
+        pub(crate) fn seed_its_people(st: &mut AppState, s: Settlement) {
+            let (now, minute) = (st.clock_tick(), st.minute_of_day());
+            let o = st.outside.as_mut().unwrap();
+            let world = crate::outside::seed_people(&o.built[&s], &st.people, now, minute);
+            o.stream.builds.people.insert(s, world);
+        }
+
         /// Settlement `s` held, built as the game builds it.
         pub(crate) fn hold(st: &mut AppState, s: Settlement) {
             let city = settlements()
@@ -2321,6 +2422,56 @@ pub(crate) mod tests {
             let now = remembered_street(&st);
             let lost: Vec<_> = known.iter().filter(|c| !now.contains(c)).collect();
             assert!(lost.is_empty(), "home's streets forgotten: {lost:?}");
+        }
+
+        /// Seed 3's home run, the next city held with its people seeded now, the clock
+        /// then run `minutes` on with it out of view: the city, and a 200x60 view (the
+        /// live city's frame) beside it.
+        fn back_beside_it(minutes: u64) -> (AppState, Settlement, Rect) {
+            let mut st = home_run();
+            let (s, x, _) = beside_a_city(&mut st);
+            seed_its_people(&mut st, s);
+            crate::clock::run(
+                &mut st,
+                Some(minutes * sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            (st, s, Rect::new(x.x - 100, x.y - 30, 200, 60))
+        }
+
+        #[test]
+        fn a_neighbour_back_in_view_catches_up_a_while_a_frame() {
+            let (mut st, s, view) = back_beside_it(150);
+            let t0 = crate::outside::people_of(&st, s).unwrap().tick();
+            let now = st.clock_tick();
+            assert_eq!(now - t0, 150 * sim::TICKS_PER_MINUTE);
+            let ticks = |st: &AppState| crate::outside::people_of(st, s).unwrap().tick();
+            assert_eq!(run_neighbours(&mut st, view, 4), 1);
+            assert_eq!(ticks(&st), t0 + CATCH_UP * sim::TICKS_PER_MINUTE);
+            run_neighbours(&mut st, view, 4);
+            assert_eq!(ticks(&st), t0 + 2 * CATCH_UP * sim::TICKS_PER_MINUTE);
+            run_neighbours(&mut st, view, 4);
+            assert_eq!(ticks(&st), now, "caught up");
+            // out of view it holds still
+            let far = Rect::new(view.x - 2000, view.y, 200, 60);
+            crate::clock::run(&mut st, Some(90), crate::clock::PATHS_PER_FRAME);
+            assert_eq!(run_neighbours(&mut st, far, 4), 0);
+            assert_eq!(ticks(&st), now);
+        }
+
+        #[test]
+        fn a_neighbours_people_a_day_behind_are_seeded_afresh() {
+            let (mut st, s, view) = back_beside_it(25 * 60);
+            let count = crate::outside::people_of(&st, s).unwrap().people().len();
+            run_neighbours(&mut st, view, 4);
+            let w = crate::outside::people_of(&st, s).unwrap();
+            assert_eq!(
+                w.tick(),
+                st.clock_tick(),
+                "seeded for now, as walking in would"
+            );
+            assert_eq!(w.minute_of_day(), st.minute_of_day());
+            assert_eq!(w.people().len(), count);
         }
 
         #[test]

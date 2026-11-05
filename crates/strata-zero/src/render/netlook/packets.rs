@@ -8,7 +8,7 @@
 //! at the nodes round the view as it comes near, and dropped once they are far off it.
 
 use citygen::rng::hash64;
-use citygen::{Pos, Rect};
+use citygen::{City, Feature, Pos, Rect, StratumKind, Terrain};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Ticks a packet takes per tile.
@@ -24,6 +24,31 @@ const PAUSE_STEPS: u64 = 40;
 /// Packets are seeded this far round the view, and kept until this much further.
 const SEED_MARGIN: i32 = 12;
 const KEEP_MARGIN: i32 = 40;
+/// On a Net with few nodes (the open Net's trunks), the columns between relays along a
+/// lane running east and west; half as many rows along one running north and south, a
+/// row being twice as tall.
+pub const RELAY: i32 = 24;
+
+/// What the traffic lights in a frame: each lane tile with its glow and whether it's a
+/// head (`Traffic::glows`), and each node soaking a packet up (`Traffic::soaks`).
+pub type Lit = (HashMap<Pos, (f32, bool)>, HashMap<Pos, f32>);
+
+/// Whether lane tile `p` is a relay, where a packet on a Net with few nodes stops and
+/// another goes on as at a node: a lane's end (where it stops, or runs on past where
+/// it's drawn), a junction, and every `RELAY` columns along an east-west run (every half
+/// as many rows along a north-south one); never beside a node, which ends the lane
+/// itself.
+pub fn relay(lane: &impl Fn(Pos) -> bool, node: &impl Fn(Pos) -> bool, p: Pos) -> bool {
+    if !lane(p) || node(p) || p.neighbors4().any(node) {
+        return false;
+    }
+    let [n, e, s, w] = [(0, -1), (1, 0), (0, 1), (-1, 0)].map(|(dx, dy)| lane(p.offset(dx, dy)));
+    match [n, e, s, w].iter().filter(|l| **l).count() {
+        0 => false,
+        2 => (e && w && p.x.rem_euclid(RELAY) == 0) || (n && s && p.y.rem_euclid(RELAY / 2) == 0),
+        _ => true,
+    }
+}
 
 /// A packet between two nodes: the lane tiles from beside one to beside the other, and
 /// the tick it left.
@@ -124,11 +149,6 @@ impl Traffic {
             seed,
             ..Traffic::default()
         }
-    }
-
-    /// The city it was made for.
-    pub fn seed(&self) -> u64 {
-        self.seed
     }
 
     /// Where `node`'s packet number `n` goes: a node joined to it, at random.
@@ -255,10 +275,115 @@ impl Traffic {
         out
     }
 
+    /// The traffic on `city`'s lanes moved on to `tick` with `view` (cells of its own
+    /// frame) on screen: what it lights.
+    pub fn run_city(&mut self, city: &City, view: Rect, tick: u64) -> Lit {
+        let net = city.stratum(StratumKind::Net);
+        let tile = |p: Pos| net.and_then(|s| s.tiles.get(p));
+        self.advance(
+            |p| tile(p).is_some_and(|t| t.terrain == Terrain::NetLane),
+            |p| tile(p).is_some_and(|t| matches!(t.feature, Some(Feature::Node(_)))),
+            city.net.nodes.iter().map(|n| n.cyber),
+            view,
+            tick,
+        );
+        (self.glows(tick), self.soaks(tick))
+    }
+
+    /// The area round `view` a Net's packets are sent from: the cells `run_sparse` needs
+    /// of its nodes and lanes.
+    pub fn seeds(view: Rect) -> Rect {
+        view.grow(SEED_MARGIN)
+    }
+
+    /// The traffic on a Net with few nodes (the open Net's trunks) moved on to `tick` with
+    /// `view` on screen: its packets stop at its lanes' `relay`s as at its nodes, `near`
+    /// the cells of its lanes and nodes round the view (`seeds`). What it lights: a
+    /// packet going into a relay lights it as the lane, there being no node to flash.
+    pub fn run_sparse(
+        &mut self,
+        lane: impl Fn(Pos) -> bool,
+        node: impl Fn(Pos) -> bool,
+        near: impl IntoIterator<Item = Pos>,
+        view: Rect,
+        tick: u64,
+    ) -> Lit {
+        let end = |p: Pos| node(p) || relay(&lane, &node, p);
+        let ends: Vec<Pos> = near.into_iter().filter(|p| end(*p)).collect();
+        self.advance(&lane, end, ends, view, tick);
+        let mut glows = self.glows(tick);
+        let soaks = self.soaks(tick);
+        for (p, g) in &soaks {
+            if node(*p) {
+                continue;
+            }
+            // the head going in as bright as a head on the lane, its tail after it
+            let (glow, head) = (g * 0.6 / 0.7, *g >= 0.7);
+            let e = glows.entry(*p).or_insert((0.0, false));
+            if glow > e.0 {
+                *e = (glow, head);
+            }
+        }
+        (glows, soaks)
+    }
+
+    /// The joins between nodes forgotten, to be looked for again as each next sends:
+    /// more of the Net has come in round them.
+    pub fn forget_joins(&mut self) {
+        self.links.clear();
+    }
+
     /// How many packets are out.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.packets.len()
+    }
+}
+
+/// The traffic of every Net the view takes in, kept by the map screen between frames:
+/// each city's and town's on its own lanes, in its own frame, found by its seed (so a
+/// city's packets carry on as it's handed over, live or not); and the open Net's, on its
+/// trunks, in world cells.
+#[derive(Clone, Debug, Default)]
+pub struct Nets {
+    cities: HashMap<u64, Traffic>,
+    open: Option<Traffic>,
+}
+
+impl Nets {
+    /// The traffic on the lanes of the city or town seeded `seed`.
+    pub fn city(&mut self, seed: u64) -> &mut Traffic {
+        self.cities
+            .entry(seed)
+            .or_insert_with(|| Traffic::new(seed))
+    }
+
+    /// The traffic on the open Net's trunks of the world seeded `seed`.
+    pub fn open(&mut self, seed: u64) -> &mut Traffic {
+        if self.open.as_ref().is_none_or(|t| t.seed != seed) {
+            self.open = Some(Traffic::new(seed));
+        }
+        self.open.get_or_insert_with(|| Traffic::new(seed))
+    }
+
+    /// The open Net round the view changed (more of it streamed in, a city came in
+    /// over it): its joins are looked for again.
+    pub fn open_changed(&mut self) {
+        if let Some(t) = self.open.as_mut() {
+            t.forget_joins();
+        }
+    }
+
+    /// The traffic of the city or town seeded `seed`, if it has run.
+    #[cfg(test)]
+    pub fn of_city(&self, seed: u64) -> Option<&Traffic> {
+        self.cities.get(&seed)
+    }
+
+    /// The open Net's traffic, if it has run.
+    #[cfg(test)]
+    pub fn open_net(&self) -> Option<&Traffic> {
+        self.open.as_ref()
     }
 }
 
@@ -371,6 +496,57 @@ mod tests {
             .expect("the sender sends again");
         assert_eq!(q.started, later, "fresh from the node");
         assert!(t.glows(later).keys().all(|p| lane(*p)), "lit on lanes only");
+    }
+
+    #[test]
+    fn a_lane_with_few_nodes_is_broken_up_by_relays() {
+        // a trunk from x 1 to 99 along y 0, a branch north at x 50, a node at the west
+        // end on its own light line
+        let mut lanes: Vec<(i32, i32)> = (1..100).map(|x| (x, 0)).collect();
+        lanes.extend((-20..0).map(|y| (50, y)));
+        let nodes = vec![(0, 0)];
+        let (lane, node) = grid(&lanes, &nodes);
+        let relays: Vec<(i32, i32)> = Rect::new(-5, -25, 110, 30)
+            .iter()
+            .filter(|p| relay(&lane, &node, *p))
+            .map(|p| (p.x, p.y))
+            .collect();
+        // the branch's end and every 12 rows up it; along the trunk every 24 columns,
+        // the junction and the east end; not the west end, beside the node
+        assert_eq!(
+            relays,
+            vec![
+                (50, -20),
+                (50, -12),
+                (24, 0),
+                (48, 0),
+                (50, 0),
+                (72, 0),
+                (96, 0),
+                (99, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn packets_run_a_lane_with_no_node_on_it() {
+        let lanes: Vec<(i32, i32)> = (0..100).map(|x| (x, 0)).collect();
+        let (lane, node) = grid(&lanes, &[]);
+        let view = Rect::new(0, -10, 100, 20);
+        let near = || {
+            Traffic::seeds(view)
+                .iter()
+                .filter(|p| lane(*p))
+                .collect::<Vec<_>>()
+        };
+        let mut lit = 0;
+        let mut t = Traffic::new(5);
+        for tick in 0..400 {
+            let (glows, _) = t.run_sparse(&lane, &node, near(), view, tick);
+            assert!(glows.keys().all(|p| lane(*p)), "lit on the lane only");
+            lit += glows.values().filter(|(_, head)| *head).count();
+        }
+        assert!(lit > 0, "heads run the lane");
     }
 
     #[test]

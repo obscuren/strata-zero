@@ -4744,9 +4744,11 @@ fn streamed_world_shots() {
 /// What a frame of the city screen costs to draw at 200x60 by night (#27), the mean of a
 /// run of frames: deep in seed 3's home city, on the ground three steps out on its road
 /// and forty, beside the next city; jacked in deep in its Net, four steps out on the
-/// open Net and forty. Built with `--release`, it says what play pays: `cargo test -p
-/// strata-zero --release --target-dir target/smoke -- --ignored streamed_draw_cost
-/// --nocapture`.
+/// open Net and forty. Beside the next city, its people out and its packets running, by
+/// day as well, and beside a busy one by day, and what the whole frame costs there (the
+/// screen run, the city's people's day with it, then drawn). Built with `--release`, it says what play pays:
+/// `cargo test -p strata-zero --release --target-dir target/smoke -- --ignored
+/// streamed_draw_cost --nocapture`.
 #[test]
 #[ignore]
 fn streamed_draw_cost() {
@@ -4763,7 +4765,32 @@ fn streamed_draw_cost() {
         }
         start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES)
     };
+    // a whole frame, the screen run then drawn: the mean and the worst
+    let frame = |st: &mut AppState, map: &mut MapScreen| {
+        let mut t = Term::new(TestBackend::new(SIZE.0, SIZE.1)).unwrap();
+        t.draw(|f| map.draw(st, f)).unwrap();
+        let mut worst = 0.0f64;
+        let start = std::time::Instant::now();
+        for _ in 0..FRAMES * 3 {
+            let one = std::time::Instant::now();
+            st.tick += 1;
+            map.update(st, &[]);
+            t.draw(|f| map.draw(st, f)).unwrap();
+            worst = worst.max(one.elapsed().as_secs_f64() * 1000.0);
+        }
+        let mean = start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES * 3);
+        (mean, worst)
+    };
+    // the next city's people out on its street, and its packets on its lanes
+    let alive = |st: &AppState, next: crate::outside::Settlement| {
+        let o = st.outside.as_ref().unwrap();
+        let city = o.held_city(next).unwrap();
+        let walkers =
+            crate::outside::people_of(st, next).map_or(0, |w| w.visible(city.size.rect()).len());
+        format!("{walkers} of theirs on the street")
+    };
     let mut rows = Vec::new();
+    let mut frames = Vec::new();
     // on foot: deep in the city, three steps out on its road past its edge, forty
     let mut st = sited_run(22 * 60);
     let deep = deep_in_the_city(&st);
@@ -4777,12 +4804,35 @@ fn streamed_draw_cost() {
     rows.push(("street, ground beside the city", cost(&mut st, &map)));
     walk_on(&mut st, &mut map, d, 40, SIZE);
     rows.push(("street, ground far out", cost(&mut st, &map)));
-    // beside the next city, built as you came near and drawn from its own map
-    let (_, at, _) = beside_the_next_city();
+    // beside the next city, built as you came near and drawn from its own map, its
+    // people out by night and by day; then jacked in beside its Net
+    let (next, at, _) = beside_the_next_city();
+    for (what, minute) in [
+        ("street, beside the next city", 22 * 60),
+        ("street, beside the next city, day", 13 * 60),
+    ] {
+        let mut beside = sited_run(minute);
+        handover::on_foot(&mut beside, at);
+        let mut map = map_on_you(&mut beside, SIZE);
+        rows.push((what, cost(&mut beside, &map)));
+        frames.push((what, frame(&mut beside, &mut map), alive(&beside, next)));
+    }
+    let (busy, by) = beside_the_busy_city();
+    let mut beside = sited_run(13 * 60);
+    handover::on_foot(&mut beside, by);
+    let mut map = map_on_you(&mut beside, SIZE);
+    let what = "street, beside a busy city, day";
+    rows.push((what, cost(&mut beside, &map)));
+    frames.push((what, frame(&mut beside, &mut map), alive(&beside, busy)));
     let mut beside = sited_run(22 * 60);
-    handover::on_foot(&mut beside, at);
-    let map = map_on_you(&mut beside, SIZE);
-    rows.push(("street, beside the next city", cost(&mut beside, &map)));
+    jacked_in_near(&mut beside, at);
+    let mut map = map_on_you(&mut beside, SIZE);
+    rows.push(("Net, beside the next city", cost(&mut beside, &map)));
+    frames.push((
+        "Net, beside the next city",
+        frame(&mut beside, &mut map),
+        alive(&beside, next),
+    ));
     // jacked in: deep in the city's Net, four steps past its edge, forty
     let mut st = sited_run(22 * 60);
     jacked_in_near(&mut st, deep);
@@ -4795,7 +4845,124 @@ fn streamed_draw_cost() {
     walk_on(&mut st, &mut map, d, 40, SIZE);
     rows.push(("Net, open Net far out", cost(&mut st, &map)));
     for (what, ms) in rows {
-        println!("{what:<34} {ms:>7.2} ms a frame");
+        println!("{what:<36} {ms:>7.2} ms a frame");
+    }
+    for (what, (mean, worst), alive) in frames {
+        println!("{what:<36} {mean:>7.2} ms a whole frame, worst {worst:.2} ({alive})");
+    }
+}
+
+/// Seed 3's city 2, whose people are out and about all day (the next city's stay at
+/// work in its towers): a cell of the open ground beside its buildings, in the home
+/// city's frame.
+fn beside_the_busy_city() -> (crate::outside::Settlement, Pos) {
+    use crate::outside::stream::tests::handover;
+    let busy = crate::outside::Settlement {
+        city: 2,
+        town: None,
+    };
+    let mut probe = sited_run(13 * 60);
+    handover::hold(&mut probe, busy);
+    let o = probe.outside.as_ref().unwrap();
+    let city = o.held_city(busy).unwrap();
+    let (x, _) = beside_the_buildings(&probe, busy, city, o.origin(city))
+        .expect("open ground beside its buildings");
+    (busy, handover::local(&probe, x))
+}
+
+/// The cities next door alive (`2026-11-05-streamed-world-design.md`, "After the first
+/// play"), at 200x60, each a few moments apart to show what moves: on foot on the open
+/// ground beside seed 3's city 2 by day, its people walking its streets; jacked in beside
+/// the next city's Net, packets on its lanes; on a trunk of the open Net, no node near,
+/// packets running it.
+#[test]
+#[ignore]
+fn alive_next_door_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    // a few moments of play between shots: the clock a tick a frame, each frame drawn
+    let play = |st: &mut AppState, map: &mut MapScreen, frames: usize| {
+        let mut t = Term::new(TestBackend::new(WIDE.0, WIDE.1)).unwrap();
+        for _ in 0..frames {
+            st.tick += 1;
+            map.update(st, &[]);
+            t.draw(|f| map.draw(st, f)).unwrap();
+        }
+    };
+    // beside a city whose people are about, built as you came near, a while on
+    let (busy, beside) = beside_the_busy_city();
+    let mut st = sited_run(13 * 60);
+    handover::on_foot(&mut st, beside);
+    let mut map = map_on_you(&mut st, WIDE);
+    assert!(crate::outside::people_of(&st, busy).is_some(), "its people");
+    // a while on, its people on their way about their day
+    for _ in 0..20 * sim::TICKS_PER_MINUTE {
+        st.tick += 1;
+        map.update(&mut st, &[]);
+    }
+    for n in 1..=3 {
+        play(&mut st, &mut map, 45);
+        shot_stack(&format!("alive_beside_day_{n}"), &st, &[&map], WIDE);
+    }
+    let (_, at, _) = beside_the_next_city();
+    let mut st = sited_run(22 * 60);
+    jacked_in_near(&mut st, at);
+    let mut map = map_on_you(&mut st, WIDE);
+    for n in 1..=3 {
+        play(&mut st, &mut map, 12);
+        shot_stack(&format!("alive_net_beside_{n}"), &st, &[&map], WIDE);
+    }
+    // a trunk of the open ground straight on 24 cells each way, no node of the open
+    // Net's within a view of it, nearest the city
+    let mut st = sited_run(22 * 60);
+    let on = {
+        let city = st.city.as_ref().unwrap();
+        let (w, h) = (city.size.w as i32, city.size.h as i32);
+        crate::outside::stream::tend(&mut st, citygen::Rect::new(-160, -80, w + 320, h + 160));
+        let o = st.outside.as_ref().unwrap();
+        let origin = o.origin(st.city.as_ref().unwrap());
+        let open_lane = |p: Pos| {
+            crate::outside::stream::owner_of(&st, p).is_none()
+                && o.stream
+                    .net
+                    .tile(origin.offset(p.x, p.y))
+                    .is_some_and(|t| t.terrain == citygen::Terrain::NetLane)
+        };
+        let nodes: Vec<Pos> = o
+            .stream
+            .net
+            .cells_in(citygen::Rect::new(
+                origin.x - 160,
+                origin.y - 80,
+                w + 320,
+                h + 160,
+            ))
+            .filter(|(_, t)| matches!(t.feature, Some(citygen::Feature::Node(_))))
+            .map(|(c, _)| Pos::new(c.x - origin.x, c.y - origin.y))
+            .collect();
+        let middle = Pos::new(w / 2, h / 2);
+        citygen::Rect::new(-150, -70, w + 300, h + 140)
+            .iter()
+            .filter(|p| {
+                (-24..=24).all(|i| open_lane(p.offset(i, 0)))
+                    || (-12..=12).all(|i| open_lane(p.offset(0, i)))
+            })
+            .filter(|p| {
+                nodes
+                    .iter()
+                    .all(|n| (n.x - p.x).abs() > 140 || (n.y - p.y).abs() > 50)
+            })
+            .min_by_key(|p| p.manhattan(middle))
+            .expect("a trunk on the open ground")
+    };
+    jacked_in_near(&mut st, on);
+    let mut map = map_on_you(&mut st, WIDE);
+    for n in 1..=3 {
+        play(&mut st, &mut map, 12);
+        shot_stack(&format!("alive_trunk_{n}"), &st, &[&map], WIDE);
     }
 }
 

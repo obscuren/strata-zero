@@ -115,6 +115,25 @@ impl GroundView {
         }
     }
 
+    /// The cells built in `area` (world-wide cells), each with its tile: an overworld
+    /// tile at a time, not looked up cell by cell.
+    pub fn cells_in(&self, area: Rect) -> impl Iterator<Item = (Pos, &Tile)> + '_ {
+        let (x0, y0) = (area.x.div_euclid(TILE), area.y.div_euclid(TILE));
+        let (x1, y1) = (
+            (area.x + area.w - 1).div_euclid(TILE),
+            (area.y + area.h - 1).div_euclid(TILE),
+        );
+        (y0..=y1)
+            .flat_map(move |y| (x0..=x1).map(move |x| Pos::new(x, y)))
+            .filter_map(|t| self.tiles.get(&t).map(|b| (t, b)))
+            .flat_map(|(t, b)| {
+                b.cells
+                    .iter()
+                    .map(move |(q, tile)| (Pos::new(TILE * t.x + q.x, TILE * t.y + q.y), tile))
+            })
+            .filter(move |(p, _)| area.contains(*p))
+    }
+
     /// The tile at world-wide cell `p`, if it is built.
     pub fn tile(&self, p: Pos) -> Option<&Tile> {
         let t = Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
