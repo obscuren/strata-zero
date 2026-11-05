@@ -1,9 +1,9 @@
 //! The cities' neon on the overworld, round 2's: each district breathes in its colour on
 //! its own slow beat (20 to 36 s a breath, in five steps each way), each tile up to 2 s
 //! off it so a step ripples across the district; half the signs stutter about once a
-//! minute; after dark the windows change about once a minute, more signs light and the
-//! skyline spills onto the ground and water round it; the towers' beacons blink red
-//! every 6 s.
+//! minute; while the lamps burn (`lighting::lamps_on`) the windows change about once a
+//! minute, more signs light and the skyline spills onto the ground and water round it;
+//! the towers' beacons blink red every 6 s. The hour sets how strong it all is.
 
 use super::live::{Hour, hash2, hash3, key, unit};
 use super::{Kind, roll};
@@ -91,7 +91,8 @@ impl Neon {
         }
     }
 
-    /// The neon over tile `p` (`t`, drawn as `kind`, `base` its glyph by day) at `tick`.
+    /// The neon over tile `p` (`t`, drawn as `kind`, `base` its glyph by day) at `tick`,
+    /// as strong as `hour` makes it, the lights on with the `lamps`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply(
         &self,
@@ -103,6 +104,7 @@ impl Neon {
         style: &StylePack,
         tick: u64,
         hour: Hour,
+        lamps: bool,
         c: &mut Cell,
     ) {
         let accent = |theme: Theme| style.theme(theme).accent;
@@ -112,10 +114,10 @@ impl Neon {
             let g =
                 hour.pick([0.10, 0.18, 0.24]) * (0.35 + 0.65 * v) * self.breath(u.theme, p, tick);
             c.fg = c.fg.mix(acc, g);
-            if hour.dark() {
+            if lamps {
                 c.bg = c.bg.mix(acc, g * 0.3);
             }
-            if hour.dark() && matches!(c.ch, '█' | '▓' | '▒') {
+            if lamps && matches!(c.ch, '█' | '▓' | '▒') {
                 let slot = (tick + hash2(self.windows, p.x as i64, p.y as i64) % WINDOW_SLOT)
                     / WINDOW_SLOT;
                 let on = unit(hash3(self.lit, p.x as i64, p.y as i64, slot as i64)) < WINDOW_LIT;
@@ -126,23 +128,23 @@ impl Neon {
                 };
             }
             let r = roll(world, p);
-            if base == '▪' || (hour.dark() && v > 0.3 && r > 0.86 && r <= 0.92) {
+            if base == '▪' || (lamps && v > 0.3 && r > 0.86 && r <= 0.92) {
                 let h = hash2(self.signs, p.x as i64, p.y as i64);
                 let cycle = SIGN_CYCLE + (h >> 1) % SIGN_SPREAD;
                 let at = (tick + (h >> 8) % cycle) % cycle;
                 let stutters = h & 1 == 0 && at < SIGN_STUTTER;
                 let on = !stutters || !((tick >> 1) + h % 3).is_multiple_of(3);
                 c.ch = '▪';
-                c.fg = match (on, hour) {
+                c.fg = match (on, lamps) {
                     (false, _) => acc.scale(0.22),
-                    (true, Hour::Day) => acc.scale(0.7),
-                    (true, _) => acc,
+                    (true, false) => acc.scale(0.7),
+                    (true, true) => acc,
                 };
-                if on && hour.dark() {
+                if on && lamps {
                     c.bg = c.bg.mix(acc, 0.16);
                 }
             }
-        } else if hour.dark() {
+        } else if lamps {
             let near = self.near[p];
             if let Some((d, theme)) = near {
                 let k = hour.pick([0.0, 0.07, 0.13])
@@ -172,7 +174,7 @@ impl Neon {
             c.ch = '▪';
             c.fg = TOWER;
             c.bold = true;
-            if hour.dark() {
+            if lamps {
                 c.bg = c.bg.mix(TOWER, 0.22);
             }
         }

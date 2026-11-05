@@ -3,9 +3,10 @@
 //! pale and its road glows red two tiles each way (by day only its pulse); the truck
 //! stop's sign dips now and then, and after dark lights its tile and a faint ring; the
 //! water plant pumps; a camp's fire flickers, glowing after dark; the wreck sparks.
-//! Nothing lights the roads but a checkpoint its own.
+//! Nothing lights the roads but a checkpoint its own. After dark is while the lamps
+//! burn (`lighting::lamps_on`).
 
-use super::live::{Hour, hash2, hash3, key, quant};
+use super::live::{hash2, hash3, key, quant};
 use crate::anim::effects::pulse;
 use crate::render::{Cell, Rgb};
 use citygen::overworld::{LINK_E, LINK_N, LINK_S, LINK_W, Overworld, PoiKind};
@@ -96,13 +97,13 @@ impl Beacons {
         }
     }
 
-    /// The places' light on tile `p` at `tick`.
-    pub(super) fn apply(&self, world: &Overworld, p: Pos, tick: u64, hour: Hour, c: &mut Cell) {
+    /// The places' light on tile `p` at `tick`, after dark with the `lamps` on.
+    pub(super) fn apply(&self, world: &Overworld, p: Pos, tick: u64, lamps: bool, c: &mut Cell) {
         let n = self.at.get(p).copied().unwrap_or(0);
         if n == 0 {
             return;
         }
-        let dark = hour.dark();
+        let dark = lamps;
         for &(i, touch) in &self.lists[n as usize - 1] {
             let poi = &world.pois[i as usize];
             let (x, y) = (poi.at.x as i64, poi.at.y as i64);

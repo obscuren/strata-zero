@@ -32,8 +32,8 @@ const FIELD_BAND: i64 = 3;
 /// stepping on its own tick.
 const CLOUD_EAST: u64 = 45;
 const CLOUD_NORTH: u64 = 300;
-/// A range's gusts: one in each stretch of 1650 ticks, starting up to 450 into it, so
-/// 1200 to 2100 ticks (40 to 70 s) apart.
+/// The world's gusts: one in each stretch of 1650 ticks, starting up to 450 into it, so
+/// 1200 to 2100 ticks (40 to 70 s) apart, however many ranges it runs through.
 const GUST_EVERY: u64 = 1650;
 const GUST_JITTER: u64 = 450;
 /// The gust's front: a tile per 3 ticks, leaning 0.6 of a tile a row, its band five
@@ -250,15 +250,15 @@ impl Weather {
             .then(|| GUST_BAND[d as usize])
     }
 
-    /// How far range `r`'s gust has come at `tick`, in tiles from its west end, while
-    /// one is crossing it.
+    /// How far the gust has come over range `r` at `tick`, in tiles from the range's west
+    /// end, while one is crossing it.
     fn front(&self, r: u16, tick: u64) -> Option<f32> {
         let span = self.spans[r as usize];
         let now = tick / GUST_EVERY;
         (0..=span / GUST_EVERY + 1)
             .filter_map(|back| now.checked_sub(back))
             .find_map(|k| {
-                let start = k * GUST_EVERY + hash2(self.gusts, r as i64, k as i64) % GUST_JITTER;
+                let start = k * GUST_EVERY + hash2(self.gusts, k as i64, 0) % GUST_JITTER;
                 (start <= tick && tick < start + span).then(|| (tick - start) as f32 / GUST_TICKS)
             })
     }
@@ -481,6 +481,36 @@ mod tests {
         );
         let sum = |c: Cell| c.fg.0 as u32 + c.fg.1 as u32 + c.fg.2 as u32;
         assert!(sum(gust) > sum(after), "{gust:?} whiter than {after:?}");
+    }
+
+    #[test]
+    fn a_gust_comes_once_in_40_to_70_s_however_many_ranges() {
+        // one gust for the world every 40 to 70 s, each range's front starting from
+        // its own west end: two ranges in view see one gust between them, not one each
+        let w = world();
+        let weather = Weather::new(w);
+        let sizes: Vec<usize> = weather.ranges().iter().map(|r| r.len()).collect();
+        let mut by_size: Vec<u16> = (0..sizes.len() as u16).collect();
+        by_size.sort_by_key(|r| std::cmp::Reverse(sizes[*r as usize]));
+        const FROM: u64 = 100_000;
+        const SIX_HUNDRED_S: u64 = 600 * 30;
+        let mut starts = std::collections::BTreeSet::new();
+        for &r in &by_size[..2] {
+            for t in FROM..FROM + SIX_HUNDRED_S {
+                if weather.front(r, t).is_some() && weather.front(r, t - 1).is_none() {
+                    starts.insert(t);
+                }
+            }
+        }
+        let starts: Vec<u64> = starts.into_iter().collect();
+        assert!(starts.len() >= 8, "{starts:?}");
+        for k in starts.windows(2) {
+            assert!(
+                (1200..=2100).contains(&(k[1] - k[0])),
+                "gusts {} ticks apart: {starts:?}",
+                k[1] - k[0]
+            );
+        }
     }
 
     #[test]
