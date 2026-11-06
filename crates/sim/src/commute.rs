@@ -612,12 +612,12 @@ mod tests {
 
     #[test]
     fn someone_whose_way_in_never_walks_to_work_stays_in_town() {
-        // half of those who work in seed 2's Porthaven with no home there have no way in
-        // that walks to their work: they don't commute, but stay at or inside their work
-        // all day, as before anyone commuted
-        let (_, params) = settlements_of(2)
+        // many of those who work in seed 0's Northmarch with no home there have no way
+        // in that walks to their work: they don't commute, but stay at or inside their
+        // work all day, as before anyone commuted
+        let (_, params) = settlements_of(0)
             .into_iter()
-            .find(|(n, _)| n == "Porthaven")
+            .find(|(n, _)| n == "Northmarch")
             .unwrap();
         let c = Generator::run(params).unwrap();
         let places = Places::derive(&c);
@@ -745,13 +745,14 @@ mod tests {
     #[test]
     fn a_commuters_way_in_walks_to_work() {
         // the cities and towns where the review found people coming in by a way that
-        // never walks to their work: every one now comes by one that does, or stays in
-        // town
+        // never walks to their work (and 21's Ironfall, as 21's Ironburg has nobody
+        // commuting since its districts are its colours): every one now comes by one
+        // that does, or stays in town
         for (seed, name) in [
             (0, "Portgate"),
             (2, "Porthaven"),
             (10, "Northspire"),
-            (21, "Ironburg"),
+            (21, "Ironfall"),
             (23, "Staticwick"),
         ] {
             let (_, params) = settlements_of(seed)
