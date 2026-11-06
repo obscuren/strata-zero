@@ -189,7 +189,7 @@ pub fn walk_minutes(from: Pos, to: Pos) -> u16 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::content::People;
     use crate::people::{Dest, Goal, SimParams, Whereabouts, Work};
@@ -774,7 +774,7 @@ mod tests {
     /// The cities and towns of world `seed` as a game builds them on their sites
     /// (`screens::build_home`, `outside::build_params`): the home city on the world's own
     /// seed, the rest each on a seed of its own. Each named as the world names it.
-    fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
+    pub(crate) fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
         use citygen::overworld::{Overworld, WorldParams, WorldSize};
         use citygen::{sited, sited_town};
         let d = WorldParams::default();
