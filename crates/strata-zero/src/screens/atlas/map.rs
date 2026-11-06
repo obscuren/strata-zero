@@ -315,12 +315,15 @@ fn draw_names(
 /// The first tile of the view along one axis, `cells` cells of `per` tiles over a
 /// stratum `len` long: centred when the stratum is shorter than the view; else panned
 /// to keep the cursor `c` four cells inside (centred on it when it starts or leaves the
-/// view) and clamped to the stratum. Always on the stratum's grid of cells, so a cell
-/// covers the same tiles however the view got there.
-fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 {
+/// view) and clamped to the stratum, its far end in view. Always on a grid of `align`
+/// tiles (a multiple of `per`: the stratum's grid of cells), so a cell covers the same
+/// tiles however the view got there.
+fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, align: i32, restart: bool) -> i32 {
     if len <= cells * per {
         let used = (len + per - 1) / per;
-        return -((cells - used) / 2) * per;
+        // back from the middle to the grid, so the far end stays in view
+        let back = (cells - used) / 2 * per;
+        return -(back - back.rem_euclid(align));
     }
     let margin = MARGIN.min((cells - 1) / 2);
     let at = (c - prev).div_euclid(per);
@@ -333,29 +336,30 @@ fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 
     } else {
         prev
     };
-    let grid = |o: i32| o - o.rem_euclid(per);
+    let grid = |o: i32| o - o.rem_euclid(align);
     let far = len - cells * per;
-    grid(o).clamp(0, far + (per - far.rem_euclid(per)) % per)
+    grid(o).clamp(0, far + (align - far.rem_euclid(align)) % align)
 }
 
 /// `pan` for a cell `num` / `den` tiles long, less than a tile closer in: worked in
-/// `1/den` tiles from the middle of the cursor's tile, the view's first tile the one
-/// its first cell is on.
+/// `1/den` tiles from the middle of the cursor's tile, on a grid of whole tiles, so
+/// the view starts on a tile and the stratum's last tile is whole in view.
 fn pan_by(prev: i32, c: i32, len: i32, cells: i32, (num, den): (i32, i32), restart: bool) -> i32 {
     let g = (1..=num.min(den))
         .rev()
         .find(|g| num % g == 0 && den % g == 0)
         .unwrap_or(1);
     let (num, den) = (num / g, den / g);
-    pan(
+    let o = pan(
         prev * den,
         c * den + den / 2,
         len * den,
         cells,
         num,
+        num * den,
         restart,
-    )
-    .div_euclid(den)
+    );
+    o / den
 }
 
 /// Where the map in `area` looks and where its cursor stands (spec 7): the cursor

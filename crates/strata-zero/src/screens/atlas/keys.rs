@@ -480,22 +480,142 @@ mod tests {
         assert!(y.abs_diff(mid.1) <= 1 || edge_y, "{y} {mid:?}");
     }
 
-    /// Seed 3's run walked into the world's first other city (not a town), on its
-    /// street nearest its block's middle: a city much smaller than the home city.
-    fn in_another_city() -> AppState {
+    /// Seed 3's run walked into the city or town of the world `pick` picks from the
+    /// others (each with its block), on its street nearest its block's middle.
+    fn walked_into(
+        pick: impl Fn(
+            Vec<(crate::outside::Settlement, citygen::Rect)>,
+        ) -> Option<(crate::outside::Settlement, citygen::Rect)>,
+    ) -> AppState {
         let mut st = crate::outside::tests::home_run();
         let o = st.outside.as_ref().unwrap();
-        let (s, b) = o
-            .others()
-            .into_iter()
-            .find(|(s, _)| s.town.is_none())
-            .unwrap();
+        let (s, b) = pick(o.others()).unwrap();
         crate::outside::enter(&mut st, s).unwrap();
         let o = st.outside.as_ref().unwrap();
         let middle = Pos::new(b.x + b.w / 2, b.y + b.h / 2);
         let cell = o.street_of(st.city.as_ref().unwrap(), middle);
         crate::outside::moves::into_city(&mut st, cell);
         st
+    }
+
+    /// The world's first other city (not a town): much smaller than the home city.
+    fn in_another_city() -> AppState {
+        walked_into(|all| all.into_iter().find(|(s, _)| s.town.is_none()))
+    }
+
+    /// The world's smallest town.
+    fn in_the_smallest_town() -> AppState {
+        walked_into(|all| {
+            all.into_iter()
+                .filter(|(s, _)| s.town.is_some())
+                .min_by_key(|(_, b)| (b.w * b.h, b.x, b.y))
+        })
+    }
+
+    #[test]
+    fn the_cursor_shows_on_every_edge_at_every_zoom() {
+        // Walked to every edge and corner of the city at every zoom, on decks of odd
+        // and even widths and heights (and, for a town small enough, those it only just
+        // fits closest in), in the home city, a smaller one and the smallest town: the
+        // cursor always has its cell in view, your @ shows on it when you stand there,
+        // and on the city's edge the whole edge tile is in view.
+        for (name, mut st) in [
+            ("another", in_another_city()),
+            ("town", in_the_smallest_town()),
+            ("home", crate::outside::tests::home_run()),
+        ] {
+            let size = st.city.as_ref().unwrap().size;
+            let (w, h) = (size.w as i32, size.h as i32);
+            let mut bodies: Vec<(u16, u16)> = vec![
+                (100, 27),
+                (101, 28),
+                (102, 27),
+                (103, 28),
+                (117, 28),
+                (118, 27),
+                (119, 28),
+                (120, 27),
+                (121, 28),
+                (198, 47),
+                (199, 48),
+            ];
+            // the map's cells a tile over 2 or 4 pixels only just fits in (2 a tile
+            // across and 1 down, or 4 and 2), with up to a tile less a cell to spare
+            for m in [2, 4] {
+                for d in 0..m {
+                    let (cols, rows) = (m * w + d, m / 2 * h + d % (m / 2));
+                    if cols <= 400 && rows <= 150 {
+                        let side = if cols + 37 + 2 >= 110 { 37 } else { 31 };
+                        bodies.push(((cols + side) as u16, (rows + 1) as u16));
+                    }
+                }
+            }
+            for (bw, bh) in bodies {
+                let body = ratatui::layout::Rect::new(1, 2, bw, bh);
+                for z in [Zoom::Fit, Zoom::Two, Zoom::One] {
+                    st.atlas.zoom = z;
+                    st.atlas.stratum = Some(STREET);
+                    st.atlas.cursor = Some(Pos::new(w / 2, h / 2));
+                    st.atlas.recentre = true;
+                    frame(&mut st, body);
+                    let what = format!("{name} {w}x{h} at {bw}x{bh}, zoom {}", z.number());
+                    for code in ['L', 'J', 'H', 'K', 'L'] {
+                        loop {
+                            let was = cursor(&st);
+                            press(&mut st, code);
+                            shows_the_cursor(&st, &what);
+                            if cursor(&st) == was {
+                                break;
+                            }
+                        }
+                        // at the edge or the corner, you standing there
+                        let (place, pos) = {
+                            let p = st.player.as_ref().unwrap();
+                            (p.place, p.pos)
+                        };
+                        let c = cursor(&st);
+                        super::super::tests::put(&mut st, ON_STREET, c);
+                        let l = laid(&st);
+                        let at = l.cell_of(c);
+                        let you = map::markers(&st, &l, &[])
+                            .into_iter()
+                            .find(|m| m.glyph == '@')
+                            .map(|m| m.cell);
+                        assert!(at.is_some() && you == at, "{what}: @ at {c:?}");
+                        super::super::tests::put(&mut st, place, pos);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The cursor as the map's last layout has it: its cell in view, and on the
+    /// stratum's edge the whole edge tile in view.
+    fn shows_the_cursor(st: &AppState, what: &str) {
+        let l = laid(st);
+        let c = cursor(st);
+        let size = st.city.as_ref().unwrap().size;
+        let (w, h) = (size.w as i32, size.h as i32);
+        let Some(cell) = l.cell_of(c) else {
+            panic!("{what}: the cursor on {c:?} off the map laid {l:?}")
+        };
+        let a = l.area;
+        assert!(a.x <= cell.0 && cell.0 < a.right() && a.y <= cell.1 && cell.1 < a.bottom());
+        // the pixels from the view's first to past the stratum's end, across and down
+        let (s, m, o) = (l.s, l.m, l.origin);
+        let past = |end: i32, from: i32| ((end - from) * m + s - 1).div_euclid(s);
+        let edges = [
+            (c.x == 0, o.x <= 0),
+            (c.x == w - 1, past(w, o.x) <= a.width as i32),
+            (c.y == 0, o.y <= 0),
+            (c.y == h - 1, past(h, o.y) <= 2 * a.height as i32),
+        ];
+        for (on, whole) in edges {
+            assert!(
+                !on || whole,
+                "{what}: the edge tile {c:?} cut by the view {l:?}"
+            );
+        }
     }
 
     #[test]
