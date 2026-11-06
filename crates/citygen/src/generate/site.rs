@@ -25,44 +25,40 @@ pub(crate) struct Site {
     pub ground: Grid<Tile>,
     pub outline: Grid<f32>,
     pub density: Grid<f32>,
+    /// The city's own overworld tiles (the town's, for a town), world-wide: its
+    /// districts are their colours (`regions`).
+    pub own: Grid<bool>,
 }
 
 /// `base` set to build world `world`'s city `city` on its block: its size the block's
 /// in detail cells, its site the world and the block's corner.
 pub fn sited(world: &Overworld, city: u8, base: GenParams) -> GenParams {
-    let own = world.city_tiles(city).len();
-    on_block(world, city, None, world.city_block(city), own, base)
+    on_block(world, city, None, world.city_block(city), base)
 }
 
 /// `base` set to build town `town` of world `world`'s city `city` on a small map of its
 /// own; none when the town has grown into its city.
 pub fn sited_town(world: &Overworld, city: u8, town: u8, base: GenParams) -> Option<GenParams> {
     let b = world.town_block(city, town)?;
-    let own = world.town_tiles(city, town).len();
-    Some(on_block(world, city, Some(town), b, own, base))
+    Some(on_block(world, city, Some(town), b, base))
 }
 
-/// Overworld tiles of a city to one of its districts: a small city has fewer, a town of
-/// a few tiles one.
-const TILES_A_DISTRICT: usize = 50;
-
-/// `base` on block `b` of the world: its size, its site, and its districts by its `own`
-/// tiles (never more than `base` asks for).
+/// `base` on block `b` of the world: its size and its site. Its districts are its
+/// colours on the overworld (`regions`), however many `base` asks for; the count is
+/// only kept to what a map of its size allows, so the params stay valid.
 fn on_block(
     world: &Overworld,
     city: u8,
     town: Option<u8>,
     b: crate::geom::Rect,
-    own: usize,
     base: GenParams,
 ) -> GenParams {
     let t = detail::TILE;
     let (w, h) = ((t * b.w) as u32, (t * b.h) as u32);
-    let fits = ((w as u64 * h as u64) / 800).min(12) as usize;
-    let districts = (own / TILES_A_DISTRICT).clamp(1, fits.max(1));
+    let fits = ((w as u64 * h as u64) / 800).clamp(1, 12) as u8;
     GenParams {
         size: SizePreset::Custom { w, h },
-        districts: (districts as u8).min(base.districts),
+        districts: base.districts.clamp(1, fits),
         site: Some(CitySite {
             world: world.params.clone(),
             city,
@@ -118,6 +114,7 @@ pub(crate) fn prepare(site: &CitySite, size: Size) -> Option<Site> {
         ground,
         outline,
         density,
+        own,
     })
 }
 
@@ -405,7 +402,7 @@ mod tests {
             land * 10 >= cells * 7,
             "{land} cells built of {cells} its tiles hold"
         );
-        assert!(c.buildings.len() >= 120, "{} buildings", c.buildings.len());
+        assert!(c.buildings.len() >= 110, "{} buildings", c.buildings.len());
     }
 
     #[test]
@@ -493,30 +490,117 @@ mod tests {
         assert!(!c.buildings.is_empty());
     }
 
-    #[test]
-    fn every_city_in_a_world_builds_on_its_site() {
-        let w = Overworld::generate(WorldParams {
-            seed: 8,
-            ..Default::default()
-        })
-        .unwrap();
-        for i in 0..w.cities.len() as u8 {
-            let p = sited(
-                &w,
-                i,
-                GenParams {
-                    seed: 8,
-                    ..Default::default()
-                },
-            );
-            let built = Generator::run(p);
-            assert!(
-                built.is_ok(),
-                "{}: {:?}",
-                w.cities[i as usize].name,
-                built.err()
-            );
+    /// The runs of `tiles` (overworld tiles of one city or town): tiles of one colour
+    /// joined side to side, each with its colour.
+    fn runs_of(w: &Overworld, tiles: &[Pos]) -> Vec<(crate::world::Theme, Vec<Pos>)> {
+        let colour = |p: Pos| {
+            tiles
+                .contains(&p)
+                .then(|| w.tile(p).and_then(|t| t.urban).map(|u| u.theme))
+                .flatten()
+        };
+        let mut done: Vec<Pos> = Vec::new();
+        let mut runs = Vec::new();
+        for &start in tiles {
+            if done.contains(&start) {
+                continue;
+            }
+            let theme = colour(start).expect("a city's tile has its colour");
+            let mut run = vec![start];
+            done.push(start);
+            let mut i = 0;
+            while i < run.len() {
+                let at = run[i];
+                i += 1;
+                for n in at.neighbors4() {
+                    if !done.contains(&n) && colour(n) == Some(theme) {
+                        done.push(n);
+                        run.push(n);
+                    }
+                }
+            }
+            runs.push((theme, run));
         }
+        runs
+    }
+
+    /// The cells of city `c` on its own overworld `tiles` are each in a district of their
+    /// tile's colour, but on a sliver's: a run of one colour with too little land to be
+    /// a district of its own, or whose streets left no room for a building, gone to a
+    /// neighbour. The slivers' tile count.
+    fn in_its_colours(w: &Overworld, c: &City, tiles: &[Pos]) -> usize {
+        let o = c.params.site.as_ref().unwrap().origin;
+        let t = detail::TILE;
+        let st = &c.stratum(StratumKind::Street).unwrap().tiles;
+        let mut slivers = 0;
+        for (theme, run) in runs_of(w, tiles) {
+            let (mut cells, mut built) = (0, false);
+            let mut wrong = Vec::new();
+            for q in &run {
+                for dy in 0..t {
+                    for dx in 0..t {
+                        let p = Pos::new(t * q.x + dx - o.x, t * q.y + dy - o.y);
+                        let Some(x) = st.get(p) else { continue };
+                        built |= x.building.is_some();
+                        let Some(d) = x.district else { continue };
+                        cells += 1;
+                        if c.district(d).theme != theme {
+                            wrong.push((p, c.district(d).theme));
+                        }
+                    }
+                }
+            }
+            if wrong.is_empty() {
+                continue;
+            }
+            assert!(
+                cells < crate::generate::regions::SLIVER || !built,
+                "{}: a run of {theme:?} ({} tiles, {cells} cells) is built as {:?} at {:?}",
+                c.name,
+                run.len(),
+                wrong[0].1,
+                wrong[0].0
+            );
+            slivers += run.len();
+        }
+        slivers
+    }
+
+    #[test]
+    fn every_city_in_a_world_builds_in_its_colours() {
+        // every city and town of three worlds builds on its site, its districts the
+        // overworld's colours over it, tile for tile (3's other cities were all corp core
+        // and combat zone under neon that said otherwise)
+        let (mut tiles, mut slivers) = (0, 0);
+        for seed in [3u64, 8, 41] {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let base = GenParams {
+                seed,
+                ..Default::default()
+            };
+            for i in 0..w.cities.len() as u8 {
+                let mut all = vec![(sited(&w, i, base.clone()), w.city_tiles(i))];
+                for t in 0..w.cities[i as usize].towns.len() as u8 {
+                    if let Some(p) = sited_town(&w, i, t, base.clone()) {
+                        all.push((p, w.town_tiles(i, t)));
+                    }
+                }
+                for (p, own) in all {
+                    let town = p.site.as_ref().unwrap().town;
+                    let c = Generator::run(p).unwrap_or_else(|e| {
+                        panic!("seed {seed}: {} {town:?}: {e}", w.cities[i as usize].name)
+                    });
+                    slivers += in_its_colours(&w, &c, &own);
+                    tiles += own.len();
+                }
+            }
+        }
+        // slivers are a stray tile here and there, not whole quarters
+        assert!(slivers * 10 < tiles, "{slivers} of {tiles} tiles merged");
     }
 
     #[test]

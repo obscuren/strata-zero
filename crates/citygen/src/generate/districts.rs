@@ -1,5 +1,8 @@
 //! Stage 2: district seeds, Voronoi regions, theme assignment, wealth and decay fields.
+//! A city on its site takes its districts from the overworld's colours instead
+//! (`regions`): one district for each run of one colour, with that colour's theme.
 
+use super::regions::{Regions, regions};
 use super::{GenCtx, Stage, StageRunner, StepOut};
 use crate::geom::{Pos, Rect};
 use crate::ids::DistrictId;
@@ -17,6 +20,8 @@ pub(crate) struct DistrictsStage {
     row: i32,
     finalized: bool,
     noise: Option<OpenSimplex>,
+    /// A city on its site: its districts, from the overworld's colours.
+    regions: Option<Regions>,
 }
 
 const FILLER_THEMES: [Theme; 4] = [
@@ -57,6 +62,15 @@ impl DistrictsStage {
         seeds
     }
 
+    /// The district cell `p` is in: its colour's on the overworld for a city on its site,
+    /// else its nearest seed's.
+    fn district_at(&self, ctx: &GenCtx, p: Pos) -> DistrictId {
+        match (self.regions.as_ref(), ctx.scratch.site.as_ref()) {
+            (Some(r), Some(site)) => DistrictId(r.at(site.origin, p)),
+            _ => self.nearest_seed(p),
+        }
+    }
+
     fn nearest_seed(&self, p: Pos) -> DistrictId {
         let mut best = 0;
         let mut best_d = i64::MAX;
@@ -70,20 +84,10 @@ impl DistrictsStage {
         DistrictId(best as u32)
     }
 
+    /// A lone city's themes, by the districts' roles: the core, the combat zone farthest
+    /// out, the docks on the water, industry beside them, the rest in turn.
     fn assign_themes(&self, ctx: &GenCtx) -> Vec<Theme> {
         let n = self.seeds.len();
-        // A town of one quarter: the overworld's colour for it, else old town.
-        if n == 1 {
-            let theme = ctx.scratch.site.as_ref().and_then(|site| {
-                let c = self.seeds[0];
-                let tile = Pos::new(
-                    (site.origin.x + c.x).div_euclid(crate::overworld::detail::TILE),
-                    (site.origin.y + c.y).div_euclid(crate::overworld::detail::TILE),
-                );
-                site.world.tile(tile).and_then(|t| t.urban).map(|u| u.theme)
-            });
-            return vec![theme.unwrap_or(Theme::OldTown)];
-        }
         let mut themes: Vec<Option<Theme>> = vec![None; n];
         let st = ctx
             .city
@@ -154,7 +158,7 @@ impl DistrictsStage {
                 if !ctx.is_land(p) {
                     continue;
                 }
-                let d = self.nearest_seed(p);
+                let d = self.district_at(ctx, p);
                 for k in StratumKind::PHYSICAL {
                     if let Some(t) = ctx.city.tile_mut(k, p) {
                         t.district = Some(d);
@@ -198,7 +202,10 @@ impl DistrictsStage {
     }
 
     fn finalize(&mut self, ctx: &mut GenCtx) {
-        self.merge_slivers(ctx);
+        // a city on its site merged its slivers as it found its colours
+        if self.regions.is_none() {
+            self.merge_slivers(ctx);
+        }
         let n = self.seeds.len();
         let size = ctx.size();
         let noise = self.noise.as_ref().expect("begin sets noise");
@@ -226,7 +233,10 @@ impl DistrictsStage {
                 }
             }
         }
-        let themes = self.assign_themes(ctx);
+        let themes = match self.regions.as_ref() {
+            Some(r) => r.themes.clone(),
+            None => self.assign_themes(ctx),
+        };
 
         let clamp = |v: f32| v.clamp(0.0, 1.0);
         let mut districts = Vec::with_capacity(n);
@@ -294,7 +304,15 @@ impl StageRunner for DistrictsStage {
             (sx / land.len() as i64) as i32,
             (sy / land.len() as i64) as i32,
         );
-        self.seeds = Self::place_seeds(&mut rng, &land, ctx.params().districts as usize);
+        self.regions = ctx
+            .scratch
+            .site
+            .as_ref()
+            .map(|site| regions(site, ctx.size(), &ctx.scratch.land));
+        self.seeds = match self.regions.as_ref() {
+            Some(r) => r.centres.clone(),
+            None => Self::place_seeds(&mut rng, &land, ctx.params().districts as usize),
+        };
         self.row = 0;
         self.finalized = false;
         Ok(())
@@ -310,7 +328,7 @@ impl StageRunner for DistrictsStage {
                 if !ctx.is_land(p) {
                     continue;
                 }
-                let d = self.nearest_seed(p);
+                let d = self.district_at(ctx, p);
                 for k in StratumKind::PHYSICAL {
                     if let Some(t) = ctx.city.tile_mut(k, p) {
                         t.district = Some(d);

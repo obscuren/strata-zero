@@ -418,7 +418,8 @@ mod tests {
                 .iter()
                 .filter(|b| site.density[middle(b.footprint)] > 0.6)
                 .count();
-            assert!(core >= 20, "seed {seed}: {core} buildings in the core");
+            // (the core is the overworld's corp core, its towers on big lots)
+            assert!(core >= 12, "seed {seed}: {core} buildings in the core");
         }
     }
 
@@ -600,9 +601,10 @@ mod tests {
     #[test]
     fn a_billboard_stands_whole() {
         // the cities where the review found a billboard with letters or a cap taken down
-        // by the street's dressing: each reads its brand between its caps
+        // by the street's dressing (and 4's Emberfall, as 4's Porthaven has none since
+        // its districts are its colours): each reads its brand between its caps
         for (seed, name) in [
-            (4, "Porthaven"),
+            (4, "Emberfall"),
             (25, "Chromehaven"),
             (33, "Greyside"),
             (38, "Hollowmouth"),

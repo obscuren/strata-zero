@@ -11,6 +11,7 @@ pub mod lots;
 pub mod naming;
 pub mod net;
 pub mod outskirts;
+pub mod regions;
 pub mod site;
 pub mod streets;
 pub mod terrain;
