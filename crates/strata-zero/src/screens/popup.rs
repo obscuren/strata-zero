@@ -61,7 +61,8 @@ pub enum Pick {
     },
     /// Closes and asks the map for its look cursor on this tile.
     Look(citygen::Pos),
-    /// Shows what someone says as a card, and logs their line.
+    /// Shows what someone says as a card, and logs their line; someone the story listens
+    /// for answers with the story instead, card and line left out.
     Talk {
         lines: Vec<Line<'static>>,
         said: String,
@@ -691,10 +692,11 @@ impl Popup {
                 }
             }
             Pick::Talk { lines, said, who } => {
-                st.say(said);
+                // The story listening answers in their place: its lines, not their usual one.
                 let heard = who.filter(|w| crate::missions::listens(st, *w));
-                if let Some(who) = heard {
-                    crate::missions::send(st, crate::missions::Event::Talked(who));
+                match heard {
+                    Some(who) => crate::missions::send(st, crate::missions::Event::Talked(who)),
+                    None => st.say(said),
                 }
                 // Whoever holds out a tray holds it out again.
                 if who.is_some()

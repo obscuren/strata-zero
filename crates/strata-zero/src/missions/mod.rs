@@ -3590,6 +3590,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn talked_to_at_the_sale_coz_says_only_his_scene() {
+        use crate::app::{Screen, ScreenCmd};
+        use crate::screens::popup::{Pick as Row, Popup};
+        use crate::screens::testutil::key;
+        let mut st = by_coz_at_night();
+        let coz = coz(&st);
+        // His Talk row, as you find him: his usual line, and what pressing it does.
+        let talk = |st: &mut AppState| {
+            let rows = crate::jobs::ui::rows(st, coz);
+            let Row::Talk { said, .. } = &rows[0].pick else {
+                panic!("Talk first")
+            };
+            let said = said.clone();
+            let mut popup = Popup::verbs("COZ", rows, st.tick);
+            let cmd = popup.update(st, &[key(crossterm::event::KeyCode::Char('t'))]);
+            (said, cmd)
+        };
+        let logged = |st: &AppState, line: &str| st.log.iter().filter(|e| e.text == line).count();
+        // At the sale the story listens: his scene opens, and his fixer line is not said.
+        assert!(listens(&st, coz));
+        let (said, cmd) = talk(&mut st);
+        assert!(matches!(cmd, ScreenCmd::Pop { .. }), "no card");
+        assert_eq!(logged(&st, &said), 0, "{said}");
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("coz"));
+        scene::skip(&mut st);
+        tick(&mut st);
+        assert_eq!(logged(&st, &said), 0, "{said}");
+        // Sold, a fixer again: his line on its card and in the log, as ever.
+        assert!(!listens(&st, coz));
+        let (said, cmd) = talk(&mut st);
+        assert!(matches!(cmd, ScreenCmd::Stay), "his card");
+        assert_eq!(logged(&st, &said), 1, "{said}");
+    }
+
+    #[test]
     fn a_run_saved_at_the_three_reopens_there() {
         use crate::runs::file::{read, write};
         use crate::runs::snapshot::{after_restore, restore};
