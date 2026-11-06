@@ -485,14 +485,15 @@ impl Default for NetState {
 }
 
 /// What of the Net's state is the deck's and your Net self's, not a city's: the
-/// failsafe, the cooling, and the mask and the shield on you. It goes where you go
-/// (`outside::enter`).
+/// failsafe, the cooling, and the mask (and when it last wore a beat out on the grid)
+/// and the shield on you. It goes where you go (`outside::enter`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Carried {
     failsafe: bool,
     cooling_until: Option<u64>,
     mask: u8,
     mask_fresh: bool,
+    mask_tick: u64,
     shield: u8,
 }
 
@@ -504,6 +505,7 @@ impl NetState {
             cooling_until: self.cooling_until,
             mask: self.mask,
             mask_fresh: self.mask_fresh,
+            mask_tick: self.grid.mask_tick,
             shield: self.shield,
         }
     }
@@ -514,6 +516,7 @@ impl NetState {
         self.cooling_until = c.cooling_until;
         self.mask = c.mask;
         self.mask_fresh = c.mask_fresh;
+        self.grid.mask_tick = c.mask_tick;
         self.shield = c.shield;
     }
 

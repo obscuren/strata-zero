@@ -2508,6 +2508,33 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn the_masks_beat_crosses_with_you() {
+            // the mask wore a beat just now: over the line into the next city and back
+            // home within the beat, it wears none, in a fresh city or one kept
+            let mut st = home_run();
+            crate::clock::run(&mut st, Some(100), crate::clock::PATHS_PER_FRAME);
+            let (s, x, d, body) = jacked_beside_a_city(&mut st);
+            let home_cell = world_of(&st, body);
+            st.net.mask = 3;
+            st.net.grid.mask_tick = st.clock_tick();
+            st.player.as_mut().unwrap().pos = x.step(d);
+            hand_over(&mut st).expect("into the next city");
+            assert_eq!(o(&st).here(), s);
+            crate::grid::tick(&mut st);
+            assert!(st.net.engaged.is_none());
+            assert_eq!(st.net.mask, 3, "no beat worn crossing in");
+            st.player.as_mut().unwrap().pos = local(&st, home_cell);
+            hand_over(&mut st).expect("home again");
+            assert_eq!(o(&st).here(), o(&st).home());
+            crate::grid::tick(&mut st);
+            assert_eq!(st.net.mask, 3, "no beat worn crossing back");
+            // a beat on, it wears one
+            let left = st.net.grid.mask_tick + crate::net::BEAT_TICKS - st.clock_tick();
+            crate::clock::run(&mut st, Some(left), crate::clock::PATHS_PER_FRAME);
+            assert_eq!(st.net.mask, 2, "a beat on");
+        }
+
+        #[test]
         fn a_run_in_flight_holds_your_net_self_out_of_a_handover() {
             let mut st = home_run();
             let (_, x, d, _) = jacked_beside_a_city(&mut st);

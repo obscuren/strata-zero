@@ -100,7 +100,7 @@ nothing about them is saved but the goal and the trip in flight.
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on
 the same world cell, the deck's own state with you (`net::Carried`: the failsafe, the
-cooling, the mask, the shield). The body stays in the city you left, held: the player's
+cooling, the mask and its beat on the grid, the shield). The body stays in the city you left, held: the player's
 `body` is its cell in the live city's frame, past the live city's own cells, as a body
 left on the open ground is; a body inside at the flat's rig stands in there by the rig's
 landing (the port the cord runs to), and the home city's own `Stay.player` keeps the body
