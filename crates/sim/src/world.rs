@@ -1924,11 +1924,14 @@ mod tests {
 
     #[test]
     fn a_small_city_drives_its_longer_trips() {
-        // driven past 60 cells on a map as big as a home city's (none has a short side
-        // under 160), past half the short side on a smaller one
+        // driven past 60 cells on a map with a short side of 120 or more (a home city's:
+        // the smallest of worlds 0 to 199 is 128), past half the short side on a smaller
+        // one
         let size = |w, h| Size { w, h };
         assert_eq!(drive_from(size(336, 176)), DRIVE_FROM);
-        assert_eq!(drive_from(size(288, 160)), DRIVE_FROM);
+        assert_eq!(drive_from(size(288, 128)), DRIVE_FROM);
+        assert_eq!(drive_from(size(200, 120)), DRIVE_FROM);
+        assert_eq!(drive_from(size(200, 118)), 59);
         assert_eq!(drive_from(size(136, 80)), 40);
         assert_eq!(drive_from(size(60, 120)), 30);
         // on the test city, 120 by 60, a commute with a car of 40 to 60 cells is driven
