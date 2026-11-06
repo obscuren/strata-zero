@@ -239,7 +239,8 @@ pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, Str
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
 /// a construct's outer wall (a facade's camera, holo ad, lock) or out on the grid (a
-/// district's lamp grid, a street terminal); not hubs, not ICE. Yourself first.
+/// district's lamp grid, a street terminal); not hubs, not ICE; and only on the cells
+/// the live city owns (on another's, that one's map is what's there). Yourself first.
 pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let Some(city) = st.city.as_ref() else {
@@ -247,13 +248,10 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     };
     let near: Vec<Pos> = std::iter::once(pos).chain(pos.neighbors8()).collect();
     for n in &city.net.nodes {
-        if !near.contains(&n.cyber) || matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
-            continue;
-        }
-        let on_wall = city
-            .tile(StratumKind::Net, n.cyber)
-            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate));
-        if n.building.is_some() && !on_wall {
+        if !near.contains(&n.cyber)
+            || !grid_reaches(city, n)
+            || !crate::outside::stream::live_owns(st, n.cyber)
+        {
             continue;
         }
         let what = match n.building {
@@ -267,6 +265,54 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
         out.push((HackTarget::Foe(i), name));
     }
     out
+}
+
+/// What a gate or a node of a city or town other than the live one says when you act on
+/// it from across the line (a program, the look cursor, a step into its gate): you can
+/// see it, not touch it. Standing on its own cells, it's the live one and answers.
+pub const TOO_FAR: &str = "too far from your body to touch it";
+
+/// The nodes of another city's or town's Net on `pos` or beside it (cells of the live
+/// city's frame) that the open Net would reach there, as `targets_outside` finds the
+/// live city's, each by its kind: found through who owns the cell, each city's on its
+/// own map. Out of reach: only the live city's Net answers.
+pub fn out_of_reach(st: &AppState, pos: Pos) -> Vec<NodeKind> {
+    out_of_reach_on(st, std::iter::once(pos).chain(pos.neighbors8()))
+}
+
+/// `out_of_reach`'s nodes on `cells` alone.
+pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<NodeKind> {
+    use crate::outside::stream::{Beyond, Owner};
+    let Some(b) = Beyond::of(st) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in cells {
+        let Some(Owner::City(city, q)) = b.elsewhere(p) else {
+            continue;
+        };
+        out.extend(
+            city.net
+                .nodes
+                .iter()
+                .filter(|n| n.cyber == q && grid_reaches(city, n))
+                .map(|n| n.kind),
+        );
+    }
+    out
+}
+
+/// Whether the open Net reaches node `n` of `city` from its tile or beside it: out on
+/// the grid, or on a construct's outer wall (a facade's camera, holo ad, lock); not hubs,
+/// not ICE.
+fn grid_reaches(city: &City, n: &citygen::Node) -> bool {
+    if matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
+        return false;
+    }
+    n.building.is_none()
+        || city
+            .tile(StratumKind::Net, n.cyber)
+            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
 }
 
 /// A target's kind where you stand.
@@ -438,7 +484,42 @@ impl Default for NetState {
     }
 }
 
+/// What of the Net's state is the deck's and your Net self's, not a city's: the
+/// failsafe, the cooling, and the mask (and when it last wore a beat out on the grid)
+/// and the shield on you. It goes where you go (`outside::enter`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Carried {
+    failsafe: bool,
+    cooling_until: Option<u64>,
+    mask: u8,
+    mask_fresh: bool,
+    mask_tick: u64,
+    shield: u8,
+}
+
 impl NetState {
+    /// What of this state goes where you go.
+    pub fn carried(&self) -> Carried {
+        Carried {
+            failsafe: self.failsafe,
+            cooling_until: self.cooling_until,
+            mask: self.mask,
+            mask_fresh: self.mask_fresh,
+            mask_tick: self.grid.mask_tick,
+            shield: self.shield,
+        }
+    }
+
+    /// What went where you go, put on this city's state.
+    pub fn carry(&mut self, c: Carried) {
+        self.failsafe = c.failsafe;
+        self.cooling_until = c.cooling_until;
+        self.mask = c.mask;
+        self.mask_fresh = c.mask_fresh;
+        self.grid.mask_tick = c.mask_tick;
+        self.shield = c.shield;
+    }
+
     /// The game minute now.
     pub fn now(&self, st: &AppState) -> u64 {
         st.clock_tick() / sim::TICKS_PER_MINUTE
@@ -695,7 +776,11 @@ impl NetState {
 }
 
 pub(crate) fn building_name(st: &AppState, b: BuildingId) -> String {
-    let city = st.city.as_ref();
+    name_in(st.city.as_ref(), b)
+}
+
+/// Building `b`'s name in `city`, as `building_name` says it.
+fn name_in(city: Option<&City>, b: BuildingId) -> String {
     city.and_then(|c| c.building_opt(b).map(|x| (c, x)))
         .map(|(c, x)| {
             x.name
@@ -1391,23 +1476,26 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
-    // A dump on a rig run starts the trace home from the relay nearest you.
-    if st.backdoors.route.is_some() {
-        let running = st.backdoors.trace.is_some();
-        st.backdoors.start_trace(now);
-        let first = st
-            .backdoors
-            .trace
-            .as_ref()
-            .and_then(|t| t.relays.first().copied());
-        match first {
-            _ if running => st.warn("trace running · already on its way"),
-            Some(b) => st.warn(format!(
-                "trace running · it starts at `{}`",
-                building_name(st, b)
-            )),
-            None => st.warn("trace running · straight to your door"),
-        }
+    // A dump on a rig run starts the trace home from the relay nearest you. The rig's
+    // route is your body's city's: held as you left it when your Net self walked out.
+    let trace = |doors: &mut crate::backdoors::Backdoors, city: Option<&City>| {
+        doors.route.as_ref()?;
+        let running = doors.trace.is_some();
+        doors.start_trace(now);
+        let first = doors.trace.as_ref().and_then(|t| t.relays.first().copied());
+        Some(match first {
+            _ if running => "trace running · already on its way".to_string(),
+            Some(b) => format!("trace running · it starts at `{}`", name_in(city, b)),
+            None => "trace running · straight to your door".to_string(),
+        })
+    };
+    let line = if st.backdoors.route.is_some() {
+        trace(&mut st.backdoors, st.city.as_ref())
+    } else {
+        crate::outside::body_stay_mut(st).and_then(|s| trace(&mut s.backdoors, Some(&s.city)))
+    };
+    if let Some(line) = line {
+        st.warn(line);
     }
     let _ = jack_out(st);
     kick(st, 20);
@@ -3093,7 +3181,10 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
 }
 
 /// The Net tile you jacked in at: your rig's landing when the body is at home, else the
-/// port beside the body; none when you are not jacked in.
+/// port beside the body; in a city your Net self has walked out of, that city's port,
+/// in this frame (`outside::held_port`); off the cells every city owns, where a port of
+/// the open ground put you (`ground_port`), or the body's own cell while the Net round it
+/// isn't built; none when you are not jacked in.
 pub fn port_of(st: &AppState) -> Option<Pos> {
     let p = st.player.as_ref()?;
     let (place, body) = p.body?;
@@ -3102,6 +3193,11 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
     }
     let city = st.city.as_ref()?;
     let k = place.stratum()?;
+    if !crate::outside::stream::live_owns(st, body) {
+        return crate::outside::held_port(st)
+            .or_else(|| ground_port(st, body))
+            .or(Some(body));
+    }
     std::iter::once(body)
         .chain(body.neighbors8())
         .find_map(|q| {
@@ -3109,6 +3205,24 @@ pub fn port_of(st: &AppState) -> Option<Pos> {
                 .find(|c| c.kind == citygen::ConnectorKind::Jack && c.serves.contains(&k))
                 .map(|c| c.pos)
         })
+}
+
+/// How far from the body a port of the open ground finds the Net with signal.
+pub const GROUND_SIGNAL: i32 = 8;
+
+/// Where a port of the open ground beside the body at `body` (the live city's frame)
+/// puts you on the Net: the nearest cell of the Net with signal (not the void between)
+/// within `GROUND_SIGNAL`, over the Net past the city's edge; none where there is none,
+/// or the Net round the body isn't built now.
+pub fn ground_port(st: &AppState, body: Pos) -> Option<Pos> {
+    use crate::render::map::TileMap;
+    let city = st.city.as_ref()?;
+    let b = crate::outside::stream::Beyond::of(st)?;
+    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+    crate::outside::nearest(body, GROUND_SIGNAL, |q| {
+        net.tile(q)
+            .is_some_and(|t| t.is_walkable() && t.terrain != Terrain::Void)
+    })
 }
 
 /// The cord on the open Net: the way back from you to where the run came onto the
@@ -3138,7 +3252,8 @@ pub struct CordView {
 
 /// The cord while you stand on the open Net, jacked in, with the cord on in Settings;
 /// its walk left empty for `cord_walk`. A trace shows on it only when it walks this
-/// run's route.
+/// run's route. The route and its relays are the body's city's: when your Net self has
+/// walked out of it, as it holds them, in this frame.
 pub fn cord_view(st: &AppState) -> Option<CordView> {
     if !st.cord {
         return None;
@@ -3147,21 +3262,26 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
     if p.place != Place::Stratum(StratumKind::Net) || !p.jacked_in() {
         return None;
     }
-    let city = st.city.as_ref()?;
     let port = port_of(st);
-    let relays: Vec<(BuildingId, Pos)> = st
-        .backdoors
+    let (doors, gates, shift) = match crate::outside::body_stay(st) {
+        Some((stay, shift)) => (&stay.backdoors, &stay.city, shift),
+        None => (&st.backdoors, st.city.as_ref()?, Pos::new(0, 0)),
+    };
+    let relays: Vec<(BuildingId, Pos)> = doors
         .route
         .as_ref()
         .map(|r| {
             r.relays
                 .iter()
-                .filter_map(|b| crate::constructs::city_gate(city, *b).map(|g| (*b, g)))
+                .filter_map(|b| {
+                    crate::constructs::city_gate(gates, *b)
+                        .map(|g| (*b, g.offset(shift.x, shift.y)))
+                })
                 .collect()
         })
         .unwrap_or_default();
     let entry = relays.last().map(|(_, g)| *g).or(port)?;
-    let held = |b: BuildingId| st.backdoors.held(b).is_some();
+    let held = |b: BuildingId| doors.held(b).is_some();
     // Each hop with the relay at its end nearest you.
     let mut hops: Vec<(BuildingId, (Pos, Pos))> = relays
         .windows(2)
@@ -3172,12 +3292,12 @@ pub fn cord_view(st: &AppState) -> Option<CordView> {
         hops.push((*first, (*gate, port)));
     }
     let this_run = |t: &crate::backdoors::HomeTrace| {
-        st.backdoors
+        doors
             .route
             .as_ref()
             .is_some_and(|r| t.relays.iter().all(|b| r.relays.contains(b)))
     };
-    let trace = st.backdoors.trace.as_ref().filter(|t| this_run(t));
+    let trace = doors.trace.as_ref().filter(|t| this_run(t));
     // A hop is the trace's once it has passed the relay at its near end, or that
     // relay burned before it came (a sprung honeypot, a key gone stale): the trace
     // goes on past a dead relay. With no trace on, a dead relay's hop is cut.
@@ -3218,6 +3338,67 @@ pub fn cord_walk(city: &City, entry: Pos, you: Pos) -> Vec<Pos> {
     let mut walk = citygen::pathing::astar(city.size, entry, you, cost).unwrap_or_default();
     walk.pop();
     walk
+}
+
+/// How far apart, each way, the cord's ends are walked over the Net past the city's
+/// edge; farther, the cord runs straight: a way looked for over more of the world
+/// would cost a frame.
+pub const CORD_REACH: i32 = 64;
+
+/// The cord's walk from `entry` to `you`, `you` left off: over the city's own Net as
+/// `cord_walk` finds it while both ends are on cells the city owns (or there is no
+/// world past it); else over the Net past its edge, whichever area owns each cell,
+/// lanes cheap and the open grid and the void dear, looked for round both ends
+/// (`stream::path_area`). Ends more than `CORD_REACH` apart, or no way found (ground
+/// not built), it runs straight.
+pub fn cord_walk_beyond(st: &AppState, entry: Pos, you: Pos) -> Vec<Pos> {
+    use crate::outside::stream::{Beyond, path_area, path_within};
+    use crate::render::map::TileMap;
+    let Some(city) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    let Some(b) = Beyond::of(st) else {
+        return cord_walk(city, entry, you);
+    };
+    if b.live_owns(entry) && b.live_owns(you) {
+        return cord_walk(city, entry, you);
+    }
+    if entry.chebyshev(you) > CORD_REACH {
+        return straight(entry, you);
+    }
+    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+    let cost = |_: Pos, to: Pos| match net.tile(to)?.terrain {
+        Terrain::NetLane | Terrain::NetGate => Some(1),
+        Terrain::NetGrid | Terrain::Void => Some(3),
+        _ => None,
+    };
+    match path_within(path_area(city.size, entry, you), entry, you, cost) {
+        Some(mut walk) => {
+            walk.pop();
+            walk
+        }
+        None => straight(entry, you),
+    }
+}
+
+/// A four-way line from `a` toward `b`, `b` left off: the cord where no way is looked
+/// for, each step along whichever axis lags the straight line more.
+fn straight(a: Pos, b: Pos) -> Vec<Pos> {
+    let (n, m) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+    let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
+    let mut out = Vec::with_capacity((n + m) as usize);
+    let (mut x, mut y, mut p) = (0, 0, a);
+    while (x, y) != (n, m) {
+        out.push(p);
+        if y == m || (x < n && (2 * x + 1) * m < (2 * y + 1) * n) {
+            x += 1;
+            p = p.offset(sx, 0);
+        } else {
+            y += 1;
+            p = p.offset(0, sy);
+        }
+    }
+    out
 }
 
 /// The arrow from `from` toward `to`, eight ways; none on the tile itself.

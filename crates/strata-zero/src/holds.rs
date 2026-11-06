@@ -202,14 +202,12 @@ pub fn looped(st: &AppState, node: NodeId, now: u64) -> bool {
 
 /// The clock moves: holds run out, and with them a feed and a hijack; a district's
 /// lights come back on; a feed closes once you are off the Net; a decoy ends when you
-/// leave its construct.
+/// leave its construct. The cities and towns held as you left them keep the same clock:
+/// their holds, hijacks and lights out run out as the live city's do, so they look from
+/// outside as they will when you walk in again.
 pub fn tick(st: &mut AppState) {
     let now = st.net.now(st);
-    st.net.holds.retain(|h| now < h.until);
-    let holds = &st.net.holds;
-    st.net
-        .hijacks
-        .retain(|j| now < j.until && holds.iter().any(|h| h.node == j.node));
+    expire(&mut st.net, now);
     let jacked = st.player.as_ref().is_some_and(|p| p.jacked_in());
     if let Some(f) = st.net.feed
         && (!jacked || held(st, f, now).is_none())
@@ -226,19 +224,36 @@ pub fn tick(st: &mut AppState) {
         st.net.decoy = None;
     }
     say_lines(st);
-    st.net.lights_out.retain(|_, until| now < *until);
     relight(st);
+    for stay in crate::outside::held_stays_mut(st) {
+        expire(&mut stay.net, now);
+        relight_city(&mut stay.city, &stay.net);
+    }
+}
+
+/// What of a city's Net state has run out by game minute `now` gone: holds, the hijacks
+/// they carried, lights out.
+fn expire(net: &mut crate::net::NetState, now: u64) {
+    net.holds.retain(|h| now < h.until);
+    let holds = &net.holds;
+    net.hijacks
+        .retain(|j| now < j.until && holds.iter().any(|h| h.node == j.node));
+    net.lights_out.retain(|_, until| now < *until);
 }
 
 /// The street's lamps cut in the districts `NetState::lights_out` holds, and burning
 /// everywhere else. Each tick, and as a saved run is reopened
 /// (`runs::snapshot::after_restore`): the street's `dark` is never saved.
 pub fn relight(st: &mut AppState) {
-    let dark: std::collections::BTreeSet<DistrictId> = st.net.lights_out.keys().copied().collect();
-    if let Some(s) = st
-        .city
-        .as_mut()
-        .and_then(|c| c.stratum_mut(StratumKind::Street))
+    if let Some(city) = st.city.as_mut() {
+        relight_city(city, &st.net);
+    }
+}
+
+/// `city`'s street lamps cut in the districts `net.lights_out` holds, burning elsewhere.
+fn relight_city(city: &mut citygen::City, net: &crate::net::NetState) {
+    let dark: std::collections::BTreeSet<DistrictId> = net.lights_out.keys().copied().collect();
+    if let Some(s) = city.stratum_mut(StratumKind::Street)
         && s.dark != dark
     {
         s.dark = dark;
@@ -502,25 +517,45 @@ pub fn hijack_lines(st: &AppState, b: BuildingId) -> [(Line, String); 3] {
 
 /// The street tiles of a building's holo ads: its ad board nodes' anchors.
 pub fn ad_tiles(st: &AppState, b: BuildingId) -> Vec<Pos> {
-    st.city.as_ref().map_or_else(Vec::new, |c| {
-        c.net
-            .nodes
-            .iter()
-            .filter(|n| n.building == Some(b) && n.kind == NodeKind::AdBoard)
-            .filter(|n| n.anchor.0 == StratumKind::Street)
-            .map(|n| n.anchor.1)
-            .collect()
-    })
+    st.city
+        .as_ref()
+        .map_or_else(Vec::new, |c| ad_tiles_in(c, b))
+}
+
+/// The street tiles of building `b`'s holo ads in `city`.
+fn ad_tiles_in(city: &citygen::City, b: BuildingId) -> Vec<Pos> {
+    city.net
+        .nodes
+        .iter()
+        .filter(|n| n.building == Some(b) && n.kind == NodeKind::AdBoard)
+        .filter(|n| n.anchor.0 == StratumKind::Street)
+        .map(|n| n.anchor.1)
+        .collect()
 }
 
 /// Every hijacked ad on the street, with what it says, while its hold lasts.
 pub fn hijacked_ads(st: &AppState) -> Vec<(Pos, &Hijack)> {
-    let now = st.net.now(st);
-    st.net
-        .hijacks
+    match st.city.as_ref() {
+        Some(city) => hijacked_ads_in(city, &st.net, st.net.now(st)),
+        None => Vec::new(),
+    }
+}
+
+/// Every hijacked ad on `city`'s street at game minute `now` (its Net state `net`),
+/// with what it says: the live city's, or one held as you left it.
+pub fn hijacked_ads_in<'a>(
+    city: &citygen::City,
+    net: &'a crate::net::NetState,
+    now: u64,
+) -> Vec<(Pos, &'a Hijack)> {
+    net.hijacks
         .iter()
         .filter(|j| now < j.until)
-        .flat_map(|j| ad_tiles(st, j.building).into_iter().map(move |p| (p, j)))
+        .flat_map(|j| {
+            ad_tiles_in(city, j.building)
+                .into_iter()
+                .map(move |p| (p, j))
+        })
         .collect()
 }
 
@@ -961,15 +996,30 @@ mod tests {
         let (ad, at) = node_cyber(&st, b, NodeKind::AdBoard);
         st.player.as_mut().unwrap().pos = Pos::new(at.x, at.y - 1);
         crack_to_landing(&mut st, HackTarget::Node(ad));
-        // An hour on, people are about.
+        // On, until someone on foot is within reach of the ads.
         {
+            let ads: Vec<Pos> = ad_tiles(&st, b)
+                .into_iter()
+                .filter(|a| in_front(&st, *a).is_some())
+                .collect();
             let city = st.city.as_ref().unwrap();
             let w = st.world.as_mut().unwrap();
-            for _ in 0..60 {
+            let about = |w: &sim::World| {
+                w.people().iter().any(|p| {
+                    w.spot_of(p.id).is_none()
+                        && w.pos_of(p.id)
+                            .is_some_and(|at| ads.iter().any(|a| a.chebyshev(at) <= LURE_REACH))
+                })
+            };
+            for _ in 0..24 * 60 {
+                if about(w) {
+                    break;
+                }
                 let t = w.tick() + sim::TICKS_PER_MINUTE;
                 w.advance(city, t);
                 w.path_some(city, usize::MAX);
             }
+            assert!(about(w), "someone passes by in a day");
         }
         st.net.holds.iter_mut().for_each(|h| h.until = u64::MAX);
         let before = st.world.as_ref().unwrap().pending();

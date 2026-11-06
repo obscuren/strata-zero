@@ -3,6 +3,7 @@
 
 use crate::constructs::Constructs;
 use crate::interiors::Interiors;
+use crate::outside::stream::{Beyond, GroundMap, Owner};
 use crate::render::{ConnDir, Rgb};
 use citygen::{
     BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, Place, Pos, Size, StratumKind,
@@ -23,6 +24,11 @@ pub trait TileMap {
     fn connector(&self, p: Pos) -> Option<ConnDir>;
     fn walkable(&self, p: Pos) -> bool {
         self.tile(p).is_some_and(|t| t.is_walkable())
+    }
+    /// Whether sight and the walker may go to `p` at all: the map's own cells, and on a
+    /// map with what lies past its edge, every cell built there.
+    fn reaches(&self, p: Pos) -> bool {
+        self.size().contains(p)
     }
     /// What lies beyond the map's edge at `p`, drawn dim: a construct floats on the
     /// Net's lattice, a floor sits in the building's mass, a stratum in nothing.
@@ -69,6 +75,12 @@ pub struct StratumMap<'a> {
     pub stratum: StratumKind,
     /// The minute of the day the stratum is seen at; ambient and lamps follow it.
     pub minute: u16,
+    /// What lies past the city's edge, and the cells of it other areas own: none on a
+    /// map that ends at the city's edge (`MapRef::beyond` sets it). With it, `tile` may
+    /// answer with another area's tile, its building and district ids that area's:
+    /// such a map is for walking, sight and drawing, never for reading ids against
+    /// `city`.
+    pub beyond: Option<&'a Beyond<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -145,7 +157,22 @@ impl<'a> MapRef<'a> {
             city,
             stratum,
             minute,
+            beyond: None,
         })
+    }
+
+    /// The street's or the Net's map carried on past the city's edge by `b`; floors,
+    /// constructs and the other strata as they are.
+    pub fn beyond(self, b: &'a Beyond<'a>) -> MapRef<'a> {
+        match self {
+            MapRef::Stratum(m) if matches!(m.stratum, StratumKind::Street | StratumKind::Net) => {
+                MapRef::Stratum(StratumMap {
+                    beyond: Some(b),
+                    ..m
+                })
+            }
+            other => other,
+        }
     }
 
     /// The map at a place at `minute` of the day, if its floor or construct has been
@@ -213,29 +240,85 @@ impl<'a> MapRef<'a> {
     }
 }
 
+impl<'a> StratumMap<'a> {
+    /// What the area owning `p` says of it when that isn't this map's city: another
+    /// held city's map at its own cell, or the stream's at the world cell. None for
+    /// the city's own cells, and on a map with nothing past it.
+    fn elsewhere<T>(&self, p: Pos, ask: impl FnOnce(&dyn TileMap, Pos) -> T) -> Option<T> {
+        Some(match self.beyond?.elsewhere(p)? {
+            Owner::City(city, q) => ask(
+                &StratumMap {
+                    city,
+                    beyond: None,
+                    ..*self
+                },
+                q,
+            ),
+            Owner::Ground(stream, at) => ask(&self.ground(stream), at),
+        })
+    }
+
+    /// The stream's layer for this stratum, at this hour.
+    fn ground(&self, stream: &'a crate::outside::stream::Stream) -> GroundMap<'a> {
+        GroundMap {
+            stream,
+            layer: self.stratum,
+            minute: self.minute,
+        }
+    }
+}
+
 impl TileMap for StratumMap<'_> {
     fn size(&self) -> Size {
         self.city.size
     }
 
     fn tile(&self, p: Pos) -> Option<&Tile> {
-        self.city.tile(self.stratum, p)
+        match self.beyond.and_then(|b| b.elsewhere(p)) {
+            None => self.city.tile(self.stratum, p),
+            Some(Owner::City(city, q)) => city.tile(self.stratum, q),
+            Some(Owner::Ground(stream, at)) => self.ground(stream).cell(at),
+        }
+    }
+
+    /// As any map, and past the city's edge the Net's void too.
+    fn walkable(&self, p: Pos) -> bool {
+        let void_walks = self.beyond.is_some() && self.stratum == StratumKind::Net;
+        self.tile(p)
+            .is_some_and(|t| t.is_walkable() || (void_walks && t.terrain == Terrain::Void))
+    }
+
+    /// The city's cells; with what lies past its edge, every cell built.
+    fn reaches(&self, p: Pos) -> bool {
+        match self.beyond {
+            None => self.size().contains(p),
+            Some(_) => self.tile(p).is_some(),
+        }
     }
 
     fn light(&self, p: Pos) -> u8 {
+        if let Some(v) = self.elsewhere(p, |m, q| m.light(q)) {
+            return v;
+        }
         self.city
             .stratum(self.stratum)
             .map_or(0, |s| s.light_at(p, self.minute))
     }
 
     fn emitted(&self, p: Pos) -> u8 {
+        if let Some(v) = self.elsewhere(p, |m, q| m.emitted(q)) {
+            return v;
+        }
         self.city
             .stratum(self.stratum)
             .map_or(0, |s| s.emitted(p, self.minute))
     }
 
     fn emits(&self, p: Pos) -> bool {
-        self.tile(p).is_some_and(|t| {
+        if let Some(v) = self.elsewhere(p, |m, q| m.emits(q)) {
+            return v;
+        }
+        self.city.tile(self.stratum, p).is_some_and(|t| {
             citygen::lighting::emits(t.terrain, t.feature, self.stratum, self.lamps_on_at(p))
         })
     }
@@ -253,6 +336,9 @@ impl TileMap for StratumMap<'_> {
     }
 
     fn lamps_on_at(&self, p: Pos) -> bool {
+        if let Some(v) = self.elsewhere(p, |m, q| m.lamps_on_at(q)) {
+            return v;
+        }
         self.city
             .stratum(self.stratum)
             .map_or_else(|| self.lamps_on(), |s| s.lamps_lit(p, self.minute))
@@ -267,20 +353,31 @@ impl TileMap for StratumMap<'_> {
     }
 
     fn theme(&self, p: Pos) -> Option<Theme> {
-        self.tile(p)
+        if let Some(v) = self.elsewhere(p, |m, q| m.theme(q)) {
+            return v;
+        }
+        self.city
+            .tile(self.stratum, p)
             .and_then(|t| t.district)
             .and_then(|d| self.city.district_opt(d))
             .map(|d| d.theme)
     }
 
     fn kind(&self, p: Pos) -> Option<BuildingKind> {
-        self.tile(p)
+        if let Some(v) = self.elsewhere(p, |m, q| m.kind(q)) {
+            return v;
+        }
+        self.city
+            .tile(self.stratum, p)
             .and_then(|t| t.building)
             .and_then(|b| self.city.building_opt(b))
             .map(|b| b.kind)
     }
 
     fn connector(&self, p: Pos) -> Option<ConnDir> {
+        if let Some(v) = self.elsewhere(p, |m, q| m.connector(q)) {
+            return v;
+        }
         self.city
             .connectors_at(p)
             .filter(|c| c.serves.contains(&self.stratum))
@@ -457,6 +554,22 @@ impl TileMap for MapRef<'_> {
         }
     }
 
+    fn walkable(&self, p: Pos) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.walkable(p),
+            MapRef::Floor(m) => m.walkable(p),
+            MapRef::Construct(m) => m.walkable(p),
+        }
+    }
+
+    fn reaches(&self, p: Pos) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.reaches(p),
+            MapRef::Floor(m) => m.reaches(p),
+            MapRef::Construct(m) => m.reaches(p),
+        }
+    }
+
     fn backdrop(&self, p: Pos) -> Option<Tile> {
         match self {
             MapRef::Stratum(m) => m.backdrop(p),
@@ -547,6 +660,7 @@ mod tests {
                 tick: 1,
                 style: &s,
                 vis: None,
+                keep: None,
                 overlays: &[],
                 cursor: None,
             }

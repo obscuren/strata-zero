@@ -1,0 +1,87 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index 9f5c7a3..8cb2e13 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -3514,3 +3514,82 @@ fn net_shell() {
+         false,
+     );
+ }
++
++// THROWAWAY (overworld mockups): the city's edge as it is, on the street and in the Net.
++#[test]
++#[ignore]
++fn tmp_overworld_edge() {
++    let Ok(dir) = std::env::var("SHOT_DIR") else {
++        return;
++    };
++    let mut st = state_home();
++    let _ = MapScreen::walking(&mut st);
++    let city = st.city.clone().unwrap();
++    let (w, h) = (city.size.w as i32, city.size.h as i32);
++    let mut picks = Vec::new();
++    for (name, at) in [
++        ("w", Pos::new(3, h / 2)),
++        ("e", Pos::new(w - 4, h / 2)),
++        ("n", Pos::new(w / 2, 2)),
++        ("s", Pos::new(w / 2, h - 3)),
++    ] {
++        let land = (0..h)
++            .filter(|y| {
++                let x = if name == "w" { 0 } else if name == "e" { w - 1 } else { at.x };
++                let y = if name == "n" { 0 } else if name == "s" { h - 1 } else { *y };
++                city.stratum(StratumKind::Street)
++                    .and_then(|st| st.tiles.get(Pos::new(x, y)))
++                    .is_some_and(|t| t.terrain != citygen::Terrain::Water)
++            })
++            .count();
++        let near = (0..8)
++            .flat_map(|r| (-r..=r).flat_map(move |d| [at.offset(d, r), at.offset(r, d)]))
++            .find(|p| city.walkable(StratumKind::Street, *p));
++        eprintln!("edge {name}: land {land}/{h} stand {near:?}");
++        if let Some(p) = near {
++            picks.push((name, p, land));
++        }
++    }
++    picks.sort_by_key(|(_, _, land)| std::cmp::Reverse(*land));
++    let (name, at, _) = picks[0];
++    eprintln!("using edge {name} at {at:?}");
++    st.rain = false;
++    stand_in(&mut st, Place::Stratum(StratumKind::Street), at);
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..h {
++            for x in 0..w {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    let mut street = MapScreen::walking(&mut st);
++    street.cam.snap(at);
++    street.update(&mut st, &[]);
++    write_svg(&dir, "edge_street", &st, &draw_stack(&st, &[&street], (120, 40)), false);
++    {
++        let p = st.player.as_mut().unwrap();
++        p.body = Some((p.place, p.pos));
++    }
++    stand_in(&mut st, Place::Stratum(StratumKind::Net), at);
++    {
++        let p = st.player.as_mut().unwrap();
++        for y in 0..h {
++            for x in 0..w {
++                p.set_vis(Pos::new(x, y), crate::render::Visibility::Visible);
++            }
++        }
++    }
++    let mut net = MapScreen::walking(&mut st);
++    net.cam.snap(at);
++    net.update(&mut st, &[]);
++    write_svg(&dir, "edge_net", &st, &draw_stack(&st, &[&net], (120, 40)), false);
++}
++
++// THROWAWAY (overworld mockups): the deck's MAP zoomed all the way out, as it is.
++#[test]
++#[ignore]
++fn tmp_overworld_deck_map() {
++    atlas_shot("deck_map_fit", &[KeyCode::Char('-'), KeyCode::Char('-')], false);
++    atlas_shot("deck_map_one", &[], false);
++}

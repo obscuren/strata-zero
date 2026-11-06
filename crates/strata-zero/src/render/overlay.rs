@@ -177,6 +177,7 @@ mod tests {
                     tick: 0,
                     style: &s,
                     vis: None,
+                    keep: None,
                     overlays: &[&Digital {
                         enabled: true,
                         focus,
@@ -210,6 +211,7 @@ mod tests {
                 tick: 0,
                 style: &s,
                 vis: None,
+                keep: None,
                 overlays: &[&off],
                 cursor: None,
             }
@@ -257,6 +259,7 @@ mod tests {
                 tick: 0,
                 style: &s,
                 vis: None,
+                keep: None,
                 overlays: &[&Digital {
                     enabled: true,
                     focus: Some(server.id),

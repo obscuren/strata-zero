@@ -192,7 +192,7 @@ mod tests {
         .unwrap();
         let area = Rect::new(0, 0, k.size.w as u16 + 4, k.size.h as u16 + 2);
         let mut buf = Buffer::empty(area);
-        NetLook { view }.draw(&map, Pos::new(-2, -1), area, 0, &mut buf, &style);
+        NetLook { view, keep: None }.draw(&map, Pos::new(-2, -1), area, 0, &mut buf, &style);
         buf
     }
 

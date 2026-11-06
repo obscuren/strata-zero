@@ -2,9 +2,10 @@
 
 use super::ui::{district_of_fixer, fixer_name};
 use super::{
-    DELIVER_MIN_RANGE, FETCH_RANGE, HOURS_COPY, HOURS_DELIVER, HOURS_FETCH, HOURS_PLANT, Job,
-    JobId, Jobs, Kind, KindTag, Objective, PAY_COPY_PER_SECURITY, PAY_DELIVER_BASE, PAY_FETCH,
-    PAY_PLANT_BASE, PAY_PLANT_PER_SECURITY, PAY_VAULT_PER_SECURITY, PLANT_AT, State, VAULT_AT,
+    DELIVER_MIN_RANGE, DELIVER_ON_SHIFT, FETCH_RANGE, HOURS_COPY, HOURS_DELIVER, HOURS_FETCH,
+    HOURS_PLANT, Job, JobId, Jobs, Kind, KindTag, Objective, PAY_COPY_PER_SECURITY,
+    PAY_DELIVER_BASE, PAY_FETCH, PAY_PLANT_BASE, PAY_PLANT_PER_SECURITY, PAY_VAULT_PER_SECURITY,
+    PLANT_AT, State, VAULT_AT,
 };
 use crate::app::AppState;
 use citygen::construct::{GREY_THRESHOLD, ICE_THRESHOLD};
@@ -83,16 +84,25 @@ fn lived_in(st: &AppState, b: BuildingId) -> bool {
 /// Whether a shift `(from, to)` in minutes of the day is on at some point within
 /// `window` minutes after minute `start` of the day. A shift whose end is before its
 /// start wraps past midnight.
-pub fn on_shift_within((from, to): (u16, u16), start: u64, window: u64) -> bool {
+pub fn on_shift_within(shift: (u16, u16), start: u64, window: u64) -> bool {
+    minutes_on_shift_within(shift, start, window) > 0
+}
+
+/// How many minutes of a shift `(from, to)` in minutes of the day are on within `window`
+/// minutes (a day at most) after minute `start` of the day. A shift whose end is before
+/// its start wraps past midnight.
+pub fn minutes_on_shift_within((from, to): (u16, u16), start: u64, window: u64) -> u64 {
     const DAY: u64 = 24 * 60;
     let (from, to) = (from as u64, to as u64);
     let end = if to > from { to } else { to + DAY };
     // Lay the window a day in, so the shift's previous occurrence can be tried too.
     let (s, e) = (start % DAY + DAY, start % DAY + DAY + window);
-    (0..=2).any(|k| {
-        let (a, b) = (from + k * DAY, end + k * DAY);
-        a < e && b > s
-    })
+    (0..=2)
+        .map(|k| {
+            let (a, b) = (from + k * DAY, end + k * DAY);
+            b.min(e).saturating_sub(a.max(s))
+        })
+        .sum()
 }
 
 /// `09:00–20:00`.
@@ -398,6 +408,16 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                     _ => None,
                 })
                 .filter(|(_, pos)| pos.manhattan(spot) >= DELIVER_MIN_RANGE)
+                // someone from out of town is out of reach once they walk out: enough of
+                // their shift in the window to walk to them
+                .filter(|(id, pos)| {
+                    world.comes_in_by(*id).is_none() || {
+                        let walk = u64::from(sim::commute::walk_minutes(spot, *pos));
+                        let shift = world.work_hours(*id).unwrap_or((0, 0));
+                        let on = minutes_on_shift_within(shift, start, HOURS_DELIVER * 60);
+                        on >= DELIVER_ON_SHIFT.max(walk)
+                    }
+                })
                 .collect();
             if pool.is_empty() {
                 return None;
@@ -878,6 +898,61 @@ mod tests {
             "but it is at 22:00 + 10h"
         );
         assert!(on_shift_within((480, 1080), 600, 60), "mid-shift");
+    }
+
+    /// Minutes of shift `(from, to)` inside `window` minutes after minute `start` of the
+    /// day, counted a minute at a time.
+    fn minutes_on(shift: (u16, u16), start: u64, window: u64) -> u64 {
+        let (from, to) = (u64::from(shift.0), u64::from(shift.1));
+        (start..start + window)
+            .filter(|m| {
+                let m = m % (24 * 60);
+                if from < to {
+                    (from..to).contains(&m)
+                } else {
+                    m >= from || m < to
+                }
+            })
+            .count() as u64
+    }
+
+    #[test]
+    fn deliver_to_a_commuter_leaves_an_hour_of_their_shift() {
+        // someone who comes in from out of town is in reach only on their shift: a
+        // package for them leaves at least an hour of it inside the job's window, at
+        // whatever hour the fixer rolls it
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        let people = sim::People::load().unwrap();
+        let window = crate::jobs::HOURS_DELIVER * 60;
+        let mut commuters = 0;
+        for minute in (0..24 * 60).step_by(25) {
+            let city = st.city.as_ref().unwrap();
+            let w = sim::World::seed(city, &people, &sim::SimParams::default(), minute, 0);
+            st.world = Some(w);
+            let start = u64::from(minute);
+            for counter in 0..20 {
+                let Some(j) = generate(&mut st, fx, KindTag::Deliver, counter) else {
+                    continue;
+                };
+                let Kind::Deliver { to, .. } = j.kind else {
+                    panic!()
+                };
+                let w = st.world.as_ref().unwrap();
+                if w.comes_in_by(to).is_none() {
+                    continue;
+                }
+                commuters += 1;
+                let shift = w.work_hours(to).unwrap();
+                let on = minutes_on(shift, start, window);
+                assert!(
+                    on >= 60,
+                    "at {minute}: {} comes in {shift:?}, {on} minutes of it inside the job",
+                    w.people()[to.0 as usize].name
+                );
+            }
+        }
+        assert!(commuters >= 10, "{commuters} packages for commuters");
     }
 
     #[test]

@@ -24,6 +24,14 @@ fn terrain(city: &City, p: Pos) -> Option<Terrain> {
     city.tile(StratumKind::Street, p).map(|t| t.terrain)
 }
 
+/// Of a building's doors (never none), the nearest `from`: the first of those as near.
+fn nearest(doors: &[Pos], from: Pos) -> Pos {
+    *doors
+        .iter()
+        .min_by_key(|d| d.manhattan(from))
+        .unwrap_or(&doors[0])
+}
+
 #[derive(Default)]
 pub struct Places {
     /// Street doors per building: Door tiles on the footprint's edge with the street outside.
@@ -41,6 +49,21 @@ pub struct Places {
     pub turf: HashMap<BuildingId, Vec<Pos>>,
     /// The street tile beside a building's first door, where muscle stands.
     pub posts: HashMap<BuildingId, Pos>,
+    /// Cells of the map's edge a road crosses, where people come in from off the map
+    /// (`commute::ways_in`).
+    pub ways_in: Vec<Pos>,
+    /// Where a walk from each way in goes.
+    pub walks: crate::commute::Walks,
+    /// Per building with a street door, the ways in whose walk reaches the door it's
+    /// gone into by from there (`door_from`) and the door it's come out of (its first):
+    /// the ways someone who comes in to work there may come by.
+    ways_to: HashMap<BuildingId, Vec<Pos>>,
+    /// Somewhere to get something to eat at midday, each by its first door: noodle bars,
+    /// markets and bars, in building order.
+    pub food: Vec<(BuildingId, Pos)>,
+    /// Where a drink after work is had in this city: of a bar, a noodle bar and the
+    /// Strip, those it has, in that order.
+    pub drinks: Vec<crate::content::Leisure>,
     kerb_set: HashSet<Pos>,
 }
 
@@ -175,6 +198,45 @@ impl Places {
             .filter(|(_, t)| !t.is_empty())
             .collect();
 
+        let door_set: HashSet<Pos> = doors.values().flatten().copied().collect();
+        let (ways_in, walks) = crate::commute::ways_in(city, &door_set);
+        let ways_to = doors
+            .iter()
+            .map(|(b, at)| {
+                let ways = ways_in
+                    .iter()
+                    .copied()
+                    .filter(|w| walks.reaches(*w, nearest(at, *w)) && walks.reaches(*w, at[0]))
+                    .collect();
+                (*b, ways)
+            })
+            .collect();
+        let has = |kind: BuildingKind| {
+            city.buildings
+                .iter()
+                .any(|b| b.kind == kind && doors.contains_key(&b.id))
+        };
+        let food = city
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BuildingKind::NoodleBar | BuildingKind::Market | BuildingKind::Bar
+                )
+            })
+            .filter_map(|b| Some((b.id, *doors.get(&b.id)?.first()?)))
+            .collect();
+        use crate::content::Leisure;
+        let drinks = [
+            (Leisure::Bar, has(BuildingKind::Bar)),
+            (Leisure::NoodleBar, has(BuildingKind::NoodleBar)),
+            (Leisure::Strip, !beats.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(l, here)| here.then_some(l))
+        .collect();
+
         Places {
             doors,
             kerbs,
@@ -183,8 +245,24 @@ impl Places {
             corners,
             turf,
             posts,
+            ways_in,
+            walks,
+            ways_to,
+            food,
+            drinks,
             kerb_set,
         }
+    }
+
+    /// The street door of `b` a walk from `from` goes in by: the nearest (the first of
+    /// those as near); none for a building with no street door.
+    pub fn door_from(&self, b: BuildingId, from: Pos) -> Option<Pos> {
+        Some(nearest(self.doors.get(&b)?, from))
+    }
+
+    /// The ways in someone who comes in to work `b` may come by (`ways_to`).
+    pub fn ways_to(&self, b: BuildingId) -> &[Pos] {
+        self.ways_to.get(&b).map_or(&[], |w| w.as_slice())
     }
 
     pub fn is_kerb(&self, p: Pos) -> bool {

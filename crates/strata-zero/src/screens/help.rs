@@ -30,6 +30,8 @@ const EXPLORE: &[(&str, &str)] = &[
 const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
     ("< >", "take stairs, lift, ladder or manhole"),
+    ("W", "up to the overworld, from the street or the ground"),
+    ("W on the Net", "the Net over the world, to walk"),
     (
         "space",
         "the thing in reach: look, talk, take, jack in, stairs · continue a run",
@@ -78,14 +80,24 @@ const DEV_KEYS: &[&str] = &["F5 F6", "c", ":", "`"];
 /// Draws the key list for `mode` centred over whatever is already on screen; the dev
 /// mode keys only with `dev` (dev mode unlocked).
 pub fn draw(f: &mut Frame, mode: Mode, dev: bool) {
-    let area = f.area();
-    let rows: Vec<_> = match mode {
+    let rows: Vec<(&str, &str)> = match mode {
         Mode::Explore => EXPLORE,
         Mode::Walk => WALK,
     }
     .iter()
     .filter(|(k, _)| dev || !DEV_KEYS.contains(k))
+    .copied()
     .collect();
+    let title = match mode {
+        Mode::Explore => "KEYS · EXPLORE",
+        Mode::Walk => "KEYS · WALK",
+    };
+    draw_keys(f, title, &rows);
+}
+
+/// A key list under `title`, centred over whatever is already on screen.
+pub fn draw_keys(f: &mut Frame, title: &str, rows: &[(&str, &str)]) {
+    let area = f.area();
     let w = area.width.min(72);
     let h = area.height.min(rows.len() as u16 + 2);
     let rect = Rect::new(
@@ -95,10 +107,6 @@ pub fn draw(f: &mut Frame, mode: Mode, dev: bool) {
         h,
     );
     f.render_widget(Clear, rect);
-    let title = match mode {
-        Mode::Explore => "KEYS · EXPLORE",
-        Mode::Walk => "KEYS · WALK",
-    };
     let block = boxed(title);
     let inner = block.inner(rect);
     f.render_widget(block, rect);

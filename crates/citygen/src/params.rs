@@ -73,6 +73,22 @@ pub struct GenParams {
     pub decay: f32,
     pub water: WaterMode,
     pub flavor: String,
+    /// Where in a world the city stands; none for a lone city. With a site the city's
+    /// water, outline and highways are the world's, and `water` is not used.
+    #[serde(default)]
+    pub site: Option<CitySite>,
+}
+
+/// A city's place in a world: the world it is in, which of its cities it is, and the
+/// world-wide detail cell its map's top-left corner lies on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CitySite {
+    pub world: crate::overworld::WorldParams,
+    pub city: u8,
+    pub origin: crate::geom::Pos,
+    /// One of the city's outlying towns, on a map of its own, rather than the city.
+    #[serde(default)]
+    pub town: Option<u8>,
 }
 
 impl Default for GenParams {
@@ -86,6 +102,7 @@ impl Default for GenParams {
             decay: 0.4,
             water: WaterMode::Bay,
             flavor: "default".into(),
+            site: None,
         }
     }
 }
@@ -94,6 +111,12 @@ impl GenParams {
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self
+    }
+
+    /// The fewest districts the city may have: one on its site in a world (a small
+    /// city's or a town's, by its tiles); four for a lone city.
+    pub fn least_districts(&self) -> u8 {
+        if self.site.is_some() { 1 } else { 4 }
     }
 
     pub fn validate(&self) -> Result<(), GenError> {
@@ -105,10 +128,11 @@ impl GenParams {
                 format!("{w}x{h} is outside 80..=1024 by 40..=512"),
             ));
         }
-        if !(4..=12).contains(&self.districts) {
+        let least = self.least_districts();
+        if !(least..=12).contains(&self.districts) {
             return Err(bad(
                 "districts",
-                format!("{} is outside 4..=12", self.districts),
+                format!("{} is outside {least}..=12", self.districts),
             ));
         }
         if (w as u64) * (h as u64) < self.districts as u64 * 800 {

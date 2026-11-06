@@ -71,7 +71,9 @@ impl ArterialsStage {
         let size = ctx.size();
         astar(size, a, b, |_, to| {
             if !land[to] {
-                return Some(40);
+                // water at bridge cost; a city on its site's dry ground past its outline
+                // dearer still
+                return Some(if ctx.is_wet(to) { 40 } else { 60 });
             }
             if arterial[to] {
                 return Some(2);
@@ -89,7 +91,7 @@ impl ArterialsStage {
                 if !ctx.city.size.contains(q) {
                     continue;
                 }
-                let t = if ctx.is_land(q) {
+                let t = if ctx.is_land(q) || !ctx.is_wet(q) {
                     Terrain::Road
                 } else {
                     Terrain::Bridge

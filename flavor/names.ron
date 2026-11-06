@@ -75,4 +75,26 @@ FlavorPack(
              "Cass", "Dmitri", "Esme", "Fenn", "Greta", "Hollis", "Idris", "Jax", "Kiri", "Lucan",
              "Marlow", "Nico", "Orla", "Pavel", "Rina", "Sunny", "Tobiah", "Una", "Viggo", "Yara",
              "Zeke", "Anouk", "Bram", "Cleo", "Dev", "Elke", "Faris", "Gwen", "Havel", "Imani"],
+    world: WorldNames(
+        regions: [
+            (Range, ["the Teeth", "the Spine", "the Ribs", "the Knuckles", "the Saw", "the Combs", "Rust Ridge", "Glass Ridge", "the Molars"]),
+            (Bay, ["Sable Bay", "Oil Bay", "Grey Bay", "Rust Bay", "Slack Bay", "the Sump"]),
+            (Spill, ["the Spill", "the Seep", "Low Spill", "the Slick", "Bleed Field"]),
+            (Salt, ["Brine Flats", "the Crust", "White Pan", "Salt Hollow"]),
+            (Flats, ["Dust Flats", "the Scour", "Ash Flats", "the Pan", "Grit Flats", "the Long Dry"]),
+            (Valley, ["the Silt", "the Wash", "Mud Run", "the Bottoms", "Reed Run"]),
+        ],
+        pois: [
+            (TruckStop, NameParts(prefixes: ["Kilo-", "Juliet-", "Tango-", "Echo-", "Mike-", "Oscar-"], suffixes: ["4 truck stop", "7 truck stop", "9 truck stop", "12 truck stop"])),
+            (Checkpoint, NameParts(prefixes: ["Halcor", "Velk", "Orrin", "Tesk", "Marrow"], suffixes: [" checkpoint"])),
+            (Relay, NameParts(prefixes: ["relay mast R"], suffixes: ["2", "4", "7", "9", "11"])),
+            (Camp, NameParts(prefixes: ["nomad camp · "], suffixes: ["the Drift", "Tin Camp", "the Caravan", "Wheelhouse"])),
+            (Wreck, NameParts(prefixes: [""], suffixes: ["AV wreck", "tanker wreck", "rig wreck", "downed drone"])),
+            (Arcology, NameParts(prefixes: ["Carrow", "Velde", "Hask", "Orrin"], suffixes: [" arcology"])),
+            (Solar, NameParts(prefixes: ["Sunfield", "Glare", "Brightline", "Heliot"], suffixes: [" array"])),
+            (WaterPlant, NameParts(prefixes: ["Brine", "Clearwell", "Deepdraw"], suffixes: [" water plant"])),
+            (TestRange, NameParts(prefixes: ["Velk", "Halcor", "Orrin"], suffixes: [" test range"])),
+            (Rig, NameParts(prefixes: ["Rig "], suffixes: ["2", "4", "6", "8"])),
+        ],
+    ),
 )

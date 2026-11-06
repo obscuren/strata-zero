@@ -35,6 +35,27 @@ neighbours), `--water none|bay|river`, `--density 0..1`.
 Needs a truecolor terminal of at least 100x30 cells (iTerm2, Ghostty, kitty,
 WezTerm). Saved cities go to `./cities/*.city`.
 
+Overworlds, many seeds on one page in the atlas look, to open in a browser:
+
+```sh
+cargo run --release -p strata-zero -- world --seeds 0..12 --out world-sheet.html
+```
+
+`--seed N` for one; `--size small|medium|large|WxH` (160x52, 320x104, 440x144; medium is
+the game's); `--cities 3..16` (9 by default). The generator is `citygen::overworld`; its design is
+`docs/superpowers/specs/2026-11-04-world-generator-design.md`.
+
+One level down, the walkable ground of the tiles round one overworld tile, drawn as the
+street draws it beside the overworld round it:
+
+```sh
+cargo run --release -p strata-zero -- world --seed 0 --detail 108,30 --span 10x4 --out detail.html
+```
+
+`--detail TX,TY` needs `--seed`; `--span WxH` counts overworld tiles (8×8 detail tiles
+each). The ground is `citygen::overworld::detail`; its design is
+`docs/superpowers/specs/2026-11-04-world-tiles-design.md`.
+
 ### The window
 
 The `window` feature builds the window front end; `--window` opens it:
@@ -78,7 +99,9 @@ open -a "Strata Zero" --args --dev   # the Mac app
 ```
 
 It then starts on, `` ` `` flips it, Settings has a row for it, `?` lists its keys,
-and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on.
+and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on. The
+overworld and the Net overworld take the keys that need no street: `` ` ``, the `:`
+console (`tp X Y` moves you over the world there) and F5's inspector of the tile.
 The game opens on a five-second splash (`screens/splash.rs`) before the title, in
 dev mode too; any key skips it.
 `STRATA_DEV` reaches the game only when a shell starts it: the Mac app opened from

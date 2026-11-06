@@ -192,7 +192,8 @@ fn here(st: &AppState) -> Option<(Place, Pos)> {
 }
 
 /// Tracks `source` in place of whatever was tracked, and logs it; refuses, and keeps
-/// the old track, when there is nothing to walk to or no way there.
+/// the old track, when there is nothing to walk to (or the person is out of town) or no
+/// way there.
 pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
     let concrete = |r: Resolved| match r {
         Resolved::Target(t) => Ok(t),
@@ -200,7 +201,14 @@ pub fn set(st: &mut AppState, source: Source) -> Result<String, String> {
         Resolved::Nowhere => Err("nothing to walk to yet".to_string()),
     };
     let target = concrete(resolve(st, &source))?;
-    let located = concrete(locate(st, target))?;
+    let located = locate(st, target);
+    if located == Resolved::Nowhere
+        && let Target::Person(id) = target
+        && out_of_town(st, id)
+    {
+        return Err(format!("{} is out of town", person_name(st, id)));
+    }
+    let located = concrete(located)?;
     let walk = Walk::new(st, located);
     match walk.leg {
         Err(NoLeg::NoWay) => return Err("no way there from here".to_string()),
@@ -606,6 +614,15 @@ pub fn locate(st: &AppState, t: Target) -> Resolved {
         }
         _ => Resolved::Nowhere,
     }
+}
+
+/// Whether this person is off the map: home out of town, or out for what the city
+/// hasn't got.
+fn out_of_town(st: &AppState, id: PersonId) -> bool {
+    st.world
+        .as_ref()
+        .and_then(|w| w.people().get(id.0 as usize))
+        .is_some_and(|p| p.whereabouts == Whereabouts::Away)
 }
 
 pub(crate) fn person_name(st: &AppState, id: PersonId) -> String {
@@ -1126,6 +1143,32 @@ pub(crate) mod tests {
         set(&mut st, story(0, at)).unwrap();
         assert!(is_tracked(&st, &story(0, at + 3)));
         assert!(!is_tracked(&st, &job_source(id, 0)));
+    }
+
+    #[test]
+    fn someone_out_of_town_is_said_to_be() {
+        // four in the morning: those who come in to work from off the map are out of
+        // town, and a track to one says so
+        let mut st = outside();
+        let city = st.city.as_ref().unwrap();
+        let people = sim::People::load().unwrap();
+        st.world = Some(sim::World::seed(
+            city,
+            &people,
+            &sim::SimParams::default(),
+            4 * 60,
+            st.tick,
+        ));
+        let w = st.world.as_ref().unwrap();
+        let away = w
+            .people()
+            .iter()
+            .find(|p| p.whereabouts == Whereabouts::Away)
+            .expect("someone out of town at four");
+        let (id, name) = (away.id, away.name.clone());
+        let source = Source::Listing(ListingId::Person(id));
+        assert_eq!(set(&mut st, source), Err(format!("{name} is out of town")));
+        assert!(st.track.is_none());
     }
 
     #[test]

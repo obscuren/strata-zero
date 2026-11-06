@@ -33,6 +33,88 @@ Elsewhere:
 - `net.rs`: `NetState` is saved whole: the Net's nodes with it (`holds`: held nodes and the verbs spent, a camera's loop among them, the feed, hijacks, lights out, a decoy; `owners`: the districts' traces; `grid::GridState`: the open Net's trail, sentinels posted, tracers' and sentinels' pace, sweeps' rings, owners on alert). Grid ICE is a `foes::Foe` with `ice`. `RollEcho` reads the first saves' `building` as its `scene` (`EchoRead`).
 - Content: `flavor/flatline.ron` (the taunts), `flavor/broadcasts.ron` (`during` on a broadcast).
 
+## The world beyond the city
+
+`st.outside` (`outside::Outside`) holds the world: it is saved as its `params` (the overworld
+itself, `world`, is `#[serde(skip)]` and made again from them by `outside::reopened` in
+`after_restore`), where you are (`at`), what you've seen of the world off the live city's
+map (`seen`, per 8×8 chunk: the open ground, and each city's street as you left it, which
+walking into it remembers), the city or town you're in (`here`), the cities and towns
+you've been into (`visited`) and the place marked on the MAP (`mark`). `built` (the other
+cities' maps this session) and `blocks` (the settlements' blocks) are caches made again
+when first needed.
+The open ground's tiles are never saved: the seed makes them again, the same every time,
+and nothing the player does changes them yet.
+
+The street carries on past the city's edge and the open ground is walked on the city
+screen, so a run saved out on the open ground is `At::City` with the player off the city's
+cells (its position in the city's frame, past its edge), on foot or jacked in with the body
+there (the Net self anywhere on the open Net: as far from the body as it walked or the Net
+overworld dropped it); it reopens as it was, jacked in too.
+The tile the Net overworld is over is the screen's, not saved: a run saved from its pause
+menu reopens on the map, the Net self where it stood. `outside::reopened` checks that the
+cell can still be stood on (the world under a saved run can change between builds until
+1.0): a body or a player on foot whose ground is gone is put back on the city's own street
+nearest it, a Net self whose cell is gone wakes on the body, each with a warning. A run
+saved at `At::Ground` (the outside screen's ground, before) opens on the street at that
+cell, its body there and not jacked in; if the ground there is gone, back in the city as
+before.
+Nothing lies on the open ground: items can't be dropped off the city's cells.
+
+In another city of the world the home city is set aside whole in `st.away`
+(`outside::Stay`: the city, its people, interiors, constructs, the Net's state, the
+ground's items, foes, journal, jobs, story, track, HELIX, the mail's marks and the
+keycards; its `bots` stay empty, as yours come with you), saved with the run; the city
+you're in is `st.city` as ever. A save taken away holds two cities, about a quarter
+bigger. Walked into on foot, a city takes over where you stand
+(`outside::stream::hand_over`): your cell, your bots and what you've seen of it carry
+over, and a save taken a step later opens in it. Every other city or town you've been in
+is kept whole (`Outside.kept`, `outside::kept`: its people, its ground, its foes, its
+jobs, its Net, its keycards, as you left them) and put back as it was when you walk in
+again, after a reopen too. A save keeps each as all it holds but its map
+(`kept::StayParts`), the map's fingerprint as built (`kept::Built`, made when it's first
+walked into) and the cells play has changed since, by 8×8 chunk, measured at the first
+save after you leave it (none today: nothing in play changes a map's cells). Reopening,
+`kept::remake` (in `after_restore`) builds each map again from the world, side by side
+on threads of their own, puts its changes back and runs `Stay::reopened` over it; one
+this build makes otherwise (another fingerprint) or can't make is dropped and logged as
+`lost in the update · what you left in {name}`. So a kept city costs a save a few KB and
+a reopen its build (about 120 ms): seed 3's home run saves 1.24 MB alone and 1.26 MB
+with three cities kept, which whole would make it 2.03 MB. A save from before has no
+`kept` (`#[serde(default)]`): the cities it had been to are made again from the world.
+A city or town held but not live whose map is in view runs its
+people's day on the clock (`outside::stream::run_neighbours`: the home city set aside,
+those kept, and those built in the background with the people their build seeded), so
+the home city set aside is saved with its people as they've run; nothing about it is
+saved besides. One behind by no more than a frame catches up (an hour) runs every
+frame; of those further behind, only the one furthest behind catches up in a frame. Someone who works in
+a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming in and
+going out by a road across the map's edge (`sim::commute`; which road is theirs is made
+again from the map, not saved), and so does anyone whose trip has no place in the city
+(`sim::Dest::Away`); a run saved before that has them where the sim left them, and they
+take up the commute at their next change of goal. A spot worker with no home keeps to the
+spot, and fixers and the story's cast never leave town: the sim's mark for the cast
+isn't saved, and is made again from `missions.cast` on reopening. A break at midday
+(`sim::Goal::Lunch`) and a drink after work are picked by a hash of who someone is, so
+nothing about them is saved but the goal and the trip in flight.
+
+Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
+cells another city or town owns, that city is the live one and your Net self is in it on
+the same world cell, the deck's own state with you (`net::Carried`: the failsafe, the
+cooling, the mask and its beat on the grid, the shield). The body stays in the city you left, held: the player's
+`body` is its cell in the live city's frame, past the live city's own cells, as a body
+left on the open ground is; a body inside at the flat's rig stands in there by the rig's
+landing (the port the cord runs to), and the home city's own `Stay.player` keeps the body
+as it is, the floor and all (`Stay.player` is you as each city last had you: what you'd
+seen of it, and, left on the Net, your body in it). So a save jacked in after a Net
+handover opens in the city your Net self is in, the body's cell in its frame. Jacking out
+puts you on that cell (`net::jack_out`, as ever), and the step's handover on foot hands the
+body's city back (`outside::arrive`: on the cell its kept body stands on, you're in that
+body where it is, at the rig too, and the rig's route ends as a jack out ends it). The
+body's city is set aside in the save, home whole and any other kept (a body left in one
+stands on a stratum: only the home city has the rig). While it's held, `outside::body_stay` reads it: the port the cord runs to, the
+rig's relays and its trace home (a dump on a rig run starts that trace there).
+
 ## Writing a save
 
 1. **Something asks.**
@@ -52,7 +134,7 @@ The order matters; every opener goes through `runs::open`:
 
 1. **`file::read(path, &st.book)`.** Checks the magic, the version and that the file is as long as its header says, then `ids::read_snapshot` reads the body against this build's book and `drop_lost` removes whatever pointed at a mission or step the book no longer has. Returns the losses. A flatlined run is refused.
 2. **`snapshot::restore`.** Puts every saved field back (`st.tick` too, so every tick stamp keeps its meaning), puts the run-made keycards back into `st.content`, clears `rest`, stands you up out of a doctor's chair (`chair` is only set while the deck's chair is open, and no screen comes back), and `clear_screens` drops what the screens remembered of another run.
-3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines), `home`, the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`.
+3. **`snapshot::after_restore`.** Rebuilds what isn't saved: `World::rebuild` (places, labels, night lines) and the story's cast kept in town (`missions::cast::keep_in_town`, the home city set aside too), the home city set aside (`Stay::reopened`: its people's places, and what it holds that this build's content lacks), the other cities and towns kept (`outside::kept::remake`: each map built again from the world, its changes put back, `Stay::reopened` over it; one made otherwise is lost), `home` (none in another city of the world), the street's `Stratum::dark` (the districts whose lamps a lights out cut, made from `net.lights_out` by `holds::relight`, as every tick makes it), the track's walk (`track::refollow`), and the overworld (`outside::reopened`: made again from its params; you back in the city if what you stood on is gone; if the world can't be made at all while you were away, the home city put back first). Drops content ids this build lacks (`forget_unknown`) and logs every loss as `lost in the update · …`. `drop_lost` runs over the home story set aside too, and over what the kept cities hold.
 4. **The screens.** `Broadcast::resume` (LOAD GAME, CONTINUE) or straight to the map (reloading after a flatline), then `MapScreen::resumed`: it respects the restored player, sets its clock to `st.tick` so the first frame doesn't run the world a minute, and never calls `missions::begin` or `enter_city` (both would start things over).
 
 ## Adding state: the checklist
@@ -74,7 +156,10 @@ Go through this whenever you add or change something that lives through play.
 11. **Set-up done in `enter_city_at`, `MapScreen::walking`'s first placement or `missions::begin`** doesn't run when a run is reopened. If a new system starts there, its state must be saved, or rebuilt in `after_restore`.
 12. **The world and the map.** The city, the floors walked into and the constructs are saved whole. If generation grows the play field a lot, the alternative is saving the seed plus what changed and regenerating the rest on load, which needs generation to stay deterministic. Size and time today (release build, the medium seed-8 morning after): about 1.0 MB on disk; a save takes about 24 ms on the frame thread (encoding 14.6 MB of MessagePack ~11 ms, gzip ~9 ms, write, sync and rename ~5 ms), under one 33 ms frame. The `#[ignore]` test `a_save_is_timed` in `runs/file.rs` measures it again (run it with `--release`); past a frame, move the gzip and the write to a thread and keep the encoding on the frame.
 13. **A screen that holds story in flight** can't stop the five-minute save, the due save or SAVE GAME, because those run from the map or the pause menu over it; only the ways out see the stack. Keep story that must survive a save in `AppState`.
-14. **The map screen's own state isn't saved.** The open Net's packets (`MapScreen.traffic`) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
+14. **The map screen's own state isn't saved.** The Nets' packets (`MapScreen.traffic`: each city's and town's on its lanes, and the open Net's on its trunks) are a look only, seeded afresh round the view after a reopen; a lane ride in flight (`MapScreen.riding`, Data surfer's) ends on the lane tile you were carried to. What the run needs lives in `AppState`: a camera's feed is `net.feed`, so it reopens open; the jack window over a held terminal and the HIJACK picker hold nothing (a verb is spent as it acts), and the launch splash comes before any run.
+15. **State that belongs to one city** (anything keyed by its buildings, people or districts) goes in `outside::Stay` too: `take`, `fresh` and `put` name its fields, and nothing makes that exhaustive, so a new city-bound field left out of them follows you into another city. `outside::kept::StayParts` (a kept city as a save keeps it) names them too, and a new field doesn't compile until it's there. State that belongs to the runner (the character, the deck's failsafe and cooling, the mask and the shield on your Net self, the bots out, the log) stays put; `enter` carries the deck's (`net::Carried`: a new runner's field of `NetState` goes in it) and the bots across, and you on the same world cell, your Net self too with the body where it stands.
+16. **A cache in a saved type** may also be rebuilt when first needed rather than in `after_restore` (`Outside.built`, `Outside.blocks`), so long as it's `#[serde(skip)]` and made from saved state only.
+17. **A city's map changed in play** (a wall blown open, a stall knocked over) is saved whole for the city you're in and the home city set aside; for another city kept, as its changed cells (`kept::Built::changes`). Change the map only through `st.city` while it's live: a kept city's changes are measured once, at the first save after you leave it, and a map held but not live is taken as it was left.
 
 ## Compatibility
 

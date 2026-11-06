@@ -4,8 +4,9 @@
 //! entity.
 
 use crate::app::AppState;
+use crate::outside::stream::Beyond;
 use crate::render::map::{MapRef, TileMap};
-use citygen::pathing::{astar, bresenham};
+use citygen::pathing::bresenham;
 use citygen::rng::hash64;
 use citygen::{Place, Pos, Terrain};
 use game::{BotBody, ItemId, Site};
@@ -53,14 +54,20 @@ pub fn spec(st: &AppState, i: usize) -> Option<&game::Bot> {
     st.content.item(&st.bots.get(i)?.item)?.bot.as_ref()
 }
 
-fn map<'a>(st: &'a AppState, place: Place) -> Option<MapRef<'a>> {
-    MapRef::for_place(
+/// The map bots find their way over at `place`: on the street and the Net, past the
+/// city's edge where the map goes on (`beyond`), so a bot follows you onto the ground.
+fn map<'a>(st: &'a AppState, place: Place, beyond: Option<&'a Beyond<'a>>) -> Option<MapRef<'a>> {
+    let m = MapRef::for_place(
         st.city.as_ref()?,
         &st.interiors,
         &st.constructs,
         place,
         st.minute_of_day(),
-    )
+    )?;
+    Some(match beyond {
+        Some(b) => m.beyond(b),
+        None => m,
+    })
 }
 
 /// A tile a body may enter. Air and ground both keep to what you could walk on for
@@ -75,10 +82,10 @@ fn body(st: &AppState, i: usize) -> BotBody {
     spec(st, i).map_or(BotBody::Air, |b| b.body)
 }
 
-/// A tile bot `me` may be on: one its body enters, not the anchor's, not a standing
-/// foe's, not another bot's.
-pub fn free(st: &AppState, place: Place, pos: Pos, me: usize) -> bool {
-    let Some(m) = map(st, place) else {
+/// A tile bot `me` may be on: one its body enters (past the city's edge on `beyond`),
+/// not the anchor's, not a standing foe's, not another bot's.
+pub fn free(st: &AppState, beyond: Option<&Beyond>, place: Place, pos: Pos, me: usize) -> bool {
+    let Some(m) = map(st, place, beyond) else {
         return false;
     };
     enters(body(st, me), &m, pos)
@@ -92,12 +99,12 @@ pub fn free(st: &AppState, place: Place, pos: Pos, me: usize) -> bool {
 }
 
 /// A tile is with the anchor at `to`: within the leash, and nothing that blocks sight
-/// between them.
-pub fn with_you(st: &AppState, place: Place, from: Pos, to: Pos) -> bool {
+/// between them (past the city's edge on `beyond`).
+pub fn with_you(st: &AppState, beyond: Option<&Beyond>, place: Place, from: Pos, to: Pos) -> bool {
     if from.chebyshev(to) > LEASH {
         return false;
     }
-    let Some(m) = map(st, place) else {
+    let Some(m) = map(st, place, beyond) else {
         return false;
     };
     bresenham(from, to)
@@ -106,25 +113,33 @@ pub fn with_you(st: &AppState, place: Place, from: Pos, to: Pos) -> bool {
         .all(|p| m.tile(p).is_none_or(|t| !crate::foes::blocks_sight(t)))
 }
 
-fn door(st: &AppState, place: Place, p: Pos) -> bool {
-    map(st, place)
+fn door(st: &AppState, beyond: Option<&Beyond>, place: Place, p: Pos) -> bool {
+    map(st, place, beyond)
         .and_then(|m| m.tile(p).map(|t| t.terrain == Terrain::Door))
         .unwrap_or(false)
 }
 
 /// Somewhere a bot can stay: free, with you, and not a doorway.
-fn stays(st: &AppState, place: Place, p: Pos, at: Pos, me: usize) -> bool {
-    free(st, place, p, me) && with_you(st, place, p, at) && !door(st, place, p)
+fn stays(st: &AppState, beyond: Option<&Beyond>, place: Place, p: Pos, at: Pos, me: usize) -> bool {
+    free(st, beyond, place, p, me)
+        && with_you(st, beyond, place, p, at)
+        && !door(st, beyond, place, p)
 }
 
 /// The nearest tile beside the anchor where bot `me` can stay, ring by ring.
 fn beside(st: &AppState, place: Place, at: Pos, me: usize) -> Option<Pos> {
+    let beyond = Beyond::of(st);
     (1..=LEASH).find_map(|r| {
         (-r..=r)
             .flat_map(|dy| (-r..=r).map(move |dx| Pos::new(at.x + dx, at.y + dy)))
             .filter(|p| p.chebyshev(at) == r)
-            .find(|p| stays(st, place, *p, at, me))
+            .find(|p| stays(st, beyond.as_ref(), place, *p, at, me))
     })
+}
+
+/// Whether bot `me` can stay on `p` by the anchor at `at`.
+fn can_stay(st: &AppState, place: Place, p: Pos, at: Pos, me: usize) -> bool {
+    stays(st, Beyond::of(st).as_ref(), place, p, at, me)
 }
 
 fn drift_wait(now: u64, me: usize) -> u64 {
@@ -198,17 +213,20 @@ pub fn toward(st: &AppState, me: usize) -> Option<Pos> {
     let b = st.bots.get(me)?;
     let (place, at) = anchor(st)?;
     let from = b.pos?;
+    let beyond = Beyond::of(st);
+    let beyond = beyond.as_ref();
     let near = (-1..=1)
         .flat_map(|dy| (-1..=1).map(move |dx| Pos::new(from.x + dx, from.y + dy)))
         .filter(|p| *p != from)
-        .filter(|p| stays(st, place, *p, at, me))
+        .filter(|p| stays(st, beyond, place, *p, at, me))
         .min_by_key(|p| p.chebyshev(at));
     if near.is_some() {
         return near;
     }
-    let m = map(st, place)?;
+    let m = map(st, place, beyond)?;
     let kind = body(st, me);
-    let path = astar(m.size(), from, at, |_, to| {
+    let area = crate::outside::stream::path_area(m.size(), from, at);
+    let path = crate::outside::stream::path_within(area, from, at, |_, to| {
         (to == at || (enters(kind, &m, to) && crate::foes::foe_at(st, place, to).is_none()))
             .then_some(1)
     })?;
@@ -233,7 +251,7 @@ pub fn toward(st: &AppState, me: usize) -> Option<Pos> {
     [Some(toward_aim), next]
         .into_iter()
         .flatten()
-        .find(|p| *p != from && *p != at && free(st, place, *p, me))
+        .find(|p| *p != from && *p != at && free(st, beyond, place, *p, me))
 }
 
 /// Moves bot `me` to `to`, leaving a wake where it was.
@@ -294,7 +312,7 @@ pub fn turn_start(st: &mut AppState, dock: (Site, usize)) -> bool {
         return false;
     };
     let engaged = st.net.engaged.as_ref().map(|e| e.place);
-    if b.place != place || engaged != Some(place) || stays(st, place, here, at, i) {
+    if b.place != place || engaged != Some(place) || can_stay(st, place, here, at, i) {
         return false;
     }
     st.bots[i].catching_up = true;
@@ -318,7 +336,7 @@ pub fn step(st: &mut AppState, dock: (Site, usize), can_move: bool) -> crate::ne
     let Some(here) = st.bots[i].pos else {
         return done(st);
     };
-    if !can_move || stays(st, place, here, at, i) {
+    if !can_move || can_stay(st, place, here, at, i) {
         return done(st);
     }
     match toward(st, i) {
@@ -344,7 +362,7 @@ fn wander(st: &mut AppState, me: usize, now: u64) {
     if b.place != place {
         return;
     }
-    if !stays(st, place, here, at, me) {
+    if !can_stay(st, place, here, at, me) {
         if now < b.moved_at + CATCH_UP_TICKS {
             return;
         }
@@ -365,10 +383,13 @@ fn wander(st: &mut AppState, me: usize, now: u64) {
     if now < b.next_drift {
         return;
     }
-    let opts: Vec<Pos> = (-1..=1)
-        .flat_map(|dy| (-1..=1).map(move |dx| Pos::new(here.x + dx, here.y + dy)))
-        .filter(|p| *p != here && stays(st, place, *p, at, me))
-        .collect();
+    let opts: Vec<Pos> = {
+        let beyond = Beyond::of(st);
+        (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| Pos::new(here.x + dx, here.y + dy)))
+            .filter(|p| *p != here && stays(st, beyond.as_ref(), place, *p, at, me))
+            .collect()
+    };
     if !opts.is_empty() {
         let pick = opts[(hash64(now, me as u64 + 7) % opts.len() as u64) as usize];
         step_to(st, me, pick, now);
@@ -428,7 +449,7 @@ mod tests {
         assert_eq!(st.bots[0].dock, (game::Site::Back, 0));
         assert_eq!(st.bots[0].place, STREET);
         assert_eq!(pos(&st).chebyshev(you(&st)), 1);
-        assert!(free(&st, STREET, pos(&st), 0));
+        assert!(free(&st, None, STREET, pos(&st), 0));
     }
 
     #[test]
@@ -504,7 +525,11 @@ mod tests {
         sync(&mut st);
         st.player.as_mut().unwrap().pos = Pos::new(16, 8);
         run(&mut st, 3 * 8);
-        assert!(with_you(&st, STREET, pos(&st), you(&st)), "{:?}", pos(&st));
+        assert!(
+            with_you(&st, None, STREET, pos(&st), you(&st)),
+            "{:?}",
+            pos(&st)
+        );
         assert!(st.bots[0].wake.len() <= 3);
     }
 
@@ -524,7 +549,11 @@ mod tests {
         // Six tiles off on both axes: diagonal steps close that in about five.
         st.player.as_mut().unwrap().pos = Pos::new(16, 14);
         run(&mut st, 3 * 6);
-        assert!(with_you(&st, STREET, pos(&st), you(&st)), "{:?}", pos(&st));
+        assert!(
+            with_you(&st, None, STREET, pos(&st), you(&st)),
+            "{:?}",
+            pos(&st)
+        );
     }
 
     #[test]
@@ -535,7 +564,7 @@ mod tests {
         st.foes.push(crate::foes::Foe::goon(STREET, at));
         run(&mut st, 6);
         assert_ne!(pos(&st), at);
-        assert!(free(&st, STREET, pos(&st), 0));
+        assert!(free(&st, None, STREET, pos(&st), 0));
     }
 
     #[test]
@@ -649,7 +678,11 @@ mod tests {
         assert_eq!(pos(&st), Pos::new(15, 8));
         pace_until_you(&mut st, 200);
         assert!(crate::net::phase(&st).is_some(), "your turn again");
-        assert!(with_you(&st, STREET, pos(&st), you(&st)), "{:?}", pos(&st));
+        assert!(
+            with_you(&st, None, STREET, pos(&st), you(&st)),
+            "{:?}",
+            pos(&st)
+        );
     }
 
     #[test]

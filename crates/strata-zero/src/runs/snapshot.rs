@@ -36,6 +36,8 @@ pub struct SnapshotRef<'a> {
     pub jobs: &'a crate::jobs::Jobs,
     pub missions: &'a crate::missions::Missions,
     pub track: &'a Option<crate::track::Track>,
+    pub outside: &'a Option<crate::outside::Outside>,
+    pub away: &'a Option<Box<crate::outside::Stay>>,
     pub run: &'a Option<RunMeta>,
     /// The catalogue entries the run made (its keycards): the build's content lacks them.
     pub keycards: Vec<game::Item>,
@@ -70,6 +72,12 @@ pub struct Snapshot {
     pub jobs: crate::jobs::Jobs,
     pub missions: crate::missions::Missions,
     pub track: Option<crate::track::Track>,
+    /// The world beyond the city; the first saves have none (it is made on first need).
+    #[serde(default)]
+    pub outside: Option<crate::outside::Outside>,
+    /// The home city set aside while the run is in another; the first saves have none.
+    #[serde(default)]
+    pub away: Option<Box<crate::outside::Stay>>,
     pub run: Option<RunMeta>,
     pub keycards: Vec<game::Item>,
 }
@@ -138,6 +146,8 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         flavor: _,     // content: the fixers' voice
         book: _,       // content: the story's book
         broadcasts: _, // content
+        outside,
+        away,
         missions,
         rest: _,      // never Some at a save: no save is taken asleep
         drawn_you: _, // UI: where the last frame drew you
@@ -176,6 +186,8 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         jobs,
         missions,
         track,
+        outside,
+        away,
         run,
         keycards: crate::credentials::run_items(content),
     }
@@ -245,6 +257,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         flavor: _,     // content
         book: _,       // content
         broadcasts: _, // content
+        outside,
+        away,
         missions,
         rest,
         drawn_you: _, // UI
@@ -284,6 +298,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         jobs: s_jobs,
         missions: s_missions,
         track: s_track,
+        outside: s_outside,
+        away: s_away,
         run: s_run,
         keycards,
     } = s;
@@ -313,6 +329,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     *jobs = s_jobs;
     *missions = s_missions;
     *track = s_track;
+    *outside = s_outside;
+    *away = s_away;
     *run = s_run;
     crate::credentials::put_back(content, keycards);
     // Never saved asleep: the run comes back awake. Nor in the doc's chair: the deck it
@@ -323,14 +341,29 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 }
 
 /// Rebuilds what a restored run leaves out (the world's places and labels, the home,
-/// the street's lamps cut by a lights out, the tracked walk), drops whatever the run
+/// the kept cities' maps, the street's lamps cut by a lights out, the tracked walk),
+/// drops whatever the run
 /// holds that this build's content lacks, and logs a warning for each thing gone:
 /// `lost`, from `file::read`, and those.
 pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
         world.rebuild(city, &st.people);
+        // who the story cast stays in town: the sim's mark isn't saved
+        crate::missions::cast::keep_in_town(world, &st.missions);
     }
-    st.home = st.city.as_ref().and_then(crate::home::HomeRig::find);
+    if let Some(stay) = st.away.as_mut() {
+        lost.extend(stay.reopened(&st.people, &st.content));
+    }
+    // the other cities and towns kept: their maps made again from the world, what they
+    // held put back with them
+    lost.extend(crate::outside::kept::remake(st));
+    // the flat is the home city's: none in another city of the world
+    let away = st.outside.as_ref().is_some_and(|o| o.here.is_some());
+    st.home = if away {
+        None
+    } else {
+        st.city.as_ref().and_then(crate::home::HomeRig::find)
+    };
     // The street's `dark` is the city's, skipped by the save: made again from the
     // districts `net.lights_out` still holds.
     crate::holds::relight(st);
@@ -344,4 +377,7 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
         }
     }
     crate::track::refollow(st);
+    // The overworld is skipped by the save: made again from its params, and you back
+    // in the city if what you stood on out there is gone.
+    crate::outside::reopened(st);
 }

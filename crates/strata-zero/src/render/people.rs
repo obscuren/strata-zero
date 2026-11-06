@@ -34,6 +34,9 @@ pub struct PeopleOverlay<'a> {
     pub night: bool,
     /// The player's sight when on foot; the free camera sees everyone.
     pub vis: Option<&'a Grid<Visibility>>,
+    /// The cells the city's people and lit doors draw on: all with none; where other
+    /// areas share the view, the cells the city owns.
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
     /// Dev: the walkers who can see you, drawn red.
     pub eyes: &'a [PersonId],
     /// Who stands against you; a down one is remembered where it fell.
@@ -131,10 +134,45 @@ impl Overlay for PeopleOverlay<'_> {
         if !map.place().is_street() {
             return;
         }
+        let seen = |p: Pos| match self.vis {
+            None => Visibility::Visible,
+            Some(v) => v.get(p).copied().unwrap_or(Visibility::Unseen),
+        };
+        StreetPeople {
+            world: self.world,
+            night: self.night,
+            seen: &seen,
+            keep: self.keep,
+            eyes: self.eyes,
+        }
+        .draw(origin, area, buf, style);
+    }
+}
+
+/// A city's people out on its street, with the doors its open buildings light by night:
+/// the live city's under the people overlay, and every other city's and town's held in
+/// view, each in its own frame on the cells it owns.
+pub struct StreetPeople<'a> {
+    pub world: &'a World,
+    pub night: bool,
+    /// How well each cell of the city's frame is seen.
+    pub seen: &'a dyn Fn(Pos) -> Visibility,
+    /// The cells they draw on: all with none.
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+    /// Dev: the walkers who can see you, drawn red.
+    pub eyes: &'a [PersonId],
+}
+
+impl StreetPeople<'_> {
+    /// Drawn into `area` with the city's cell `origin` at its top left.
+    pub fn draw(&self, origin: Pos, area: Rect, buf: &mut Buffer, style: &StylePack) {
+        let kept = |p: Pos| self.keep.is_none_or(|keep| keep(p));
         if self.night {
             for b in self.world.open_buildings() {
                 for &d in self.world.doors(b) {
-                    if let Some((sx, sy)) = tile_to_screen(area, origin, d) {
+                    if kept(d)
+                        && let Some((sx, sy)) = tile_to_screen(area, origin, d)
+                    {
                         buf[(sx, sy)].set_fg(DOOR_LIT);
                     }
                 }
@@ -150,12 +188,12 @@ impl Overlay for PeopleOverlay<'_> {
             let Some((sx, sy)) = tile_to_screen(area, origin, m.pos) else {
                 continue;
             };
+            if !kept(m.pos) {
+                continue;
+            }
             // On foot, people and moving cars are seen only in sight; a parked car is
             // remembered like a pile.
-            let seen = match self.vis {
-                None => Visibility::Visible,
-                Some(v) => v.get(m.pos).copied().unwrap_or(Visibility::Unseen),
-            };
+            let seen = (self.seen)(m.pos);
             let remembered_car = matches!(m.kind, MoverKind::Car { parked: true, .. })
                 && seen == Visibility::Remembered;
             if seen != Visibility::Visible && !remembered_car {
@@ -305,6 +343,7 @@ mod tests {
             eyes: &[],
             foes: &[],
             bodies: &[],
+            keep: None,
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -341,6 +380,7 @@ mod tests {
             eyes: &[],
             foes: &[],
             bodies: &[],
+            keep: None,
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -371,6 +411,7 @@ mod tests {
             eyes: &[],
             foes: &[],
             bodies: &[],
+            keep: None,
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Net),
@@ -410,6 +451,7 @@ mod tests {
             eyes: &[],
             foes: &[],
             bodies: &[],
+            keep: None,
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -439,6 +481,7 @@ mod tests {
             eyes: &[],
             foes: &[],
             bodies: &[],
+            keep: None,
         }
         .draw(
             &MapRef::stratum_of(&c, StratumKind::Street),
@@ -463,6 +506,67 @@ mod tests {
                 .count(),
             0,
             "no car stands in sight"
+        );
+    }
+
+    #[test]
+    fn a_citys_people_draw_only_on_the_cells_it_keeps() {
+        // the left half of the map another area's: the city's people and lit doors
+        // draw on the right half only, in sight as `seen` says
+        let c = city();
+        let mut w = World::seed(
+            &c,
+            &People::load().unwrap(),
+            &SimParams::default(),
+            22 * 60,
+            0,
+        );
+        let mut t = 0;
+        while t < 60 * TICKS_PER_MINUTE {
+            t += TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+        }
+        let whole = Rect::new(0, 0, c.size.w as u16, c.size.h as u16);
+        let style = StylePack::load().unwrap();
+        let half = c.size.w as i32 / 2;
+        let draw = |keep: Option<&dyn Fn(citygen::Pos) -> bool>,
+                    seen: &dyn Fn(citygen::Pos) -> Visibility| {
+            let mut buf = Buffer::empty(whole);
+            StreetPeople {
+                world: &w,
+                night: true,
+                seen,
+                keep,
+                eyes: &[],
+            }
+            .draw(citygen::Pos::new(0, 0), whole, &mut buf, &style);
+            buf
+        };
+        let marked = |buf: &Buffer, x0: i32, x1: i32| {
+            buf.content
+                .iter()
+                .enumerate()
+                .filter(|(i, cell)| {
+                    let x = (*i % whole.width as usize) as i32;
+                    (x0..x1).contains(&x) && (cell.symbol() != " " || cell.fg == DOOR_LIT)
+                })
+                .count()
+        };
+        let all = draw(None, &|_| Visibility::Visible);
+        assert!(marked(&all, 0, half) > 0 && marked(&all, half, c.size.w as i32) > 0);
+        let right = |p: citygen::Pos| p.x >= half;
+        let kept = draw(Some(&right), &|_| Visibility::Visible);
+        assert_eq!(marked(&kept, 0, half), 0, "nothing on the cells not kept");
+        assert_eq!(
+            marked(&kept, half, c.size.w as i32),
+            marked(&all, half, c.size.w as i32),
+            "all of it on those kept"
+        );
+        let unseen = draw(Some(&right), &|_| Visibility::Unseen);
+        assert!(
+            unseen.content.iter().all(|cell| cell.symbol() != "@"),
+            "no walker out of sight"
         );
     }
 
@@ -499,6 +603,7 @@ mod tests {
                 eyes: &[],
                 foes: &[],
                 bodies: &bodies,
+                keep: None,
             }
             .draw(
                 &MapRef::stratum_of(&c, StratumKind::Street),
@@ -558,6 +663,7 @@ mod tests {
                 eyes: &[],
                 foes: &foes,
                 bodies: &[],
+                keep: None,
             }
             .draw(&map, citygen::Pos::new(0, 0), area, tick, &mut buf, &style);
             buf

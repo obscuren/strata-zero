@@ -3849,3 +3849,1508 @@ fn save_pause_shots() {
         false,
     );
 }
+
+/// The world beyond the city (#22): the overworld after going up from the large seed-8
+/// city, and down on the open ground on a highway by day and night, walked on the city
+/// screen. Seed 8's world has no bridge off its cities; `streamed_world_shots` stands
+/// on one of seed 3's.
+#[test]
+#[ignore]
+fn outside_shots() {
+    use crate::outside::At;
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::Water;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let at = |minute: u16| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        crate::outside::ensure(&mut st);
+        st
+    };
+    // Up from the city: on its block on the overworld.
+    let mut st = at(13 * 60);
+    let s = OutsideScreen::new(&mut st);
+    shot_stack("outside_overworld", &st, &[&s], (120, 40));
+    shot_stack("outside_overworld_small", &st, &[&s], (100, 30));
+    // Down on the open ground on a highway, off every city's and town's block.
+    let pick = |st: &AppState, f: &dyn Fn(&citygen::overworld::WorldTile) -> bool| {
+        let o = st.outside.as_ref().unwrap();
+        o.world()
+            .tiles
+            .iter()
+            .find(|(p, t)| crate::outside::settlement_at(st, *p).is_none() && f(t))
+            .map(|(p, _)| p)
+    };
+    use citygen::overworld::{LINK_E, LINK_W};
+    for (name, minute, f) in [
+        (
+            "outside_ground_highway",
+            13 * 60,
+            &(|t: &citygen::overworld::WorldTile| {
+                t.road == LINK_E | LINK_W && t.water == Water::None
+            }) as &dyn Fn(&citygen::overworld::WorldTile) -> bool,
+        ),
+        (
+            "outside_ground_night",
+            22 * 60,
+            &|t: &citygen::overworld::WorldTile| {
+                t.road == LINK_E | LINK_W && t.water == Water::None
+            },
+        ),
+    ] {
+        let mut st = at(minute);
+        let Some(t) = pick(&st, f) else {
+            eprintln!("{name}: none on the open ground of this world");
+            continue;
+        };
+        st.outside.as_mut().unwrap().at = At::Overworld(t);
+        let mut map = down(&mut st);
+        // a few steps along, so the memory shows behind you
+        for _ in 0..6 {
+            map.update(&mut st, &[key(KeyCode::Char('l'))]);
+        }
+        built_round(&mut st);
+        shot_stack(name, &st, &[map.as_ref()], (120, 40));
+    }
+}
+
+/// ↵ on the overworld where you stand: the city screen it lands on, a frame run.
+fn down(st: &mut AppState) -> Box<dyn Screen> {
+    let mut s = crate::screens::outside::OutsideScreen::new(st);
+    let crate::app::ScreenCmd::Switch { to: mut map, .. } = s.update(st, &[key(KeyCode::Enter)])
+    else {
+        panic!("down onto the city screen")
+    };
+    map.update(st, &[]);
+    built_round(st);
+    map
+}
+
+/// The cities and towns building in the background near the view finished, and you
+/// looking round again: the shot shows what play shows once they're in, however fast
+/// the machine builds.
+fn built_round(st: &mut AppState) {
+    if crate::outside::stream::finish(st) {
+        crate::screens::explore::look_round(st);
+        crate::outside::stream::finish(st);
+    }
+}
+
+/// On the street at world cell `cell` (past the city's edge), on foot: the city screen,
+/// a frame run.
+fn on_the_ground(st: &mut AppState, cell: Pos) -> MapScreen {
+    let origin = st
+        .outside
+        .as_ref()
+        .unwrap()
+        .origin(st.city.as_ref().unwrap());
+    let p = st.player.as_mut().unwrap();
+    p.place = Place::Stratum(StratumKind::Street);
+    p.pos = Pos::new(cell.x - origin.x, cell.y - origin.y);
+    p.body = None;
+    let mut map = MapScreen::walking(st);
+    map.update(st, &[]);
+    built_round(st);
+    map
+}
+
+/// Beside the first truck stop's pump of the run's world: its world cell.
+fn by_the_pump(st: &AppState) -> Pos {
+    use crate::outside::TILE;
+    use citygen::overworld::PoiKind;
+    let w = st.outside.as_ref().unwrap().world();
+    let poi = w
+        .pois
+        .iter()
+        .find(|p| p.kind == PoiKind::TruckStop)
+        .unwrap()
+        .clone();
+    let o = Pos::new(TILE * (poi.at.x - 3), TILE * (poi.at.y - 3));
+    let g = citygen::overworld::detail::region(w, o.x, o.y, 7 * TILE as u32, 7 * TILE as u32);
+    let pump = g
+        .iter()
+        .find(|(_, t)| t.feature == Some(citygen::Feature::Furniture(citygen::Furniture::Vending)))
+        .map(|(p, _)| p)
+        .unwrap();
+    let beside = pump
+        .neighbors4()
+        .find(|q| g.get(*q).is_some_and(|t| t.is_walkable()))
+        .unwrap();
+    Pos::new(o.x + beside.x, o.y + beside.y)
+}
+
+/// POIs one level down (#17): the truck stop by day and by night, a checkpoint, a camp
+/// at night and a rig, on the seed-8 large city's world, standing on each.
+#[test]
+#[ignore]
+fn poi_shots() {
+    use crate::outside::At;
+    use citygen::overworld::PoiKind;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    for (name, kind, minute) in [
+        ("poi_truck_stop_day", PoiKind::TruckStop, 13 * 60),
+        ("poi_truck_stop_night", PoiKind::TruckStop, 22 * 60),
+        ("poi_checkpoint", PoiKind::Checkpoint, 13 * 60),
+        ("poi_camp_night", PoiKind::Camp, 22 * 60),
+        ("poi_rig", PoiKind::Rig, 13 * 60),
+        ("poi_solar", PoiKind::Solar, 13 * 60),
+        ("poi_water_plant", PoiKind::WaterPlant, 13 * 60),
+    ] {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+        crate::outside::ensure(&mut st);
+        let o = st.outside.as_ref().unwrap();
+        let Some(poi) = o.world().pois.iter().find(|p| p.kind == kind).cloned() else {
+            eprintln!("{name}: none in this world");
+            continue;
+        };
+        st.outside.as_mut().unwrap().at = At::Overworld(poi.at);
+        let map = down(&mut st);
+        shot_stack(name, &st, &[map.as_ref()], (120, 40));
+    }
+}
+
+/// The open Net (#18): jacked in beside the truck stop's pump, by day, on the city
+/// screen; and a barren stretch's Net.
+#[test]
+#[ignore]
+fn open_net_shots() {
+    use crate::outside::TILE;
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let cell = by_the_pump(&st);
+    let mut map = on_the_ground(&mut st, cell);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    built_round(&mut st);
+    shot_stack("open_net_truck_stop", &st, &[&map], (120, 40));
+    // a barren stretch: dry land with no road and no POI for three tiles round, its Net
+    // the odd stray dot in the void
+    let w = st.outside.as_ref().unwrap().world().clone();
+    let barren = w
+        .tiles
+        .iter()
+        .map(|(p, _)| p)
+        .find(|p| {
+            let around = (-3..=3).flat_map(|dy| (-3..=3).map(move |dx| p.offset(dx, dy)));
+            around.clone().all(|q| {
+                w.tile(q).is_some_and(|t| {
+                    t.road == 0 && t.urban.is_none() && t.water == citygen::overworld::Water::None
+                })
+            }) && !w.pois.iter().any(|poi| around.clone().any(|q| q == poi.at))
+        })
+        .unwrap();
+    let cell = Pos::new(TILE * barren.x + TILE / 2, TILE * barren.y + TILE / 2);
+    let mut map = on_the_ground(&mut st, cell);
+    {
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+    }
+    map.update(&mut st, &[]);
+    map.update(&mut st, &[]);
+    built_round(&mut st);
+    shot_stack("open_net_barren", &st, &[&map], (120, 40));
+}
+
+/// Cities grown into the world (#19): seed 41's home city on its site, where its
+/// streets give way to the open ground, on its coast, and on the overworld.
+#[test]
+#[ignore]
+fn city_in_world_shots() {
+    use crate::screens::outside::OutsideScreen;
+    use citygen::{Place, StratumKind, Terrain};
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let at = |pos: Pos, minute: u16| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        let mut p = crate::walker::Player::at(Place::Stratum(StratumKind::Street), pos);
+        let bonus = st.sight_bonus();
+        p.update_fov(
+            &crate::render::map::MapRef::stratum_at(
+                st.city.as_ref().unwrap(),
+                StratumKind::Street,
+                minute,
+            ),
+            bonus,
+        );
+        st.player = Some(p);
+        st
+    };
+    let street = &city.stratum(StratumKind::Street).unwrap().tiles;
+    let middle = Pos::new(city.size.w as i32 / 2, city.size.h as i32 / 2);
+    let nearest = |ok: &dyn Fn(Pos, &citygen::Tile) -> bool| {
+        street
+            .iter()
+            .filter(|(p, t)| ok(*p, t))
+            .min_by_key(|(p, _)| p.manhattan(middle))
+            .map(|(p, _)| p)
+            .unwrap()
+    };
+    let open = |t: &citygen::Tile| {
+        matches!(
+            t.terrain,
+            Terrain::Dirt | Terrain::Scrub | Terrain::Crops | Terrain::Rise | Terrain::Sand
+        )
+    };
+    // the edge: a sidewalk with the open ground a few steps west of it
+    let edge = nearest(&|p, t| {
+        t.terrain == Terrain::Sidewalk
+            && (3..6).all(|k| street.get(p.offset(-k, 0)).is_some_and(open))
+    });
+    let mut st = at(edge, 13 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_edge_street", &st, &[&map], (120, 40));
+    let mut st = at(edge, 22 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_edge_street_night", &st, &[&map], (120, 40));
+    // the coast: a sidewalk or road beside the world's water
+    let coast = nearest(&|p, t| {
+        matches!(t.terrain, Terrain::Sidewalk | Terrain::Road)
+            && p.neighbors4()
+                .any(|q| street.get(q).is_some_and(|u| u.terrain == Terrain::Water))
+    });
+    let mut st = at(coast, 13 * 60);
+    let map = MapScreen::walking(&mut st);
+    shot_stack("city_coast_street", &st, &[&map], (120, 40));
+    // up: the city on the overworld, its block drawn round you
+    let mut st = at(edge, 13 * 60);
+    crate::outside::ensure(&mut st);
+    let s = OutsideScreen::new(&mut st);
+    shot_stack("city_on_the_overworld", &st, &[&s], (120, 40));
+}
+
+/// The outskirts (#20): seed 41's home city where it thins, by a shanty by day and by
+/// night, by a scrapyard, and the same edge in the Net.
+#[test]
+#[ignore]
+fn outskirts_shots() {
+    use citygen::{Place, StratumKind, Terrain};
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let at = |place: StratumKind, pos: Pos, minute: u16, body: Option<Pos>| {
+        let mut st = AppState::new();
+        st.enter_city_at(city.clone(), minute);
+        st.character = game::Character::debug_runner(&st.content);
+        let mut p = crate::walker::Player::at(Place::Stratum(place), pos);
+        if let Some(b) = body {
+            p.body = Some((Place::Stratum(StratumKind::Street), b));
+        }
+        let bonus = st.sight_bonus();
+        p.update_fov(
+            &crate::render::map::MapRef::stratum_at(st.city.as_ref().unwrap(), place, minute),
+            bonus,
+        );
+        st.player = Some(p);
+        st
+    };
+    let street = &city.stratum(StratumKind::Street).unwrap().tiles;
+    let walkable = |p: Pos| street.get(p).is_some_and(|t| t.is_walkable());
+    // a shanty's door, and the dirt in front of it
+    let door = street
+        .iter()
+        .find(|(p, t)| {
+            t.terrain == Terrain::Door && t.building.is_none() && walkable(p.offset(0, 1))
+        })
+        .map(|(p, _)| p)
+        .expect("a shanty");
+    let front = door.offset(0, 2);
+    for (name, minute) in [
+        ("outskirts_shanties", 13 * 60),
+        ("outskirts_shanties_night", 22 * 60),
+    ] {
+        let mut st = at(StratumKind::Street, front, minute, None);
+        let map = MapScreen::walking(&mut st);
+        shot_stack(name, &st, &[&map], (120, 40));
+    }
+    // a scrapyard's gate
+    let gate = street
+        .iter()
+        .find(|(p, t)| {
+            t.terrain == Terrain::Gravel
+                && t.district.is_some()
+                && street
+                    .get(p.offset(-1, 0))
+                    .is_some_and(|u| u.terrain == Terrain::Railing)
+                && walkable(p.offset(0, 1))
+        })
+        .map(|(p, _)| p.offset(0, 2));
+    if let Some(gate) = gate.filter(|p| walkable(*p)) {
+        let mut st = at(StratumKind::Street, gate, 13 * 60, None);
+        let map = MapScreen::walking(&mut st);
+        shot_stack("outskirts_yard", &st, &[&map], (120, 40));
+    }
+    // jacked in at the shanty's door: the grid thinning, the stolen line, the open Net
+    let net = &city.stratum(StratumKind::Net).unwrap().tiles;
+    let on_net = std::iter::once(door)
+        .chain(door.neighbors8())
+        .find(|p| net.get(*p).is_some_and(|t| t.is_walkable()))
+        .unwrap_or(door);
+    let mut st = at(StratumKind::Net, on_net, 22 * 60, Some(front));
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    shot_stack("outskirts_net", &st, &[&map], (120, 40));
+}
+
+/// Every city in the world (#21): from seed 41's home city, the street of the nearest
+/// other city where you come in, and a town's.
+#[test]
+#[ignore]
+fn other_cities_shots() {
+    use crate::outside::enter;
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let others = st.outside.as_ref().unwrap().others();
+    let home = st.outside.as_ref().unwrap().home();
+    let centre = st.outside.as_ref().unwrap().world().cities[home.city as usize].centre;
+    let nearest = |town: bool| {
+        others
+            .iter()
+            .filter(|(s, _)| s.town.is_some() == town)
+            .min_by_key(|(_, b)| {
+                let (x, y) = (b.x + b.w / 2 - centre.x, b.y + b.h / 2 - centre.y);
+                x * x + y * y
+            })
+            .copied()
+    };
+    for (name, town) in [("another_city_street", false), ("a_town_street", true)] {
+        let Some((s, b)) = nearest(town) else {
+            continue;
+        };
+        if enter(&mut st, s).is_err() {
+            continue;
+        }
+        // in at the middle of its block's west edge
+        let o = st.outside.as_ref().unwrap();
+        let city = st.city.clone().unwrap();
+        let cell = o.street_of(&city, Pos::new(b.x, b.y + b.h / 2));
+        crate::outside::moves::into_city(&mut st, cell);
+        let map = MapScreen::walking(&mut st);
+        built_round(&mut st);
+        shot_stack(name, &st, &[&map], (120, 40));
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+    }
+}
+
+/// The overworld jacked in (#23): looking up at the Net over the world from the open
+/// Net by the truck stop, and from the city's Net.
+#[test]
+#[ignore]
+fn net_overworld_shots() {
+    // from the open ground: jacked in at the first truck stop's pump, W
+    let city = Generator::run(GenParams {
+        seed: 8,
+        size: SizePreset::Large,
+        districts: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 22 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let cell = by_the_pump(&st);
+    let mut map = on_the_ground(&mut st, cell);
+    map.update(&mut st, &[key(KeyCode::Char(' '))]);
+    map.update(&mut st, &[]);
+    built_round(&mut st);
+    if let crate::app::ScreenCmd::Push { to, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))])
+    {
+        shot_stack("net_overworld_ground", &st, &[&map, to.as_ref()], (120, 40));
+        shot_stack(
+            "net_overworld_ground_small",
+            &st,
+            &[&map, to.as_ref()],
+            (100, 30),
+        );
+    }
+    // from the city's Net
+    let (mut st, mut map) = on_the_open_net();
+    if let crate::app::ScreenCmd::Push { to, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))])
+    {
+        shot_stack("net_overworld_city", &st, &[&map, to.as_ref()], (120, 40));
+    }
+}
+
+/// The deck MAP's world zoom (#24): from seed 41's home city, the cursor on the
+/// nearest place with its card; and out on the overworld, with a place marked.
+#[test]
+#[ignore]
+fn world_zoom_shots() {
+    use crate::screens::atlas::Zoom;
+    let city = crate::screens::build_home(AppState::new().params.clone().with_seed(41)).unwrap();
+    let mut st = AppState::new();
+    st.enter_city_at(city, 13 * 60);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+    st.atlas.zoom = Zoom::World;
+    let place = crate::screens::atlas::world_places(&st)
+        .into_iter()
+        .find(|p| p.what != "a city" && p.what != "the city you live in")
+        .unwrap();
+    st.atlas.world.cursor = Some(place.tile);
+    // past the deck's opening glitch
+    st.tick += 200;
+    for (name, size) in [
+        ("world_zoom_city", (120, 40)),
+        ("world_zoom_city_small", (100, 30)),
+    ] {
+        shot_stack(name, &st, &[&map, &deck], size);
+    }
+    // out on the overworld, the place marked
+    crate::screens::atlas::key(&mut st, KeyCode::Char('t'));
+    crate::outside::moves::up(&mut st);
+    let out = crate::screens::outside::OutsideScreen::new(&mut st);
+    shot_stack("world_zoom_marked_outside", &st, &[&out], (120, 40));
+    st.atlas.world.cursor = None;
+    let mut deck = Deck::new(st.tick);
+    deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+    st.tick += 200;
+    shot_stack("world_zoom_outside", &st, &[&out, &deck], (120, 40));
+}
+
+/// A run in seed 3's home city on its site at `minute` of the day, its world made, no
+/// rain: the city the streamed world's shots walk out of.
+fn sited_run(minute: u16) -> AppState {
+    let mut st = AppState::new();
+    st.enter_city_at(crate::outside::tests::sited().clone(), minute);
+    st.character = game::Character::debug_runner(&st.content);
+    st.player = Some(crate::walker::Player::spawn(st.city.as_ref().unwrap(), 1));
+    crate::outside::ensure(&mut st);
+    st.rain = false;
+    st
+}
+
+/// The walking key for a step `d`.
+fn step_key(d: citygen::Dir) -> crossterm::event::KeyEvent {
+    use citygen::Dir;
+    key(KeyCode::Char(match d {
+        Dir::N => 'k',
+        Dir::S => 'j',
+        Dir::E => 'l',
+        Dir::W => 'h',
+        Dir::NE => 'u',
+        Dir::NW => 'y',
+        Dir::SE => 'n',
+        Dir::SW => 'b',
+    }))
+}
+
+/// The cities building near the view finished and the camera come to rest on you, at
+/// `size`: the screen as play shows it a moment later.
+fn ready(st: &mut AppState, map: &mut MapScreen, size: (u16, u16)) {
+    built_round(st);
+    map.settle(st, size);
+    built_round(st);
+    map.settle(st, size);
+}
+
+/// The city screen on the place you're on, a frame run, ready at `size`.
+fn map_on_you(st: &mut AppState, size: (u16, u16)) -> MapScreen {
+    let mut map = MapScreen::walking(st);
+    map.update(st, &[]);
+    ready(st, &mut map, size);
+    map
+}
+
+/// `n` steps `d` (those the ground lets you take), then ready at `size`.
+fn walk_on(st: &mut AppState, map: &mut MapScreen, d: citygen::Dir, n: usize, size: (u16, u16)) {
+    for _ in 0..n {
+        map.update(st, &[step_key(d)]);
+    }
+    ready(st, map, size);
+}
+
+/// Jacked in at the live city's street port nearest its cell `near`, your body beside
+/// the port, your Net self put on `near` (on the city's Net or past its edge).
+fn jacked_in_near(st: &mut AppState, near: Pos) {
+    let beside = {
+        let city = st.city.as_ref().unwrap();
+        let port = city
+            .connectors
+            .iter()
+            .filter(|c| {
+                c.kind == citygen::ConnectorKind::Jack
+                    && c.serves.contains(&StratumKind::Street)
+                    && city.walkable(StratumKind::Net, c.pos)
+            })
+            .min_by_key(|c| c.pos.manhattan(near))
+            .expect("a street terminal")
+            .pos;
+        std::iter::once(port)
+            .chain(port.neighbors8())
+            .find(|q| city.walkable(StratumKind::Street, *q))
+            .unwrap()
+    };
+    crate::outside::stream::tests::handover::on_foot(st, beside);
+    let bonus = st.sight_bonus();
+    let city = st.city.as_ref().unwrap();
+    let p = st.player.as_mut().unwrap();
+    p.jack_in(city, None, bonus).unwrap();
+    p.pos = near;
+}
+
+/// The street cell nearest the middle of the live city that it owns: deep in it.
+fn deep_in_the_city(st: &AppState) -> Pos {
+    let city = st.city.as_ref().unwrap();
+    let middle = Pos::new(city.size.w as i32 / 2, city.size.h as i32 / 2);
+    city.stratum(StratumKind::Street)
+        .unwrap()
+        .tiles
+        .iter()
+        .filter(|(p, t)| t.is_walkable() && crate::outside::stream::live_owns(st, *p))
+        .min_by_key(|(p, _)| p.manhattan(middle))
+        .map(|(p, _)| p)
+        .unwrap()
+}
+
+/// Where a road leaves the live city: a street cell of its own on its map's edge, the
+/// road running on straight out over the open ground for 8 cells, the one nearest its
+/// buildings (a step north or south counting double, as a cell is twice as tall as it
+/// is wide). The cell and the way out.
+fn road_out(st: &AppState) -> (Pos, citygen::Dir) {
+    use crate::outside::TILE;
+    use citygen::overworld::detail;
+    use citygen::{Dir, Terrain};
+    let o = st.outside.as_ref().unwrap();
+    let city = st.city.as_ref().unwrap();
+    let (w, origin) = (o.world(), o.origin(city));
+    let tile = |c: Pos| Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE));
+    let street = &city.stratum(StratumKind::Street).unwrap().tiles;
+    let built: Vec<Pos> = street
+        .iter()
+        .filter(|(_, t)| t.building.is_some())
+        .map(|(p, _)| p)
+        .collect();
+    let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+    (0..ch)
+        .flat_map(|y| [(Pos::new(0, y), Dir::W), (Pos::new(cw - 1, y), Dir::E)])
+        .chain((0..cw).flat_map(|x| [(Pos::new(x, 0), Dir::N), (Pos::new(x, ch - 1), Dir::S)]))
+        .filter(|(q, d)| {
+            let at = origin.offset(q.x, q.y);
+            let (dx, dy) = d.delta();
+            street.get(*q).is_some_and(|t| t.terrain == Terrain::Road)
+                && o.owner(tile(at)) == Some(o.here())
+                && (1..=8).all(|i| {
+                    let c = at.offset(dx * i, dy * i);
+                    w.tile(tile(c)).is_some()
+                        && o.owner(tile(c)).is_none()
+                        && detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)].terrain
+                            == Terrain::Road
+                })
+        })
+        .min_by_key(|(q, d)| {
+            let near = built
+                .iter()
+                .map(|b| b.manhattan(*q))
+                .min()
+                .unwrap_or(i32::MAX);
+            if matches!(d, Dir::N | Dir::S) {
+                2 * near
+            } else {
+                near
+            }
+        })
+        .expect("a road out of the city")
+}
+
+/// The cell of the open ground beside settlement `s`'s map (`city`, its `(0, 0)` at
+/// world cell `origin`) nearest the city's buildings as a 200x60 view takes them in, a
+/// step north or south counting three: a world cell, and the step onto a street cell
+/// `s` owns.
+fn beside_the_buildings(
+    st: &AppState,
+    s: crate::outside::Settlement,
+    city: &citygen::City,
+    origin: Pos,
+) -> Option<(Pos, citygen::Dir)> {
+    use crate::outside::TILE;
+    use citygen::Dir;
+    use citygen::overworld::detail;
+    let o = st.outside.as_ref()?;
+    let w = o.world();
+    let tile = |c: Pos| Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE));
+    let street = &city.stratum(StratumKind::Street)?.tiles;
+    let built: Vec<Pos> = street
+        .iter()
+        .filter(|(_, t)| t.building.is_some())
+        .map(|(p, _)| p)
+        .collect();
+    let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+    (0..ch)
+        .flat_map(|y| [(Pos::new(0, y), Dir::E), (Pos::new(cw - 1, y), Dir::W)])
+        .chain((0..cw).flat_map(|x| [(Pos::new(x, 0), Dir::S), (Pos::new(x, ch - 1), Dir::N)]))
+        .filter(|(q, d)| {
+            let at = origin.offset(q.x, q.y);
+            let x = at.step(d.opposite());
+            city.walkable(StratumKind::Street, *q)
+                && o.owner(tile(at)) == Some(s)
+                && w.tile(tile(x)).is_some()
+                && o.owner(tile(x)).is_none()
+                && detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+        })
+        .min_by_key(|(q, _)| {
+            built
+                .iter()
+                .map(|b| (b.x - q.x).abs().max(3 * (b.y - q.y).abs()))
+                .min()
+                .unwrap_or(i32::MAX)
+        })
+        .map(|(q, d)| (origin.offset(q.x, q.y).step(d.opposite()), d))
+}
+
+/// The next city of seed 3's world (`handover::beside_a_city`'s), a cell of the open
+/// ground a step short of its map where its buildings are nearest (in the home city's
+/// frame), and the step in.
+fn beside_the_next_city() -> (crate::outside::Settlement, Pos, citygen::Dir) {
+    use crate::outside::stream::tests::handover;
+    let mut probe = sited_run(13 * 60);
+    let (next, x, d) = handover::beside_a_city(&mut probe);
+    let o = probe.outside.as_ref().unwrap();
+    let city = o.held_city(next).unwrap();
+    match beside_the_buildings(&probe, next, city, o.origin(city)) {
+        Some((at, d)) => (next, handover::local(&probe, at), d),
+        None => (next, x, d),
+    }
+}
+
+/// A quarter turn from `d`: north or south off a road east or west, else east.
+fn across(d: citygen::Dir) -> citygen::Dir {
+    use citygen::Dir;
+    match d {
+        Dir::E | Dir::W => Dir::N,
+        _ => Dir::E,
+    }
+}
+
+/// The street and the Net walked as one map (#27), from seed 3's home city on its site,
+/// all on the city screen, some at 200x60 to take in a city's buildings from past its
+/// edge. On foot: on the road out three steps past the edge, by day, by night and in
+/// the rain; six steps out with the city behind, by day and by night; on a bridge of
+/// the open ground; beside the next city a step short of its map, its buildings built
+/// in the background, by day and by night, and a step in; at the line between a city
+/// and its town, by day and by night. Jacked in: the trunk on the road out leaving the
+/// city's Net, close and wide; off it in the void; onto the next city's Net; the Net
+/// overworld walked to the next city, and its Net where it came down.
+#[test]
+#[ignore]
+fn streamed_world_shots() {
+    use crate::app::ScreenCmd;
+    use crate::outside::TILE;
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const SIZE: (u16, u16) = (120, 40);
+    const WIDE: (u16, u16) = (200, 60);
+    let you = |st: &AppState| st.player.as_ref().unwrap().pos;
+    // the road out: three steps past the edge; then six, the city behind
+    for (name, minute, rain) in [
+        ("streamed_edge_day", 13 * 60, false),
+        ("streamed_edge_night", 22 * 60, false),
+        ("streamed_edge_rain", 22 * 60, true),
+    ] {
+        let mut st = sited_run(minute);
+        let (e, d) = road_out(&st);
+        handover::on_foot(&mut st, e);
+        let mut map = map_on_you(&mut st, SIZE);
+        walk_on(&mut st, &mut map, d, 3, SIZE);
+        assert!(
+            !crate::outside::stream::live_owns(&st, you(&st)),
+            "past the edge"
+        );
+        st.rain = rain;
+        shot_stack(name, &st, &[&map], SIZE);
+        if !rain {
+            walk_on(&mut st, &mut map, d, 3, WIDE);
+            let behind = name.replace("edge", "city_behind");
+            shot_stack(&behind, &st, &[&map], WIDE);
+        }
+    }
+    // a bridge of the open ground: its middle, by day
+    let mut st = sited_run(13 * 60);
+    let bridge = {
+        use citygen::overworld::{Water, detail};
+        let w = st.outside.as_ref().unwrap().world();
+        let tile = w
+            .tiles
+            .iter()
+            .find(|(p, t)| {
+                t.road != 0
+                    && t.water == Water::River
+                    && crate::outside::tile_owner(&st, *p).is_none()
+            })
+            .map(|(p, _)| p)
+            .expect("a bridge on seed 3's open ground");
+        let o = Pos::new(TILE * tile.x, TILE * tile.y);
+        let g = detail::region(w, o.x, o.y, TILE as u32, TILE as u32);
+        let middle = Pos::new(TILE / 2, TILE / 2);
+        let on = g
+            .iter()
+            .filter(|(_, t)| t.terrain == citygen::Terrain::Bridge)
+            .min_by_key(|(p, _)| p.manhattan(middle))
+            .map(|(p, _)| p)
+            .expect("the bridge's deck");
+        o.offset(on.x, on.y)
+    };
+    let mut map = on_the_ground(&mut st, bridge);
+    ready(&mut st, &mut map, SIZE);
+    shot_stack("streamed_ground_bridge", &st, &[&map], SIZE);
+    // the next city: on the ground a step short of its map where its buildings are
+    // nearest, and the way in
+    let (next, outside, inward) = beside_the_next_city();
+    for (name, minute) in [
+        ("streamed_beside_city", 13 * 60),
+        ("streamed_beside_city_night", 22 * 60),
+    ] {
+        let mut st = sited_run(minute);
+        handover::on_foot(&mut st, outside);
+        let mut map = map_on_you(&mut st, WIDE);
+        assert!(
+            st.outside.as_ref().unwrap().held_city(next).is_some(),
+            "built as you came near"
+        );
+        assert_ne!(st.outside.as_ref().unwrap().here(), next, "not in it yet");
+        shot_stack(name, &st, &[&map], WIDE);
+        if minute == 13 * 60 {
+            walk_on(&mut st, &mut map, inward, 1, WIDE);
+            assert_eq!(st.outside.as_ref().unwrap().here(), next, "walked in");
+            shot_stack("streamed_into_city", &st, &[&map], WIDE);
+        }
+    }
+    // the line between a city and its town, each drawn from its own map
+    for (name, minute) in [
+        ("streamed_town_line", 13 * 60),
+        ("streamed_town_line_night", 22 * 60),
+    ] {
+        let mut st = sited_run(minute);
+        let (_, _, a, _) = handover::beside_a_town(&mut st);
+        handover::on_foot(&mut st, a);
+        let map = map_on_you(&mut st, SIZE);
+        shot_stack(name, &st, &[&map], SIZE);
+    }
+    // jacked in at the home city's port nearest the road out: the Net self on the
+    // road's trunk four steps past the edge, close and wide; then off it in the void
+    let mut st = sited_run(22 * 60);
+    let (e, d) = road_out(&st);
+    jacked_in_near(&mut st, e);
+    let mut map = map_on_you(&mut st, SIZE);
+    walk_on(&mut st, &mut map, d, 4, SIZE);
+    assert!(
+        !st.city.as_ref().unwrap().size.contains(you(&st)),
+        "off the city's map"
+    );
+    shot_stack("streamed_net_edge", &st, &[&map], SIZE);
+    map.settle(&mut st, WIDE);
+    shot_stack("streamed_net_edge_wide", &st, &[&map], WIDE);
+    walk_on(&mut st, &mut map, across(d), 12, SIZE);
+    shot_stack("streamed_net_void", &st, &[&map], SIZE);
+    // W: the Net overworld round the Net self's tile, walked to the next city's
+    // middle tile; ↵ down onto its Net there
+    let ScreenCmd::Push { to: mut up, .. } = map.update(&mut st, &[key(KeyCode::Char('W'))]) else {
+        panic!("W looks up at the Net overworld")
+    };
+    let to = {
+        let o = st.outside.as_ref().unwrap();
+        let (_, b) = o.others().into_iter().find(|(s, _)| *s == next).unwrap();
+        Pos::new(b.x + b.w / 2, b.y + b.h / 2)
+    };
+    let from = {
+        let c = handover::world_of(&st, you(&st));
+        Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE))
+    };
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let steps: Vec<_> = std::iter::repeat_n(
+        step_key(if dx > 0 {
+            citygen::Dir::E
+        } else {
+            citygen::Dir::W
+        }),
+        dx.unsigned_abs() as usize,
+    )
+    .chain(std::iter::repeat_n(
+        step_key(if dy > 0 {
+            citygen::Dir::S
+        } else {
+            citygen::Dir::N
+        }),
+        dy.unsigned_abs() as usize,
+    ))
+    .collect();
+    up.update(&mut st, &steps);
+    shot_stack("streamed_net_overworld", &st, &[&map, up.as_ref()], SIZE);
+    assert!(matches!(
+        up.update(&mut st, &[key(KeyCode::Enter)]),
+        ScreenCmd::Pop { .. }
+    ));
+    map.update(&mut st, &[]);
+    ready(&mut st, &mut map, SIZE);
+    assert_eq!(
+        crate::outside::stream::owner_of(&st, you(&st)),
+        Some(next),
+        "down on the next city's Net"
+    );
+    shot_stack("streamed_net_landed", &st, &[&map], SIZE);
+    // jacked in at home, the Net self beside the next city a step short of its map:
+    // three steps onto its Net
+    let mut st = sited_run(22 * 60);
+    jacked_in_near(&mut st, outside);
+    let mut map = map_on_you(&mut st, WIDE);
+    walk_on(&mut st, &mut map, inward, 3, WIDE);
+    assert_eq!(
+        crate::outside::stream::owner_of(&st, you(&st)),
+        Some(next),
+        "on the next city's Net"
+    );
+    shot_stack("streamed_net_next_city", &st, &[&map], WIDE);
+}
+
+/// What a frame of the city screen costs to draw at 200x60 by night (#27), the mean of a
+/// run of frames: deep in seed 3's home city, on the ground three steps out on its road
+/// and forty, beside the next city; jacked in deep in its Net, four steps out on the
+/// open Net and forty. Beside the next city, its people out and its packets running, by
+/// day as well, and beside a busy one by day, and what the whole frame costs there (the
+/// screen run, the city's people's day with it, then drawn). And what a look round costs
+/// (the sight update every step makes, out to `LIT_RADIUS`): deep in the city, far out on
+/// the ground and beside the next city; and a step on over the ground far out. Built with
+/// `--release`, it says what play pays: `cargo test -p strata-zero --release --target-dir
+/// target/smoke -- --ignored streamed_draw_cost --nocapture`.
+#[test]
+#[ignore]
+fn streamed_draw_cost() {
+    use crate::outside::stream::tests::handover;
+    const SIZE: (u16, u16) = (200, 60);
+    const FRAMES: u32 = 120;
+    let cost = |st: &mut AppState, map: &MapScreen| {
+        let mut t = Term::new(TestBackend::new(SIZE.0, SIZE.1)).unwrap();
+        t.draw(|f| map.draw(st, f)).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            st.tick += 1;
+            t.draw(|f| map.draw(st, f)).unwrap();
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES)
+    };
+    // a whole frame, the screen run then drawn: the mean and the worst
+    let frame = |st: &mut AppState, map: &mut MapScreen| {
+        let mut t = Term::new(TestBackend::new(SIZE.0, SIZE.1)).unwrap();
+        t.draw(|f| map.draw(st, f)).unwrap();
+        let mut worst = 0.0f64;
+        let start = std::time::Instant::now();
+        for _ in 0..FRAMES * 3 {
+            let one = std::time::Instant::now();
+            st.tick += 1;
+            map.update(st, &[]);
+            t.draw(|f| map.draw(st, f)).unwrap();
+            worst = worst.max(one.elapsed().as_secs_f64() * 1000.0);
+        }
+        let mean = start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES * 3);
+        (mean, worst)
+    };
+    // the next city's people out on its street, and its packets on its lanes
+    let alive = |st: &AppState, next: crate::outside::Settlement| {
+        let o = st.outside.as_ref().unwrap();
+        let city = o.held_city(next).unwrap();
+        let walkers =
+            crate::outside::people_of(st, next).map_or(0, |w| w.visible(city.size.rect()).len());
+        format!("{walkers} of theirs on the street")
+    };
+    let mut rows = Vec::new();
+    let mut frames = Vec::new();
+    // on foot: deep in the city, three steps out on its road past its edge, forty
+    let mut st = sited_run(22 * 60);
+    let deep = deep_in_the_city(&st);
+    handover::on_foot(&mut st, deep);
+    let map = map_on_you(&mut st, SIZE);
+    rows.push(("street, deep in the city", cost(&mut st, &map)));
+    let (e, d) = road_out(&st);
+    handover::on_foot(&mut st, e);
+    let mut map = map_on_you(&mut st, SIZE);
+    walk_on(&mut st, &mut map, d, 3, SIZE);
+    rows.push(("street, ground beside the city", cost(&mut st, &map)));
+    walk_on(&mut st, &mut map, d, 40, SIZE);
+    rows.push(("street, ground far out", cost(&mut st, &map)));
+    let mut sights = vec![
+        ("street, ground far out", sight_cost(&mut st)),
+        ("street, deep in the city", {
+            let mut deep_in = sited_run(22 * 60);
+            handover::on_foot(&mut deep_in, deep);
+            map_on_you(&mut deep_in, SIZE);
+            sight_cost(&mut deep_in)
+        }),
+    ];
+    // steps on over the open ground: each a frame run, the ground ahead built and sight
+    // looked again
+    let steps = {
+        const STEPS: u32 = 24;
+        let start = std::time::Instant::now();
+        for _ in 0..STEPS {
+            st.tick += 1;
+            map.update(&mut st, &[step_key(d)]);
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(STEPS)
+    };
+    // beside the next city, built as you came near and drawn from its own map, its
+    // people out by night and by day; then jacked in beside its Net
+    let (next, at, _) = beside_the_next_city();
+    for (what, minute) in [
+        ("street, beside the next city", 22 * 60),
+        ("street, beside the next city, day", 13 * 60),
+        ("street, beside the next city, morning", 7 * 60 + 20),
+    ] {
+        let mut beside = sited_run(minute);
+        handover::on_foot(&mut beside, at);
+        let mut map = map_on_you(&mut beside, SIZE);
+        rows.push((what, cost(&mut beside, &map)));
+        sights.push((what, sight_cost(&mut beside)));
+        frames.push((what, frame(&mut beside, &mut map), alive(&beside, next)));
+    }
+    let (busy, by) = beside_the_busy_city();
+    let mut beside = sited_run(13 * 60);
+    handover::on_foot(&mut beside, by);
+    let mut map = map_on_you(&mut beside, SIZE);
+    let what = "street, beside a busy city, day";
+    rows.push((what, cost(&mut beside, &map)));
+    frames.push((what, frame(&mut beside, &mut map), alive(&beside, busy)));
+    let mut beside = sited_run(22 * 60);
+    jacked_in_near(&mut beside, at);
+    let mut map = map_on_you(&mut beside, SIZE);
+    rows.push(("Net, beside the next city", cost(&mut beside, &map)));
+    frames.push((
+        "Net, beside the next city",
+        frame(&mut beside, &mut map),
+        alive(&beside, next),
+    ));
+    // jacked in: deep in the city's Net, four steps past its edge, forty
+    let mut st = sited_run(22 * 60);
+    jacked_in_near(&mut st, deep);
+    let map = map_on_you(&mut st, SIZE);
+    rows.push(("Net, deep in the city", cost(&mut st, &map)));
+    jacked_in_near(&mut st, e);
+    let mut map = map_on_you(&mut st, SIZE);
+    walk_on(&mut st, &mut map, d, 4, SIZE);
+    rows.push(("Net, open Net beside the city", cost(&mut st, &map)));
+    walk_on(&mut st, &mut map, d, 40, SIZE);
+    rows.push(("Net, open Net far out", cost(&mut st, &map)));
+    for (what, ms) in rows {
+        println!("{what:<36} {ms:>7.2} ms a frame");
+    }
+    for (what, (mean, worst), alive) in frames {
+        println!("{what:<36} {mean:>7.2} ms a whole frame, worst {worst:.2} ({alive})");
+    }
+    for (what, ms) in sights {
+        println!("{what:<36} {ms:>7.2} ms a sight update");
+    }
+    println!(
+        "{:<36} {steps:>7.2} ms a step",
+        "street, ground far out, stepping on"
+    );
+}
+
+/// What a look round costs where you stand on a stratum (`Player::update_fov` over the
+/// map carried on past the city's edge, as every step looks again), in ms: the mean of a
+/// few.
+fn sight_cost(st: &mut AppState) -> f64 {
+    const LOOKS: u32 = 20;
+    let bonus = st.sight_bonus();
+    let mut p = st.player.take().unwrap();
+    let start = std::time::Instant::now();
+    {
+        let city = st.city.as_ref().unwrap();
+        let b = crate::outside::stream::Beyond::of(st);
+        let k = p.place.stratum().unwrap();
+        let bare = crate::render::map::MapRef::stratum_at(city, k, st.minute_of_day());
+        let map = match b.as_ref() {
+            Some(b) => bare.beyond(b),
+            None => bare,
+        };
+        for _ in 0..LOOKS {
+            p.update_fov(&map, bonus);
+        }
+    }
+    let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(LOOKS);
+    st.player = Some(p);
+    ms
+}
+
+/// A city's lights from afar (`2026-11-05-streamed-world-design.md`, Task 16): at night
+/// on the open ground across from the next city's east or west side, 30, 60 and 90 cells
+/// from a lamp of its (the nearest open ground at or past each), at 250x60 (the map wide
+/// enough to take in 90 cells either side of you); its lamps in sight where nothing stands
+/// between, its dark unseen.
+#[test]
+#[ignore]
+fn far_lights_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (250, 60);
+    for (k, at, away) in across_from_the_next_city(&[30, 60, 90]) {
+        let mut st = sited_run(22 * 60);
+        handover::on_foot(&mut st, at);
+        let map = map_on_you(&mut st, WIDE);
+        println!("far_lights_{k}: {away} cells from the lamp");
+        shot_stack(&format!("far_lights_{k}"), &st, &[&map], WIDE);
+    }
+}
+
+/// The next city of seed 3's world (as `handover::beside_a_city` finds it), a street lamp
+/// of its with nothing standing between it and its map's east or west edge along its
+/// row, and for each of `out` the open ground straight out past the edge at least that
+/// far from the lamp (the lamp whose ground lies nearest those): each with the cell (in
+/// the home city's frame) and how far it is from the lamp.
+fn across_from_the_next_city(out: &[i32]) -> Vec<(i32, Pos, i32)> {
+    use crate::outside::TILE;
+    use crate::outside::stream::tests::handover;
+    use citygen::Dir;
+    use citygen::overworld::detail;
+    /// How far past each distance the open ground is looked for.
+    const SLIDE: i32 = 40;
+    let mut probe = sited_run(22 * 60);
+    let (next, _, _) = handover::beside_a_city(&mut probe);
+    let o = probe.outside.as_ref().unwrap();
+    let (w, city) = (o.world(), o.held_city(next).unwrap());
+    let origin = o.origin(city);
+    let tile = |c: Pos| Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE));
+    let street = city.stratum(StratumKind::Street).unwrap();
+    let lamp = |q: Pos| street.tiles[q].feature == Some(citygen::Feature::Lamp);
+    let (cw, ch) = (city.size.w as i32, city.size.h as i32);
+    let ground = |c: Pos| {
+        w.tile(tile(c)).is_some()
+            && o.owner(tile(c)).is_none()
+            && detail::region(w, c.x, c.y, 1, 1)[Pos::new(0, 0)].is_walkable()
+    };
+    // along a row in from an edge: the first lamp before anything stands in the way
+    let first_lamp = |cells: &mut dyn Iterator<Item = Pos>| {
+        cells
+            .take_while(|q| !street.tiles[*q].blocks_sight())
+            .find(|q| lamp(*q))
+    };
+    (0..ch)
+        .flat_map(|y| {
+            let west = first_lamp(&mut (0..cw).map(|x| Pos::new(x, y)));
+            let east = first_lamp(&mut (0..cw).rev().map(|x| Pos::new(x, y)));
+            [west.map(|q| (q, Dir::W)), east.map(|q| (q, Dir::E))]
+        })
+        .flatten()
+        .filter_map(|(q, d)| {
+            let (dx, dy) = d.delta();
+            let at = origin.offset(q.x, q.y);
+            out.iter()
+                .map(|k| {
+                    let away = (*k..k + SLIDE).find(|i| ground(at.offset(i * dx, i * dy)))?;
+                    let stand = handover::local(&probe, at.offset(away * dx, away * dy));
+                    Some((*k, stand, away))
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .min_by_key(|stands| stands.iter().map(|(k, _, away)| away - k).sum::<i32>())
+        .expect("open ground across from the next city")
+}
+
+/// Seed 3's city 2, whose people are out and about all day (the next city's stay at
+/// work in its towers): a cell of the open ground beside its buildings, in the home
+/// city's frame.
+fn beside_the_busy_city() -> (crate::outside::Settlement, Pos) {
+    use crate::outside::stream::tests::handover;
+    let busy = crate::outside::Settlement {
+        city: 2,
+        town: None,
+    };
+    let mut probe = sited_run(13 * 60);
+    handover::hold(&mut probe, busy);
+    let o = probe.outside.as_ref().unwrap();
+    let city = o.held_city(busy).unwrap();
+    let (x, _) = beside_the_buildings(&probe, busy, city, o.origin(city))
+        .expect("open ground beside its buildings");
+    (busy, handover::local(&probe, x))
+}
+
+/// The cities next door alive (`2026-11-05-streamed-world-design.md`, "After the first
+/// play"), at 200x60, each a few moments apart to show what moves: on foot on the open
+/// ground beside seed 3's city 2 by day, its people walking its streets; jacked in beside
+/// the next city's Net, packets on its lanes; on a trunk of the open Net, no node near,
+/// packets running it.
+#[test]
+#[ignore]
+fn alive_next_door_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    // a few moments of play between shots: the clock a tick a frame, each frame drawn
+    let play = |st: &mut AppState, map: &mut MapScreen, frames: usize| {
+        let mut t = Term::new(TestBackend::new(WIDE.0, WIDE.1)).unwrap();
+        for _ in 0..frames {
+            st.tick += 1;
+            map.update(st, &[]);
+            t.draw(|f| map.draw(st, f)).unwrap();
+        }
+    };
+    // beside a city whose people are about, built as you came near, a while on
+    let (busy, beside) = beside_the_busy_city();
+    let mut st = sited_run(13 * 60);
+    handover::on_foot(&mut st, beside);
+    let mut map = map_on_you(&mut st, WIDE);
+    assert!(crate::outside::people_of(&st, busy).is_some(), "its people");
+    // a while on, its people on their way about their day
+    for _ in 0..20 * sim::TICKS_PER_MINUTE {
+        st.tick += 1;
+        map.update(&mut st, &[]);
+    }
+    for n in 1..=3 {
+        play(&mut st, &mut map, 45);
+        shot_stack(&format!("alive_beside_day_{n}"), &st, &[&map], WIDE);
+    }
+    let (_, at, _) = beside_the_next_city();
+    let mut st = sited_run(22 * 60);
+    jacked_in_near(&mut st, at);
+    let mut map = map_on_you(&mut st, WIDE);
+    for n in 1..=3 {
+        play(&mut st, &mut map, 12);
+        shot_stack(&format!("alive_net_beside_{n}"), &st, &[&map], WIDE);
+    }
+    // a trunk of the open ground straight on 24 cells each way, no node of the open
+    // Net's within a view of it, nearest the city
+    let mut st = sited_run(22 * 60);
+    let on = {
+        let city = st.city.as_ref().unwrap();
+        let (w, h) = (city.size.w as i32, city.size.h as i32);
+        crate::outside::stream::tend(&mut st, citygen::Rect::new(-160, -80, w + 320, h + 160));
+        let o = st.outside.as_ref().unwrap();
+        let origin = o.origin(st.city.as_ref().unwrap());
+        let open_lane = |p: Pos| {
+            crate::outside::stream::owner_of(&st, p).is_none()
+                && o.stream
+                    .net
+                    .tile(origin.offset(p.x, p.y))
+                    .is_some_and(|t| t.terrain == citygen::Terrain::NetLane)
+        };
+        let nodes: Vec<Pos> = o
+            .stream
+            .net
+            .cells_in(citygen::Rect::new(
+                origin.x - 160,
+                origin.y - 80,
+                w + 320,
+                h + 160,
+            ))
+            .filter(|(_, t)| matches!(t.feature, Some(citygen::Feature::Node(_))))
+            .map(|(c, _)| Pos::new(c.x - origin.x, c.y - origin.y))
+            .collect();
+        let middle = Pos::new(w / 2, h / 2);
+        citygen::Rect::new(-150, -70, w + 300, h + 140)
+            .iter()
+            .filter(|p| {
+                (-24..=24).all(|i| open_lane(p.offset(i, 0)))
+                    || (-12..=12).all(|i| open_lane(p.offset(0, i)))
+            })
+            .filter(|p| {
+                nodes
+                    .iter()
+                    .all(|n| (n.x - p.x).abs() > 140 || (n.y - p.y).abs() > 50)
+            })
+            .min_by_key(|p| p.manhattan(middle))
+            .expect("a trunk on the open ground")
+    };
+    jacked_in_near(&mut st, on);
+    let mut map = map_on_you(&mut st, WIDE);
+    for n in 1..=3 {
+        play(&mut st, &mut map, 12);
+        shot_stack(&format!("alive_trunk_{n}"), &st, &[&map], WIDE);
+    }
+}
+
+/// Every city lives (`2026-11-05-streamed-world-design.md`, "After the first play"): in
+/// seed 3's corporate neighbour, where few who work have a home, at 200x60: the morning,
+/// its people coming in along the road from the north edge and on to work, three game
+/// minutes apart; a quarter to one in the middle of the city, some out on a break, a few
+/// moments apart; the evening, its people walking back out that road, three minutes
+/// apart; half past nine in the middle of the city.
+#[test]
+#[ignore]
+fn commuters_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    let corporate = crate::outside::Settlement {
+        city: 1,
+        town: None,
+    };
+    let play = |st: &mut AppState, map: &mut MapScreen, frames: u64, draw: bool| {
+        let mut t = Term::new(TestBackend::new(WIDE.0, WIDE.1)).unwrap();
+        for _ in 0..frames {
+            st.tick += 1;
+            map.update(st, &[]);
+            if draw {
+                t.draw(|f| map.draw(st, f)).unwrap();
+            }
+        }
+    };
+    // in the corporate city at `minute`, on its street at the cell nearest `near`
+    let inside = |minute: u16, near: fn(&citygen::City) -> Pos| {
+        let mut st = sited_run(minute);
+        crate::outside::enter(&mut st, corporate).unwrap();
+        let at = {
+            let city = st.city.as_ref().unwrap();
+            let want = near(city);
+            city.size
+                .rect()
+                .iter()
+                .filter(|p| city.walkable(StratumKind::Street, *p))
+                .min_by_key(|p| p.manhattan(want))
+                .unwrap()
+        };
+        handover::on_foot(&mut st, at);
+        let map = map_on_you(&mut st, WIDE);
+        (st, map)
+    };
+    // by the road in from the north edge, a little way in
+    let by_the_road = |c: &citygen::City| Pos::new(c.size.w as i32 / 2 - 4, 14);
+    let middle = |c: &citygen::City| Pos::new(c.size.w as i32 / 2, c.size.h as i32 / 2);
+    let minutes = |n: u64| n * sim::TICKS_PER_MINUTE;
+    for (name, minute, near, on, apart) in [
+        (
+            "commute_morning",
+            7 * 60,
+            by_the_road as fn(&citygen::City) -> Pos,
+            20,
+            minutes(3),
+        ),
+        ("commute_midday", 12 * 60 + 20, middle, 25, 45),
+        ("commute_evening", 18 * 60, by_the_road, 20, minutes(3)),
+        ("commute_late", 21 * 60, middle, 30, 45),
+    ] {
+        let (mut st, mut map) = inside(minute, near);
+        play(&mut st, &mut map, minutes(on), false);
+        for n in 1..=3 {
+            play(&mut st, &mut map, apart - 12, false);
+            play(&mut st, &mut map, 12, true);
+            shot_stack(&format!("{name}_{n}"), &st, &[&map], WIDE);
+        }
+    }
+}
+
+/// One light (`2026-11-05-streamed-world-design.md`, "After the first play"): seed 3's
+/// next city drawn from the open ground beside it, held, and a step in, live, at 200x60,
+/// by day, at dusk and by night; then the dev light view (`light`) by day and by night at
+/// the line between a city and its town, and by day beside the next city.
+#[test]
+#[ignore]
+fn one_light_shots() {
+    use crate::outside::stream::tests::handover;
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const WIDE: (u16, u16) = (200, 60);
+    let (next, outside, inward) = beside_the_next_city();
+    for (hour, minute) in [("day", 13 * 60), ("dusk", 18 * 60), ("night", 22 * 60)] {
+        let mut st = sited_run(minute);
+        handover::on_foot(&mut st, outside);
+        let mut map = map_on_you(&mut st, WIDE);
+        assert_ne!(st.outside.as_ref().unwrap().here(), next, "beside it");
+        shot_stack(&format!("one_light_beside_{hour}"), &st, &[&map], WIDE);
+        walk_on(&mut st, &mut map, inward, 1, WIDE);
+        assert_eq!(st.outside.as_ref().unwrap().here(), next, "walked in");
+        shot_stack(&format!("one_light_inside_{hour}"), &st, &[&map], WIDE);
+    }
+    for (hour, minute) in [("day", 13 * 60), ("night", 22 * 60)] {
+        let mut st = sited_run(minute);
+        let (_, _, a, _) = handover::beside_a_town(&mut st);
+        handover::on_foot(&mut st, a);
+        let map = map_on_you(&mut st, WIDE);
+        st.show_light = true;
+        shot_stack(
+            &format!("one_light_view_town_line_{hour}"),
+            &st,
+            &[&map],
+            WIDE,
+        );
+    }
+    let mut st = sited_run(13 * 60);
+    handover::on_foot(&mut st, outside);
+    let map = map_on_you(&mut st, WIDE);
+    st.show_light = true;
+    shot_stack("one_light_view_beside_day", &st, &[&map], WIDE);
+}
+
+/// What a frame of the overworld screen costs to draw at 200x60, the mean of a run of
+/// frames, the tick moving on each: up from seed 3's home city on foot by day, at dusk
+/// and by night, and on the Net over the world. Built with `--release`, it says what play
+/// pays: `cargo test -p strata-zero --release --target-dir target/smoke -- --ignored
+/// overworld_draw_cost --nocapture`.
+#[test]
+#[ignore]
+fn overworld_draw_cost() {
+    use crate::screens::outside::OutsideScreen;
+    const SIZE: (u16, u16) = (200, 60);
+    const FRAMES: u32 = 240;
+    let cost = |st: &mut AppState, s: &dyn Screen| {
+        let mut t = Term::new(TestBackend::new(SIZE.0, SIZE.1)).unwrap();
+        t.draw(|f| s.draw(st, f)).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            st.tick += 1;
+            t.draw(|f| s.draw(st, f)).unwrap();
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES)
+    };
+    for (what, minute) in [
+        ("overworld, day", 13 * 60),
+        ("overworld, dusk", 18 * 60 + 20),
+        ("overworld, night", 22 * 60),
+    ] {
+        let mut st = sited_run(minute);
+        let s = OutsideScreen::new(&mut st);
+        println!("{what:<24} {:>7.2} ms a frame", cost(&mut st, &s));
+    }
+    let mut st = sited_run(22 * 60);
+    let s = OutsideScreen::net_from_city(&mut st);
+    println!(
+        "{:<24} {:>7.2} ms a frame",
+        "the Net overworld",
+        cost(&mut st, &s)
+    );
+}
+
+/// The overworld in motion (round 2 of `2026-11-05-overworld-motion-mock/`): on foot on
+/// seed 3's world where the view takes in mountains, the sea, a river and the most of a
+/// city, at 128x42 as the mock draws it, by day, at dusk and by night; and amid the most
+/// mountains, by night and by day, with a gust's band on the middle of them and two
+/// seconds after.
+#[test]
+#[ignore]
+fn overworld_motion_shots() {
+    use crate::outside::At;
+    use crate::render::overworld::live::LiveAtlas;
+    use crate::screens::outside::OutsideScreen;
+    use citygen::overworld::{Ground, Water};
+    if std::env::var("SHOT_DIR").is_err() {
+        return;
+    }
+    const SIZE: (u16, u16) = (128, 42);
+    let st = sited_run(13 * 60);
+    let w = st.outside.as_ref().unwrap().world().clone();
+    // the view (about 85 by 32 tiles) with mountains, the sea and a river, and the most
+    // of a city
+    let (hw, hh) = (40, 14);
+    let score = |c: Pos| {
+        let (mut high, mut sea, mut river, mut urban) = (false, false, false, 0);
+        for y in c.y - hh..=c.y + hh {
+            for x in c.x - hw..=c.x + hw {
+                let Some(t) = w.tile(Pos::new(x, y)) else {
+                    continue;
+                };
+                high |= matches!(t.ground, Ground::Mountains | Ground::Peak);
+                sea |= t.water == Water::Sea;
+                river |= t.water == Water::River;
+                urban += t.urban.is_some() as u32;
+            }
+        }
+        (high && sea && river, urban)
+    };
+    let at = (hh..w.size.h as i32 - hh)
+        .step_by(4)
+        .flat_map(|y| {
+            (hw..w.size.w as i32 - hw)
+                .step_by(4)
+                .map(move |x| Pos::new(x, y))
+        })
+        .max_by_key(|c| (score(*c), -c.x, -c.y))
+        .unwrap();
+    let up = |minute: u16, tick: u64| {
+        let mut st = sited_run(minute);
+        let s = OutsideScreen::new(&mut st);
+        st.outside.as_mut().unwrap().at = At::Overworld(at);
+        st.tick = tick;
+        (st, s)
+    };
+    const TICK: u64 = 6000;
+    for (name, minute) in [
+        ("overworld_motion_day", 13 * 60),
+        ("overworld_motion_dusk", 18 * 60 + 20),
+        ("overworld_motion_night", 22 * 60),
+    ] {
+        let (st, s) = up(minute, TICK);
+        shot_stack(name, &st, &[&s], SIZE);
+    }
+    // a gust: on the mountain at the middle of the world's widest stretch of them, the
+    // tick its band is full there
+    let atlas = LiveAtlas::new(&w);
+    let high = |p: Pos| {
+        w.tile(p).is_some_and(|t| {
+            matches!(t.ground, Ground::Mountains | Ground::Peak)
+                && t.water == Water::None
+                && t.road == 0
+                && t.urban.is_none()
+        })
+    };
+    let peak = w
+        .tiles
+        .iter()
+        .map(|(p, _)| p)
+        .filter(|p| high(*p))
+        .max_by_key(|p| {
+            let n = (-hw..=hw)
+                .flat_map(|dx| (-hh..=hh).map(move |dy| (dx, dy)))
+                .filter(|(dx, dy)| high(p.offset(*dx, *dy)))
+                .count();
+            (n, -p.x, -p.y)
+        })
+        .unwrap();
+    let gust = (TICK..TICK + 2400)
+        .find(|t| atlas.gust(peak, *t) == Some(1.0))
+        .expect("a gust within 80 s");
+    for (name, minute) in [
+        ("overworld_motion_gust_night", 22 * 60),
+        ("overworld_motion_gust_day", 13 * 60),
+    ] {
+        let (mut st, s) = up(minute, gust);
+        st.outside.as_mut().unwrap().at = At::Overworld(peak);
+        shot_stack(name, &st, &[&s], SIZE);
+        // and two seconds on, the hills quiet again
+        st.tick += 60;
+        shot_stack(&format!("{name}_after"), &st, &[&s], SIZE);
+    }
+    eprintln!("overworld motion shots round {at:?}, the gust on {peak:?} at tick {gust}");
+}

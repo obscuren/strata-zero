@@ -125,6 +125,10 @@ pub fn glyph_for(
             Feature::Pipe => '╌',
             Feature::Cable => '╌',
             Feature::Awning => '▔',
+            Feature::Pylon => '╫',
+            Feature::PowerLine(false) => '┄',
+            Feature::PowerLine(true) => '┆',
+            Feature::FireBarrel => '•',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -147,6 +151,10 @@ pub fn glyph_for(
         };
     }
     let horizontal = mask & (MASK_E | MASK_W) != 0;
+    // A deck or a rail runs the way it goes on: east-west where it goes on both ways, or
+    // one way with nothing north or south (a deck two wide has its twin beside it).
+    let runs_across =
+        mask & (MASK_E | MASK_W) == MASK_E | MASK_W || horizontal && mask & (MASK_N | MASK_S) == 0;
     match terrain {
         Terrain::Void => ' ',
         Terrain::Water => pick(&g.water, tick / 6 + variant as u64),
@@ -187,7 +195,7 @@ pub fn glyph_for(
             }
         }
         Terrain::Bridge => {
-            if horizontal {
+            if runs_across {
                 '╍'
             } else {
                 '╏'
@@ -251,13 +259,33 @@ pub fn glyph_for(
         Terrain::NetGate => '▯',
         Terrain::Atrium => ' ',
         Terrain::Railing => {
-            if horizontal {
+            if runs_across {
                 '─'
             } else {
                 '│'
             }
         }
+        // Open ground: sparse, so the screen reads quiet and what's built carries it.
+        Terrain::Dirt => one_in(variant, 16, '·'),
+        Terrain::Scrub => ['"', ',', ' '][(variant % 3) as usize],
+        Terrain::Crops => one_in(variant, 2, '▬'),
+        Terrain::Salt => ['░', '·'][(variant % 2) as usize],
+        Terrain::Spill => ['≈', '·', '·', ' ', ' '][(variant % 5) as usize],
+        Terrain::Gravel => one_in(variant, 2, '∙'),
+        Terrain::Sand => ['░', '·', ' '][(variant % 3) as usize],
+        Terrain::Reeds => ['"', '·', ' '][(variant % 3) as usize],
+        Terrain::Rock => ['■', '▪', '▪'][(variant % 3) as usize],
+        Terrain::Cliff => ['█', '▓', '▓'][(variant % 3) as usize],
+        Terrain::Shallows => ['~', '≈', ' '][((tick / 6 + variant as u64) % 3) as usize],
+        Terrain::Ford => one_in(variant, 2, '·'),
+        Terrain::Rise => ['·', '░', '░', '░'][(variant % 4) as usize],
+        Terrain::Wash => ['░', '·', ' '][(variant % 3) as usize],
     }
+}
+
+/// `ch` on one tile in `n`, picked by its variant; blank on the rest.
+fn one_in(variant: u8, n: u8, ch: char) -> char {
+    if variant.is_multiple_of(n) { ch } else { ' ' }
 }
 
 /// Legend rows for a stratum: glyph and label.
@@ -366,11 +394,33 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::NetGate => (Rgb(200, 255, 245), Rgb(6, 18, 22)),
         Terrain::Atrium => (bg0, bg0),
         Terrain::Railing => (ts.wall, ts.floor),
+        Terrain::Dirt => (Rgb(67, 60, 48), Rgb(13, 11, 9)),
+        Terrain::Scrub => (Rgb(74, 90, 48), Rgb(13, 12, 9)),
+        Terrain::Crops => (Rgb(58, 106, 48), Rgb(11, 12, 8)),
+        Terrain::Salt => (Rgb(90, 88, 82), Rgb(18, 18, 16)),
+        Terrain::Spill => (Rgb(74, 138, 34), Rgb(6, 12, 4)),
+        Terrain::Gravel => (Rgb(74, 69, 60), Rgb(20, 19, 16)),
+        Terrain::Sand => (Rgb(138, 122, 88), Rgb(28, 24, 18)),
+        Terrain::Reeds => (Rgb(94, 112, 64), Rgb(15, 18, 11)),
+        Terrain::Rock => (Rgb(94, 88, 80), Rgb(13, 11, 9)),
+        Terrain::Cliff => (Rgb(52, 49, 44), Rgb(12, 11, 10)),
+        Terrain::Shallows => (Rgb(106, 166, 216), Rgb(18, 60, 94)),
+        Terrain::Ford => (Rgb(90, 140, 190), Rgb(14, 40, 64)),
+        Terrain::Rise => (Rgb(70, 60, 44), Rgb(20, 17, 13)),
+        Terrain::Wash => (Rgb(96, 84, 60), Rgb(22, 19, 14)),
     }
 }
 
 /// The operating chair's cyan.
 const CHAIR: Rgb = Rgb(0, 229, 255);
+
+/// A fire burning in a drum in the outskirts (round 2's).
+const FIRE: Rgb = Rgb(255, 140, 58);
+
+/// The caps either end of a roadside sign (round 2's Kilo-9).
+const SIGN_CAP: Rgb = Rgb(60, 140, 255);
+/// The orange of a roadside sign's letters (round 2's Kilo-9).
+const ROADSIDE_SIGN: Rgb = Rgb(255, 140, 0);
 
 /// Feature foreground colour, if the feature overrides it.
 fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
@@ -398,6 +448,8 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Trash => Rgb(115, 105, 85),
         Feature::Barrier => Rgb(255, 60, 60),
         Feature::Stall => ts.accent,
+        // a roadside sign's caps in blue, its letters in the sign's orange
+        Feature::Sign('▣') => SIGN_CAP,
         Feature::Sign(_) => ts.accent2,
         Feature::Terminal => Rgb(0, 230, 210),
         Feature::Camera => Rgb(255, 60, 70),
@@ -412,6 +464,10 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
         Feature::Furniture(Furniture::Chair) => CHAIR,
         Feature::Furniture(_) => ts.wall.scale(1.2),
+        Feature::Pylon => Rgb(106, 110, 118),
+        // round 2's fire in a drum, guttering
+        Feature::FireBarrel => FIRE.scale(flicker(tick, tile.variant, true)),
+        Feature::PowerLine(_) => Rgb(42, 46, 54),
     }
 }
 
@@ -479,7 +535,8 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
             | Feature::Terminal
             | Feature::Camera
             | Feature::Node(_)
-            | Feature::Fitting(_),
+            | Feature::Fitting(_)
+            | Feature::FireBarrel,
         ) => true,
         _ => false,
     };
@@ -516,6 +573,15 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
         }
         bg = bg.mix(sky, w);
     }
+    // a roadside sign's letters in the sign's orange, where no district colours them:
+    // on the open ground and on a city's own ground past its outline alike
+    if let Some(Feature::Sign(c)) = tile.feature
+        && c != '▣'
+        && c != '!'
+        && tile.district.is_none()
+    {
+        fg = ROADSIDE_SIGN;
+    }
     let jack = ctx.connector.is_some_and(|c| c.kind == ConnectorKind::Jack);
     let bold = tile.is_connector()
         || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
@@ -541,6 +607,61 @@ mod tests {
         StratumKind, Terrain, Theme, Tile, Tone, Wear,
     };
     use unicode_width::UnicodeWidthChar;
+
+    #[test]
+    fn a_roadside_sign_is_orange_between_blue_caps() {
+        let style = StylePack::load().unwrap();
+        let ctx = RenderCtx {
+            style: &style,
+            theme: None,
+            stratum: StratumKind::Street,
+            light: 110,
+            tick: 0,
+            vis: Visibility::Visible,
+            connector: None,
+            kind: None,
+            wall_mask: 0,
+            lamps_on: true,
+            sky: None,
+            glow: None,
+        };
+        let sign = |c: char, district: Option<citygen::DistrictId>| {
+            let mut t = Tile::new(Terrain::Gravel);
+            t.feature = Some(Feature::Sign(c));
+            t.district = district;
+            cell(&t, &ctx)
+        };
+        assert_eq!(sign('K', None).fg, ROADSIDE_SIGN);
+        assert_eq!(sign('▣', None).ch, '▣');
+        assert!(sign('▣', None).fg.2 > sign('▣', None).fg.0, "a blue cap");
+        // a district's own sign keeps its colour
+        assert_ne!(sign('K', Some(citygen::DistrictId(0))).fg, ROADSIDE_SIGN);
+    }
+
+    #[test]
+    fn a_fire_barrel_burns_bright_at_night() {
+        let style = crate::render::style::StylePack::load().unwrap();
+        let mut t = Tile::new(Terrain::Dirt);
+        t.feature = Some(Feature::FireBarrel);
+        let at = |light: u8| {
+            let ctx = RenderCtx {
+                style: &style,
+                theme: None,
+                stratum: StratumKind::Street,
+                light,
+                tick: 0,
+                vis: Visibility::Visible,
+                connector: None,
+                kind: None,
+                wall_mask: 0,
+                lamps_on: true,
+                sky: None,
+                glow: None,
+            };
+            cell(&t, &ctx).fg
+        };
+        assert_eq!(at(20), at(255), "a fire lights itself");
+    }
 
     #[test]
     fn style_glyphs_are_single_width() {
@@ -578,6 +699,55 @@ mod tests {
                 assert_eq!(c.width(), Some(1), "{label}");
             }
         }
+    }
+
+    #[test]
+    fn a_wide_bridge_runs_the_way_it_goes() {
+        let s = StylePack::load().unwrap();
+        let g = |t, mask| glyph_for(t, None, None, None, 1, 0, mask, &s);
+        // a deck two wide running north-south: each cell has its twin beside it
+        assert_eq!(g(Terrain::Bridge, MASK_N | MASK_S | MASK_E), '╏');
+        assert_eq!(g(Terrain::Bridge, MASK_N | MASK_S | MASK_W), '╏');
+        // and east-west, its twin above or below
+        assert_eq!(g(Terrain::Bridge, MASK_E | MASK_W | MASK_S), '╍');
+        assert_eq!(g(Terrain::Bridge, MASK_E | MASK_W), '╍');
+        assert_eq!(g(Terrain::Bridge, MASK_E), '╍');
+        assert_eq!(g(Terrain::Railing, MASK_N | MASK_S), '│');
+        assert_eq!(g(Terrain::Railing, MASK_W | MASK_E), '─');
+    }
+
+    #[test]
+    fn open_ground_draws_in_one_cell() {
+        let s = StylePack::load().unwrap();
+        let ground = [
+            Terrain::Dirt,
+            Terrain::Scrub,
+            Terrain::Crops,
+            Terrain::Salt,
+            Terrain::Spill,
+            Terrain::Gravel,
+            Terrain::Sand,
+            Terrain::Reeds,
+            Terrain::Rock,
+            Terrain::Cliff,
+            Terrain::Shallows,
+            Terrain::Ford,
+            Terrain::Rise,
+            Terrain::Wash,
+        ];
+        for t in ground {
+            let mut drawn = std::collections::BTreeSet::new();
+            for variant in 0..=255u8 {
+                let c = glyph_for(t, None, None, None, variant, 0, 0, &s);
+                assert_eq!(c.width(), Some(1), "{t:?} {variant}");
+                drawn.insert(c);
+            }
+            assert!(drawn.len() >= 2, "{t:?} draws only {drawn:?}");
+        }
+        assert_eq!(
+            glyph_for(Terrain::Dirt, Some(Feature::Pylon), None, None, 0, 0, 0, &s),
+            '╫'
+        );
     }
 
     #[test]

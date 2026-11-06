@@ -10,6 +10,8 @@ pub mod interiors;
 pub mod lots;
 pub mod naming;
 pub mod net;
+pub mod outskirts;
+pub mod site;
 pub mod streets;
 pub mod terrain;
 pub mod verticals;
@@ -135,6 +137,14 @@ pub(crate) struct Scratch {
     pub lots: Vec<Lot>,
     pub lobbies: Vec<(BuildingId, Pos)>,
     pub water_edge: Option<crate::geom::Dir>,
+    /// The world's part when the city has a site (its ground, its outline).
+    pub site: Option<site::Site>,
+    /// A city on its site: the Net's cells that are the open Net's (past its outline,
+    /// away from the city), which the city's Net leaves as they are.
+    pub open_net: Option<Grid<bool>>,
+    /// A city on its site: where the open Net's lanes run on into the city's own cells,
+    /// each lane's last cell on the open Net, for the trunks' joins.
+    pub trunk_ends: Vec<Pos>,
 }
 
 impl Scratch {
@@ -149,6 +159,9 @@ impl Scratch {
             lots: Vec::new(),
             lobbies: Vec::new(),
             water_edge: None,
+            site: None,
+            open_net: None,
+            trunk_ends: Vec::new(),
         }
     }
 }
@@ -209,6 +222,15 @@ impl GenCtx {
         self.city
             .tile(StratumKind::Street, p)
             .is_some_and(|t| t.district == Some(id))
+    }
+
+    /// Whether `p` is water: the world's, for a city on its site; any ground not land,
+    /// for a lone city.
+    pub fn is_wet(&self, p: Pos) -> bool {
+        match self.scratch.site.as_ref() {
+            Some(site) => site.wet(p),
+            None => !self.is_land(p),
+        }
     }
 
     pub fn is_land(&self, p: Pos) -> bool {
@@ -338,8 +360,13 @@ impl Generator {
         if let Some(e) = self.error {
             return Err(e);
         }
-        self.ctx.city.validate().map_err(GenError::Invalid)?;
-        Ok(self.ctx.city)
+        let mut city = self.ctx.city;
+        // again, for what the stages since linking left empty (slivers voided)
+        if let Some(site) = self.ctx.scratch.site.as_ref() {
+            site::fill(&mut city, site);
+        }
+        city.validate().map_err(GenError::Invalid)?;
+        Ok(city)
     }
 
     /// Runs every stage to completion.

@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overworld motion round 2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0d1117; --ink:#c9d1d9; --dim:#8b949e; --rule:#21262d; --cyan:#00e5ff; --well:#161b22; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); font-family:-apple-system,system-ui,sans-serif;
+         margin:24px 32px 64px; line-height:1.5; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:17px; margin:36px 0 6px; }
+  p, li, dd { max-width:1100px; font-size:14px; }
+  .note { color:var(--dim); font-size:13px; }
+  .changes { margin:6px 0 0; padding-left:20px; }
+  .changes li { font-size:13.5px; margin:2px 0; }
+  code, kbd { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:var(--well);
+              padding:1px 5px; border-radius:4px; }
+  .bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin:16px 0 8px; }
+  .group { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+  .group .lab { color:var(--dim); font-size:12px; margin-right:4px; text-transform:uppercase; letter-spacing:.06em; }
+  .group.off { opacity:.4; }
+  button { font:600 13px ui-monospace,Menlo,monospace; color:#9aa4b2; background:var(--well);
+           border:1px solid #2b3340; border-radius:5px; padding:5px 10px; cursor:pointer; }
+  button:hover { color:#e6edf3; border-color:#3d4a5c; }
+  button[aria-pressed="true"] { color:#04060a; background:var(--cyan); border-color:var(--cyan); }
+  button.layer[aria-pressed="true"] { background:#9fe6ff; border-color:#9fe6ff; }
+  button.today[aria-pressed="true"] { background:#8b949e; border-color:#8b949e; }
+  #cap { min-height:3em; margin:4px 0 2px; font-size:14px; max-width:1160px; }
+  #cap b { color:#e6edf3; }
+  #capt { color:var(--dim); font-size:13px; margin:0 0 10px; max-width:1160px; }
+  .wrap { overflow:auto; max-width:100%; border:1px solid #1a2230; border-radius:4px;
+          box-shadow:0 8px 30px rgba(0,0,0,.5); display:inline-block; background:#0a0b10; }
+  canvas { display:block; }
+  .keys { color:var(--dim); font-size:12px; margin-top:6px; }
+  .opts { display:grid; grid-template-columns: 7.5em 1fr; gap:4px 14px; max-width:1160px; font-size:14px; }
+  .opts dt { font-family:ui-monospace,Menlo,monospace; color:var(--cyan); white-space:nowrap; }
+  .opts dd { margin:0; }
+  .rust dt { font-family:ui-monospace,Menlo,monospace; color:var(--cyan); margin-top:12px; font-size:14px; }
+  .rust dd { margin:2px 0 0 0; }
+  .rust ul { margin:2px 0; padding-left:20px; }
+  .rust li { margin:2px 0; }
+  table.rates { border-collapse:collapse; font-size:13.5px; margin:6px 0 2px; }
+  table.rates td { padding:2px 16px 2px 0; vertical-align:top; }
+  table.rates td:first-child { color:#e6edf3; white-space:nowrap; }
+  table.rates td:last-child { color:var(--dim); }
+  @media (max-width: 760px) {
+    body { margin:16px; }
+    .opts { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<h1>The overworld in motion · round 2</h1>
+<p class="note">Round 1's picks put together on one screen. What changed from round 1:</p>
+<ul class="changes note">
+  <li>Neon (B) and weather (C) run together, with D's beacons at the places. Traffic (A), the highway lamps and their wave, and D's running dusk clock are gone: the roads stay still.</li>
+  <li>No rain. The cloud shadows stay.</li>
+  <li>New: every 40 to 70 seconds a gust runs through the hills and mountains, about five seconds across, then quiet. <b>gust now</b> sends one without waiting.</li>
+  <li>The neon is slower: a district takes 20 to 36 seconds per breath, where round 1 took 5 to 12. Sign stutters, window changes and tower blinks are much rarer (rates at the bottom).</li>
+  <li>The Net overworld stays as it is today. Its tab is only for reference.</li>
+</ul>
+
+<div class="bar">
+  <div class="group" role="group" aria-label="View">
+    <span class="lab">view</span>
+    <button data-view="r2">round 2</button>
+    <button class="today" data-view="today">0 today</button>
+    <button class="today" data-view="net">NET (today, unchanged)</button>
+  </div>
+  <div class="group" id="layers" role="group" aria-label="Layers">
+    <span class="lab">layers</span>
+    <button class="layer" data-layer="neon">neon</button>
+    <button class="layer" data-layer="weather">weather</button>
+    <button class="layer" data-layer="beacons">beacons</button>
+    <button id="gust">gust now</button>
+  </div>
+  <div class="group" role="group" aria-label="Time of day">
+    <span class="lab">time</span>
+    <button data-tod="0">day</button>
+    <button data-tod="1">dusk</button>
+    <button data-tod="2">night</button>
+  </div>
+  <div class="group" role="group" aria-label="Cell size">
+    <span class="lab">size</span>
+    <button data-size="7">S</button>
+    <button data-size="9">M</button>
+    <button data-size="11">L</button>
+  </div>
+  <div class="group"><button id="pause">pause</button></div>
+</div>
+<p id="cap"></p>
+<p id="capt"></p>
+<div class="wrap"><canvas id="scr" aria-label="The overworld screen, animated"></canvas></div>
+<p class="keys"><kbd>←</kbd><kbd>→</kbd> view · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> layers · <kbd>g</kbd> gust · <kbd>↑</kbd><kbd>↓</kbd> time · <kbd>space</kbd> pause · the screen is 128×42 cells, the map 96×32 · the route shield is borrowed from the deck MAP's world zoom (the overworld screen draws none today)</p>
+
+<h2>The layers, one line each</h2>
+<dl class="opts" id="legend"></dl>
+
+<h2>What the Rust side would need</h2>
+<dl class="rust">
+  <dt>shared · the clock's light</dt>
+  <dd><ul>
+    <li><code>atlas_cell</code> takes the minute: <code>lighting::daylight(minute)</code> and <code>lighting::sky(Street, minute)</code>, as the street already uses them. Each kind of tile gets a brightness (ground 0.4→1, water 0.55→1, settlements 0.72→1, open road 0.5→1, settlement road 0.82→1, places 0.85→1), and ground and water also take the dusk cast at that brightness. By day the look is exactly today's.</li>
+    <li><code>draw_world</code> passes <code>st.tick</code> down the way <code>draw_net_world</code> already does. The screen already redraws every frame, and the window repaints only the cells that changed.</li>
+  </ul></dd>
+  <dt>neon</dt>
+  <dd><ul>
+    <li>Each district breathes on its own period with <code>anim::effects::pulse</code>, quantised to five steps, with a phase from its theme plus up to 60 ticks per tile from <code>roll</code>, so each step ripples through the district rather than landing all at once (a district id would let two districts of one theme breathe apart). Signs stay where today's look puts them (<code>roll &gt; 0.92</code>), plus more after dark (<code>0.86–0.92</code>).</li>
+    <li>Beacons sit on each settlement's densest tiles, picked once and spaced five apart. The night spill uses each tile's distance (≤3) to the nearest urban tile and that tile's accent, computed once per world.</li>
+    <li>Everything is stateless, from the tick and <code>hash(x, y)</code>:
+      <table class="rates">
+        <tr><td>breathing</td><td>period 600–1080 ticks (20–36 s) by district: CorpCore 720, NeonStrip 600, NightMarket 660, Docks 840, OldTown 900, Megablocks 960, Industrial 1080; five steps, so a district changes a step every 2–3.6 s</td></tr>
+        <tr><td>sign stutter</td><td>half the signs stutter; each one once every 1800–2700 ticks (60–90 s, hashed), for 12 ticks (0.4 s). Round 1: a third of the signs, every 5–10 s, for 16 ticks</td></tr>
+        <tr><td>windows</td><td>dusk and night only; each dense tile redraws its light every 1800 ticks (60 s, staggered), lit 4 times in 5. Round 1: every 8 s, lit 7 in 10</td></tr>
+        <tr><td>tower blink</td><td>6 ticks on in every 180 (once every 6 s), each tower on its own phase. Round 1: 5 in 54 (every 1.8 s)</td></tr>
+        <tr><td>water reflections</td><td>after dark, within 3 of a settlement; each tile has a 1-in-25 chance every 30 ticks (1 s). Round 1: 6% every 8 ticks</td></tr>
+      </table></li>
+  </ul></dd>
+  <dt>weather (no rain)</dt>
+  <dd><ul>
+    <li>Swells come from <code>hash(⌊(x − t/30)/3⌋, y)</code> over the deep sea, each row stepping on its own hashed tick, so the whole sea never moves in one frame. A shore tile (already found in <code>ground_cell</code>) breaks when a swell is one tile out to sea.</li>
+    <li>The river needs its tiles in flow order. <code>rivers.rs</code> has each river's path while it generates: keep it on <code>Overworld</code>, or trace the link masks once from source to mouth.</li>
+    <li>Clouds are two octaves of value noise on the tile grid at three levels of shade.</li>
+    <li>The gust: a schedule of start ticks hashed from the world's seed, and a front <code>f = 44 + (t − start)/3</code>. A hill, mountain or lake tile is in the band when <code>0 ≤ f − (x + 0.6·(y − 16)) &lt; 5</code>, at strengths 1, 0.75, 0.5, 0.3, 0.15 back from the front. Mountains whiten toward <code>(235, 240, 250)</code> (spindrift), hills take dust toward <code>(205, 175, 125)</code>, lake <code>≈</code> turns to <code>~</code>. Only the tile's kind is needed: <code>Ground::Hills | Mountains | Peak</code> and <code>Water::Lake</code>.
+      <table class="rates">
+        <tr><td>gust</td><td>every 1200–2100 ticks (40–70 s, hashed); the front moves a tile per 3 ticks and crosses the range in about 230 ticks (7.7 s), so any one tile is in the band for about 0.5 s; 5-tile band, west to east like the clouds</td></tr>
+        <tr><td>swells</td><td>a tile per 30 ticks (1 s) toward the coast</td></tr>
+        <tr><td>river glints</td><td>a tile per 10 ticks downstream; a glint on 3 in 10 of the slots</td></tr>
+        <tr><td>wind in the fields</td><td>a 3-tile band every 34, a tile per 6 ticks</td></tr>
+        <tr><td>cloud shadows</td><td>a tile per 45 ticks (1.5 s) east, a tile per 300 ticks north; each row and column steps on its own hashed tick</td></tr>
+        <tr><td>sea glints</td><td>dusk and night; a 1-in-40 chance per tile every 7 ticks, amber at dusk, the moon's grey at night</td></tr>
+      </table></li>
+  </ul></dd>
+  <dt>beacons</dt>
+  <dd><ul>
+    <li>A beacon pattern per <code>PoiKind</code>, drawn round <code>world.pois</code>; nothing on the roads.
+      <table class="rates">
+        <tr><td>relay mast</td><td>green-white blink 6 ticks in 60 (every 2 s); after dark a halo on the 8 tiles round it while lit</td></tr>
+        <tr><td>checkpoint</td><td>after dark the cross flashes red and pale every 12 ticks, and the road two tiles each way glows red on a 40-tick pulse; by day only the pulse</td></tr>
+        <tr><td>truck stop</td><td>its sign dips for 10 ticks every 200; after dark it lights its tile and a faint ring</td></tr>
+        <tr><td>water plant</td><td>a pump's pulse, 90 ticks</td></tr>
+        <tr><td>camp</td><td>fire flicker every 4 ticks; after dark a glow and a faint ring</td></tr>
+        <tr><td>wreck</td><td>a white spark, 2 ticks in 210</td></tr>
+      </table></li>
+  </ul></dd>
+  <dt>NET</dt>
+  <dd>Nothing to build: the Net overworld keeps today's <code>NetAtlas</code>, with its one bright cell every 23 tiles along the open trunks.</dd>
+  <dt>cost</dt>
+  <dd>With all three layers on, about 24 cells change per tick by day and 33 at night, and no frame changes more than about 130. The swells and cloud steps account for about 20 of those; the neon adds 5 to 10 and the beacons 1 or 2. A gust adds about 5 while it runs. Everything is decided per cell, with nothing done per pixel.</dd>
+</dl>
+
+<script>
+'use strict';
+// ───────────────────────────── colour and hashing ─────────────────────────────
+const clamp01 = t => t < 0 ? 0 : t > 1 ? 1 : t;
+const mix = (a, b, t) => { t = clamp01(t); return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)]; };
+const scale = (a, f) => [Math.max(0, Math.min(255, Math.round(a[0] * f))), Math.max(0, Math.min(255, Math.round(a[1] * f))), Math.max(0, Math.min(255, Math.round(a[2] * f)))];
+const css = c => `rgb(${c[0]},${c[1]},${c[2]})`;
+/** anim::effects::pulse */
+const pulse = (tick, period) => 0.5 + 0.5 * Math.sin(2 * Math.PI * tick / Math.max(1, period));
+const quant = (v, n) => Math.round(v * n) / n;
+const mod = (a, n) => ((a % n) + n) % n;
+function h32(a, b, c) {
+  let h = Math.imul((a | 0) ^ 0x3c6ef372, 0x9E3779B1);
+  h ^= Math.imul((b | 0) + 0x7f4a7c15 | 0, 0x85EBCA77);
+  h = (h << 13) | (h >>> 19);
+  h ^= Math.imul((c | 0) ^ 0x2545F491, 0xC2B2AE3D);
+  h ^= h >>> 16; h = Math.imul(h, 0x85EBCA6B); h ^= h >>> 13; h = Math.imul(h, 0xC2B2AE35); h ^= h >>> 16;
+  return h >>> 0;
+}
+const rnd = (a, b = 0, c = 0) => h32(a, b, c) / 4294967296;
+function vnoise(x, y, salt) {
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = rnd(x0, y0, salt), b = rnd(x0 + 1, y0, salt), c = rnd(x0, y0 + 1, salt), d = rnd(x0 + 1, y0 + 1, salt);
+  const top = a + (b - a) * sx, low = c + (d - c) * sx;
+  return top + (low - top) * sy;
+}
+
+// ───────────────────────────── the game's colours ─────────────────────────────
+const ATLAS_BG = [4, 6, 10];
+const CHROME_BG = [10, 11, 16];      // window/raster.rs BG, what Reset cells paint
+const RULE = [40, 60, 75];
+const CYAN = [0, 229, 255], MAGENTA = [255, 0, 200], TEXT = [205, 212, 222], DIM = [160, 170, 185];
+const FAINT = [120, 130, 145], LABEL = [120, 130, 145], ODIM = [110, 118, 130], PANEL_RULE = [40, 46, 56];
+const GREEN = [80, 230, 120], DIM_AMBER = [190, 150, 60];
+const WHITE = [255, 255, 255];
+const NET_VOID = [1, 2, 4], NET_SIGNAL = [0, 255, 200], SIGNAL = [0, 255, 200], BLACK_RED = [255, 40, 72];
+const SKY_DAY = [200, 215, 235], SKY_DUSK = [235, 150, 80], MOON = [64, 84, 128];
+
+const DOUBLE = '═║═╚║║╔╠═╝═╩╗╣╦╬';
+const ROUND  = '─│─╰││╭├─╯─┴╮┤┬┼';
+const DASHED = '┄┆┄╰┆┆╭├┄╯┄┴╮┤┬┼';
+const HEAVY  = '━┃━┗┃┃┏┣━┛━┻┓┫┳╋';
+
+const THEMES = {
+  CorpCore: [0, 229, 255], NightMarket: [255, 0, 200], Megablocks: [255, 190, 0], CombatZone: [255, 40, 60],
+  Docks: [0, 200, 190], Industrial: [230, 230, 0], NeonStrip: [255, 80, 180], OldTown: [255, 150, 60],
+};
+/** a district's breath in ticks: round 2 slows round 1's 140–360 to 600–1080 (20–36 s) */
+const THEME_PERIOD = { CorpCore: 720, NeonStrip: 600, NightMarket: 660, Megablocks: 960, Industrial: 1080, Docks: 840, OldTown: 900, CombatZone: 780 };
+const THEME_PHASE = { CorpCore: 0, NeonStrip: 230, NightMarket: 460, Megablocks: 690, Industrial: 920, Docks: 1150, OldTown: 1380, CombatZone: 1610 };
+
+const POI = {
+  TruckStop: ['⌂', [255, 176, 0]], Checkpoint: ['╪', [255, 40, 72]], Relay: ['⬡', [0, 255, 200]],
+  Camp: ['△', [255, 128, 64]], Wreck: ['×', [255, 40, 72]], Arcology: ['▣', [168, 144, 216]],
+  Solar: ['▦', [122, 176, 224]], WaterPlant: ['◎', [0, 229, 255]], TestRange: ['◈', [255, 0, 200]], Rig: ['◆', [200, 160, 80]],
+};
+/** NetAtlas::poi_node */
+function poiNode(kind) {
+  const open = NET_SIGNAL, black = [255, 40, 72], grey = [159, 230, 255];
+  switch (kind) {
+    case 'TruckStop': case 'Wreck': case 'Solar': return ['◇', grey];
+    case 'Checkpoint': case 'TestRange': return ['◈', black];
+    case 'Relay': return ['⬡', open];
+    case 'WaterPlant': return ['◆', open];
+    case 'Arcology': case 'Rig': return ['⌗', grey];
+    default: return null;
+  }
+}
+
+// ───────────────────────────── the world ─────────────────────────────
+const W = 96, H = 32;
+const NONE = 0, RIVER = 1, LAKE = 2, SEA = 3;
+const idx = (x, y) => y * W + x;
+const inb = (x, y) => x >= 0 && y >= 0 && x < W && y < H;
+const T = [];
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+  T.push({ x, y, water: NONE, ground: 'flats', road: 0, river: 0, wash: 0, urban: null, poi: null });
+const tile = (x, y) => inb(x, y) ? T[idx(x, y)] : null;
+/** overworld::roll, the tile's stable roll in 0..1 */
+const roll = (x, y) => rnd(x, y, 0xA71A5);
+
+function expand(wps) {
+  const out = [wps[0].slice()];
+  for (let i = 0; i < wps.length - 1; i++) {
+    let [x, y] = wps[i]; const [tx, ty] = wps[i + 1];
+    while (x !== tx || y !== ty) {
+      if (x !== tx) x += Math.sign(tx - x); else y += Math.sign(ty - y);
+      out.push([x, y]);
+    }
+  }
+  return out;
+}
+const OPP = { 1: 4, 4: 1, 2: 8, 8: 2 };
+function link(path, field, openStart, openEnd) {
+  for (let i = 0; i < path.length - 1; i++) {
+    const [ax, ay] = path[i], [bx, by] = path[i + 1];
+    const ab = bx > ax ? 2 : bx < ax ? 8 : by > ay ? 4 : 1;
+    tile(ax, ay)[field] |= ab; tile(bx, by)[field] |= OPP[ab];
+  }
+  if (openStart) tile(...path[0])[field] |= openStart;
+  if (openEnd) tile(...path[path.length - 1])[field] |= openEnd;
+}
+
+// the coast: the sea fills the south-west
+const isSea = (x, y) => x + 0.9 * (31 - y) + (vnoise(0.5, y / 3, 11) - 0.5) * 3 + (vnoise(x / 4, y / 3, 12) - 0.5) * 2.5 < 30;
+for (const t of T) if (isSea(t.x, t.y)) t.water = SEA;
+
+// the river, source to mouth
+const RIVER_PATH = expand([[71, 0], [71, 2], [69, 2], [69, 4], [66, 4], [66, 5], [63, 5], [63, 7], [61, 7], [61, 9], [58, 9], [58, 11],
+  [55, 11], [55, 12], [52, 12], [52, 14], [50, 14], [50, 17], [49, 17], [49, 22], [46, 22], [46, 24], [43, 24], [43, 26], [26, 26]])
+  .filter(([x, y]) => tile(x, y).water !== SEA);
+for (const [x, y] of RIVER_PATH) tile(x, y).water = RIVER;
+link(RIVER_PATH, 'river', 1, 8);
+
+// a small lake up in the hills
+for (const [x, y] of [[74, 9], [75, 9], [76, 9], [75, 10], [76, 10], [77, 10]]) tile(x, y).water = LAKE;
+
+// the ground
+const nearRiver = (x, y, r) => { for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { const t = tile(x + dx, y + dy); if (t && t.water === RIVER) return true; } return false; };
+for (const t of T) {
+  if (t.water === SEA) continue;
+  const { x, y } = t;
+  const n1 = vnoise(x / 3.2, y / 2.2, 21);
+  const dm = Math.hypot((x - 89) / 9, (y - 4) / 6) + (n1 - 0.5) * 0.5;
+  const dr = Math.hypot((x - 64) / 5.5, (y - 13) / 2.6) + (n1 - 0.5) * 0.6;
+  const ds = Math.hypot((x - 55) / 4.5, (y - 28.5) / 2.2) + (n1 - 0.5) * 0.5;
+  const dsalt = Math.hypot((x - 68) / 6, (y - 29.5) / 2.4) + (n1 - 0.5) * 0.5;
+  const dtown = Math.hypot((x - 82) / 5.5, (y - 20) / 3.2);
+  if (dm < 0.32) t.ground = 'peak';
+  else if (dm < 1) t.ground = 'mountains';
+  else if (dm < 1.6 || dr < 1) t.ground = 'hills';
+  else if (ds < 1) t.ground = 'spill';
+  else if (dsalt < 1) t.ground = 'salt';
+  else if ((x >= 44 && nearRiver(x, y, 2) && vnoise(x / 2.5, y, 31) > 0.36) || (dtown > 1 && dtown < 1.9 && vnoise(x / 2.5, y, 32) > 0.45)) t.ground = 'fields';
+  else t.ground = vnoise(x / 6, y / 4, 41) > 0.52 ? 'scrub' : 'flats';
+}
+
+// a dry wash running up toward Route 1
+const WASH = expand([[76, 31], [76, 28], [78, 28], [78, 24]]);
+link(WASH, 'wash', 4, 0);
+
+// settlements
+const SETTLEMENTS = [
+  { name: 'Ironwick', cx: 31, cy: 18, rx: 13, ry: 9, max: 1.0, town: false },
+  { name: 'Velk', cx: 82, cy: 20, rx: 5.5, ry: 3.2, max: 0.55, town: true },
+];
+SETTLEMENTS.forEach((s, si) => {
+  for (const t of T) {
+    if (t.water === SEA) continue;
+    const { x, y } = t;
+    const e = Math.hypot((x - s.cx) / s.rx, (y - s.cy) / s.ry) + (vnoise(x / 2.5, y / 1.8, 51 + si) - 0.5) * 0.35;
+    if (e >= 1) continue;
+    const v = Math.min(1, Math.pow(1 - e, 0.75) * 1.15) * s.max;
+    let theme;
+    if (s.town) theme = x < s.cx ? 'OldTown' : 'Megablocks';
+    else if (e < 0.3) theme = 'CorpCore';
+    else {
+      const a = Math.atan2((y - s.cy) * 1.4, x - s.cx) * 180 / Math.PI + (vnoise(x / 3, y / 2, 61) - 0.5) * 30;
+      theme = a < -115 ? 'NeonStrip' : a < -45 ? 'Megablocks' : a < 35 ? 'Industrial' : a < 115 ? 'NightMarket' : 'Docks';
+      if (a >= 165) theme = 'NeonStrip';
+    }
+    t.urban = { density: Math.round(v * 255), theme, set: si };
+  }
+});
+
+// highways (world.routes): the city's centre out to the world
+const ROUTES = [
+  { name: 'Route 1', num: '1', path: expand([[31, 18], [60, 18], [60, 21], [95, 21]]), open: [0, 2] },
+  { name: 'Route 7', num: '7', path: expand([[31, 18], [31, 12], [33, 12], [33, 0]]), open: [0, 1] },
+  { name: 'Route 12', num: '12', path: expand([[82, 21], [82, 25], [85, 25], [85, 31]]), open: [0, 4] },
+];
+ROUTES.forEach((r, i) => { r.id = i; link(r.path, 'road', r.open[0], r.open[1]); });
+
+// places (world.pois)
+const POIS = [
+  { kind: 'Checkpoint', at: [33, 6], name: 'Marrow checkpoint' },
+  { kind: 'TruckStop', at: [67, 22], name: 'Oscar-12 truck stop' },
+  { kind: 'Relay', at: [62, 14], name: 'relay mast R11' },
+  { kind: 'WaterPlant', at: [47, 15], name: 'Kell water plant' },
+  { kind: 'Wreck', at: [72, 27], name: 'the wreck' },
+  { kind: 'Camp', at: [90, 28], name: 'a camp' },
+];
+for (const p of POIS) tile(...p.at).poi = p.kind;
+
+const YOU_AT = [55, 18];
+
+// ───────────────────────────── the atlas look (render/overworld.rs) ─────────────────────────────
+const cell = (ch, fg, bg, bold = false, cat = 'ground') => ({ ch, fg, bg, bold, cat });
+function isShore(x, y) {
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    if (!dx && !dy) continue;
+    const n = tile(x + dx, y + dy);
+    if (n && n.water !== SEA) return true;
+  }
+  return false;
+}
+const SHORE = T.map(t => t.water === SEA && isShore(t.x, t.y));
+function groundCell(t) {
+  const { x, y } = t, r = roll(x, y);
+  if (t.water === RIVER) return cell(ROUND[t.river & 15], [58, 138, 216], [6, 18, 31], false, 'water');
+  if (t.wash && !t.urban) return cell(DASHED[t.wash & 15], [88, 76, 56], ATLAS_BG);
+  if (t.urban) {
+    const v = t.urban.density / 255, a = THEMES[t.urban.theme];
+    const ch = v > 0.75 ? (r < 0.45 ? '█' : '▓') : v > 0.45 ? (r < 0.4 ? '▓' : '▒') : v > 0.22 ? (r < 0.35 ? '▒' : '░') : r < 0.45 ? '░' : r < 0.75 ? '▫' : '·';
+    const fg = mix(mix([42, 46, 56], [154, 160, 174], v), a, 0.22 + 0.38 * v);
+    const bg = mix(ATLAS_BG, a, 0.03 + 0.06 * v);
+    if (v > 0.45 && r > 0.92) return cell('▪', a, bg, false, 'urban');
+    return cell(ch, fg, bg, false, 'urban');
+  }
+  if (t.water === LAKE) return cell('≈', [42, 90, 138], [10, 26, 46], false, 'water');
+  if (t.water === SEA) {
+    return SHORE[idx(x, y)] ? cell('~', [42, 90, 138], [10, 26, 46], false, 'water')
+      : cell(r < 0.12 ? '~' : ' ', [26, 58, 92], [5, 12, 24], false, 'water');
+  }
+  const bg = ATLAS_BG;
+  switch (t.ground) {
+    case 'peak': return cell('▲', [200, 204, 216], bg);
+    case 'mountains': return cell('▲', [120, 124, 138], bg);
+    case 'hills': return cell(r < 0.7 ? '∩' : '·', [122, 102, 72], bg);
+    case 'spill': return cell(r < 0.18 ? '≈' : r < 0.6 ? '·' : ' ', r > 0.9 ? [154, 255, 90] : [74, 138, 34], [6, 12, 4]);
+    case 'salt': return cell(r < 0.5 ? '░' : '·', [90, 88, 82], bg);
+    case 'fields': return cell('▬', [58, 106, 48], bg);
+    case 'scrub': return cell(r < 0.35 ? '"' : r < 0.6 ? ',' : ' ', [74, 90, 52], bg);
+    default: return cell(r < 0.3 ? '·' : r < 0.45 ? '.' : ' ', [74, 66, 52], bg);
+  }
+}
+function atlasCell(t) {
+  const c = groundCell(t);
+  if (t.poi) { const [ch, fg] = POI[t.poi]; return cell(ch, fg, c.bg, true, 'poi'); }
+  if (t.road) {
+    const inCity = !!t.urban;
+    const bg = inCity ? [26, 20, 8] : t.water !== NONE ? [10, 26, 46] : ATLAS_BG;
+    const fg = inCity ? [240, 200, 112] : [200, 160, 80];
+    return cell(DOUBLE[t.road & 15], fg, bg, inCity, inCity ? 'croad' : 'road');
+  }
+  return c;
+}
+const BASE = T.map(atlasCell);
+
+// ───────────────────────────── the clock's light (shared) ─────────────────────────────
+const TOD_MINUTE = [13 * 60, 18 * 60 + 20, 22 * 60];
+const TOD_NAME = ['day', 'dusk', 'night'];
+/** citygen::lighting::daylight */
+function daylight(m) {
+  m = mod(m, 1440);
+  if (m < 300 || m >= 1140) return 0;
+  if (m < 420) return (m - 300) / 120;
+  if (m < 1020) return 1;
+  return 1 - (m - 1020) / 120;
+}
+/** citygen::lighting::sky on a sunlit stratum */
+function sky(m) {
+  const t = daylight(m);
+  if (t <= 0) return null;
+  const tent = 1 - Math.abs(2 * t - 1);
+  return [mix(SKY_DUSK, SKY_DAY, t), 0.25 * tent + 0.18 * t];
+}
+const FACTOR = { ground: [0.4, 0.6], water: [0.55, 0.45], urban: [0.72, 0.28], road: [0.5, 0.5], croad: [0.82, 0.18], poi: [0.85, 0.15] };
+function lit(c, m) {
+  const dl = daylight(m);
+  if (dl >= 1) return { ...c };
+  const [k0, k1] = FACTOR[c.cat];
+  const f = k0 + k1 * dl;
+  let fg = scale(c.fg, f), bg = c.bg;
+  if (c.cat === 'ground' || c.cat === 'water') {
+    const s = sky(m);
+    if (s) fg = mix(fg, scale(s[0], f), s[1]);
+    else fg = mix(fg, MOON, 0.10);
+    if (c.cat === 'water' || c.bg !== ATLAS_BG) bg = scale(bg, 0.7 + 0.3 * dl);
+  }
+  return { ...c, fg, bg };
+}
+const hourWord = m => daylight(m) > 0.25 ? 'day' : 'night';
+
+// ───────────────────────────── shared tables ─────────────────────────────
+// each route's path as tile indices, and where along it each tile is
+for (const r of ROUTES) {
+  r.tiles = r.path.map(([x, y]) => idx(x, y));
+  // distance along the route from the nearest urban tile on it (for the lamps' wave)
+  const urb = r.tiles.map(i => !!T[i].urban);
+  r.dCity = r.tiles.map((_, k) => { let best = 99; urb.forEach((u, j) => { if (u) best = Math.min(best, Math.abs(j - k)); }); return best; });
+}
+// the nearest urban tile within 3 of each other tile, with its accent and settlement
+const NEAR_URBAN = T.map(t => {
+  if (t.urban) return null;
+  let best = null;
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    const n = tile(t.x + dx, t.y + dy);
+    if (!n || !n.urban) continue;
+    const d = Math.max(Math.abs(dx), Math.abs(dy));
+    if (!best || d < best.d) best = { d, theme: n.urban.theme };
+  }
+  return best;
+});
+// beacons: each settlement's densest tiles, spaced apart
+const BEACONS = [];
+SETTLEMENTS.forEach((s, si) => {
+  const cand = T.filter(t => t.urban && t.urban.set === si && !t.road && t.water === NONE).sort((a, b) => b.urban.density - a.urban.density || roll(a.x, a.y) - roll(b.x, b.y));
+  const want = s.town ? 1 : 3;
+  for (const t of cand) {
+    if (BEACONS.filter(b => b.set === si).length >= want) break;
+    if (BEACONS.some(b => Math.max(Math.abs(b.x - t.x), Math.abs(b.y - t.y)) < 5)) continue;
+    BEACONS.push({ x: t.x, y: t.y, set: si, ph: h32(t.x, t.y, 3) % 180 });
+  }
+});
+const RIVER_IDX = RIVER_PATH.map(([x, y]) => idx(x, y));
+
+// ───────────────────────────── neon (round 1's B, slowed) ─────────────────────────────
+const NEON = {
+  windowSlot: 1800, windowLit: 0.8,          // a window re-rolls every 60 s, lit 4 in 5
+  signCycle: 1800, signSpread: 900, signStutter: 12, // a stuttering sign: once every 60–90 s for 0.4 s
+  beaconEvery: 180, beaconOn: 6,             // a tower blinks 6 ticks in every 180
+  glintEvery: 30, glintChance: 0.04,         // water reflections re-roll every second
+};
+function neon(F, tick, tod) {
+  const amp = [0.10, 0.18, 0.24][tod];
+  // each tile is up to 2 s off its district's beat, so a step ripples through the district instead of landing at once
+  const breathe = (th, x, y) => quant(pulse(tick + THEME_PHASE[th] + h32(x, y, 7) % 60, THEME_PERIOD[th]), 5);
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i], c = F[i];
+    if (t.urban && c.cat === 'urban') {
+      const v = t.urban.density / 255, acc = THEMES[t.urban.theme], r = roll(t.x, t.y);
+      const g = amp * (0.35 + 0.65 * v) * breathe(t.urban.theme, t.x, t.y);
+      c.fg = mix(c.fg, acc, g);
+      if (tod > 0) c.bg = mix(c.bg, acc, g * 0.3);
+      if (tod > 0 && (c.ch === '█' || c.ch === '▓' || c.ch === '▒')) {
+        const hh = h32(t.x, t.y, 5);
+        const slot = Math.floor((tick + hh % NEON.windowSlot) / NEON.windowSlot);
+        const on = rnd(t.x, t.y, slot + 17) < NEON.windowLit;
+        c.fg = on ? mix(c.fg, mix(acc, [255, 230, 180], 0.5), 0.16) : scale(c.fg, 0.82);
+      }
+      const sign = BASE[i].ch === '▪' || (tod > 0 && v > 0.3 && r > 0.86 && r <= 0.92);
+      if (sign) {
+        const hh = h32(t.x, t.y, 9);
+        const cycle = NEON.signCycle + (hh >>> 1) % NEON.signSpread;
+        const pos = (tick + (hh >>> 8)) % cycle;
+        let on = true;
+        if ((hh & 1) === 0 && pos < NEON.signStutter) on = ((tick >> 1) + hh) % 3 !== 0;
+        c.ch = '▪';
+        c.fg = on ? (tod === 0 ? scale(acc, 0.7) : acc) : scale(acc, 0.22);
+        if (on && tod > 0) c.bg = mix(c.bg, acc, 0.16);
+      }
+    } else if (tod > 0) {
+      const nu = NEAR_URBAN[i];
+      const wet = t.water !== NONE && !t.road && !t.poi;
+      if (nu) {
+        const acc = THEMES[nu.theme];
+        const k = (tod === 2 ? 0.13 : 0.07) * [1, 0.55, 0.27][nu.d - 1] * (0.8 + 0.2 * breathe(nu.theme, t.x, t.y));
+        c.bg = mix(c.bg, acc, k);
+      }
+      if (wet && (nu || t.urban)) {
+        const acc = THEMES[nu ? nu.theme : t.urban.theme];
+        if (rnd(t.x, t.y, Math.floor(tick / NEON.glintEvery) + 3) < NEON.glintChance) {
+          if (t.water !== RIVER) c.ch = '~';
+          c.fg = scale(mix(acc, WHITE, 0.15), tod === 2 ? 0.75 : 0.55);
+        }
+      }
+    }
+  }
+  for (const b of BEACONS) {
+    if ((tick + b.ph) % NEON.beaconEvery >= NEON.beaconOn) continue;
+    const c = F[idx(b.x, b.y)];
+    c.ch = '▪'; c.fg = [255, 40, 60]; c.bold = true;
+    if (tod > 0) c.bg = mix(c.bg, [255, 40, 60], 0.22);
+  }
+}
+
+// ───────────────────────────── weather (round 1's C, no rain, a gust in the hills) ─────────────────────────────
+function cloudAt(x, y, tick) {
+  // each row steps east on its own tick, each column north on its own tick: no frame moves the whole sky
+  const ox = Math.floor((tick + h32(y, 0, 45) % 45) / 45), oy = Math.floor((tick + h32(x, 0, 46) % 300) / 300);
+  return 0.65 * vnoise((x - ox) / 10, (y + oy) / 4.5, 91) + 0.35 * vnoise((x - ox) / 4.5, (y + oy) / 2.2, 92);
+}
+const GUST = { first: 120, every: 1200, spread: 900, span: 230, ticksPerTile: 3, band: [1, 0.75, 0.5, 0.3, 0.15] };
+const GUSTS = [];
+{ let g = 6000 + GUST.first; for (let k = 0; k < 600; k++) { GUSTS.push(g); g += GUST.every + h32(k, 0, 55) % GUST.spread; } }
+let manualGust = -1e9;
+/** where the gust's front is at `tick` (a column, tilted with the rows), or null when the hills are quiet */
+function gustFront(tick) {
+  if (tick >= manualGust && tick < manualGust + GUST.span) return 44 + (tick - manualGust) / GUST.ticksPerTile;
+  for (const s of GUSTS) {
+    if (s > tick) break;
+    if (tick < s + GUST.span) return 44 + (tick - s) / GUST.ticksPerTile;
+  }
+  return null;
+}
+function nextGust(tick) { for (const s of GUSTS) if (s > tick) return s; return null; }
+function gust(F, tick, tod) {
+  const f = gustFront(tick);
+  if (f === null) return;
+  const k = [1, 0.85, 0.7][tod];
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i], c = F[i];
+    const hill = t.ground === 'hills', high = t.ground === 'mountains' || t.ground === 'peak', lake = t.water === LAKE;
+    if (!(hill || high || lake) || c.cat === 'poi' || c.cat === 'road' || c.cat === 'urban') continue;
+    if (t.water === RIVER) continue;
+    const d = f - (t.x + (t.y - 16) * 0.6);
+    if (d < 0 || d >= GUST.band.length) continue;
+    const s = GUST.band[Math.floor(d)];
+    if (lake) { c.ch = '~'; c.fg = mix(c.fg, scale([150, 200, 240], k), 0.5 * s); }
+    else if (high) { c.fg = mix(c.fg, scale([235, 240, 250], k), 0.5 * s); c.bg = mix(c.bg, scale([60, 66, 80], k), 0.25 * s); }
+    else { c.fg = mix(c.fg, scale([205, 175, 125], k), 0.45 * s); c.bg = mix(c.bg, scale([44, 36, 22], k), 0.25 * s); }
+  }
+}
+function weather(F, tick, tod) {
+  // swells roll east toward the coast, each row stepping on its own tick
+  const swell = (x, y) => { const u = x - Math.floor((tick + h32(y, 0, 30) % 30) / 30); return mod(u, 3) !== 2 && rnd(Math.floor(u / 3), y, 77) < 0.17; };
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i], c = F[i];
+    if (c.cat !== 'water') continue;
+    if (t.water === SEA) {
+      if (SHORE[i]) {
+        if (swell(t.x - 1, t.y + 1)) { c.ch = '≈'; c.fg = mix(c.fg, [150, 200, 240], 0.5); }
+      } else {
+        c.ch = swell(t.x, t.y) ? '~' : ' ';
+        if (tod > 0 && rnd(t.x, t.y, Math.floor(tick / 7) * 3 + 1) < 0.025) {
+          c.ch = '~'; c.fg = tod === 2 ? [120, 140, 180] : [200, 130, 70];
+        }
+      }
+    } else if (t.water === LAKE) {
+      if (rnd(t.x, t.y, Math.floor((tick + h32(t.x, t.y, 2) % 20) / 20)) < 0.3) { c.ch = '~'; c.fg = mix(c.fg, [120, 170, 220], 0.3); }
+    }
+  }
+  // glints running down the river to the sea
+  const step = Math.floor(tick / 10);
+  const glint = id => rnd(id, 0, 404) < 0.3;
+  RIVER_IDX.forEach((i, k) => {
+    const c = F[i];
+    if (c.cat !== 'water') return;
+    if (glint(step - k)) { c.fg = tod === 2 ? [120, 170, 220] : [170, 220, 255]; c.bold = true; }
+    else if (glint(step - k - 1)) c.fg = mix(c.fg, tod === 2 ? [100, 150, 200] : [120, 190, 245], 0.6);
+  });
+  // wind through the fields
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i], c = F[i];
+    if (c.ch === '▬' && c.cat === 'ground' && mod(t.x + (t.y >> 1) - Math.floor(tick / 6), 34) < 3)
+      c.fg = mix(c.fg, tod === 2 ? [80, 110, 70] : [150, 200, 110], 0.35);
+  }
+  // now and then, a gust through the hills and mountains
+  gust(F, tick, tod);
+  // cloud shadows, a tile at a time
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i], c = F[i];
+    const s = cloudAt(t.x, t.y, tick);
+    const lv = s > 0.66 ? 0.45 : s > 0.58 ? 0.25 : 0;
+    if (!lv || c.cat === 'poi') continue;
+    const k = tod === 2 ? lv * 0.6 : lv;
+    c.fg = scale(c.fg, 1 - k); c.bg = scale(c.bg, 1 - k * 0.5);
+  }
+}
+
+// ───────────────────────────── beacons (round 1's D, the places only) ─────────────────────────────
+function beacons(F, tick, tod) {
+  const dark = tod > 0;
+  const ring = (x, y, col, k) => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const n = tile(x + dx, y + dy); if (n) { const nc = F[idx(n.x, n.y)]; nc.bg = mix(nc.bg, col, k); } } };
+  for (const p of POIS) {
+    const [x, y] = p.at, i = idx(x, y), c = F[i], hh = h32(x, y, 12);
+    switch (p.kind) {
+      case 'Relay': {
+        const on = (tick + hh) % 60 < 6;
+        if (on) { c.fg = [210, 255, 245]; c.bg = mix(c.bg, NET_SIGNAL, 0.28); if (dark) ring(x, y, NET_SIGNAL, 0.08); }
+        else c.fg = scale(c.fg, dark ? 0.55 : 0.8);
+        break;
+      }
+      case 'Checkpoint': {
+        if (dark) {
+          c.fg = Math.floor(tick / 12) % 2 ? [255, 40, 72] : [255, 170, 185];
+          const g = 0.10 + 0.08 * quant(pulse(tick, 40), 4);
+          for (let d = 1; d <= 2; d++) for (const [dx, dy] of [[0, -d], [0, d]]) {
+            const n = tile(x + dx, y + dy); if (n && n.road) { const nc = F[idx(n.x, n.y)]; nc.bg = mix(nc.bg, BLACK_RED, g / d); }
+          }
+        } else c.fg = scale(c.fg, 0.75 + 0.25 * quant(pulse(tick, 40), 4));
+        break;
+      }
+      case 'TruckStop': {
+        if ((tick + hh) % 200 < 10 && tick % 2) c.fg = scale(c.fg, 0.3);
+        if (dark) { c.bg = [56, 38, 6]; ring(x, y, [255, 176, 0], 0.07); }
+        break;
+      }
+      case 'WaterPlant': c.fg = scale(c.fg, 0.6 + 0.4 * quant(pulse(tick, 90), 4)); break;
+      case 'Camp': {
+        const fire = [[255, 128, 64], [255, 96, 40], [255, 160, 80], [230, 80, 30]];
+        c.fg = fire[h32(tick >> 2, x, y) % 4];
+        if (!dark) c.fg = mix(c.fg, [255, 128, 64], 0.6);
+        else { c.bg = mix(c.bg, [255, 100, 30], 0.16); ring(x, y, [255, 100, 30], 0.06); }
+        break;
+      }
+      case 'Wreck': if ((tick + hh) % 210 < 2) c.fg = WHITE; break;
+    }
+  }
+}
+
+// ───────────────────────────── the Net overworld (NetAtlas) ─────────────────────────────
+const SPURS = new Map();
+{
+  const road = (x, y) => { const t = tile(x, y); return !!(t && t.road); };
+  for (const p of POIS) {
+    if (!poiNode(p.kind)) continue;
+    const [px, py] = p.at;
+    let to = null;
+    for (let d = 1; d <= 6 && !to; d++) {
+      for (let dx = -d; dx <= d && !to; dx++) {
+        const dy = d - Math.abs(dx);
+        for (const q of [[px + dx, py + dy], [px + dx, py - dy]]) if (!to && road(...q)) to = q;
+      }
+    }
+    if (!to) continue;
+    let [qx, qy] = p.at;
+    while (qx !== to[0] || qy !== to[1]) {
+      const across = qx !== to[0];
+      if (across) qx += Math.sign(to[0] - qx); else qy += Math.sign(to[1] - qy);
+      if ((qx !== to[0] || qy !== to[1]) && !road(qx, qy) && !tile(qx, qy).poi) SPURS.set(idx(qx, qy), across ? '┄' : '┆');
+    }
+  }
+}
+const STOPS = new Map();
+for (const r of ROUTES) r.tiles.forEach((i, k) => { if (!STOPS.has(i)) STOPS.set(i, []); STOPS.get(i).push(k); });
+function netCell(t) {
+  const { x, y } = t, i = idx(x, y);
+  const lattice = x % 4 === 0 && y % 2 === 0;
+  const wet = t.water === SEA || t.water === LAKE;
+  let c = wet ? cell(lattice ? '·' : ' ', [10, 26, 40], [1, 3, 9], false, 'void') : cell(lattice ? '·' : ' ', [15, 51, 48], NET_VOID, false, 'void');
+  if (t.urban) {
+    const v = t.urban.density / 255, acc = THEMES[t.urban.theme];
+    const bg = mix(NET_VOID, acc, 0.05 + 0.10 * v), r = roll(x, y);
+    c = r < 0.18 + 0.4 * v ? cell(r < 0.06 * (1 + v) ? '◆' : r < 0.2 ? '◇' : '▫', mix([26, 74, 72], acc, 0.4 + 0.5 * v), bg, false, 'node')
+      : cell('·', mix(NET_VOID, acc, 0.25), bg, false, 'field');
+  }
+  if (SPURS.has(i)) { c.ch = SPURS.get(i); c.fg = [42, 106, 96]; c.cat = 'spur'; }
+  if (t.road) {
+    const inCity = !!t.urban;
+    c.ch = HEAVY[t.road & 15]; c.fg = inCity ? NET_SIGNAL : [31, 138, 118]; c.bold = inCity; c.cat = 'trunk';
+  }
+  if (t.poi) { const n = poiNode(t.poi); if (n) { c = cell(n[0], n[1], mix(NET_VOID, n[1], 0.18), true, 'pnode'); } }
+  return c;
+}
+const NETBASE = T.map(netCell);
+
+/** today's NetAtlas: a bright cell every 23 tiles steps along the open trunks */
+const PACKET_TICKS = 6;
+function netToday(F, tick) {
+  const step = Math.floor(tick / PACKET_TICKS);
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i];
+    if (!t.road || t.urban || F[i].cat !== 'trunk') continue;
+    if ((STOPS.get(i) || []).some(k => (k + step) % 23 === 7)) { F[i].fg = [200, 255, 240]; F[i].bold = true; }
+  }
+}
+
+// ───────────────────────────── the views ─────────────────────────────
+const VIEWS = ['r2', 'today', 'net'];
+const LAYERS = ['neon', 'weather', 'beacons'];
+const CAPTION = {
+  r2: ['Round 2', 'Each settlement breathes slowly in its districts\' colours, with the odd sign stutter and tower blink. The sea, the river, the fields and the cloud shadows move with the wind, and now and then a gust runs through the hills and mountains. The places keep their beacons. The roads stay still.'],
+  today: ['0 · today', 'What ships now: the atlas is the same at every hour and every frame. Only the HERE line and the clock know the time.'],
+  net: ['NET (today, unchanged)', 'Kept as it is, for reference: a bright cell every 23 tiles steps along the open trunks, and the node fields and places are still. Jeff liked its calm.'],
+};
+const LAYER_LINE = {
+  neon: ['neon', 'Each district breathes in its own colour, a breath every 20–36 s. Half the signs stutter about once a minute, window lights change about once a minute, and tower beacons blink every 6 s. After dark the skyline spills onto the ground and water.'],
+  weather: ['weather', 'Swells roll in and break on the shore, glints run down the river, wind combs the fields and cloud shadows drift a tile at a time. The sea glints at sunset and under the moon. There is no rain. Every 40–70 s a gust runs through the hills and mountains, about 8 s from one end of the range to the other.'],
+  beacons: ['beacons', 'The relay mast blinks green with a halo, the checkpoint\'s red cross flashes and lights its road, the truck stop\'s sign hums, the water plant pumps, a camp fire flickers and the wreck sparks. Nothing is on the roads.'],
+};
+const LAYER_TIME = {
+  neon: ['signs at 70%, shallow breathing, no spill', 'windows and night signs on, the spill begins', 'full glow; the skyline spills onto ground and water'],
+  weather: ['cloud shadows dark', 'sunset glints on the sea', 'moon glints; the clouds barely show'],
+  beacons: ['blinks only, no halos', 'halos and the checkpoint\'s flasher', 'halos and the checkpoint\'s flasher'],
+};
+
+/** the map's 96×32 cells for the view at `tick` */
+function mapFrame(tick) {
+  const { view, tod, layers } = state;
+  const minute = TOD_MINUTE[tod];
+  let F;
+  if (view === 'net') {
+    F = NETBASE.map(c => ({ ...c }));
+    netToday(F, tick);
+  } else if (view === 'today') {
+    F = BASE.map(c => ({ ...c }));
+  } else {
+    F = LIT[tod].map(c => ({ ...c }));
+    if (layers.weather) weather(F, tick, tod);
+    if (layers.neon) neon(F, tick, tod);
+    if (layers.beacons) beacons(F, tick, tod);
+  }
+  const yi = idx(...YOU_AT);
+  F[yi] = { ...F[yi], ch: '@', fg: WHITE, bold: true };
+  return { F, minute };
+}
+
+// ───────────────────────────── the screen ─────────────────────────────
+const COLS = 128, ROWS = 42, MAPX = 0, MAPY = 5, VRULE = 96, SIDEX = 97, SIDEW = 31;
+let SCR = [];
+const blankCell = () => ({ ch: ' ', fg: TEXT, bg: CHROME_BG, bold: false });
+function put(x, y, ch, fg, bold = false, bg = CHROME_BG) { if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return; SCR[y * COLS + x] = { ch, fg, bg, bold }; }
+function txt(x, y, s, fg, bold = false, bg = CHROME_BG) { for (const ch of s) put(x++, y, ch, fg, bold, bg); return x; }
+
+let state = { view: 'r2', tod: 2, size: 9, paused: false, layers: { neon: true, weather: true, beacons: true } };
+let minimapCache = { tod: -1, cells: null };
+function minimap(tod) {
+  if (minimapCache.tod === tod) return minimapCache.cells;
+  const pw = SIDEW - 2, rows = 9, ph = rows * 2;
+  const ink = i => { const c = BASE[i]; return c.ch === ' ' ? c.bg : scale(c.fg, 0.8); };
+  const span = (i, len, n) => { const a = Math.floor(i * len / n); return [a, Math.max(a + 1, Math.floor((i + 1) * len / n))]; };
+  const pixel = (px, py) => {
+    const [x0, x1] = span(px, W, pw), [y0, y1] = span(py, H, ph);
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const c = ink(idx(x, y)); r += c[0]; g += c[1]; b += c[2]; n++; }
+    return scale([r / n, g / n, b / n], [1, 0.75, 0.5][tod]);
+  };
+  const cells = [];
+  for (let y = 0; y < rows; y++) for (let x = 0; x < pw; x++) cells.push({ x, y, top: pixel(x, 2 * y), low: pixel(x, 2 * y + 1) });
+  minimapCache = { tod, cells };
+  return cells;
+}
+function composeChrome(minute, net) {
+  SCR = Array.from({ length: COLS * ROWS }, blankCell);
+  // the top band: you
+  let x = txt(0, 0, ' ', TEXT); x = txt(x, 0, 'VEX', CYAN, true); x = txt(x, 0, ' :: LVL ', DIM); x = txt(x, 0, '1', TEXT); x = txt(x, 0, ' :: ¤ ', DIM); txt(x, 0, '320', TEXT);
+  const bar = (y, label, cur, max, col) => {
+    let x = txt(0, y, ` ${label.padEnd(5)} `, DIM); x = txt(x, y, `${(cur + '/' + max).padStart(7)} `, TEXT);
+    const cells = VRULE - 16, filled = Math.round(cells * cur / max);
+    for (let k = 0; k < cells; k++) put(x + k, y, k < filled ? '█' : '░', k < filled ? col : scale(col, 0.5));
+  };
+  bar(1, 'HP', 45, 45, GREEN); bar(2, 'FOCUS', 30, 30, CYAN); bar(3, 'XP', 0, 200, DIM_AMBER);
+  // the top band: where, and when
+  const hh = Math.floor(mod(minute, 1440) / 60), mm = Math.floor(mod(minute, 60));
+  const clock = `${hh >= 18 || hh <= 5 ? '☾' : '☀'} ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  const place = net ? 'the Net overworld' : 'overworld';
+  txt(SIDEX + 1, 0, place, CYAN, true);
+  txt(SIDEX + SIDEW - clock.length, 0, clock, TEXT);
+  x = txt(SIDEX, 1, ' CARRY', DIM); x = txt(x, 1, ' 11.4/16.0 kg ', TEXT);
+  const cc = SIDEW - (x - SIDEX) - 1, cf = Math.round(cc * 11.4 / 16);
+  for (let k = 0; k < cc; k++) put(x + k, 1, k < cf ? '█' : '░', k < cf ? CYAN : scale(CYAN, 0.5));
+  // the rules
+  for (let y = 0; y < 37; y++) if (y !== 4) put(VRULE, y, '│', RULE);
+  for (let k = 0; k < COLS; k++) { put(k, 4, k === VRULE ? '┿' : '━', RULE); put(k, 37, k === VRULE ? '┷' : '━', RULE); }
+  // the panel: HERE, MAP, NEAR
+  let y = MAPY;
+  const rule = () => { for (let k = 0; k < SIDEW; k++) put(SIDEX + k, y, '─', PANEL_RULE); y++; };
+  txt(SIDEX, y++, ' HERE', LABEL, true);
+  if (net) { txt(SIDEX, y++, ' the Net · Route 1', TEXT, true); txt(SIDEX, y++, ' the Net overworld', ODIM); }
+  else { txt(SIDEX, y++, ' Route 1', TEXT, true); txt(SIDEX, y++, ` overworld · scrub · ${hourWord(minute)}`, ODIM); }
+  rule();
+  txt(SIDEX, y++, ' MAP', LABEL, true);
+  const todNow = daylight(minute) >= 1 ? 0 : daylight(minute) > 0 ? 1 : 2;
+  for (const p of minimap(todNow)) put(SIDEX + 1 + p.x, y + p.y, '▀', p.top, false, p.low);
+  const ax = Math.floor(YOU_AT[0] * (SIDEW - 2) / W), ay = Math.floor(YOU_AT[1] * 18 / H / 2);
+  put(SIDEX + 1 + ax, y + ay, '@', WHITE, true, SCR[(y + ay) * COLS + SIDEX + 1 + ax].bg);
+  y += 9;
+  rule();
+  txt(SIDEX, y++, ' NEAR', LABEL, true);
+  for (const [name, d] of [['relay mast R11', '8 NE'], ['Kell water plant', '8 W'], ['Oscar-12 truck stop', '12 E'], ['Marrow checkpoint', '22 NW']]) {
+    const e = txt(SIDEX, y, ' ' + name, TEXT); txt(e, y++, '  ' + d, ODIM);
+  }
+  rule();
+  // the footer
+  if (net) { x = txt(0, 38, ' ⚡ ', CYAN); txt(x, 38, 'the Net overworld', TEXT); }
+  else txt(0, 38, ' on foot · overworld', TEXT);
+  txt(COLS - 3, 38, '[', FAINT); put(COLS - 2, 38, '?', CYAN, true); put(COLS - 1, 38, ']', FAINT);
+  // the hint line is gone (Jeff: drop it); ? still opens the keys
+  x = txt(0, 41, ' ABILITIES  ', DIM);
+  for (const s of ['[1] netscan ○', '    [2] arc trace ○', '    [3] ──', '    [4] ──', '    [5] ──']) x = txt(x, 41, s, DIM);
+}
+
+const LIT = [0, 1, 2].map(tod => BASE.map(c => lit(c, TOD_MINUTE[tod])));
+
+// shields as the deck MAP's world zoom draws them (the overworld screen has none today)
+const SHIELDS = [];
+for (const r of ROUTES) {
+  const open = r.path.filter(([x, y]) => !tile(x, y).urban);
+  if (open.length < 10) continue;
+  const [x, y] = open[Math.floor(open.length / 2)];
+  // beside the road, not over it
+  const over = tile(x + 1, y) && tile(x + 1, y).road;
+  SHIELDS.push(over ? { x: x - 1, y: y - 1, text: `[${r.num}]` } : { x: x + 1, y, text: `[${r.num}]` });
+}
+
+
+function compose(tick) {
+  const { F, minute } = mapFrame(tick);
+  const net = state.view === 'net';
+  composeChrome(minute, net);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = F[idx(x, y)];
+    SCR[(MAPY + y) * COLS + MAPX + x] = { ch: c.ch, fg: c.fg, bg: c.bg, bold: c.bold };
+  }
+  if (!net) {
+    const dl = daylight(minute);
+    for (const s of SHIELDS) [...s.text].forEach((ch, k) => {
+      SCR[(MAPY + s.y) * COLS + MAPX + s.x + k] = { ch, fg: scale([224, 176, 96], 0.6 + 0.4 * dl), bg: [26, 20, 8], bold: true };
+    });
+  }
+}
+
+// ───────────────────────────── painting (as the window paints) ─────────────────────────────
+// box (U+2500–257F) and block (U+2580–259F) characters as shapes: window/shapes.rs, ported
+const N_ = 0, L_ = 1, H_ = 2, D_ = 3;
+const ARMS = [
+  [L_, L_, N_, N_], [H_, H_, N_, N_], [N_, N_, L_, L_], [N_, N_, H_, H_],
+  [L_, L_, N_, N_], [H_, H_, N_, N_], [N_, N_, L_, L_], [N_, N_, H_, H_],
+  [L_, L_, N_, N_], [H_, H_, N_, N_], [N_, N_, L_, L_], [N_, N_, H_, H_],
+  [N_, L_, N_, L_], [N_, H_, N_, L_], [N_, L_, N_, H_], [N_, H_, N_, H_],
+  [L_, N_, N_, L_], [H_, N_, N_, L_], [L_, N_, N_, H_], [H_, N_, N_, H_],
+  [N_, L_, L_, N_], [N_, H_, L_, N_], [N_, L_, H_, N_], [N_, H_, H_, N_],
+  [L_, N_, L_, N_], [H_, N_, L_, N_], [L_, N_, H_, N_], [H_, N_, H_, N_],
+  [N_, L_, L_, L_], [N_, H_, L_, L_], [N_, L_, H_, L_], [N_, L_, L_, H_],
+  [N_, L_, H_, H_], [N_, H_, H_, L_], [N_, H_, L_, H_], [N_, H_, H_, H_],
+  [L_, N_, L_, L_], [H_, N_, L_, L_], [L_, N_, H_, L_], [L_, N_, L_, H_],
+  [L_, N_, H_, H_], [H_, N_, H_, L_], [H_, N_, L_, H_], [H_, N_, H_, H_],
+  [L_, L_, N_, L_], [H_, L_, N_, L_], [L_, H_, N_, L_], [H_, H_, N_, L_],
+  [L_, L_, N_, H_], [H_, L_, N_, H_], [L_, H_, N_, H_], [H_, H_, N_, H_],
+  [L_, L_, L_, N_], [H_, L_, L_, N_], [L_, H_, L_, N_], [H_, H_, L_, N_],
+  [L_, L_, H_, N_], [H_, L_, H_, N_], [L_, H_, H_, N_], [H_, H_, H_, N_],
+  [L_, L_, L_, L_], [H_, L_, L_, L_], [L_, H_, L_, L_], [H_, H_, L_, L_],
+  [L_, L_, H_, L_], [L_, L_, L_, H_], [L_, L_, H_, H_], [H_, L_, H_, L_],
+  [L_, H_, H_, L_], [H_, L_, L_, H_], [L_, H_, L_, H_], [H_, H_, H_, L_],
+  [H_, H_, L_, H_], [H_, L_, H_, H_], [L_, H_, H_, H_], [H_, H_, H_, H_],
+  [L_, L_, N_, N_], [H_, H_, N_, N_], [N_, N_, L_, L_], [N_, N_, H_, H_],
+  [D_, D_, N_, N_], [N_, N_, D_, D_], [N_, D_, N_, L_], [N_, L_, N_, D_],
+  [N_, D_, N_, D_], [D_, N_, N_, L_], [L_, N_, N_, D_], [D_, N_, N_, D_],
+  [N_, D_, L_, N_], [N_, L_, D_, N_], [N_, D_, D_, N_], [D_, N_, L_, N_],
+  [L_, N_, D_, N_], [D_, N_, D_, N_], [N_, D_, L_, L_], [N_, L_, D_, D_],
+  [N_, D_, D_, D_], [D_, N_, L_, L_], [L_, N_, D_, D_], [D_, N_, D_, D_],
+  [D_, D_, N_, L_], [L_, L_, N_, D_], [D_, D_, N_, D_], [D_, D_, L_, N_],
+  [L_, L_, D_, N_], [D_, D_, D_, N_], [D_, D_, L_, L_], [L_, L_, D_, D_],
+  [D_, D_, D_, D_], [N_, L_, N_, L_], [L_, N_, N_, L_], [L_, N_, L_, N_],
+  [N_, L_, L_, N_], [N_, N_, N_, N_], [N_, N_, N_, N_], [N_, N_, N_, N_],
+  [L_, N_, N_, N_], [N_, N_, L_, N_], [N_, L_, N_, N_], [N_, N_, N_, L_],
+  [H_, N_, N_, N_], [N_, N_, H_, N_], [N_, H_, N_, N_], [N_, N_, N_, H_],
+  [L_, H_, N_, N_], [N_, N_, L_, H_], [H_, L_, N_, N_], [N_, N_, H_, L_],
+];
+class Mask {
+  constructor(w, h) { this.w = w; this.h = h; this.px = new Uint8Array(w * h); }
+  fill(x0, y0, x1, y1, a) {
+    x0 = Math.max(0, x0); x1 = Math.min(this.w, Math.max(0, x1)); y0 = Math.max(0, y0); y1 = Math.min(this.h, Math.max(0, y1));
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = y * this.w + x; if (this.px[k] < a) this.px[k] = a; }
+  }
+  clear(x0, y0, x1, y1) { for (let y = y0; y < Math.min(y1, this.h); y++) for (let x = x0; x < Math.min(x1, this.w); x++) this.px[y * this.w + x] = 0; }
+}
+const lightT = h => Math.max(1, Math.round(h / 16));
+const span = (c, t) => { const s = c - Math.floor(t / 2); return [s, s + t]; };
+function lines(m, cp) {
+  const [l, r, u, d] = ARMS[cp - 0x2500];
+  const t = lightT(m.h), thick = a => a === H_ ? 2 * t : t;
+  const cx = Math.floor(m.w / 2), cy = Math.floor(m.h / 2), w = m.w, h = m.h;
+  const across_v = Math.max(thick(Math.min(Math.max(u, d), H_)), (u === N_ && d === N_) ? 0 : t);
+  const across_h = Math.max(thick(Math.min(Math.max(l, r), H_)), (l === N_ && r === N_) ? 0 : t);
+  const v_double = u === D_ || d === D_, h_double = l === D_ || r === D_;
+  for (const [weight, left] of [[l, true], [r, false]]) {
+    if (weight === N_) continue;
+    const other = left ? r : l;
+    if (weight === D_) {
+      for (const [off, toward] of [[-t, u], [t, d]]) {
+        let meet;
+        if (v_double) { const near = toward !== N_ ? -t : t; const x = cx + (left ? near : -near); meet = left ? span(x, t)[1] : span(x, t)[0]; }
+        else if (u !== N_ || d !== N_) meet = left ? span(cx, across_v)[1] : span(cx, across_v)[0];
+        else meet = cx;
+        const [y0, y1] = span(cy + off, t);
+        if (left) m.fill(0, y0, meet, y1, 255); else m.fill(meet, y0, w, y1, 255);
+      }
+    } else {
+      let meet;
+      if (v_double && other === N_) { const far = (u !== N_ && d !== N_) ? t : -t; const x = cx + (left ? -far : far); meet = left ? span(x, t)[1] : span(x, t)[0]; }
+      else meet = left ? span(cx, Math.max(across_v, thick(weight)))[1] : span(cx, Math.max(across_v, thick(weight)))[0];
+      const [y0, y1] = span(cy, thick(weight));
+      if (left) m.fill(0, y0, meet, y1, 255); else m.fill(meet, y0, w, y1, 255);
+    }
+  }
+  for (const [weight, top] of [[u, true], [d, false]]) {
+    if (weight === N_) continue;
+    const other = top ? d : u;
+    if (weight === D_) {
+      for (const [off, toward] of [[-t, l], [t, r]]) {
+        let meet;
+        if (h_double) { const near = toward !== N_ ? -t : t; const y = cy + (top ? near : -near); meet = top ? span(y, t)[1] : span(y, t)[0]; }
+        else if (l !== N_ || r !== N_) meet = top ? span(cy, across_h)[1] : span(cy, across_h)[0];
+        else meet = cy;
+        const [x0, x1] = span(cx + off, t);
+        if (top) m.fill(x0, 0, x1, meet, 255); else m.fill(x0, meet, x1, h, 255);
+      }
+    } else {
+      let meet;
+      if (h_double && other === N_) { const far = (l !== N_ && r !== N_) ? t : -t; const y = cy + (top ? -far : far); meet = top ? span(y, t)[1] : span(y, t)[0]; }
+      else meet = top ? span(cy, Math.max(across_h, thick(weight)))[1] : span(cy, Math.max(across_h, thick(weight)))[0];
+      const [x0, x1] = span(cx, thick(weight));
+      if (top) m.fill(x0, 0, x1, meet, 255); else m.fill(x0, meet, x1, h, 255);
+    }
+  }
+  const dashes = cp >= 0x2504 && cp <= 0x2507 ? 3 : cp >= 0x2508 && cp <= 0x250B ? 4 : cp >= 0x254C && cp <= 0x254F ? 2 : 0;
+  if (dashes) {
+    const horizontal = l !== N_, len = horizontal ? m.w : m.h, gap = Math.max(1, Math.floor(len / (dashes * 4)));
+    for (let i = 0; i < dashes; i++) {
+      const end = Math.floor((i + 1) * len / dashes), start = Math.max(0, end - gap);
+      if (horizontal) m.clear(start, 0, end, m.h); else m.clear(0, start, m.w, end);
+    }
+  }
+}
+function blocks(m, cp) {
+  const w = m.w, h = m.h, rows = e => Math.floor((h * e + 4) / 8), cols = e => Math.floor((w * e + 4) / 8);
+  const hw = Math.floor(w / 2), hh = Math.floor(h / 2);
+  const quads = (ul, ur, ll, lr) => { if (ul) m.fill(0, 0, hw, hh, 255); if (ur) m.fill(hw, 0, w, hh, 255); if (ll) m.fill(0, hh, hw, h, 255); if (lr) m.fill(hw, hh, w, h, 255); };
+  if (cp === 0x2580) m.fill(0, 0, w, hh, 255);
+  else if (cp >= 0x2581 && cp <= 0x2588) m.fill(0, h - rows(cp - 0x2580), w, h, 255);
+  else if (cp >= 0x2589 && cp <= 0x258F) m.fill(0, 0, cols(0x2590 - cp), h, 255);
+  else if (cp === 0x2590) m.fill(hw, 0, w, h, 255);
+  else if (cp === 0x2591) m.fill(0, 0, w, h, 64);
+  else if (cp === 0x2592) m.fill(0, 0, w, h, 128);
+  else if (cp === 0x2593) m.fill(0, 0, w, h, 192);
+  else if (cp === 0x2594) m.fill(0, 0, w, rows(1), 255);
+  else if (cp === 0x2595) m.fill(w - cols(1), 0, w, h, 255);
+  else if (cp === 0x2596) quads(0, 0, 1, 0); else if (cp === 0x2597) quads(0, 0, 0, 1);
+  else if (cp === 0x2598) quads(1, 0, 0, 0); else if (cp === 0x2599) quads(1, 0, 1, 1);
+  else if (cp === 0x259A) quads(1, 0, 0, 1); else if (cp === 0x259B) quads(1, 1, 1, 0);
+  else if (cp === 0x259C) quads(1, 1, 0, 1); else if (cp === 0x259D) quads(0, 1, 0, 0);
+  else if (cp === 0x259E) quads(0, 1, 1, 0); else quads(0, 1, 1, 1);
+}
+const shapeCache = new Map();
+/** the shape of a box or block character as rectangles [x, y, w, h, alpha], or null */
+function shapeRects(ch) {
+  if (shapeCache.has(ch)) return shapeCache.get(ch);
+  const cp = ch.codePointAt(0);
+  let rects = null;
+  if ((cp >= 0x2500 && cp <= 0x2570) || (cp >= 0x2574 && cp <= 0x259F)) {
+    const m = new Mask(CW, CH);
+    if (cp <= 0x257F) lines(m, cp); else blocks(m, cp);
+    rects = [];
+    let open = new Map();
+    for (let y = 0; y <= m.h; y++) {
+      const runs = new Map();
+      if (y < m.h) {
+        let x = 0;
+        while (x < m.w) {
+          const a = m.px[y * m.w + x];
+          if (!a) { x++; continue; }
+          let e = x; while (e < m.w && m.px[y * m.w + e] === a) e++;
+          runs.set(`${x},${e},${a}`, [x, e, a]); x = e;
+        }
+      }
+      const next = new Map();
+      for (const [k, r] of runs) { if (open.has(k)) next.set(k, open.get(k)); else next.set(k, [r[0], y, r[1] - r[0], 0, r[2]]); }
+      for (const [k, r] of open) if (!runs.has(k)) { r[3] = y - r[1]; rects.push(r); }
+      open = next;
+    }
+  }
+  shapeCache.set(ch, rects);
+  return rects;
+}
+
+const canvas = document.getElementById('scr');
+const ctx = canvas.getContext('2d', { alpha: false });
+let CW = 9, CH = 19, FONT_PX = 15, prevKeys = [];
+const FAMILY = "'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+function setup() {
+  const dpr = window.devicePixelRatio || 1;
+  const avail = Math.max(320, document.body.clientWidth);
+  const cw = Math.max(5, Math.min(state.size, Math.floor(avail / COLS)));
+  CW = Math.max(4, Math.round(cw * dpr));
+  CH = Math.round(CW * 2.1);
+  FONT_PX = Math.round(CW / 0.6);
+  canvas.width = COLS * CW; canvas.height = ROWS * CH;
+  canvas.style.width = (COLS * CW / dpr) + 'px'; canvas.style.height = (ROWS * CH / dpr) + 'px';
+  shapeCache.clear(); prevKeys = new Array(COLS * ROWS).fill(''); lastFont = '';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+}
+let lastFont = '';
+function drawCell(x, y, c) {
+  const px = x * CW, py = y * CH;
+  ctx.globalAlpha = 1; ctx.fillStyle = css(c.bg); ctx.fillRect(px, py, CW, CH);
+  if (c.ch === ' ') return;
+  const rects = shapeRects(c.ch);
+  ctx.fillStyle = css(c.fg);
+  if (rects) {
+    for (const [rx, ry, rw, rh, a] of rects) { ctx.globalAlpha = a / 255; ctx.fillRect(px + rx, py + ry, rw, rh); }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  const font = `${c.bold ? 700 : 400} ${FONT_PX}px ${FAMILY}`;
+  if (font !== lastFont) { ctx.font = font; lastFont = font; }
+  ctx.save(); ctx.beginPath(); ctx.rect(px, py, CW, CH); ctx.clip();
+  ctx.fillText(c.ch, px + CW / 2, py + CH / 2 + Math.round(FONT_PX * 0.05), CW);
+  ctx.restore();
+}
+function paint() {
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+    const k = y * COLS + x, c = SCR[k];
+    const key = c.ch + c.fg.join() + '|' + c.bg.join() + (c.bold ? 'b' : '');
+    if (key === prevKeys[k]) continue;
+    prevKeys[k] = key;
+    drawCell(x, y, c);
+  }
+}
+
+
+// ───────────────────────────── the loop and the controls ─────────────────────────────
+let tick = 6000, last = performance.now(), acc = 0, drawn = -1, dirty = true;
+const FRAME_MS = 1000 / 30;
+function loop(now) {
+  const dt = Math.min(250, now - last); last = now;
+  if (!state.paused) {
+    acc += dt;
+    while (acc >= FRAME_MS) { acc -= FRAME_MS; tick++; }
+  }
+  if (tick !== drawn || dirty) { compose(tick); paint(); drawn = tick; dirty = false; }
+  requestAnimationFrame(loop);
+}
+function syncUi() {
+  document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
+  document.querySelectorAll('[data-layer]').forEach(b => b.setAttribute('aria-pressed', String(state.layers[b.dataset.layer])));
+  document.querySelectorAll('[data-tod]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.tod === state.tod)));
+  document.querySelectorAll('[data-size]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.size === state.size)));
+  document.getElementById('layers').classList.toggle('off', state.view !== 'r2');
+  document.getElementById('pause').textContent = state.paused ? 'play' : 'pause';
+  const [name, line] = CAPTION[state.view];
+  document.getElementById('cap').innerHTML = `<b>${name}.</b> ${line}`;
+  let note = '';
+  if (state.view === 'r2') {
+    const on = LAYERS.filter(l => state.layers[l]);
+    note = on.length ? `At ${TOD_NAME[state.tod]}: ` + on.map(l => `${l}, ${LAYER_TIME[l][state.tod]}`).join('; ') + '.' : 'Every layer is off: this is the shared light alone.';
+  } else note = 'The time of day changes only the band and HERE.';
+  document.getElementById('capt').textContent = note;
+  dirty = true;
+}
+function sendGust() { manualGust = tick; if (state.view !== 'r2') state.view = 'r2'; state.layers.weather = true; syncUi(); }
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { state.view = b.dataset.view; syncUi(); }));
+document.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click', () => { const l = b.dataset.layer; state.layers[l] = !state.layers[l]; if (state.view !== 'r2') state.view = 'r2'; syncUi(); }));
+document.querySelectorAll('[data-tod]').forEach(b => b.addEventListener('click', () => { state.tod = +b.dataset.tod; syncUi(); }));
+document.querySelectorAll('[data-size]').forEach(b => b.addEventListener('click', () => { state.size = +b.dataset.size; setup(); syncUi(); }));
+document.getElementById('pause').addEventListener('click', () => { state.paused = !state.paused; syncUi(); });
+document.getElementById('gust').addEventListener('click', sendGust);
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const i = VIEWS.indexOf(state.view);
+  if (e.key === 'ArrowRight') state.view = VIEWS[(i + 1) % VIEWS.length];
+  else if (e.key === 'ArrowLeft') state.view = VIEWS[(i + VIEWS.length - 1) % VIEWS.length];
+  else if (e.key === 'ArrowUp') state.tod = (state.tod + 2) % 3;
+  else if (e.key === 'ArrowDown') state.tod = (state.tod + 1) % 3;
+  else if (e.key === ' ') state.paused = !state.paused;
+  else if (e.key === 'g') { sendGust(); e.preventDefault(); return; }
+  else if (e.key === '1' || e.key === '2' || e.key === '3') { const l = LAYERS[+e.key - 1]; state.layers[l] = !state.layers[l]; state.view = 'r2'; }
+  else return;
+  e.preventDefault(); syncUi();
+});
+let resizeT = 0;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { setup(); dirty = true; }, 120); });
+// the legend
+document.getElementById('legend').innerHTML = LAYERS.map(l => `<dt>${LAYER_LINE[l][0]}</dt><dd>${LAYER_LINE[l][1]}</dd>`).join('')
+  + ['today', 'net'].map(v => `<dt>${v === 'net' ? 'NET' : '0 · today'}</dt><dd>${CAPTION[v][1]}</dd>`).join('');
+
+setup(); syncUi(); requestAnimationFrame(loop);
+// repaint once the face has loaded
+if (document.fonts && document.fonts.load) {
+  Promise.all([document.fonts.load(`400 16px 'Fira Code'`), document.fonts.load(`700 16px 'Fira Code'`)])
+    .then(() => { prevKeys.fill(''); lastFont = ''; dirty = true; }).catch(() => {});
+}
+</script>
+</body>
+</html>

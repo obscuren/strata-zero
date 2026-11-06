@@ -1,6 +1,7 @@
 //! The MAP's keys (spec 7): the cursor, the places list, the kinds, the track, the
 //! zoom and the fold. Everything else is the deck's.
 
+use super::Zoom;
 use super::map::MapLayout;
 use super::{cached, pane, refresh, relayout, spot_source, under_cursor};
 use crate::app::AppState;
@@ -26,6 +27,10 @@ enum Act {
 /// Handles a key on the MAP tab; false for the keys the deck keeps (`q e`, the digits,
 /// tab, esc and the rest).
 pub fn key(st: &mut AppState, code: KeyCode) -> bool {
+    if st.atlas.zoom == Zoom::World && super::world::available(st) {
+        return super::world::key(st, code);
+    }
+    let world = super::world::available(st);
     let act = match code {
         KeyCode::Left | KeyCode::Char('h') => Act::Move(-1, 0),
         KeyCode::Right | KeyCode::Char('l') => Act::Move(1, 0),
@@ -60,9 +65,15 @@ pub fn key(st: &mut AppState, code: KeyCode) -> bool {
         Act::Zoom { closer } => {
             atlas.zoom = if closer {
                 atlas.zoom.closer()
+            } else if atlas.zoom == Zoom::Fit && world {
+                // past the whole city: the world, on the city's tile you're on
+                Zoom::World
             } else {
                 atlas.zoom.further()
             };
+            if atlas.zoom == Zoom::World {
+                atlas.world.cursor = None;
+            }
             atlas.recentre = true;
         }
         Act::Fold => atlas.folded = !atlas.folded,

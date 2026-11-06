@@ -3,9 +3,11 @@
 //! ringed.
 
 use super::plate::{self, Ring};
-use super::{AMBER, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put, security_of};
+use super::{
+    AMBER, NetArea, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put, security_of,
+};
 use crate::render::Rgb;
-use crate::render::map::{MapRef, TileMap};
+use crate::render::map::TileMap;
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::tileset::{DOUBLE, LIGHT, node_glyph};
@@ -36,7 +38,7 @@ fn is_data(t: Terrain) -> bool {
 }
 
 /// How far the nearest lane or construct is: 1 or 2, else 3.
-pub fn near_data(map: &MapRef, p: Pos) -> i32 {
+pub fn near_data(map: &dyn TileMap, p: Pos) -> i32 {
     for r in 1..=2i32 {
         for dy in -r..=r {
             for dx in -r..=r {
@@ -62,23 +64,24 @@ fn mask(p: Pos, joins: impl Fn(Pos) -> bool) -> usize {
         .sum()
 }
 
+/// The Net of `net` drawn over `area` from tile `origin` of its map's frame: its own
+/// city's constructs and hubs (none on the open Net), and only the cells it keeps.
 pub(super) fn draw(
-    map: &MapRef,
+    net: NetArea,
     view: &NetLookView,
     origin: Pos,
     area: Rect,
     buf: &mut Buffer,
     style: &StylePack,
 ) {
-    let city = map.city();
+    let NetArea { map, city, keep } = net;
     let tiles = TileRect::new(origin.x, origin.y, area.width as i32, area.height as i32);
     let mut built: HashMap<BuildingId, Built> = HashMap::new();
     let mut labels: HashMap<Pos, char> = HashMap::new();
-    for b in city
-        .buildings
-        .iter()
-        .filter(|b| b.footprint.intersects(tiles))
-    {
+    let buildings = city
+        .into_iter()
+        .flat_map(|c| c.buildings.iter().map(move |b| (c, b)));
+    for (city, b) in buildings.filter(|(_, b)| b.footprint.intersects(tiles)) {
         let security = security_of(city, b.id);
         let tier = Tier::of(security.unwrap_or(0));
         let steps = plate::steps_in(b.footprint, tier.steps());
@@ -110,17 +113,21 @@ pub(super) fn draw(
         );
     }
     let hubs: Vec<Pos> = city
-        .net
-        .nodes
         .iter()
+        .flat_map(|c| c.net.nodes.iter())
         .filter(|n| n.kind == NodeKind::Backbone)
         .map(|n| n.cyber)
         .filter(|h| tiles.grow(14).contains(*h))
         .collect();
+    let theme =
+        |d: Option<citygen::DistrictId>| d.and_then(|d| city?.district_opt(d)).map(|d| d.theme);
     let glows = &view.packets;
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
+            if keep.is_some_and(|keep| !keep(p)) {
+                continue;
+            }
             let Some(tile) = map.tile(p) else {
                 put(buf, sx, sy, ' ', VOID, VOID, false);
                 continue;
@@ -174,7 +181,16 @@ pub(super) fn draw(
                     (DOUBLE[m], WHITE, VOID.mix(WHITE, 0.12), false)
                 }
                 (Terrain::NetGate, None) => ('▯', WHITE, VOID.mix(WHITE, 0.12), true),
-                _ => void_cell(map, p, tile.variant, tile.district, &hubs, style),
+                // the void (the open Net past a city's outline): no lattice, never walked
+                (Terrain::Void, _) => void_cell(
+                    map,
+                    p,
+                    tile.variant & !1,
+                    theme(tile.district),
+                    &hubs,
+                    style,
+                ),
+                _ => void_cell(map, p, tile.variant, theme(tile.district), &hubs, style),
             };
             if let Some(Feature::Node(kind)) = tile.feature {
                 ch = node_glyph(kind, style);
@@ -222,16 +238,14 @@ fn floor_cell(b: &Built, p: Pos, label: Option<char>) -> (char, Rgb, Rgb, bool) 
 
 /// The open grid: dark, its lattice dots only near data, rings round the hubs.
 fn void_cell(
-    map: &MapRef,
+    map: &dyn TileMap,
     p: Pos,
     variant: u8,
-    district: Option<citygen::DistrictId>,
+    theme: Option<citygen::Theme>,
     hubs: &[Pos],
     style: &StylePack,
 ) -> (char, Rgb, Rgb, bool) {
-    let city = map.city();
     let near = near_data(map, p);
-    let theme = district.and_then(|d| city.district_opt(d)).map(|d| d.theme);
     let accent = style.theme_or_neutral(theme).accent;
     let bg = match near {
         1 => VOID.mix(SIGNAL, 0.09),
@@ -262,6 +276,7 @@ fn void_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::map::MapRef;
     use crate::render::netlook::{NetLook, TERMINAL};
     use crate::render::viewport::Overlay;
     use citygen::{City, GenParams, Generator, SizePreset, StratumKind};
@@ -283,7 +298,7 @@ mod tests {
         let map = MapRef::stratum_of(c, StratumKind::Net);
         let area = Rect::new(0, 0, c.size.w as u16, c.size.h as u16);
         let mut buf = Buffer::empty(area);
-        NetLook { view }.draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        NetLook { view, keep: None }.draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
         buf
     }
 
@@ -326,6 +341,28 @@ mod tests {
             VOID.to_color(),
             "the void is dark"
         );
+    }
+
+    #[test]
+    fn a_void_cell_is_never_a_dot() {
+        // the open Net past a city's outline holds void: walking there is barred, so it
+        // draws as nothing even beside data, whatever its variant
+        let mut c = city();
+        let map0 = MapRef::stratum_of(&c, StratumKind::Net);
+        let at = net_tiles(&c)
+            .find(|(p, t)| t.terrain == Terrain::NetGrid && near_data(&map0, *p) == 1)
+            .map(|(p, _)| p)
+            .expect("a grid tile beside data");
+        let t = c
+            .stratum_mut(StratumKind::Net)
+            .unwrap()
+            .tiles
+            .get_mut(at)
+            .unwrap();
+        t.terrain = Terrain::Void;
+        t.variant |= 1;
+        let buf = paint(&c, &NetLookView::default());
+        assert_eq!(buf[(at.x as u16, at.y as u16)].symbol(), " ");
     }
 
     #[test]
@@ -389,11 +426,19 @@ mod tests {
         // Whole, then with the camera so its left half is off the area.
         let whole_area = Rect::new(0, 0, c.size.w as u16, c.size.h as u16);
         let mut whole = Buffer::empty(whole_area);
-        NetLook { view: &view }.draw(&map, Pos::new(0, 0), whole_area, 0, &mut whole, &style);
+        NetLook {
+            view: &view,
+            keep: None,
+        }
+        .draw(&map, Pos::new(0, 0), whole_area, 0, &mut whole, &style);
         let origin = Pos::new(fp.x + fp.w / 2, fp.y - 2);
         let area = Rect::new(0, 0, 40, (fp.h + 4) as u16);
         let mut half = Buffer::empty(area);
-        NetLook { view: &view }.draw(&map, origin, area, 0, &mut half, &style);
+        NetLook {
+            view: &view,
+            keep: None,
+        }
+        .draw(&map, origin, area, 0, &mut half, &style);
         for p in fp.iter().filter(|p| p.x >= origin.x && p.x < origin.x + 40) {
             let (sx, sy) = ((p.x - origin.x) as u16, (p.y - origin.y) as u16);
             assert_eq!(
@@ -405,6 +450,50 @@ mod tests {
     }
 
     #[test]
+    fn the_look_draws_only_the_cells_it_keeps() {
+        // where other areas share the view, the city's look leaves their cells alone,
+        // off its map too
+        let c = city();
+        let style = StylePack::load().unwrap();
+        let map = MapRef::stratum_of(&c, StratumKind::Net);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        for cell in buf.content.iter_mut() {
+            cell.set_char('x');
+        }
+        let view = NetLookView::default();
+        let keep = |p: Pos| p.x >= 0 && p.x < 10;
+        NetLook {
+            view: &view,
+            keep: Some(&keep),
+        }
+        .draw(&map, Pos::new(-20, 0), area, 0, &mut buf, &style);
+        for x in 0..40u16 {
+            let kept = (20..30).contains(&x);
+            assert_eq!(buf[(x, 3)].symbol() == "x", !kept, "{x}");
+        }
+        // with no city (the open Net) no building's id is read: a construct's wall
+        // draws as nobody's, not in its tier's colour
+        let (wall, b) = net_tiles(&c)
+            .find(|(_, t)| t.terrain == Terrain::NetWall && t.building.is_some())
+            .map(|(p, t)| (p, t.building.unwrap()))
+            .expect("a construct wall");
+        let fg_at = |city: Option<&City>| {
+            let mut out = Buffer::empty(Rect::new(0, 0, c.size.w as u16, c.size.h as u16));
+            let net = NetArea {
+                map: &map,
+                city,
+                keep: None,
+            };
+            super::super::draw_area(net, &view, Pos::new(0, 0), out.area, &mut out, &style);
+            fg(&out, wall)
+        };
+        let tier = Tier::of(security_of(&c, b).unwrap_or(0));
+        assert_eq!(fg_at(Some(&c)), tier.colour().scale(0.85).to_color());
+        assert_eq!(fg_at(None), WHITE.to_color());
+    }
+
+    #[test]
     fn off_the_net_is_void() {
         let c = city();
         let style = StylePack::load().unwrap();
@@ -412,7 +501,11 @@ mod tests {
         let area = Rect::new(0, 0, 10, 4);
         let mut buf = Buffer::empty(area);
         let view = NetLookView::default();
-        NetLook { view: &view }.draw(&map, Pos::new(-20, -20), area, 0, &mut buf, &style);
+        NetLook {
+            view: &view,
+            keep: None,
+        }
+        .draw(&map, Pos::new(-20, -20), area, 0, &mut buf, &style);
         assert_eq!(buf[(3, 2)].bg, VOID.to_color());
     }
 }

@@ -3,9 +3,11 @@
 use crate::app::{self, AppState};
 use crate::save::save_city;
 use anyhow::{Context, Result, bail};
+use citygen::overworld::{Overworld, WorldParams, WorldSize};
 use citygen::{GenParams, Generator, SizePreset, WaterMode};
 use clap::{Parser, Subcommand};
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -50,6 +52,125 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Generate overworlds and write them to one HTML page, to look at in a browser.
+    World {
+        /// One seed.
+        #[arg(long, conflicts_with = "seeds")]
+        seed: Option<u64>,
+        /// A range of seeds, `A..B` (B excluded); 0..12 when neither is given.
+        #[arg(long)]
+        seeds: Option<String>,
+        /// small, medium, large or WxH.
+        #[arg(long, default_value = "medium")]
+        size: String,
+        /// How many cities, 3 to 16 (9 by default).
+        #[arg(long)]
+        cities: Option<u8>,
+        /// Draw one level down instead: the detail map round overworld tile `TX,TY`
+        /// (needs `--seed`).
+        #[arg(long, requires = "seed", conflicts_with = "seeds")]
+        detail: Option<String>,
+        /// How many overworld tiles `--detail` draws, `WxH`.
+        #[arg(long, default_value = "10x4")]
+        span: String,
+        /// With `--detail`: draw the tiles' Net instead of their ground.
+        #[arg(long, requires = "detail")]
+        net: bool,
+        /// The page to write.
+        #[arg(long, default_value = "world-sheet.html")]
+        out: PathBuf,
+    },
+}
+
+/// An overworld tile, `TX,TY`.
+pub fn parse_tile(s: &str) -> Result<citygen::Pos> {
+    let (x, y) = s
+        .split_once(',')
+        .with_context(|| format!("tile `{s}` is not TX,TY"))?;
+    Ok(citygen::Pos::new(
+        x.trim()
+            .parse()
+            .with_context(|| format!("bad tile x `{x}`"))?,
+        y.trim()
+            .parse()
+            .with_context(|| format!("bad tile y `{y}`"))?,
+    ))
+}
+
+/// A span of tiles, `WxH`, each at least 1.
+pub fn parse_span(s: &str) -> Result<(u32, u32)> {
+    let (w, h) = s
+        .split_once('x')
+        .with_context(|| format!("span `{s}` is not WxH"))?;
+    let (w, h): (u32, u32) = (
+        w.parse().context("bad span width")?,
+        h.parse().context("bad span height")?,
+    );
+    if w == 0 || h == 0 {
+        bail!("span `{s}` is empty");
+    }
+    Ok((w, h))
+}
+
+/// `A..B` (B excluded, A below B) or a single seed `N`.
+pub fn parse_seeds(s: &str) -> Result<Range<u64>> {
+    match s.split_once("..") {
+        Some((a, b)) => {
+            let a: u64 = a
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{a}`"))?;
+            let b: u64 = b
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{b}`"))?;
+            if a >= b {
+                bail!("seeds `{s}` run backwards or are empty");
+            }
+            Ok(a..b)
+        }
+        None => {
+            let n: u64 = s
+                .trim()
+                .parse()
+                .with_context(|| format!("bad seed `{s}`"))?;
+            one_seed(n)
+        }
+    }
+}
+
+fn one_seed(n: u64) -> Result<Range<u64>> {
+    let end = n
+        .checked_add(1)
+        .with_context(|| format!("seed {n} is the last there is; use one below it"))?;
+    Ok(n..end)
+}
+
+/// The seeds `strata world` draws: `--seed`, else `--seeds`, else 0..12.
+pub fn seed_range(seed: Option<u64>, seeds: Option<&str>) -> Result<Range<u64>> {
+    match (seed, seeds) {
+        (Some(_), Some(_)) => bail!("--seed and --seeds both given; pick one"),
+        (Some(n), None) => one_seed(n),
+        (None, Some(s)) => parse_seeds(s),
+        (None, None) => Ok(0..12),
+    }
+}
+
+pub fn parse_world_size(s: &str) -> Result<WorldSize> {
+    match s {
+        "small" => Ok(WorldSize::Small),
+        "medium" => Ok(WorldSize::Medium),
+        "large" => Ok(WorldSize::Large),
+        other => {
+            let (w, h) = other
+                .split_once('x')
+                .with_context(|| format!("size `{other}` is not small/medium/large or WxH"))?;
+            Ok(WorldSize::Custom {
+                w: w.parse().context("bad width")?,
+                h: h.parse().context("bad height")?,
+            })
+        }
+    }
 }
 
 pub fn parse_size(s: &str) -> Result<SizePreset> {
@@ -182,12 +303,85 @@ pub fn run() -> Result<()> {
             );
             Ok(())
         }
+        Some(Cmd::World {
+            seed,
+            seeds,
+            size,
+            cities,
+            detail,
+            span,
+            net,
+            out,
+        }) => {
+            let range = seed_range(seed, seeds.as_deref())?;
+            let size = parse_world_size(&size)?;
+            let style = crate::render::style::StylePack::load()?;
+            if let Some(tile) = detail {
+                let mut params = WorldParams {
+                    seed: range.start,
+                    size,
+                    ..Default::default()
+                };
+                if let Some(c) = cities {
+                    params.cities = c;
+                }
+                let world = Overworld::generate(params)?;
+                let (centre, span) = (parse_tile(&tile)?, parse_span(&span)?);
+                if world.tile(centre).is_none() {
+                    bail!(
+                        "tile {tile} is outside the {}×{} world",
+                        world.size.w,
+                        world.size.h
+                    );
+                }
+                std::fs::write(
+                    &out,
+                    crate::sheet::detail_sheet(&world, centre, span, &style, net),
+                )
+                .with_context(|| format!("writing {}", out.display()))?;
+                println!("-> {}", out.display());
+                return Ok(());
+            }
+            let mut worlds = Vec::new();
+            for seed in range {
+                let mut params = WorldParams {
+                    seed,
+                    size,
+                    ..Default::default()
+                };
+                if let Some(c) = cities {
+                    params.cities = c;
+                }
+                let start = std::time::Instant::now();
+                let world = Overworld::generate(params)?;
+                let took = start.elapsed();
+                println!(
+                    "seed {seed}: {} cities (home {}), {} routes, {} POIs, {} ms",
+                    world.cities.len(),
+                    world.home().name,
+                    world.routes.len(),
+                    world.pois.len(),
+                    took.as_millis()
+                );
+                worlds.push((world, took));
+            }
+            std::fs::write(&out, crate::sheet::world_sheet(&worlds, &style))
+                .with_context(|| format!("writing {}", out.display()))?;
+            println!("-> {}", out.display());
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tile_parses() {
+        assert_eq!(parse_tile("50,36").unwrap(), citygen::Pos::new(50, 36));
+        assert!(parse_tile("50").is_err() && parse_tile("a,b").is_err());
+    }
 
     #[test]
     fn dev_mode_is_asked_for_by_flag_or_env() {
@@ -198,6 +392,37 @@ mod tests {
         assert!(!dev_asked(false, Some(OsStr::new(""))));
         assert!(Cli::try_parse_from(["strata", "--dev"]).unwrap().dev);
         assert!(!Cli::try_parse_from(["strata"]).unwrap().dev);
+    }
+
+    #[test]
+    fn seeds_parse_as_ranges() {
+        assert_eq!(parse_seeds("0..12").unwrap(), 0..12);
+        assert_eq!(parse_seeds("7").unwrap(), 7..8);
+        assert!(parse_seeds("5..2").is_err());
+        assert!(parse_seeds("abc").is_err());
+        assert!(parse_seeds("3..x").is_err());
+    }
+
+    #[test]
+    fn one_seed_or_a_range_but_not_both() {
+        assert!(
+            Cli::try_parse_from(["strata", "world", "--seed", "1", "--seeds", "0..3"]).is_err()
+        );
+        assert_eq!(seed_range(Some(4), None).unwrap(), 4..5);
+        assert_eq!(seed_range(None, Some("2..5")).unwrap(), 2..5);
+        assert_eq!(seed_range(None, None).unwrap(), 0..12);
+        assert!(seed_range(Some(u64::MAX), None).is_err());
+        assert!(parse_seeds(&u64::MAX.to_string()).is_err());
+    }
+
+    #[test]
+    fn world_sizes_parse() {
+        assert_eq!(parse_world_size("medium").unwrap(), WorldSize::Medium);
+        assert_eq!(
+            parse_world_size("200x60").unwrap(),
+            WorldSize::Custom { w: 200, h: 60 }
+        );
+        assert!(parse_world_size("huge").is_err());
     }
 
     #[test]

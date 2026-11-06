@@ -114,6 +114,19 @@ impl Rect {
             None
         }
     }
+    /// The smallest rectangle holding every one of `cells`; empty for none.
+    pub fn around(cells: &[Pos]) -> Rect {
+        let Some(first) = cells.first() else {
+            return Rect::new(0, 0, 0, 0);
+        };
+        let (lo, hi) = cells.iter().fold((*first, *first), |(lo, hi), p| {
+            (
+                Pos::new(lo.x.min(p.x), lo.y.min(p.y)),
+                Pos::new(hi.x.max(p.x), hi.y.max(p.y)),
+            )
+        });
+        Rect::new(lo.x, lo.y, hi.x - lo.x + 1, hi.y - lo.y + 1)
+    }
     pub fn clamp_to(self, bounds: Rect) -> Option<Rect> {
         self.intersection(bounds)
     }

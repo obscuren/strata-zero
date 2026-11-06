@@ -136,7 +136,7 @@ impl Title {
     /// own. (The COMBAT starts are on the lot, which has none.)
     fn debug_game(&self, st: &mut AppState) -> ScreenCmd {
         st.character = game::Character::debug_runner(&st.content);
-        let cmd = crate::screens::start_city(st, Title::fresh_params(st, st.tick));
+        let cmd = crate::screens::start_built(st, crate::screens::new_game_city(st));
         if matches!(cmd, ScreenCmd::Switch { .. }) {
             crate::runs::when::begin_run(st);
         }

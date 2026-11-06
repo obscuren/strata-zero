@@ -449,9 +449,15 @@ mod tests {
         let (place, set) = news::set_tile(&st).unwrap();
         stand(&mut st, place, set.offset(0, 1));
         // Someone on foot you would see from a free tile to one side of them, off where
-        // the bubble goes.
+        // the bubble goes, nobody else on foot above them where it goes.
         let city = st.city.as_ref().unwrap();
         let world = st.world.as_ref().unwrap();
+        let room_above = |id: sim::PersonId, at: Pos| {
+            world
+                .visible(citygen::Rect::new(at.x - 30, at.y - 10, 60, 10))
+                .iter()
+                .all(|m| !matches!(m.kind, sim::MoverKind::Walker { id: o, .. } if o != id))
+        };
         let spots: Vec<(sim::PersonId, Pos, Pos)> = world
             .visible(citygen::Rect::new(0, 0, 100_000, 100_000))
             .into_iter()
@@ -459,6 +465,7 @@ mod tests {
                 sim::MoverKind::Walker { id, .. } => Some((id, m.pos)),
                 _ => None,
             })
+            .filter(|&(id, at)| room_above(id, at))
             .flat_map(|(id, at)| [2, -2, 3, -3].map(|dx| (id, at, at.offset(dx, 0))))
             .filter(|&(_, _, p)| {
                 city.walkable(StratumKind::Street, p) && world.person_at(p).is_none()

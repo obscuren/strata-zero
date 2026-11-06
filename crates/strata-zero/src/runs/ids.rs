@@ -371,9 +371,64 @@ fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
     } = found;
     // The minute `NetState::now` gives once the run is back: the world's clock.
     let now = s.world.as_ref().map_or(s.tick, |w| w.tick()) / sim::TICKS_PER_MINUTE;
-    for m in fresh {
-        if let (Some(mission), Some(run)) = (book.missions.get(m), s.missions.runs.get_mut(m)) {
-            *run = crate::missions::fresh_run(book, &s.missions.cast, mission, now);
+    clear_lost(
+        &mut s.missions,
+        &mut s.journal,
+        &mut s.track,
+        book,
+        &fresh,
+        now,
+    );
+    // the home city's story, set aside while the run is in another city
+    if let Some(away) = s.away.as_mut() {
+        let now = away
+            .world
+            .as_ref()
+            .map_or(now * sim::TICKS_PER_MINUTE, |w| w.tick())
+            / sim::TICKS_PER_MINUTE;
+        clear_lost(
+            &mut away.missions,
+            &mut away.journal,
+            &mut away.track,
+            book,
+            &fresh,
+            now,
+        );
+    }
+    // the other cities' and towns' kept (the story never runs there, but a mail or a
+    // track may point at it)
+    for kept in s.outside.iter_mut().flat_map(|o| o.kept_saved_mut()) {
+        let now = kept
+            .world
+            .as_ref()
+            .map_or(now * sim::TICKS_PER_MINUTE, |w| w.tick())
+            / sim::TICKS_PER_MINUTE;
+        clear_lost(
+            &mut kept.missions,
+            &mut kept.journal,
+            &mut kept.track,
+            book,
+            &fresh,
+            now,
+        );
+    }
+    lost
+}
+
+/// What a story (`missions`, its `journal`'s mails, the `track`) held of steps the book
+/// lacks, dropped; the book's missions the run had no run for (`fresh`) started as
+/// `begin` would at minute `now`.
+fn clear_lost(
+    missions: &mut Missions,
+    journal: &mut crate::credentials::Journal,
+    track: &mut Option<crate::track::Track>,
+    book: &Book,
+    fresh: &[usize],
+    now: u64,
+) {
+    for &m in fresh {
+        if let (Some(mission), Some(run)) = (book.missions.get(m), missions.runs.get_mut(m)) {
+            *run = crate::missions::fresh_run(book, &missions.cast, mission, now);
         }
     }
     let gone = |r: &Option<StepRef>| r.is_some_and(StepRef::lost);
@@ -400,7 +455,7 @@ fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
         notes: _,
         tray,
         tab: _,
-    } = &mut s.missions;
+    } = missions;
     feeds.retain(|f| !gone(&f.story));
     if call.as_ref().is_some_and(|c| gone(&c.story)) {
         *call = None;
@@ -414,18 +469,17 @@ fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
     if tray.as_ref().is_some_and(|t| t.story.lost()) {
         *tray = None;
     }
-    for mail in &mut s.journal.mails {
+    for mail in &mut journal.mails {
         if gone(&mail.story) {
             mail.story = None;
         }
     }
-    if s.track
+    if track
         .as_ref()
         .is_some_and(|t| matches!(t.source, crate::track::Source::Story(r) if r.lost()))
     {
-        s.track = None;
+        *track = None;
     }
-    lost
 }
 
 #[cfg(test)]
@@ -781,6 +835,49 @@ mod tests {
         );
         assert_eq!(s.journal.mails.len(), st.journal.mails.len());
         assert!(s.track.is_none());
+    }
+
+    /// A run saved in another city of the world, its home's story set aside: a step
+    /// gone from the book is dropped from what the set-aside story held, as at home.
+    #[test]
+    fn a_step_gone_while_away_is_dropped_from_the_home_story() {
+        let dir = Dir::new("step-away");
+        let (mut st, d, tray) = at_the_tray();
+        let here = StepRef::new(d, tray);
+        let from = st.book.missions[d].from.clone();
+        let call = Call {
+            story: Some(here),
+            from: from.clone(),
+            lines: vec!["x".into()],
+            rang: 0,
+            answered: None,
+            line: 0,
+            shown: 0,
+            full: false,
+        };
+        st.missions.call = Some(call.clone());
+        st.missions.calls.push_back(call);
+        st.journal.mails[0].story = Some(here);
+        crate::outside::ensure(&mut st);
+        let other = st.outside.as_ref().unwrap().others()[0].0;
+        crate::outside::enter(&mut st, other).expect("into another city");
+        assert!(st.away.is_some());
+        let path = write(&dir.0, &st).unwrap();
+        let mut book = st.book.clone();
+        book.missions[d].steps.remove(tray);
+
+        let (_, s, lost) = read(&path, &book).expect("the run reads");
+        assert_eq!(lost, ["a step of doctor (tray)"]);
+        let away = s.away.as_ref().expect("home set aside");
+        assert_eq!(away.missions.call, None);
+        assert!(away.missions.calls.is_empty());
+        assert_eq!(away.journal.mails[0].story, None);
+        let run = &away.missions.runs[d];
+        assert!(
+            matches!(run.state, RunState::Done { .. }),
+            "{:?}",
+            run.state
+        );
     }
 
     /// A step the player already finished, gone from a later book: dropped from what

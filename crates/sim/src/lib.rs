@@ -1,6 +1,7 @@
 //! The living city: people with professions, homes, workplaces, routines and cars,
 //! stepped in game minutes.
 
+pub mod commute;
 pub mod content;
 pub mod paths;
 pub mod people;

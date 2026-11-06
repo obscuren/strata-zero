@@ -387,7 +387,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .world
                 .as_ref()
                 .ok_or_else(|| "no city, no people".to_string())?;
-            let (mut out, mut inside, mut driving) = (0, 0, 0);
+            let (mut out, mut inside, mut driving, mut away) = (0, 0, 0, 0);
             for p in w.people() {
                 match &p.whereabouts {
                     sim::Whereabouts::Inside(_) => inside += 1,
@@ -399,9 +399,12 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                             out += 1;
                         }
                     }
+                    sim::Whereabouts::Away => away += 1,
                 }
             }
-            Ok(format!("{out} out · {inside} inside · {driving} driving"))
+            Ok(format!(
+                "{out} out · {inside} inside · {driving} driving · {away} out of town"
+            ))
         }
         "clock" | "time" => {
             // Jumps the clock forward to the next hh:mm and reseeds the city's day there.

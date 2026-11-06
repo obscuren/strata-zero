@@ -21,11 +21,19 @@ enum Work {
     Variants(StratumKind),
 }
 
+/// The most rounds `verify` takes blockers down in: a sign's round after the rest's.
+const VERIFY_ROUNDS: usize = 12;
+
 #[derive(Default)]
 pub(crate) struct DressingStage {
     queue: VecDeque<Work>,
     total: usize,
     rng: Option<ChaCha8Rng>,
+}
+
+/// A sign standing on ground you could otherwise walk.
+fn is_sign(t: &Tile) -> bool {
+    matches!(t.feature, Some(Feature::Sign(_))) && Tile::new(t.terrain).is_walkable()
 }
 
 /// True when the tile may take a blocking feature without pinching a corridor.
@@ -219,11 +227,17 @@ impl DressingStage {
     }
 
     /// Blocking features must never cut tiles off from the street: any blocker beside an
-    /// unreached walkable tile is removed, repeatedly, until nothing is cut off.
+    /// unreached walkable tile is removed, repeatedly, until nothing is cut off. A sign
+    /// (a billboard's letters and caps, a world's sign past the outline) comes down last,
+    /// only beside a pocket no other blocker seals, and only where the street would reach
+    /// it with every sign down (not beside ground nothing reaches anyway).
     fn verify(ctx: &mut GenCtx) {
-        for _ in 0..6 {
+        for _ in 0..VERIFY_ROUNDS {
             let reach = reachable_from_street(&ctx.city);
-            let mut to_clear: Vec<(StratumKind, Pos)> = Vec::new();
+            // blockers beside a pocket: signs (each with a pocket's tile beside it), and
+            // the rest
+            let mut signs: Vec<(StratumKind, Pos, Pos)> = Vec::new();
+            let mut others: Vec<(StratumKind, Pos)> = Vec::new();
             for k in StratumKind::PHYSICAL {
                 let st = ctx.city.stratum(k).expect("stratum");
                 for (p, t) in st.tiles.iter() {
@@ -231,17 +245,28 @@ impl DressingStage {
                         continue;
                     }
                     for n in p.neighbors4() {
-                        let blocker = st.tiles.get(n).is_some_and(|u| {
-                            u.feature.is_some()
-                                && !u.is_walkable()
-                                && Tile::new(u.terrain).is_walkable()
-                        });
-                        if blocker {
-                            to_clear.push((k, n));
+                        let Some(u) = st.tiles.get(n) else {
+                            continue;
+                        };
+                        if u.feature.is_none()
+                            || u.is_walkable()
+                            || !Tile::new(u.terrain).is_walkable()
+                        {
+                            continue;
+                        }
+                        if is_sign(u) {
+                            signs.push((k, n, p));
+                        } else {
+                            others.push((k, n));
                         }
                     }
                 }
             }
+            let to_clear = if others.is_empty() {
+                Self::sealing(ctx, signs)
+            } else {
+                others
+            };
             if to_clear.is_empty() {
                 return;
             }
@@ -249,6 +274,29 @@ impl DressingStage {
                 ctx.set_feature(k, p, None);
             }
         }
+    }
+
+    /// Of `signs` (each beside a pocket's tile), those beside a pocket the street would
+    /// reach with every sign down.
+    fn sealing(ctx: &GenCtx, signs: Vec<(StratumKind, Pos, Pos)>) -> Vec<(StratumKind, Pos)> {
+        if signs.is_empty() {
+            return Vec::new();
+        }
+        let mut open = ctx.city.clone();
+        for k in StratumKind::PHYSICAL {
+            let st = open.stratum_mut(k).expect("stratum");
+            for t in st.tiles.as_mut_slice() {
+                if is_sign(t) {
+                    t.feature = None;
+                }
+            }
+        }
+        let reach = reachable_from_street(&open);
+        signs
+            .into_iter()
+            .filter(|(k, _, pocket)| reach[k.index()][*pocket])
+            .map(|(k, sign, _)| (k, sign))
+            .collect()
     }
 
     fn lights(ctx: &mut GenCtx, k: StratumKind) {

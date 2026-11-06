@@ -8,6 +8,8 @@ use game::{AbilityKind, Action, Active, At, Effect};
 
 /// What an item action is refused with while jacked in.
 pub const JACKED_IN: &str = "jacked in · gear and pack locked until you jack out";
+/// What dropping an item is refused with off the cells the city owns.
+pub const OUT_HERE: &str = "nowhere to leave it out here";
 
 /// Jacked in: the body sits still and its gear and pack can't be touched; only the
 /// Net acts.
@@ -64,6 +66,15 @@ fn put_in(st: &AppState, action: &Action) -> Option<game::ItemId> {
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if handles_items(&action) && jacked_in(st) {
         return Err(JACKED_IN.to_string());
+    }
+    // Items lie only on a city's map: off the cells the city owns there's nothing to
+    // leave one on.
+    if matches!(action, Action::Drop { .. } | Action::DropCopy(_))
+        && st.player.as_ref().is_some_and(|p| {
+            p.place.stratum().is_some() && !crate::outside::stream::live_owns(st, p.pos)
+        })
+    {
+        return Err(OUT_HERE.to_string());
     }
     // The story keeps some things shut until it says otherwise.
     if let Action::Open(id) = &action

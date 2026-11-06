@@ -42,8 +42,17 @@ pub fn cast(st: &mut AppState) {
         };
         if let Some(w) = st.world.as_mut() {
             w.rename(who, &role.name);
+            w.keep_in_town(who);
         }
         st.missions.cast.insert(id, who);
+    }
+}
+
+/// Everyone the story has cast stays in town: the sim doesn't save who, so a reopened
+/// run marks them again from the cast (`after_restore`, `Stay::reopened`).
+pub fn keep_in_town(world: &mut sim::World, missions: &super::Missions) {
+    for &who in missions.cast.values() {
+        world.keep_in_town(who);
     }
 }
 

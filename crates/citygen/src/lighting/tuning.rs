@@ -38,6 +38,8 @@ pub fn steady_emission(
         Some(Feature::Neon(_)) => Some((4, 90.0)),
         Some(Feature::HoloAd) => Some((5, 100.0)),
         Some(Feature::Helipad) => Some((3, 60.0)),
+        // a fire in a drum warms the dirt round a shanty
+        Some(Feature::FireBarrel) => Some((4, 70.0)),
         _ if terrain == Terrain::Window && k == StratumKind::Street => Some((2, 30.0)),
         _ => None,
     }
@@ -58,8 +60,9 @@ pub const NET_LANE_LIGHT: u8 = 255;
 /// Emitted light (ambient excluded) at or above which a tile in line of sight is seen
 /// past the dark radius. A street lamp passes within four tiles, neon within two.
 pub const LIT_SIGHT: u8 = 40;
-/// How far the player's cast reaches when looking for lit tiles.
-pub const LIT_RADIUS: i32 = 40;
+/// How far the player's cast reaches when looking for lit tiles: a city's lamps are
+/// seen from the open ground well before you reach it, where nothing stands between.
+pub const LIT_RADIUS: i32 = 96;
 /// The dark radius at full day on a sunlit stratum: past the viewport's half-diagonal.
 pub const DAY_RADIUS: i32 = 60;
 
@@ -170,3 +173,18 @@ pub const STAGE: (i32, f32) = (3, 60.0);
 pub const SCREEN_GLOW: (i32, f32) = (3, 90.0);
 /// One in this many wearing fittings is dead, and one more stutters.
 pub const WEAR_IN: u64 = 9;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fire_barrel_lights_the_dirt_round_it() {
+        let e = steady_emission(
+            Terrain::Dirt,
+            Some(Feature::FireBarrel),
+            StratumKind::Street,
+        );
+        assert!(e.is_some_and(|(r, s)| r >= 3 && s > 40.0));
+    }
+}

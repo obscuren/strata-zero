@@ -72,6 +72,18 @@ impl DistrictsStage {
 
     fn assign_themes(&self, ctx: &GenCtx) -> Vec<Theme> {
         let n = self.seeds.len();
+        // A town of one quarter: the overworld's colour for it, else old town.
+        if n == 1 {
+            let theme = ctx.scratch.site.as_ref().and_then(|site| {
+                let c = self.seeds[0];
+                let tile = Pos::new(
+                    (site.origin.x + c.x).div_euclid(crate::overworld::detail::TILE),
+                    (site.origin.y + c.y).div_euclid(crate::overworld::detail::TILE),
+                );
+                site.world.tile(tile).and_then(|t| t.urban).map(|u| u.theme)
+            });
+            return vec![theme.unwrap_or(Theme::OldTown)];
+        }
         let mut themes: Vec<Option<Theme>> = vec![None; n];
         let st = ctx
             .city
@@ -159,7 +171,7 @@ impl DistrictsStage {
         let mut merged = false;
         loop {
             let n = self.seeds.len();
-            if n <= 4 {
+            if n <= ctx.params().least_districts() as usize {
                 break;
             }
             let min_tiles = (600usize).max(land / (3 * n));

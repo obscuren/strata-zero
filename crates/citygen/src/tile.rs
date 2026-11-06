@@ -38,9 +38,39 @@ pub enum Terrain {
     Atrium,
     /// The edge of an atrium floor: you see past it, you do not walk through it.
     Railing,
+    // Open ground one level down from the overworld. Appended, so saves keep the
+    // indices of everything above.
+    /// Bare earth.
+    Dirt,
+    /// Earth with scrub.
+    Scrub,
+    /// Rows of crops in a field.
+    Crops,
+    /// A salt pan's crust.
+    Salt,
+    /// The toxic spill's seep.
+    Spill,
+    /// A road's shoulder.
+    Gravel,
+    /// A beach.
+    Sand,
+    /// Reeds and mud at a lake's or river's edge.
+    Reeds,
+    /// A rock outcrop: you see past it, you do not walk through it.
+    Rock,
+    /// A mountain's rock wall.
+    Cliff,
+    /// Water at the edge, too deep to wade but lighter than the deep.
+    Shallows,
+    /// A river's shallow crossing, walkable.
+    Ford,
+    /// A low rise in the ground.
+    Rise,
+    /// A dry wash's bed.
+    Wash,
 }
 
-pub const ALL_TERRAIN: [Terrain; 28] = [
+pub const ALL_TERRAIN: [Terrain; 42] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -69,6 +99,20 @@ pub const ALL_TERRAIN: [Terrain; 28] = [
     Terrain::NetGate,
     Terrain::Atrium,
     Terrain::Railing,
+    Terrain::Dirt,
+    Terrain::Scrub,
+    Terrain::Crops,
+    Terrain::Salt,
+    Terrain::Spill,
+    Terrain::Gravel,
+    Terrain::Sand,
+    Terrain::Reeds,
+    Terrain::Rock,
+    Terrain::Cliff,
+    Terrain::Shallows,
+    Terrain::Ford,
+    Terrain::Rise,
+    Terrain::Wash,
 ];
 
 impl Terrain {
@@ -104,6 +148,20 @@ impl Terrain {
             NetGate => "gate",
             Atrium => "atrium",
             Railing => "railing",
+            Dirt => "dirt",
+            Scrub => "scrub",
+            Crops => "crops",
+            Salt => "salt",
+            Spill => "spill",
+            Gravel => "gravel",
+            Sand => "sand",
+            Reeds => "reeds",
+            Rock => "rock",
+            Cliff => "cliff",
+            Shallows => "shallows",
+            Ford => "ford",
+            Rise => "rise",
+            Wash => "dry wash",
         }
     }
 
@@ -154,8 +212,14 @@ pub enum Feature {
     Ice(IceGrade),
     /// A shopfront awning over the pavement; walkable.
     Awning,
-    /// A light fitting indoors. Last, so old saves keep their indices.
+    /// A light fitting indoors. Appended, so old saves keep their indices.
     Fitting(Fitting),
+    /// A power line's pylon out in the open; nobody walks through it.
+    Pylon,
+    /// A power line overhead between pylons; `true` where it runs north-south.
+    PowerLine(bool),
+    /// A fire burning in an oil drum, out in a city's outskirts; nobody walks through it.
+    FireBarrel,
 }
 
 /// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
@@ -299,7 +363,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 21] = [
+pub const ALL_FEATURES: [Feature; 25] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -329,6 +393,10 @@ pub const ALL_FEATURES: [Feature; 21] = [
         tone: Tone::Tungsten,
         wear: Wear::Ok,
     }),
+    Feature::Pylon,
+    Feature::PowerLine(false),
+    Feature::PowerLine(true),
+    Feature::FireBarrel,
 ];
 
 /// One cell of a stratum.
@@ -380,6 +448,17 @@ impl Tile {
                 | NetLane
                 | NetFloor
                 | NetGate
+                | Dirt
+                | Scrub
+                | Crops
+                | Salt
+                | Spill
+                | Gravel
+                | Sand
+                | Reeds
+                | Ford
+                | Rise
+                | Wash
         );
         let feature_ok = !matches!(
             self.feature,
@@ -391,6 +470,9 @@ impl Tile {
                     | Feature::Terminal
                     | Feature::Furniture(_)
                     | Feature::Ice(_)
+                    | Feature::Pylon
+                    | Feature::FireBarrel
+                    | Feature::Sign(_)
             )
         );
         terrain_ok && feature_ok
@@ -399,7 +481,7 @@ impl Tile {
     pub fn blocks_sight(&self) -> bool {
         matches!(
             self.terrain,
-            Terrain::Wall | Terrain::Door | Terrain::Mass | Terrain::NetWall
+            Terrain::Wall | Terrain::Door | Terrain::Mass | Terrain::NetWall | Terrain::Cliff
         )
     }
 
@@ -429,6 +511,34 @@ impl Tile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_ground_walks_and_sees_as_it_should() {
+        use Terrain::*;
+        for t in [
+            Dirt, Scrub, Crops, Salt, Spill, Gravel, Sand, Reeds, Ford, Rise, Wash,
+        ] {
+            assert!(Tile::new(t).is_walkable(), "{t:?}");
+            assert!(!Tile::new(t).blocks_sight(), "{t:?}");
+        }
+        for t in [Rock, Cliff, Shallows] {
+            assert!(!Tile::new(t).is_walkable(), "{t:?}");
+        }
+        assert!(Tile::new(Cliff).blocks_sight());
+        assert!(!Tile::new(Rock).blocks_sight());
+        let mut pylon = Tile::new(Dirt);
+        pylon.feature = Some(Feature::Pylon);
+        assert!(!pylon.is_walkable() && !pylon.blocks_sight());
+        let mut line = Tile::new(Dirt);
+        line.feature = Some(Feature::PowerLine(true));
+        assert!(line.is_walkable() && !line.blocks_sight());
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(*ALL_TERRAIN.last().unwrap(), Wash);
+        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::FireBarrel);
+        let mut fire = Tile::new(Dirt);
+        fire.feature = Some(Feature::FireBarrel);
+        assert!(!fire.is_walkable() && !fire.blocks_sight());
+    }
+
     use super::*;
 
     #[test]
@@ -447,8 +557,8 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 21);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_FEATURES.len(), 25);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -466,8 +576,12 @@ mod tests {
             assert!(!tile.blocks_sight());
             assert!(!tile.is_building_part());
         }
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(*ALL_TERRAIN.last().unwrap(), Terrain::Railing);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(
+            ALL_TERRAIN[27],
+            Terrain::Railing,
+            "appended, so saves keep indices"
+        );
         assert_eq!(Furniture::Couch.label(), "couch");
         assert_eq!(Furniture::Shower.label(), "shower");
     }
@@ -483,6 +597,22 @@ mod tests {
         }
         assert_eq!(Furniture::Vending.label(), "vending machine");
         assert!(ALL_FEATURES.contains(&Feature::Awning));
+    }
+
+    #[test]
+    fn a_sign_stands_in_the_way_and_is_seen_past() {
+        // a billboard's cap and letters on a lot, a road sign on the open ground
+        for (terrain, ch) in [
+            (Terrain::Plaza, '▣'),
+            (Terrain::Plaza, 'K'),
+            (Terrain::Dirt, '▣'),
+            (Terrain::Gravel, '!'),
+        ] {
+            let mut t = Tile::new(terrain);
+            t.feature = Some(Feature::Sign(ch));
+            assert!(!t.is_walkable(), "{terrain:?} {ch}");
+            assert!(!t.blocks_sight(), "{terrain:?} {ch}");
+        }
     }
 
     #[test]
@@ -511,8 +641,8 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 28);
-        assert_eq!(ALL_FEATURES.len(), 21);
+        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_FEATURES.len(), 25);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],

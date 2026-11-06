@@ -74,8 +74,10 @@ pub fn frame(st: &mut AppState) {
     }
 }
 
-/// A fight is on: a map on turns, or a foe where you stand hunting you.
-fn fighting(st: &AppState) -> bool {
+/// A fight is on: a map on turns, or a foe where you stand hunting you (on the open
+/// Net, one near you). It holds off the five-minute save, and holds you in the city
+/// (`outside::can_cross`).
+pub(crate) fn fighting(st: &AppState) -> bool {
     st.net.engaged.is_some()
         || st
             .player

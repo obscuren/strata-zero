@@ -13,7 +13,13 @@ pub(crate) struct NamingStage {
 impl StageRunner for NamingStage {
     fn begin(&mut self, ctx: &mut GenCtx) -> Result<(), GenError> {
         let mut rng = ctx.rng(Stage::Naming);
-        ctx.city.name = ctx.flavor.city_name(&mut rng);
+        // drawn on a site too, so its districts' names come out as they would
+        let own = ctx.flavor.city_name(&mut rng);
+        // a city or town on its site is called what its world calls it
+        ctx.city.name = match (ctx.scratch.site.as_ref(), ctx.city.params.site.as_ref()) {
+            (Some(site), Some(at)) => site.world.settlement_name(at.city, at.town),
+            _ => own,
+        };
         self.rng = Some(rng);
         self.next = 0;
         Ok(())

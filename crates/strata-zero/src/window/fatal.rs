@@ -13,10 +13,15 @@ pub fn show(message: &str) {
     }
 }
 
-/// Makes a panic show its message in the box too, then do what it did before.
+/// Makes a panic show its message in the box too, then do what it did before. A city's
+/// build in the background is left be: its panic is said as a warning when the build is
+/// collected, and the game goes on without that city (`outside::stream::say_broke`).
 pub fn catch_panics() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if crate::outside::stream::held_by_build(info) {
+            return;
+        }
         show(&format!("Strata Zero stopped.\n\n{info}"));
         previous(info);
     }));

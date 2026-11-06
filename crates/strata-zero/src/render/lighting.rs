@@ -9,9 +9,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 /// Dev: every visible tile goes grey by its light value, glyph kept, so a tuning
-/// change can be seen against the map.
+/// change can be seen against the map. Over the cells `keep` takes (all with none; where
+/// other areas share the view, the map's own): each area is greyed by its own light, as
+/// `LightPass`.
 pub struct LightOverlay<'a> {
     pub vis: Option<&'a Grid<Visibility>>,
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
 }
 
 impl Overlay for LightOverlay<'_> {
@@ -24,19 +27,40 @@ impl Overlay for LightOverlay<'_> {
         buf: &mut Buffer,
         _style: &StylePack,
     ) {
+        let vis = |p: Pos| match self.vis {
+            None => Visibility::Visible,
+            Some(v) => v.get(p).copied().unwrap_or(Visibility::Unseen),
+        };
+        LightPass {
+            map,
+            vis: &vis,
+            keep: self.keep,
+        }
+        .draw(origin, area, buf);
+    }
+}
+
+/// The dev light view over one map in its own frame, from tile `origin`: the city's, or
+/// an area's past its edge (the open ground, another city held). Every tile `vis` says
+/// is in sight, on the cells `keep` takes (all with none), grey by the map's own light.
+pub struct LightPass<'a> {
+    pub map: &'a dyn TileMap,
+    pub vis: &'a dyn Fn(Pos) -> Visibility,
+    pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+}
+
+impl LightPass<'_> {
+    pub fn draw(&self, origin: Pos, area: Rect, buf: &mut Buffer) {
         for sy in area.y..area.bottom() {
             for sx in area.x..area.right() {
                 let p = screen_to_tile(area, origin, (sx, sy));
-                if map.tile(p).is_none() {
-                    continue;
-                }
-                if self
-                    .vis
-                    .is_some_and(|v| v.get(p) != Some(&Visibility::Visible))
+                if self.keep.is_some_and(|keep| !keep(p))
+                    || self.map.tile(p).is_none()
+                    || (self.vis)(p) != Visibility::Visible
                 {
                     continue;
                 }
-                let l = map.light(p);
+                let l = self.map.light(p);
                 let grey = Rgb(l, l, l);
                 let fg = if l < 128 {
                     Rgb(230, 230, 230)
@@ -117,21 +141,22 @@ mod tests {
         let area = Rect::new(0, 0, 20, 10);
         let mut buf = Buffer::empty(area);
         buf[(0, 0)].set_char('x');
-        LightOverlay { vis: None }.draw(&map, citygen::Pos::new(10, 10), area, 0, &mut buf, &s);
+        LightOverlay {
+            vis: None,
+            keep: None,
+        }
+        .draw(&map, citygen::Pos::new(10, 10), area, 0, &mut buf, &s);
         let l = map.light(citygen::Pos::new(10, 10));
         assert_eq!(buf[(0, 0)].bg, Rgb(l, l, l).scale(0.6).to_color());
         assert_eq!(buf[(0, 0)].symbol(), "x", "the glyph stays");
         // Unseen tiles are left alone.
         let unseen = citygen::Grid::filled(city.size, Visibility::Unseen);
         let mut dark = Buffer::empty(area);
-        LightOverlay { vis: Some(&unseen) }.draw(
-            &map,
-            citygen::Pos::new(10, 10),
-            area,
-            0,
-            &mut dark,
-            &s,
-        );
+        LightOverlay {
+            vis: Some(&unseen),
+            keep: None,
+        }
+        .draw(&map, citygen::Pos::new(10, 10), area, 0, &mut dark, &s);
         assert_eq!(dark[(0, 0)].bg, Buffer::empty(area)[(0, 0)].bg);
     }
 
