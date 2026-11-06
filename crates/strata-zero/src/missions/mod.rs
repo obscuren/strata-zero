@@ -3386,7 +3386,30 @@ pub(crate) mod tests {
 
     #[test]
     fn selling_the_ledger_ends_the_act() {
-        let mut st = by_coz_at_night();
+        the_sale_ends_the_act(by_coz_at_night());
+    }
+
+    #[test]
+    fn a_build_without_hacking_sells_the_ledger_too() {
+        // A solo, who can't read the shard: the doctor names him, then her chair.
+        let mut st = the_word_with(&["handguns"]);
+        st.character.profession = game::ProfessionId::new("solo");
+        play_the_doctor(&mut st, true, false);
+        assert_eq!(
+            ledger_objectives(&st).last(),
+            Some(&bring_it_to_coz(&st)),
+            "she told"
+        );
+        let skills = &st.character.skills;
+        assert!(!skills.iter().any(|s| s.0 == "hacking"), "{skills:?}");
+        to_the_clock(&mut st, 21, 40);
+        beside_coz(&mut st);
+        the_sale_ends_the_act(st);
+    }
+
+    /// Beside Coz at night, the doctor done and the ledger sending you to him: talked to,
+    /// his scene through, the sale; the act ends, Seren's line through an ad and her mail.
+    fn the_sale_ends_the_act(mut st: AppState) {
         let (ledger, three) = (mission_at(&st, "ledger"), mission_at(&st, "the_three"));
         let (coz, shard) = (coz(&st), ItemId::new("ledger_shard"));
         assert_eq!(st.missions.runs[three].state, RunState::Waiting);

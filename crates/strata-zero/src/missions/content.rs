@@ -2401,6 +2401,38 @@ mod tests {
         assert_eq!(unknown_builds(&chef, &c), ["chef"]);
     }
 
+    /// Each item the story gives that a mission able to stand on a `Later` step names, by
+    /// mission: open there for good, it would keep that item in your pack for good.
+    fn kept_for_later(b: &Book, content: &Content) -> Vec<(String, String)> {
+        let gives = b.gives(content);
+        b.missions
+            .iter()
+            .filter(|m| m.steps.iter().any(|s| s.when == Trigger::Later))
+            .flat_map(|m| {
+                b.items_named(m)
+                    .into_iter()
+                    .filter(|i| gives.contains(&game::ItemId::new(i)))
+                    .map(|i| (m.id.clone(), i))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn no_mission_left_for_later_keeps_a_story_item() {
+        let c = Content::load().unwrap();
+        assert_eq!(kept_for_later(&book(), &c), []);
+        // The same check catches a mission that gives an item and stops for later.
+        let b = with_steps(
+            r#"Step(id: "a", when: NewGame, then: [Give(item: "taped_package", count: 1)]),
+            Step(id: "later", when: Later, then: [])"#,
+        )
+        .unwrap();
+        assert_eq!(
+            kept_for_later(&b, &c),
+            [("m".into(), "taped_package".into())]
+        );
+    }
+
     #[test]
     fn the_code_slot_is_a_mails_alone() {
         let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
