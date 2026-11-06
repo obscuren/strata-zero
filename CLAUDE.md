@@ -9,7 +9,7 @@ compiled into the binary.
 The game runs in a terminal (the default) or in a window of its own (the `window` cargo
 feature: `strata --window`). The `app` feature builds the desktop apps on top of it
 (`Strata Zero.app`, `Strata Zero.exe`, the Linux `strata-zero`): always in the window,
-with the working folder set to the player's app folder (`window::platform`). Both run
+with the working folder set to the player's app folder (`platform`). Both run
 the same screens:
 every screen draws ratatui cells and reads crossterm `KeyEvent`s through
 `app::Runner::frame`, and only the backend below that differs.
@@ -90,9 +90,11 @@ cargo test --workspace --features strata-zero/window --target-dir target/smoke
   picks the font.
 - **The app.** `scripts/macos-app.sh` builds `target/smoke/macos/Strata Zero.app`;
   `scripts/windows-app.sh` and `scripts/linux-app.sh` build the Windows zip and the
-  Linux archive on those systems. In the app, the working folder (and so `cities/`) is
-  `~/Library/Application Support/Strata Zero/` on a Mac, `%APPDATA%\Strata Zero` on
-  Windows, and `~/.local/share/strata-zero` on Linux.
+  Linux archive on those systems.
+- **The game's folder.** `cities/` and `runs/` live in the player's app folder for the
+  terminal game and the apps alike: `~/Library/Application Support/Strata Zero/` on a
+  Mac, `%APPDATA%\Strata Zero` on Windows, and `~/.local/share/strata-zero` on Linux
+  (`platform::Platform::files_dir`). `STRATA_DIR=.` keeps a checkout's own instead.
 
 ## Saving the run
 

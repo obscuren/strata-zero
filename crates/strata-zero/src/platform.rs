@@ -1,6 +1,6 @@
-//! Which desktop the window runs on. Fonts, chords and the app folder are answers on a
-//! `Platform`, so every platform's answer is tested on any machine; only the code that
-//! calls the operating system is behind `cfg`.
+//! Which desktop the game runs on. The folder it keeps its files in, and the window's
+//! fonts and chords, are answers on a `Platform`, so every platform's answer is tested
+//! on any machine; only the code that calls the operating system is behind `cfg`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ pub fn set(env: Env, key: &str) -> Option<OsString> {
     env(key).filter(|v| !v.is_empty())
 }
 
-/// A desktop the window runs on.
+/// A desktop the game runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     Mac,
@@ -47,8 +47,18 @@ impl Platform {
         Platform::Linux
     };
 
-    /// The folder the desktop app keeps its files in (and so `cities/`), from `env`;
-    /// `None` when the variables it is found from aren't set.
+    /// The folder the game keeps its files in (`cities/`, `runs/`), from `env`: the one
+    /// `STRATA_DIR` names (a run from a checkout keeps its own, `STRATA_DIR=.`), else the
+    /// player's app folder (`app_dir`), the terminal game's and the desktop app's alike.
+    /// `None` when neither can be told.
+    pub fn files_dir(self, env: Env) -> Option<PathBuf> {
+        set(env, "STRATA_DIR")
+            .map(PathBuf::from)
+            .or_else(|| self.app_dir(env))
+    }
+
+    /// The player's app folder, from `env`; `None` when the variables it is found from
+    /// aren't set.
     /// - Mac: `~/Library/Application Support/Strata Zero`
     /// - Windows: `%APPDATA%\Strata Zero`, else `%USERPROFILE%\AppData\Roaming\Strata Zero`
     /// - Linux: `$XDG_DATA_HOME/strata-zero`, else `~/.local/share/strata-zero`
@@ -104,6 +114,41 @@ mod tests {
             assert_eq!(dir, Some(PathBuf::from("/h/.local/share/strata-zero")));
         }
         assert_eq!(Platform::Linux.app_dir(&env_of(&[])), None);
+    }
+
+    /// Every platform keeps its files in the app folder unless `STRATA_DIR` names
+    /// another, as given (`.` is the working folder; the caller makes it whole).
+    #[test]
+    fn files_dir_is_the_app_folder_unless_strata_dir_says() {
+        let env = [
+            ("HOME", "/h"),
+            ("APPDATA", "C:\\Users\\x\\AppData\\Roaming"),
+        ];
+        for p in [Platform::Mac, Platform::Windows, Platform::Linux] {
+            assert_eq!(
+                p.files_dir(&env_of(&env)),
+                p.app_dir(&env_of(&env)),
+                "{p:?}"
+            );
+            assert!(p.files_dir(&env_of(&env)).is_some(), "{p:?}");
+            let mut here = env.to_vec();
+            here.push(("STRATA_DIR", "."));
+            assert_eq!(
+                p.files_dir(&env_of(&here)),
+                Some(PathBuf::from(".")),
+                "{p:?}"
+            );
+            let mut empty = env.to_vec();
+            empty.push(("STRATA_DIR", ""));
+            assert_eq!(
+                p.files_dir(&env_of(&empty)),
+                p.app_dir(&env_of(&env)),
+                "{p:?}"
+            );
+            let only = [("STRATA_DIR", "/saves")];
+            assert_eq!(p.files_dir(&env_of(&only)), Some(PathBuf::from("/saves")));
+            assert_eq!(p.files_dir(&env_of(&[])), None, "{p:?}");
+        }
     }
 
     #[test]

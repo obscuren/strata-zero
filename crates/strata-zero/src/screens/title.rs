@@ -368,7 +368,7 @@ impl Screen for Title {
                             fx: TransitionKind::SlideUp,
                         },
                         Entry::LoadCity => ScreenCmd::Push {
-                            to: Box::new(Files::load(st.tick)),
+                            to: Box::new(Files::load(st)),
                             fx: TransitionKind::SlideUp,
                         },
                         Entry::Hall => ScreenCmd::Push {

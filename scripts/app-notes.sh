@@ -46,9 +46,9 @@ section() {
 section strata-zero-mac-app.dmg "Mac app" \
     "Strata Zero in a window of its own, one app for $macs. Open the DMG and drag Strata Zero into Applications. $trust"
 section strata-zero-windows-app.zip "Windows app" \
-    "Strata Zero in a window of its own, for 64-bit Windows 10 and 11. Unzip it and run \`Strata Zero.exe\`; your cities are kept in \`%APPDATA%\\Strata Zero\`. It isn't signed yet, so Windows SmartScreen asks the first time: choose More info, then Run anyway."
+    "Strata Zero in a window of its own, for 64-bit Windows 10 and 11. Unzip it and run \`Strata Zero.exe\`; your saves are kept in \`%APPDATA%\\Strata Zero\`. It isn't signed yet, so Windows SmartScreen asks the first time: choose More info, then Run anyway."
 section strata-zero-linux-app.tar.gz "Linux app" \
-    "Strata Zero in a window of its own, for 64-bit Linux on X11 or Wayland, drawn through Vulkan where there is a driver. Unpack it and run \`strata-zero\`, or run \`./install.sh\` once to add Strata Zero to your app menu; your cities are kept in \`~/.local/share/strata-zero\`."
+    "Strata Zero in a window of its own, for 64-bit Linux on X11 or Wayland, drawn through Vulkan where there is a driver. Unpack it and run \`strata-zero\`, or run \`./install.sh\` once to add Strata Zero to your app menu; your saves are kept in \`~/.local/share/strata-zero\`."
 
 if [ ${#sections[@]} -eq 0 ]; then
     echo "$tag: the notes already link every app the release has"

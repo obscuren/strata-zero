@@ -36,6 +36,19 @@ Then run `strata`. It wants a truecolor terminal of at least 100×30 (iTerm2,
 Ghostty, kitty, WezTerm, Windows Terminal). Every build is on the
 [releases page](https://github.com/obscuren/strata-zero/releases).
 
+## Your saves
+
+Your runs are kept in one folder, whichever way you play and wherever you start the
+game:
+
+- **macOS:** `~/Library/Application Support/Strata Zero/`
+- **Windows:** `%APPDATA%\Strata Zero\`
+- **Linux:** `~/.local/share/strata-zero/` (or `$XDG_DATA_HOME/strata-zero/`)
+
+Before v0.2.0, `strata` in a terminal kept them in `cities/` and `runs/` folders in
+whatever folder it was started from. Move those into the folder above and the game
+finds them again.
+
 ## Build from source
 
 ```sh

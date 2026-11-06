@@ -25,7 +25,7 @@ of save code, as long as it follows the rules under "Adding state" below.
 Elsewhere:
 
 - `app.rs`: the `AppState` fields `saves` (where this session saves; `None` in `AppState::new()`), `run`, `save_due`, `last_save`, `save_failed`; `AppState::clear_screens()`; `Screen::holds_story()`; `Runner::save_on_exit()`.
-- `cli.rs`: `start_state` is the only place that turns saving on (`saves = Some(runs::default_dir())`).
+- `cli.rs`: `start_state` is the only place that turns saving on (`saves`: `runs/` in the game's folder, which `files_dir` finds through `platform::Platform::files_dir`: the player's app folder, or `STRATA_DIR`). The terminal game and the window use the same folder, wherever they're started.
 - `window/mod.rs`: the window's ways out save through `Runner::save_on_exit`.
 - `screens/title.rs` (CONTINUE, HALL OF FAME, dev LOAD CITY), `screens/runs.rs` (LOAD GAME and HALL OF FAME), `screens/broadcast.rs` (`Broadcast::resume`: the run's own flags, no switches), `screens/mod.rs` (`resume_screen`), `screens/explore.rs` (`MapScreen::resumed`, the `s` key, the SAVED mark on the bottom status row, the flatline switch), `screens/pause.rs` (SAVE GAME, the ways out, `last saved · …`), `screens/flatlined.rs` (taunt or reload).
 - `credentials.rs`: `run_items` / `put_back`, the run-made `keycard:*` items.
@@ -126,7 +126,7 @@ rig's relays and its trace home (a dump on a rig run starts that trace there).
 2. **`when::can_save` decides.** A folder to save in, a run, a real city (not the lot), a player, not flatlined (`net.death`), not asleep (`rest`), no scene in flight (`missions.scene`). On the way out `Runner::save_on_exit` also refuses while any screen in the stack `holds_story()`. A refused save leaves the last one standing.
 3. **`file::write`.** The header from `describe::header`; the body is `snapshot(st)` written inside `ids::with_book(&st.book, …)` so story positions go out as ids; written to `<id>.run.tmp`, synced, renamed over `<id>.run` (retried briefly: Windows antivirus can hold the file). A failure logs `couldn't save · <cause>` and keeps the old file; on the pause menu's ways out it also stays on the menu and says so, and a second press leaves anyway.
 
-The desktop app moves into its app folder (`window::enter_app_dir`) before the first screen is built, because the title looks in `runs/` for a run to CONTINUE.
+The title looks in `st.saves` for a run to CONTINUE, so the game's folder is set before the first screen is built; it is a whole path, so the desktop app moving into it (`window::enter_app_dir`) changes nothing for the saves.
 
 ## Bringing a run back
 

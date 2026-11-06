@@ -102,7 +102,7 @@ pub struct RunInfo {
     pub header: Result<RunHeader, String>,
 }
 
-/// Where runs are saved: beside `cities/` in the working folder.
+/// The folder runs are saved in, beside `cities/` in the game's folder (`AppState.saves`).
 pub fn default_dir() -> PathBuf {
     PathBuf::from("runs")
 }

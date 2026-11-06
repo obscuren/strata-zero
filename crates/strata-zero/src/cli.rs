@@ -1,6 +1,7 @@
 //! Command line: interactive app by default, `gen` for headless generation.
 
 use crate::app::{self, AppState};
+use crate::platform::{Env, Platform, process_env};
 use crate::save::save_city;
 use anyhow::{Context, Result, bail};
 use citygen::overworld::{Overworld, WorldParams, WorldSize};
@@ -8,7 +9,7 @@ use citygen::{GenParams, Generator, SizePreset, WaterMode};
 use clap::{Parser, Subcommand};
 use std::ffi::OsStr;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -213,32 +214,29 @@ fn dev_asked(flag: bool, env: Option<&OsStr>) -> bool {
     flag || env.is_some_and(|v| !v.is_empty() && v != OsStr::new("0"))
 }
 
-/// The state a game starts from: runs saved in the runs folder, dev mode unlocked and
-/// on if it was asked for.
-fn start_state(dev: bool) -> AppState {
+/// The folder this game keeps its files in (`Platform::files_dir`: `STRATA_DIR`, else
+/// the player's app folder), made, by its whole path: a `STRATA_DIR` of `.` stays the
+/// folder the game was started in after the desktop app moves into it.
+fn files_dir(env: Env) -> Result<PathBuf> {
+    let dir = Platform::NATIVE.files_dir(env).context(
+        "can't tell where to keep the game's files: set HOME (APPDATA on Windows), or STRATA_DIR",
+    )?;
+    let dir = std::path::absolute(&dir).with_context(|| format!("finding {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// The state a game starts from: runs saved in `runs/` and cities kept in `cities/`, in
+/// the game's folder `dir` (`files_dir`), and dev mode unlocked and on if it was asked
+/// for.
+fn start_state(dev: bool, dir: &Path) -> AppState {
     let mut st = AppState::new();
-    st.saves = Some(crate::runs::default_dir());
+    st.saves = Some(dir.join(crate::runs::default_dir()));
+    st.cities = dir.join(crate::save::default_dir());
     if dev {
         st.unlock_dev();
     }
     st
-}
-
-/// The window's game: its first screen and its state, once `enter` has put the desktop
-/// app in its app folder (`window::enter_app_dir`), so the title finds the runs kept
-/// there to CONTINUE.
-#[cfg(feature = "window")]
-fn window_start(
-    dev: bool,
-    enter: impl FnOnce() -> Result<Option<PathBuf>>,
-) -> Result<(Box<dyn crate::app::Screen>, AppState)> {
-    let entered = enter()?;
-    let mut st = start_state(dev);
-    if let Some(dir) = entered {
-        // The folder `runs` names from there, by its whole path.
-        st.saves = Some(dir.join(crate::runs::default_dir()));
-    }
-    Ok((crate::screens::initial(&st), st))
 }
 
 pub fn run() -> Result<()> {
@@ -247,11 +245,13 @@ pub fn run() -> Result<()> {
     match cli.cmd {
         #[cfg(feature = "window")]
         None if cli.window || crate::window::IS_APP => {
-            let (screen, st) = window_start(dev, crate::window::enter_app_dir)?;
-            crate::window::run(screen, st)
+            let dir = files_dir(&process_env)?;
+            crate::window::enter_app_dir(&dir)?;
+            let st = start_state(dev, &dir);
+            crate::window::run(crate::screens::initial(&st), st)
         }
         None => {
-            let st = start_state(dev);
+            let st = start_state(dev, &files_dir(&process_env)?);
             app::run(crate::screens::initial(&st), st)
         }
         Some(Cmd::Gen {
@@ -427,39 +427,49 @@ mod tests {
 
     #[test]
     fn a_game_starts_without_dev_mode_unless_asked() {
-        let st = start_state(false);
+        let st = start_state(false, Path::new("/game"));
         assert!(!st.dev && !st.dev_unlocked);
-        let st = start_state(true);
+        let st = start_state(true, Path::new("/game"));
         assert!(st.dev && st.dev_unlocked);
     }
 
     #[test]
-    fn a_game_saves_its_runs_in_the_runs_folder() {
-        assert_eq!(start_state(false).saves, Some(crate::runs::default_dir()));
+    fn a_game_keeps_its_files_in_the_games_folder() {
+        let st = start_state(false, Path::new("/game"));
+        assert_eq!(st.saves, Some(PathBuf::from("/game/runs")));
+        assert_eq!(st.cities, PathBuf::from("/game/cities"));
         assert_eq!(AppState::new().saves, None, "nothing else saves");
     }
 
-    /// The desktop app's title offers CONTINUE for a run in its app folder: the folder
-    /// is entered before the title looks. The run lands there only as the folder is
-    /// entered, so a title made before it would find nothing.
-    #[cfg(feature = "window")]
+    /// The game's folder is made and named by its whole path, so the desktop app moving
+    /// into it doesn't move it: `STRATA_DIR=.` is the folder the game was started in.
     #[test]
-    fn the_window_enters_the_app_folder_before_the_title_looks() {
+    fn the_games_folder_is_made_whole() {
+        use crate::platform::env_of;
+        use crate::runs::testutil::Dir;
+        let tmp = Dir::new("files-dir");
+        let named = tmp.0.join("a").join("b");
+        let env = env_of(&[("STRATA_DIR", named.to_str().unwrap())]);
+        assert_eq!(files_dir(&env).unwrap(), named);
+        assert!(named.is_dir(), "made");
+        let here = files_dir(&env_of(&[("STRATA_DIR", ".")])).unwrap();
+        assert!(here.is_absolute(), "{}", here.display());
+        assert_eq!(here, std::env::current_dir().unwrap());
+        assert!(files_dir(&env_of(&[])).is_err(), "nowhere to tell");
+    }
+
+    /// The title offers CONTINUE for a run in the game's folder, wherever the game was
+    /// started: the terminal and the window both look in it from their first screen.
+    #[test]
+    fn the_title_finds_the_runs_in_the_games_folder() {
         use crate::runs::testutil::{Dir, saving, small_city};
         use crate::screens::testutil::buffer_text;
-        let app = Dir::new("app-folder");
-        let (mut run, _) = saving(&app, small_city());
-        run.saves = Some(app.0.join("runs"));
-        let enter = || {
-            assert!(crate::runs::when::save_now(&mut run));
-            Ok(Some(app.0.clone()))
-        };
-        let (mut splash, mut st) = window_start(false, enter).unwrap();
-        assert_eq!(
-            st.saves,
-            Some(app.0.join("runs")),
-            "runs/ in the app folder"
-        );
+        let game = Dir::new("game-folder");
+        let (mut run, _) = saving(&game, small_city());
+        run.saves = Some(game.0.join("runs"));
+        assert!(crate::runs::when::save_now(&mut run));
+        let mut st = start_state(false, &game.0);
+        let mut splash = crate::screens::initial(&st);
         // The splash first, then the title it hands over to.
         let mut title = loop {
             st.tick += 1;

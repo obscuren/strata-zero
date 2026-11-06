@@ -198,8 +198,11 @@ pub struct AppState {
     /// The deck's MAP: its cursor, view, zoom, kind and fold, for the session.
     pub atlas: crate::screens::atlas::AtlasState,
     /// The folder runs are saved in; `None` saves nothing. Only the state a real game
-    /// starts from (`cli::start_state`) has one.
+    /// starts from (`cli::start_state`) has one: `runs/` in the game's folder.
     pub saves: Option<std::path::PathBuf>,
+    /// The folder dev mode's SAVE CITY and LOAD CITY keep cities in: `cities/` in the
+    /// game's folder for a real game (`cli::start_state`), else in the working folder.
+    pub cities: std::path::PathBuf,
     /// The run under way: its id and when it started. Saved with the run; a new city
     /// has none until JACK IN gives it one.
     pub run: Option<crate::runs::RunMeta>,
@@ -378,6 +381,7 @@ impl AppState {
             track: None,
             atlas: Default::default(),
             saves: None,
+            cities: crate::save::default_dir(),
             run: None,
             save_due: false,
             last_save: None,

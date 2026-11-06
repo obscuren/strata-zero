@@ -1,7 +1,7 @@
 //! Window key presses as the crossterm events every screen already reads, and the chords
 //! that belong to the window: Cmd chords on a Mac, Ctrl, F11 and Alt+Enter on a PC.
 
-use super::platform::Platform;
+use crate::platform::Platform;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
