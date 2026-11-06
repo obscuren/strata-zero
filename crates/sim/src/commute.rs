@@ -612,9 +612,10 @@ mod tests {
 
     #[test]
     fn someone_whose_way_in_never_walks_to_work_stays_in_town() {
-        // many of those who work in seed 0's Northmarch with no home there have no way
-        // in that walks to their work: they don't commute, but stay at or inside their
-        // work all day, as before anyone commuted
+        // seed 0's Northmarch as the game seeds it (housed): many who work there have no
+        // flat they can walk to work from, and no way in that walks to their work: they
+        // don't commute, but stay at or inside their work all day, as before anyone
+        // commuted
         let (_, params) = settlements_of(0)
             .into_iter()
             .find(|(n, _)| n == "Northmarch")
@@ -633,7 +634,7 @@ mod tests {
                 walk[*into] && walk[doors[0]]
             })
         };
-        let mut w = world(&c, 4 * 60);
+        let mut w = housed(&c, 4 * 60);
         let stay: Vec<usize> = w
             .people()
             .iter()
@@ -655,6 +656,119 @@ mod tests {
             }
             a_minute(&mut w, &c);
         }
+    }
+
+    /// `c`'s people at `minute` of the day as a city of the world other than home seeds
+    /// them (`SimParams::housed`).
+    fn housed(c: &City, minute: u16) -> World {
+        let params = SimParams {
+            housed: true,
+            ..SimParams::default()
+        };
+        World::seed(c, &People::load().unwrap(), &params, minute, 0)
+    }
+
+    /// Those of `w` with a home in `c` who can't walk between it and their job, one way
+    /// or the other, as their trips are walked: from the door they're in (the first) to
+    /// the door of the other nearest it.
+    fn cut_off_from_work(c: &City, w: &World) -> Vec<usize> {
+        let places = Places::derive(c);
+        let region = crate::paths::walk_regions(c);
+        let walks = |a: Pos, b: Pos| region[a] != 0 && region[a] == region[b];
+        let cut = |p: &crate::Person| {
+            let Some(h) = p.home else {
+                return false;
+            };
+            let home = places.doors[&h][0];
+            let (at, to_work) = match p.work {
+                Work::Building(b) => (places.doors[&b][0], places.door_from(b, home).unwrap()),
+                Work::Spot(s) => (s, s),
+                Work::Roaming => return false,
+            };
+            !walks(home, to_work) || !walks(at, places.door_from(h, at).unwrap())
+        };
+        w.people()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| cut(p))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn everyone_housed_can_walk_to_work() {
+        // seed 0's Northmarch, seeded as a city of the world other than home: everyone
+        // with a home in it can walk from it to their work and back, and over a day goes
+        // to work and comes home
+        let (_, params) = settlements_of(0)
+            .into_iter()
+            .find(|(n, _)| n == "Northmarch")
+            .unwrap();
+        let c = Generator::run(params).unwrap();
+        let mut w = housed(&c, 4 * 60);
+        let cut = cut_off_from_work(&c, &w);
+        let names: Vec<&str> = cut.iter().map(|i| w.people()[*i].name.as_str()).collect();
+        assert!(
+            cut.is_empty(),
+            "{} of {} cut off from work: {:?}",
+            cut.len(),
+            w.people().len(),
+            &names[..names.len().min(5)]
+        );
+        let n = w.people().len();
+        let (mut at_work, mut at_home) = (vec![false; n], vec![false; n]);
+        for _ in 0..24 * 60 {
+            a_minute(&mut w, &c);
+            for (i, p) in w.people().iter().enumerate() {
+                if let (Some(h), Work::Building(b)) = (p.home, p.work) {
+                    at_work[i] |= p.whereabouts == Whereabouts::Inside(b);
+                    at_home[i] |= p.whereabouts == Whereabouts::Inside(h);
+                }
+            }
+        }
+        let stuck: Vec<&str> = w
+            .people()
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| {
+                p.home.is_some()
+                    && matches!(p.work, Work::Building(_))
+                    && !(at_work[*i] && at_home[*i])
+            })
+            .map(|(_, p)| p.name.as_str())
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "{} never at work or never home: {stuck:?}",
+            stuck.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "every city and town of 20 worlds: a minute in the release profile"]
+    fn no_one_in_twenty_worlds_is_cut_off_from_work() {
+        // seeded as a home city is and as any other is (housed): nobody has a home they
+        // can't walk to work from; those with no flat that's a walk from work have none
+        let (mut cut_all, mut no_home_all, mut all) = (0, 0, 0);
+        for seed in 0..20 {
+            for (name, params) in settlements_of(seed) {
+                let Ok(c) = Generator::run(params) else {
+                    continue;
+                };
+                let (at_home, w) = (world(&c, 4 * 60), housed(&c, 4 * 60));
+                let cut = cut_off_from_work(&c, &at_home).len() + cut_off_from_work(&c, &w).len();
+                let no_home = w.people().iter().filter(|p| p.home.is_none()).count();
+                println!(
+                    "seed {seed} {name}: {cut} cut off; housed, {no_home} of {} with no home",
+                    w.people().len()
+                );
+                cut_all += cut;
+                no_home_all += no_home;
+                all += w.people().len();
+            }
+        }
+        println!("{cut_all} cut off; housed, {no_home_all} of {all} with no home");
+        assert_eq!(cut_all, 0);
     }
 
     /// The cities and towns of world `seed` as a game builds them on their sites

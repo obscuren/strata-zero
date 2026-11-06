@@ -2,7 +2,8 @@
 
 use citygen::pathing::astar;
 use citygen::world::{City, StratumKind};
-use citygen::{Feature, Pos, Terrain};
+use citygen::{Feature, Grid, Pos, Terrain};
+use std::collections::VecDeque;
 
 /// The cost of stepping onto `to` on foot: street tiles at 1, roads at 3, nothing else.
 /// A sign (a billboard on a lot) stands in a walker's way as it stands in yours; what
@@ -50,6 +51,34 @@ pub fn drive_cost(city: &City, _from: Pos, to: Pos) -> Option<u32> {
         Terrain::Sidewalk | Terrain::Plaza if is_crossing(city, to) => Some(4),
         _ => None,
     }
+}
+
+/// Where a walk can go: each cell a walker can stand on numbered (from 1) by the stretch
+/// of street a walk from it reaches, stepping as `walk_path` steps; 0 elsewhere. Two
+/// cells share a number when a walk goes from one to the other.
+pub fn walk_regions(city: &City) -> Grid<u32> {
+    let mut region = Grid::filled(city.size, 0u32);
+    let mut n = 0;
+    for y in 0..city.size.h as i32 {
+        for x in 0..city.size.w as i32 {
+            let p = Pos::new(x, y);
+            if region[p] != 0 || walk_cost(city, p, p).is_none() {
+                continue;
+            }
+            n += 1;
+            region.set(p, n);
+            let mut queue = VecDeque::from([p]);
+            while let Some(q) = queue.pop_front() {
+                for r in q.neighbors4() {
+                    if region.get(r) == Some(&0) && walk_cost(city, r, r).is_some() {
+                        region.set(r, n);
+                        queue.push_back(r);
+                    }
+                }
+            }
+        }
+    }
+    region
 }
 
 pub fn walk_path(city: &City, from: Pos, to: Pos) -> Option<Vec<Pos>> {
