@@ -1,12 +1,16 @@
 //! Look: what the player's eyes can tell them about one tile, in the house voice.
 
 use crate::app::AppState;
+use crate::outside::stream::{Beyond, Owner};
 use crate::render::Visibility;
 use crate::render::map::{MapRef, TileMap};
 use crate::render::mark::{mark_items, mark_person, mark_tile};
 use crate::ui::chrome::{DIM, TEXT, frame, put, solid};
 use crate::ui::hud::capitalised;
-use citygen::{ConnectorKind, Feature, FloorPlan, Place, Pos, Rect as TileRect, Terrain};
+use citygen::{
+    City, ConnectorKind, Feature, FloorPlan, Place, Pos, Rect as TileRect, StratumKind, Terrain,
+    Tile,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -162,9 +166,22 @@ fn leads(up: Option<String>, down: Option<String>) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fixture> {
-    let city = st.city.as_ref()?;
-    let tile = map.tile(pos)?;
+/// The fixture on `tile` at `pos` of `place`, `ids` the city its ids are read against at
+/// the cell on its map (none on the open ground, where a terminal is a port all the same).
+fn fixture_at(
+    st: &AppState,
+    tile: &Tile,
+    ids: Option<(&City, Pos)>,
+    place: Place,
+    pos: Pos,
+) -> Option<Fixture> {
+    let Some((city, at)) = ids else {
+        return (place.is_street() && tile.feature == Some(Feature::Terminal)).then(|| Fixture {
+            name: "Access terminal".into(),
+            second: Some("public".into()),
+            key: "terminal",
+        });
+    };
     match place {
         Place::Floor { building, level } => {
             if let Some(rig) = st.home
@@ -224,7 +241,7 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
         }
         Place::Stratum(k) => {
             if city
-                .connectors_at(pos)
+                .connectors_at(at)
                 .any(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
             {
                 let district = tile
@@ -241,7 +258,7 @@ fn fixture_at(st: &AppState, map: &MapRef, place: Place, pos: Pos) -> Option<Fix
                 });
             }
             let c = city
-                .connectors_at(pos)
+                .connectors_at(at)
                 .find(|c| c.kind != ConnectorKind::Jack)?;
             let (below, above) = c.serves_from(k)?;
             let (name, key) = match c.kind {
@@ -395,8 +412,135 @@ pub fn draw_box(card: &LookCard, r: Rect, buf: &mut Buffer) {
     }
 }
 
+/// Whether `place`'s map carries on past the city's edge: the street and the Net.
+fn carries_on(place: Place) -> bool {
+    matches!(
+        place,
+        Place::Stratum(StratumKind::Street | StratumKind::Net)
+    )
+}
+
+/// What lies past the city's edge on `place`'s map, and the cells of it other areas
+/// own: none where the map ends at the city's edge (or there's no world out there).
+fn beyond_of(st: &AppState, place: Place) -> Option<Beyond<'_>> {
+    carries_on(place).then(|| Beyond::of(st)).flatten()
+}
+
+/// Who answers for a cell of the live city's frame a look reads.
+#[derive(Clone, Copy)]
+enum Whose<'a> {
+    /// The live city's own: its map, and its people and what lies there.
+    Live,
+    /// Another city or town held, at its own cell: its map, its ids.
+    City(&'a City, Pos),
+    /// The open ground (or a place not built yet), at the world cell: no ids.
+    Ground(Pos),
+}
+
+impl<'a> Whose<'a> {
+    /// Who answers for `pos`, `b` what lies past the city's edge.
+    fn of(b: Option<&Beyond<'a>>, pos: Pos) -> Whose<'a> {
+        match b.and_then(|b| b.elsewhere(pos)) {
+            None => Whose::Live,
+            Some(Owner::City(c, q)) => Whose::City(c, q),
+            Some(Owner::Ground(_, at)) => Whose::Ground(at),
+        }
+    }
+
+    /// The city the cell's ids are read against, with the cell on its map (`live` at
+    /// `pos` for the live city's own); none on the open ground.
+    fn ids(self, live: &'a City, pos: Pos) -> Option<(&'a City, Pos)> {
+        match self {
+            Whose::Live => Some((live, pos)),
+            Whose::City(c, q) => Some((c, q)),
+            Whose::Ground(_) => None,
+        }
+    }
+
+    fn live(self) -> bool {
+        matches!(self, Whose::Live)
+    }
+}
+
+/// How well you see cell `pos` of `place` (the live city's frame), as the map draws it,
+/// `b` what lies past the city's edge there: on the live map's cells by your sight; past
+/// them, in sight at the last look, else as the world's record remembers it; on the Net
+/// all of it. All of it too when you're not on `place`.
+pub fn sight(st: &AppState, b: Option<&Beyond>, place: Place, pos: Pos) -> Visibility {
+    let Some(p) = st.player.as_ref().filter(|p| p.place == place) else {
+        return Visibility::Visible;
+    };
+    if let Some(v) = p.vis().get(pos) {
+        return *v;
+    }
+    let Some(b) = b else {
+        return Visibility::Unseen;
+    };
+    if place == Place::Stratum(StratumKind::Net) || p.beyond_sight().binary_search(&pos).is_ok() {
+        Visibility::Visible
+    } else if st
+        .outside
+        .as_ref()
+        .is_some_and(|o| crate::outside::ground::remembered(o, b.origin().offset(pos.x, pos.y)))
+    {
+        Visibility::Remembered
+    } else {
+        Visibility::Unseen
+    }
+}
+
+/// Where cell `pos` of `place` (the live city's frame) is, as the top band says it: by
+/// the city or town owning it, on its own map; off them on the street the place the
+/// ground is part of (a city's outskirts, else the region round it, as HERE picks it),
+/// on the Net what runs over it.
+pub fn location(st: &AppState, place: Place, pos: Pos) -> String {
+    let Some(live) = st.city.as_ref() else {
+        return String::new();
+    };
+    let b = beyond_of(st, place);
+    location_of(st, b.as_ref(), Whose::of(b.as_ref(), pos), live, place, pos)
+}
+
+fn location_of(
+    st: &AppState,
+    b: Option<&Beyond>,
+    whose: Whose,
+    live: &City,
+    place: Place,
+    pos: Pos,
+) -> String {
+    let (b, at) = match (b, whose) {
+        (Some(b), Whose::Ground(at)) => (b, at),
+        _ => {
+            let (city, q) = whose.ids(live, pos).unwrap_or((live, pos));
+            return crate::ui::hud::location(city, &st.interiors, place, q);
+        }
+    };
+    if place == Place::Stratum(StratumKind::Net) {
+        return format!("{} · Net", b.net_name(pos));
+    }
+    let t = Pos::new(
+        at.x.div_euclid(crate::outside::TILE),
+        at.y.div_euclid(crate::outside::TILE),
+    );
+    let region = || {
+        let w = st.outside.as_ref()?.world();
+        w.regions
+            .iter()
+            .min_by_key(|r| (r.at.x - t.x).pow(2) + (4 * (r.at.y - t.y).pow(2)))
+            .map(|r| r.name.clone())
+    };
+    let name = b
+        .street_name(pos)
+        .or_else(region)
+        .unwrap_or_else(|| "the open ground".to_string());
+    format!("{name} · {}", place.stratum().map_or("", |k| k.label()))
+}
+
 /// The things worth a look in `view`, nearest to `from` first: people, fixtures,
-/// piles, and lamps, neon, signs and holo ads. Only what is in sight.
+/// piles, and lamps, neon, signs and holo ads. Only what is in sight. Past the city's
+/// edge and on the cells other areas own, what their maps have (people and piles are the
+/// city's own).
 pub fn points_of_interest(
     st: &AppState,
     map: &MapRef,
@@ -405,31 +549,37 @@ pub fn points_of_interest(
     from: Pos,
     inside_person: &dyn Fn(Place, Pos) -> Option<sim::PersonId>,
 ) -> Vec<Pos> {
-    let player = st.player.as_ref().filter(|p| p.place == place);
+    let Some(live) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    let beyond = beyond_of(st, place);
+    let walked = match beyond.as_ref() {
+        Some(b) => map.beyond(b),
+        None => *map,
+    };
     let mut out: Vec<Pos> = Vec::new();
     for y in view.y..view.y + view.h {
         for x in view.x..view.x + view.w {
             let p = Pos::new(x, y);
-            let Some(tile) = map.tile(p) else { continue };
-            let seen = player
-                .map(|pl| pl.vis().get(p).copied().unwrap_or(Visibility::Unseen))
-                .unwrap_or(Visibility::Visible);
-            if seen != Visibility::Visible {
+            let Some(tile) = walked.tile(p) else { continue };
+            if sight(st, beyond.as_ref(), place, p) != Visibility::Visible {
                 continue;
             }
-            let person = if place.is_street() {
-                st.world.as_ref().and_then(|w| w.person_at(p)).is_some()
-            } else {
-                inside_person(place, p).is_some()
-            } || crate::missions::visitors::at(st, place, p).is_some();
+            let whose = Whose::of(beyond.as_ref(), p);
+            let person = whose.live()
+                && (if place.is_street() {
+                    st.world.as_ref().and_then(|w| w.person_at(p)).is_some()
+                } else {
+                    inside_person(place, p).is_some()
+                } || crate::missions::visitors::at(st, place, p).is_some());
             let lit = matches!(
                 tile.feature,
                 Some(Feature::Lamp | Feature::Neon(_) | Feature::Sign(_) | Feature::HoloAd)
             );
             if person
                 || lit
-                || !st.ground.at(place, p).is_empty()
-                || fixture_at(st, map, place, p).is_some()
+                || (whose.live() && !st.ground.at(place, p).is_empty())
+                || fixture_at(st, tile, whose.ids(live, p), place, p).is_some()
             {
                 out.push(p);
             }
@@ -439,7 +589,10 @@ pub fn points_of_interest(
     out
 }
 
-/// What the player's eyes can tell them about `pos` on the map they walk.
+/// What the player's eyes can tell them about `pos` on the map they walk. Past the
+/// city's edge and on the cells other areas own, the cell as it's drawn: another city's
+/// or town's by its own map and its own ids, the open ground's by the world's; your own
+/// cell is you wherever it is, and the city's people, piles and foes are on its own.
 pub fn look_card(
     st: &AppState,
     map: &MapRef,
@@ -448,14 +601,18 @@ pub fn look_card(
     inside_person: &dyn Fn(Place, Pos) -> Option<sim::PersonId>,
     reachable: &[Pos],
 ) -> LookCard {
-    let Some(city) = st.city.as_ref() else {
+    let Some(live) = st.city.as_ref() else {
         return LookCard::default();
     };
+    let beyond = beyond_of(st, place);
+    let walked = match beyond.as_ref() {
+        Some(b) => map.beyond(b),
+        None => *map,
+    };
+    let whose = Whose::of(beyond.as_ref(), pos);
     let player = st.player.as_ref().filter(|p| p.place == place);
-    let seen = player
-        .map(|p| p.vis().get(pos).copied().unwrap_or(Visibility::Unseen))
-        .unwrap_or(Visibility::Visible);
-    if seen == Visibility::Unseen || map.tile(pos).is_none() {
+    let seen = sight(st, beyond.as_ref(), place, pos);
+    if seen == Visibility::Unseen || walked.tile(pos).is_none() {
         return LookCard {
             body: vec!["You can't see there.".to_string()],
             header_fg: TEXT,
@@ -464,16 +621,41 @@ pub fn look_card(
     }
     let visible = seen == Visibility::Visible;
     let looks = Looks::load();
-    let tile = map.tile(pos).expect("checked");
+    let tile = walked.tile(pos).expect("checked");
     let own = player.is_some_and(|p| p.pos == pos);
+    let ids = whose.ids(live, pos);
+    // the flavour line by the cell's own city and its cell there, the open ground's by
+    // the world's seed and its cell
+    let (seed, at) = match (ids, whose) {
+        (Some((c, q)), _) => (c.seed, q),
+        (None, Whose::Ground(w)) => (
+            st.outside
+                .as_ref()
+                .and_then(|o| o.world.as_ref())
+                .map_or(live.seed, |w| w.seed),
+            w,
+        ),
+        (None, _) => (live.seed, pos),
+    };
+    // the glyph by the map of the area the cell is on, as it's drawn
+    let own_map = match (whose, place.stratum()) {
+        (Whose::City(c, q), Some(k)) => Some((MapRef::stratum_at(c, k, st.minute_of_day()), q)),
+        _ => None,
+    };
+    let mark = || match own_map.as_ref() {
+        Some((m, q)) => mark_tile(st, m, *q),
+        None => mark_tile(st, &walked, pos),
+    };
+    let location = location_of(st, beyond.as_ref(), whose, live, place, pos);
     let mut card = LookCard {
         header_fg: TEXT,
         hint: visible && reachable.contains(&pos),
         ..LookCard::default()
     };
 
-    // What is there, best first.
-    let person = visible
+    // What is there, best first: the city's people, piles and foes on its own cells.
+    let live_cell = whose.live();
+    let person = (visible && live_cell)
         .then(|| {
             if place.is_street() {
                 st.world.as_ref().and_then(|w| w.person_at(pos))
@@ -482,8 +664,8 @@ pub fn look_card(
             }
         })
         .flatten();
-    let fixture = fixture_at(st, map, place, pos);
-    let stacks: Vec<String> = if visible {
+    let fixture = fixture_at(st, tile, ids, place, pos);
+    let stacks: Vec<String> = if visible && live_cell {
         st.ground
             .at(place, pos)
             .iter()
@@ -509,9 +691,9 @@ pub fn look_card(
     let foe = st
         .foes
         .iter()
-        .find(|f| f.place == place && f.pos == pos && (visible || f.down));
+        .find(|f| live_cell && f.place == place && f.pos == pos && (visible || f.down));
     // A visitor the story put here, before people.
-    let visitor = visible
+    let visitor = (visible && live_cell)
         .then(|| crate::missions::visitors::at(st, place, pos))
         .flatten();
     // A body the story left, before the same.
@@ -519,7 +701,7 @@ pub fn look_card(
         .missions
         .bodies
         .iter()
-        .find(|b| b.place == place && b.pos == pos);
+        .find(|b| live_cell && b.place == place && b.pos == pos);
     if let (Some(b), None) = (body, foe) {
         set_head(
             &mut card,
@@ -570,7 +752,7 @@ pub fn look_card(
         card.body.extend(role.and_then(|r| r.look.clone()));
         card.also.extend(stacks);
     } else if let (Some(id), Some(world)) = (person, st.world.as_ref()) {
-        let c = world.card(id, city);
+        let c = world.card(id, live);
         set_head(&mut card, c.name.clone(), Some(mark_person(st, id)));
         card.second = Some(format!("{} · {}", c.profession, c.doing));
         if !crate::credentials::carries(st, id).is_empty() {
@@ -580,12 +762,12 @@ pub fn look_card(
         card.also.extend(fixture.iter().map(|f| f.name.clone()));
         card.also.extend(stacks);
     } else if let Some(f) = fixture {
-        set_head(&mut card, f.name, mark_tile(st, map, pos));
+        set_head(&mut card, f.name, mark());
         card.second = f.second;
         if visible {
             card.body.extend(
                 looks
-                    .line(Group::Fixture, f.key, city.seed, pos)
+                    .line(Group::Fixture, f.key, seed, at)
                     .map(String::from),
             );
             card.also.extend(stacks);
@@ -599,14 +781,14 @@ pub fn look_card(
             .extend(item.map(|i| crate::missions::item_desc(st, &i.id)));
         card.also.extend(rest.iter().cloned());
     } else if let Some(f) = tile.feature {
-        let glyph = mark_tile(st, map, pos);
+        let glyph = mark();
         match f {
             Feature::Furniture(fu) => {
                 set_head(&mut card, capitalised(fu.label()), glyph);
                 if visible {
                     card.body.extend(
                         looks
-                            .line(Group::Furniture, fu.label(), city.seed, pos)
+                            .line(Group::Furniture, fu.label(), seed, at)
                             .map(String::from),
                     );
                 }
@@ -623,6 +805,7 @@ pub fn look_card(
                     set_head(&mut card, name.to_string(), glyph);
                     // A holo ad cutting into the news reads the headline while it lasts.
                     let cut = (visible
+                        && live_cell
                         && f == Feature::HoloAd
                         && place.is_street()
                         && crate::missions::news::cut_in(st) == Some(pos))
@@ -634,37 +817,33 @@ pub fn look_card(
                             n.headline_caps()
                         ));
                     } else if visible {
-                        card.body.extend(
-                            looks
-                                .line(Group::Feature, key, city.seed, pos)
-                                .map(String::from),
-                        );
+                        card.body
+                            .extend(looks.line(Group::Feature, key, seed, at).map(String::from));
                     }
                 }
-                None => ground(st, map, place, pos, own, &mut card),
+                None => ground(&location, mark(), tile, own, &mut card),
             },
         }
     } else if let Place::Construct(b) = place
         && let Some(i) = st.constructs.get(b).and_then(|k| k.guard_at(pos))
     {
         let g = &st.constructs.get(b).expect("checked").guards[i];
-        set_head(
-            &mut card,
-            format!("{} ICE", capitalised(g.label())),
-            mark_tile(st, map, pos),
-        );
+        set_head(&mut card, format!("{} ICE", capitalised(g.label())), mark());
         card.second = Some(if g.standing { "standing" } else { "broken" }.to_string());
-    } else if let Some(b) = tile.building.filter(|_| {
-        place.stratum().is_some()
-            && matches!(
-                tile.terrain,
-                Terrain::Wall | Terrain::Window | Terrain::Mass
-            )
-    }) {
+    } else if let (Some(b), Some((city, _))) = (
+        tile.building.filter(|_| {
+            place.stratum().is_some()
+                && matches!(
+                    tile.terrain,
+                    Terrain::Wall | Terrain::Window | Terrain::Mass
+                )
+        }),
+        ids,
+    ) {
         let bl = city.building(b);
         let kind = citygen::kind_label(city, b);
         let name = bl.name.clone().unwrap_or_else(|| capitalised(kind));
-        set_head(&mut card, name, mark_tile(st, map, pos));
+        set_head(&mut card, name, mark());
         let district = city.district(bl.district).name.clone();
         card.second = Some(format!("{kind} · {district}"));
         // A clinic's front has its own line, with a tell in it.
@@ -675,15 +854,16 @@ pub fn look_card(
         if visible {
             card.body.extend(
                 looks
-                    .line(Group::Building, &key, city.seed, pos)
+                    .line(Group::Building, &key, seed, at)
                     .map(String::from),
             );
         }
     } else {
-        ground(st, map, place, pos, own, &mut card);
+        ground(&location, mark(), tile, own, &mut card);
     }
     // What the story left on the tile, its own paragraph.
     if visible
+        && live_cell
         && let Some((_, _, note)) = st
             .missions
             .notes
@@ -703,20 +883,25 @@ pub fn look_card(
     card
 }
 
-/// The bare ground: its name and where it is, or "You" on your own tile.
-fn ground(st: &AppState, map: &MapRef, place: Place, pos: Pos, own: bool, card: &mut LookCard) {
-    let Some(city) = st.city.as_ref() else { return };
-    let location = crate::ui::hud::location(city, &st.interiors, place, pos);
+/// The bare ground `tile`, drawn as `glyph`: its name and `location`, where it is; or
+/// "You" on your own tile.
+fn ground(
+    location: &str,
+    glyph: Option<(char, Color)>,
+    tile: &Tile,
+    own: bool,
+    card: &mut LookCard,
+) {
     if own {
         card.glyph = Some(('@', Color::Rgb(255, 255, 255)));
         card.header_fg = TEXT;
         card.header = Some("You".to_string());
-    } else if let Some(t) = map.tile(pos) {
-        card.glyph = mark_tile(st, map, pos);
+    } else {
+        card.glyph = glyph;
         card.header_fg = card.glyph.map_or(TEXT, |(_, c)| c);
-        card.header = Some(capitalised(t.terrain.label()));
+        card.header = Some(capitalised(tile.terrain.label()));
     }
-    card.second = Some(location);
+    card.second = Some(location.to_string());
 }
 
 #[cfg(test)]

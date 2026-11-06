@@ -4178,24 +4178,11 @@ impl Screen for MapScreen {
         let mut held_ads = Vec::new();
         if let (Some(b), Some(stratum)) = (beyond.as_ref(), self.place.stratum()) {
             // Off the city's map: in sight now, else what the world's record remembers;
-            // on it, your memory of the city's cells (another area's among them).
-            // Looking round without walking sees it all.
-            let past = |p: Pos| {
-                use crate::render::Visibility;
-                let (Some(g), Some(you)) = (vis, st.player.as_ref()) else {
-                    return Visibility::Visible;
-                };
-                if let Some(v) = g.get(p) {
-                    *v
-                } else if you.beyond_sight().binary_search(&p).is_ok() {
-                    Visibility::Visible
-                } else if st.outside.as_ref().is_some_and(|o| {
-                    crate::outside::ground::remembered(o, b.origin().offset(p.x, p.y))
-                }) {
-                    Visibility::Remembered
-                } else {
-                    Visibility::Unseen
-                }
+            // on it, your memory of the city's cells (another area's among them), as
+            // Look sees them. Looking round without walking sees it all.
+            let past = |p: Pos| match vis {
+                Some(_) => crate::look::sight(st, Some(b), self.place, p),
+                None => crate::render::Visibility::Visible,
             };
             let mut nets = self.traffic.borrow_mut();
             draw_beyond(
@@ -4447,7 +4434,7 @@ impl Screen for MapScreen {
             }
             _ => None,
         }
-        .unwrap_or_else(|| hud::location(city, &st.interiors, self.place, cursor));
+        .unwrap_or_else(|| crate::look::location(st, self.place, cursor));
         let alert_building = match self.place {
             Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
             Place::Stratum(_) => None,

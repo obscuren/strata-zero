@@ -872,3 +872,310 @@ fn a_city_is_called_what_the_world_calls_it() {
         "the status bar and the band read in a few: {checked}"
     );
 }
+
+/// The screen drawn at `w`×`h`: what it put in each cell.
+fn buffer(st: &AppState, m: &dyn Screen, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+    t.draw(|f| m.draw(st, f)).unwrap();
+    t.backend().buffer().clone()
+}
+
+/// The screen cell your `@` is drawn on: the white one on the map (left of the sidebar,
+/// whose minimap draws you too).
+fn your_cell(buf: &ratatui::buffer::Buffer) -> (u16, u16) {
+    let white = ratatui::style::Color::Rgb(255, 255, 255);
+    let area = buf.area;
+    (area.y..area.bottom())
+        .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+        .filter(|at| buf[*at].symbol() == "@" && buf[*at].fg == white)
+        .min_by_key(|(x, _)| *x)
+        .expect("your @ is drawn")
+}
+
+/// The screen drawn at 180×60 and the camera let come to rest on you.
+fn settled(st: &mut AppState, m: &mut dyn Screen) {
+    buffer(st, m, 180, 60);
+    for _ in 0..60 {
+        m.update(st, &[]);
+    }
+}
+
+fn me(st: &AppState) -> Pos {
+    st.player.as_ref().unwrap().pos
+}
+
+/// In sight from where you stand, as the map draws it: the live map's cells by your
+/// sight there, the cells past its edge by what was in sight at the last look; on the
+/// Net, all of it.
+fn in_sight(st: &AppState, q: Pos) -> bool {
+    use crate::render::Visibility;
+    let p = st.player.as_ref().unwrap();
+    if p.place == NET {
+        return true;
+    }
+    match p.vis().get(q) {
+        Some(v) => *v == Visibility::Visible,
+        None => p.beyond_sight().binary_search(&q).is_ok(),
+    }
+}
+
+/// Nobody standing on cell `q` of the live city's frame: none of the live city's people,
+/// nor of a city or town held there.
+fn nobody(st: &AppState, q: Pos) -> bool {
+    let b = Beyond::of(st).unwrap();
+    let theirs = b.held().any(|h| {
+        let at = Pos::new(
+            q.x + b.origin().x - h.origin.x,
+            q.y + b.origin().y - h.origin.y,
+        );
+        h.people
+            .is_some_and(|w| w.person_at(at).is_some() || w.car_at(at).is_some())
+    });
+    let ours = st
+        .world
+        .as_ref()
+        .is_some_and(|w| w.person_at(q).is_some() || w.car_at(q).is_some());
+    !theirs && !ours
+}
+
+/// Cells of `area` within `r` of you on the map you're on, in sight with nobody on them,
+/// one of each kind there (`"open"` for one you could stand on), nearest you first.
+fn in_view(st: &AppState, area: Area, r: i32) -> Vec<(&'static str, Pos)> {
+    let city = st.city.as_ref().unwrap();
+    let b = Beyond::of(st).unwrap();
+    let k = st.player.as_ref().unwrap().place.stratum().unwrap();
+    let map = MapRef::stratum_at(city, k, st.minute_of_day()).beyond(&b);
+    let mut out: Vec<(&'static str, Pos)> = Vec::new();
+    for q in cells(st, area, Scope::Near(r)) {
+        if q == me(st) || !in_sight(st, q) || !nobody(st, q) || map.tile(q).is_none() {
+            continue;
+        }
+        let what = if map.walkable(q) {
+            "open"
+        } else {
+            kind(map.tile(q))
+        };
+        if !out.iter().any(|(k, _)| *k == what) {
+            out.push((what, q));
+        }
+    }
+    out
+}
+
+/// What Look (`x`) says of cell `q` of the map you're on, as the map screen asks it.
+fn card_at(st: &AppState, q: Pos) -> crate::look::LookCard {
+    let city = st.city.as_ref().unwrap();
+    let place = st.player.as_ref().unwrap().place;
+    let map = MapRef::stratum_at(city, place.stratum().unwrap(), st.minute_of_day());
+    crate::look::look_card(st, &map, place, q, &|_, _| None, &[])
+}
+
+/// Look (`x`) with its cursor walked from you onto `q` by the arrow keys, drawn at
+/// 180×60, then put away: the character drawn under the cursor, and the page.
+fn looked(st: &mut AppState, m: &mut dyn Screen, q: Pos) -> (String, String) {
+    // drawn first, so the screen knows its view (the cursor keeps to it)
+    settled(st, m);
+    let you = your_cell(&buffer(st, m, 180, 60));
+    let at = me(st);
+    let (dx, dy) = (q.x - at.x, q.y - at.y);
+    let mut keys = vec![key(KeyCode::Char('x'))];
+    keys.extend(std::iter::repeat_n(
+        key(KeyCode::Char(if dx > 0 { 'l' } else { 'h' })),
+        dx.unsigned_abs() as usize,
+    ));
+    keys.extend(std::iter::repeat_n(
+        key(KeyCode::Char(if dy > 0 { 'j' } else { 'k' })),
+        dy.unsigned_abs() as usize,
+    ));
+    m.update(st, &keys);
+    let buf = buffer(st, m, 180, 60);
+    let under = buf[((you.0 as i32 + dx) as u16, (you.1 as i32 + dy) as u16)]
+        .symbol()
+        .to_string();
+    let page = crate::screens::testutil::buffer_text(&buf);
+    m.update(st, &[key(KeyCode::Esc)]);
+    assert_eq!(me(st), at, "looking never moves you");
+    (under, page)
+}
+
+const UNSEEN: &str = "You can't see there.";
+
+/// Look on your own cell and on a cell of each kind in sight round you in `area`: each
+/// read as it's drawn, the box saying so.
+fn reads_as_drawn(st: &mut AppState, m: &mut dyn Screen, area: Area, name: &str) {
+    let net = st.player.as_ref().unwrap().place == NET;
+    let you = card_at(st, me(st));
+    assert_eq!(
+        you.header.as_deref(),
+        Some("You"),
+        "{name}: your own cell {you:?}"
+    );
+    let (_, page) = looked(st, m, me(st));
+    assert!(!page.contains(UNSEEN), "{name}: your own cell\n{page}");
+    let cells = in_view(st, area, 12);
+    assert!(
+        cells.iter().any(|(k, _)| *k == "open"),
+        "{name}: an open cell in sight: {cells:?}"
+    );
+    for (what, q) in cells {
+        let card = card_at(st, q);
+        assert_ne!(
+            card.body,
+            vec![UNSEEN.to_string()],
+            "{name}: a {what} at {q:?}"
+        );
+        let header = card
+            .header
+            .clone()
+            .unwrap_or_else(|| panic!("{name}: a {what} named"));
+        let (under, page) = looked(st, m, q);
+        assert!(page.contains(&header), "{name}: a {what}: {header}\n{page}");
+        assert!(!page.contains(UNSEEN), "{name}: a {what} at {q:?}\n{page}");
+        // the Net draws its own look over the tiles; on the street the card's glyph is
+        // the one drawn
+        if !net {
+            let glyph = card.glyph.map(|(g, _)| g.to_string());
+            assert_eq!(glyph, Some(under), "{name}: a {what} at {q:?}: {card:?}");
+        }
+    }
+}
+
+/// Look on the cells of a city held round you (`area`) and the same cells once it's
+/// live (the call put down, and it handed over where you stand): the same cards.
+fn as_once_live(st: &mut AppState, m: &mut dyn Screen, s: Settlement, name: &str) {
+    let world = |st: &AppState, q: Pos| {
+        let o = st.outside.as_ref().unwrap();
+        o.origin(st.city.as_ref().unwrap()).offset(q.x, q.y)
+    };
+    let held: Vec<(&'static str, Pos, crate::look::LookCard)> = in_view(st, Area::Held(s), 10)
+        .into_iter()
+        .chain(std::iter::once(("you", me(st))))
+        .map(|(k, q)| (k, world(st, q), card_at(st, q)))
+        .collect();
+    st.missions.call = None;
+    m.update(st, &[]);
+    assert_eq!(here(st), s, "{name}: handed over where you stand");
+    for (what, w, card) in held {
+        let o = st.outside.as_ref().unwrap();
+        let at = o.origin(st.city.as_ref().unwrap());
+        let q = Pos::new(w.x - at.x, w.y - at.y);
+        assert!(live_owns(st, q));
+        assert_eq!(
+            card_at(st, q),
+            card,
+            "{name}: a {what} at {w:?} as once it's live"
+        );
+    }
+}
+
+#[test]
+fn look_reads_every_cell_as_drawn() {
+    // on foot on the open ground by a truck stop at night
+    let (mut st, mut m) = on_the_ground();
+    reads_as_drawn(&mut st, m.as_mut(), Area::Ground, "open ground");
+    // tab: what's worth a look round you there, the stop's sign and lamps among it
+    let pois = {
+        let city = st.city.as_ref().unwrap();
+        let map = MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day());
+        let at = me(&st);
+        let view = Rect::new(at.x - 40, at.y - 20, 81, 41);
+        crate::look::points_of_interest(&st, &map, STREET, view, at, &|_, _| None)
+    };
+    let first = *pois
+        .first()
+        .expect("something worth a look on the open ground");
+    settled(&mut st, m.as_mut());
+    let you = your_cell(&buffer(&st, m.as_ref(), 180, 60));
+    m.update(&mut st, &[key(KeyCode::Char('x')), key(KeyCode::Tab)]);
+    let buf = buffer(&st, m.as_ref(), 180, 60);
+    let page = crate::screens::testutil::buffer_text(&buf);
+    let card = card_at(&st, first);
+    let (dx, dy) = (first.x - me(&st).x, first.y - me(&st).y);
+    let under = buf[((you.0 as i32 + dx) as u16, (you.1 as i32 + dy) as u16)].symbol();
+    assert_eq!(
+        card.glyph.map(|(g, _)| g.to_string()).as_deref(),
+        Some(under)
+    );
+    assert!(
+        page.contains(card.header.as_deref().unwrap()),
+        "tab: {card:?}\n{page}"
+    );
+    m.update(&mut st, &[key(KeyCode::Esc)]);
+    // jacked in there, your Net self on the open Net
+    let body = me(&st);
+    jacked(&mut st, (STREET, body), body);
+    m.update(&mut st, &[]);
+    reads_as_drawn(&mut st, m.as_mut(), Area::Ground, "open Net");
+    // a city held, from its own streets and its own Net (held in the home city by a
+    // call): read as drawn, and as they read once it's live
+    let (mut st, _) = at_home();
+    let s = beside_a_city(&mut st).0;
+    let (mut st, mut m) = held_from_outside(s);
+    reads_as_drawn(&mut st, m.as_mut(), Area::Held(s), "held, on foot");
+    as_once_live(&mut st, m.as_mut(), s, "held, on foot");
+    let (mut st, mut m) = held_from_outside(s);
+    let body = me(&st);
+    let city = st.city.as_ref().unwrap();
+    let b = Beyond::of(&st).unwrap();
+    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+    let at = crate::outside::nearest(body, 12, |q| {
+        in_area(&st, Area::Held(s), q) && net.tile(q).is_some_and(|t| t.terrain == Terrain::NetGrid)
+    })
+    .expect("its Net's grid");
+    drop(b);
+    jacked(&mut st, (STREET, body), at);
+    m.update(&mut st, &[]);
+    assert_eq!(here(&st), here_home(&st), "held in by the call");
+    reads_as_drawn(&mut st, m.as_mut(), Area::Held(s), "held, on the Net");
+    as_once_live(&mut st, m.as_mut(), s, "held, on the Net");
+    // a town's cells on the live city's own map, held in the city by a call
+    let mut st = home_run();
+    st.rain = false;
+    let (_, town, a, d) = crate::outside::stream::tests::handover::beside_a_town(&mut st);
+    ringing(&mut st);
+    on_foot(&mut st, a.step(d));
+    let mut m: Box<dyn Screen> = Box::new(crate::screens::explore::MapScreen::walking(&mut st));
+    m.update(&mut st, &[]);
+    assert!(
+        in_area(&st, Area::Held(town), me(&st)),
+        "on the town's cell"
+    );
+    assert!(
+        st.city.as_ref().unwrap().size.contains(me(&st)),
+        "on the city's map"
+    );
+    reads_as_drawn(&mut st, m.as_mut(), Area::Held(town), "a town on the map");
+    as_once_live(&mut st, m.as_mut(), town, "a town on the map");
+}
+
+fn here_home(st: &AppState) -> Settlement {
+    st.outside.as_ref().unwrap().home()
+}
+
+#[test]
+fn the_free_camera_names_a_cell_as_look_does() {
+    use crate::screens::explore::{MapScreen, Mode};
+    // dev mode's free camera over the open ground and over a city held: the top band
+    // names the cell under its cursor as Look does, never the live city's outskirts
+    let (mut st, _) = on_the_ground();
+    let ground = me(&st);
+    let s = beside_a_city(&mut st).0;
+    let theirs = middle(&st, tile_of(&st, s));
+    st.unlock_dev();
+    for (at, what) in [(ground, "the open ground"), (theirs, "a city held")] {
+        let mut m = MapScreen::walking(&mut st);
+        m.update(&mut st, &[]);
+        m.mode = Mode::Explore;
+        m.cursor = at;
+        m.update(&mut st, &[]);
+        let (page, _) = drawn(&st, &m, 180, 60);
+        let band = page.lines().next().unwrap_or_default().to_string();
+        let said = crate::look::location(&st, STREET, at);
+        assert!(!said.contains("the outskirts"), "{what}: {said}");
+        // the band cuts a long name short
+        let head: String = said.chars().take(24).collect();
+        assert!(band.contains(&head), "{what}: {said}\n{band}");
+    }
+}
