@@ -17425,22 +17425,30 @@ mod tests {
             /// The view the screen is drawn at.
             const SIZE: (u16, u16) = (200, 60);
 
-            /// A cell of the open ground you can stand on a step short of held
-            /// settlement `c`'s map, where its walkers on the street are nearest as a
-            /// wide view takes them in (a step north or south counting three), and the
-            /// step onto its cells: in the live city's frame.
-            fn beside_its_walkers(st: &AppState, c: Settlement) -> (Pos, Dir) {
+            /// A cell of the open ground you can stand on a step short of settlement
+            /// `c`'s map (`city`), where its walkers on the street (`walking`, cells of
+            /// its map) are nearest as a wide view takes them in (a step north or south
+            /// counting three), the step onto its cells and how far the nearest walker
+            /// is: in the live city's frame.
+            fn beside_walkers(
+                st: &AppState,
+                c: Settlement,
+                city: &citygen::City,
+                walking: &[Pos],
+            ) -> Option<(Pos, Dir, i32)> {
                 use citygen::overworld::detail;
                 let o = st.outside.as_ref().unwrap();
                 let w = o.world();
-                let city = o.held_city(c).unwrap();
                 let origin = o.origin(city);
                 let tile = |p: Pos| Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
-                let walking: Vec<Pos> = walkers(st, c)
-                    .values()
-                    .map(|p| Pos::new(p.x - origin.x, p.y - origin.y))
-                    .collect();
                 let map = TileRect::new(0, 0, city.size.w as i32, city.size.h as i32);
+                let far = |q: Pos| {
+                    walking
+                        .iter()
+                        .map(|b| (b.x - q.x).abs().max(3 * (b.y - q.y).abs()))
+                        .min()
+                        .unwrap_or(i32::MAX)
+                };
                 map.border()
                     .flat_map(|q| Dir::CARDINAL.map(|d| (q, d)))
                     .filter(|(q, d)| {
@@ -17452,34 +17460,55 @@ mod tests {
                             && o.owner(tile(x)).is_none()
                             && detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)].is_walkable()
                     })
-                    .min_by_key(|(q, _)| {
-                        walking
-                            .iter()
-                            .map(|b| (b.x - q.x).abs().max(3 * (b.y - q.y).abs()))
-                            .min()
-                            .unwrap_or(i32::MAX)
-                    })
+                    .min_by_key(|(q, _)| far(*q))
                     .map(|(q, d)| {
                         let x = origin.offset(q.x, q.y).step(d.opposite());
-                        (handover::local(st, x), d)
+                        (handover::local(st, x), d, far(q))
                     })
-                    .expect("open ground beside its walkers")
             }
 
-            /// Seed 3's home run at one in the afternoon, Vantawick held beside it (its
-            /// docks a city where nobody has a home, its people walking in and out all
-            /// day) with its people seeded as its build seeds them, you on foot on the
-            /// open ground a step short of its map by its walkers, the screen on you: the
-            /// run, the screen, the city, your cell and the step in.
+            /// Where the walkers of a city's people `w` stand on its map `city`.
+            fn walking(city: &citygen::City, w: &sim::World) -> Vec<Pos> {
+                w.visible(city.size.rect())
+                    .into_iter()
+                    .filter(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+                    .map(|m| m.pos)
+                    .collect()
+            }
+
+            /// Seed 3's home run at half past seven in the morning (on their way to
+            /// work), the neighbour whose people walk nearest an edge of its map with
+            /// open ground past it held beside it,
+            /// its people seeded as its build seeds them, you on foot on that ground a
+            /// step short of its map by its walkers, the screen on you: the run, the
+            /// screen, the city, your cell and the step in.
             fn beside_its_people() -> (AppState, MapScreen, Settlement, Pos, Dir) {
                 let mut st = AppState::new();
-                st.enter_city_at(crate::outside::tests::sited().clone(), 13 * 60);
+                st.enter_city_at(crate::outside::tests::sited().clone(), 7 * 60 + 30);
                 st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
                 crate::outside::ensure(&mut st);
                 st.rain = false;
-                let (c, ..) = handover::beside_a_city_where(&mut st, &|s| s.city == 3);
+                let home = st.outside.as_ref().unwrap().home();
+                let (now, minute) = (st.clock_tick(), st.minute_of_day());
+                let nearest = crate::outside::stream::tests::settlements()
+                    .iter()
+                    .filter(|(s, _)| s.town.is_none() && *s != home)
+                    .filter_map(|(s, city)| {
+                        let w = crate::outside::seed_people(city, &st.people, now, minute);
+                        let (.., far) = beside_walkers(&st, *s, city, &walking(city, &w))?;
+                        Some((far, *s))
+                    })
+                    .min_by_key(|(far, s)| (*far, s.city))
+                    .map(|(_, s)| s);
+                let (c, ..) = handover::beside_a_city_where(&mut st, &|s| Some(s) == nearest);
                 handover::seed_its_people(&mut st, c);
-                let (x, d) = beside_its_walkers(&st, c);
+                let (x, d) = {
+                    let o = st.outside.as_ref().unwrap();
+                    let city = o.held_city(c).unwrap();
+                    let walking = walking(city, people(&st, c));
+                    let (x, d, _) = beside_walkers(&st, c, city, &walking).expect("its edge");
+                    (x, d)
+                };
                 handover::on_foot(&mut st, x);
                 let mut s = MapScreen::walking(&mut st);
                 draw_buffer(&s, &st, SIZE.0, SIZE.1);

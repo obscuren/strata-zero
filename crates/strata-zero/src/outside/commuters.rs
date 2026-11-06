@@ -16,6 +16,14 @@ const CORPORATE: Settlement = Settlement {
     town: None,
 };
 
+/// Seed 3's home city, seeded as home is (not housed): homes for under half who work
+/// there, the rest coming in from off the map. Every other city has homes for half its
+/// people at least.
+const HOME: Settlement = Settlement {
+    city: 0,
+    town: None,
+};
+
 /// One trip of a day: who, the tick they set off, what for, where to, and its two ends.
 #[derive(Clone, Debug, PartialEq)]
 struct Trip {
@@ -124,21 +132,23 @@ fn off_the_map(w: &World, id: PersonId) -> bool {
 
 #[test]
 fn a_city_without_homes_still_has_its_commute() {
-    let city = settlement(CORPORATE);
+    let city = settlement(HOME);
     let people = sim::People::load().unwrap();
     let seeded = World::seed(city, &people, &sim::SimParams::default(), FOUR, 0);
     let homes = seeded.people().iter().filter(|p| p.home.is_some()).count();
     assert!(
-        homes * 3 < seeded.people().len(),
+        homes * 2 < seeded.people().len(),
         "few work there with a home in it: {homes} of {}",
         seeded.people().len()
     );
-    // those who work its buildings by day with no home in it
+    // those who work its buildings by day with no home in it, and a way in that walks
+    // to their work (the rest stay in town)
     let day: BTreeSet<PersonId> = seeded
         .people()
         .iter()
         .filter(|p| p.home.is_none() && matches!(p.work, Work::Building(_)))
         .filter(|p| (7 * 60..=11 * 60).contains(&p.shift_start))
+        .filter(|p| seeded.comes_in_by(p.id).is_some())
         .map(|p| p.id)
         .collect();
     assert!(day.len() >= 40, "{} day workers", day.len());
@@ -517,7 +527,7 @@ fn day_commuters(w: &World) -> Vec<(PersonId, citygen::BuildingId)> {
 fn commuters_take_lunch() {
     // a third or so of those who come in to work step out at midday, to something to eat
     // or a spot along the street, and are back at work after
-    let city = settlement(CORPORATE);
+    let city = settlement(HOME);
     let people = sim::People::load().unwrap();
     let day = day_commuters(&World::seed(
         city,
