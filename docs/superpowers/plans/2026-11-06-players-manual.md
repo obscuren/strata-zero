@@ -81,3 +81,13 @@ Revised after the mock: look B, the open spread (spec §3).
 - [ ] Write the thirteen chapters from the crawl's facts, second person, plain words, leaving out what a player can't reach yet.
 - [ ] Run every test and both clippy builds; look at the `manual_pages` shots.
 - [ ] Commit with `Closes #7`.
+
+### Task 6: The desk (spec §3a)
+
+**Files:** create `crates/strata-zero/src/manual/desk.rs` (the scene: its layout for a size, the city, the room and its props as half-block pixels, the cover's words, leaning in as a zoom); `screens/manual.rs` draws it in place of the closed cover and leans in and out.
+
+**Produces:** `desk::Desk::new(w, h) -> Desk`, `Desk::draw(&self, buf, area, tick)`, `Desk::draw_leaned(&self, buf, area, tick, e: f32)` (e 0 at the desk, 1 leaned in); `Manual` states `Desk` and `Spread(n)` with a lean in flight timed from the tick (`LEAN_TICKS`).
+
+- [ ] Tests: the desk draws at 100×30, 120×40 and 200×60 without panicking and shows PLAYER'S MANUAL on its screen; the same tick draws the same picture; space leans in and lands on the contents after `LEAN_TICKS`; esc in the booklet leans back to the desk, esc at the desk closes, q closes from the booklet; `?`'s way in opens leaned in.
+- [ ] Shots: `manual_desk` at both sizes and a frame halfway through the lean.
+- [ ] Commit.

@@ -61,8 +61,7 @@ chapter that one reader can't draw never lands.
   (`2026-11-06-players-manual-mock/`, `python3 gen.py round1.html` draws its three
   looks; look B, "the open spread"): two pages side by side
   on the game's own dark, stapled at the spine, over the screen it opened from.
-  - **The cover** comes first, alone, as the closed booklet: the STRATA / ZERO logo in
-    neon, a drawing of the city's strata under it, PLAYER'S MANUAL and the version.
+  - **The cover** comes first, on the screen at your desk (§3a).
   - **Pages are a fixed size** (46×28 cells, text 40 wide and 22 rows), whatever the
     terminal or window, so a page number means the same page everywhere. The spread is
     94×28 with a keys line under it: it fits the minimum terminal (100×30).
@@ -72,14 +71,52 @@ chapter that one reader can't draw never lands.
     carry the chapter's title as a running head. Page numbers sit in the outer bottom
     corners. A heading or a table's head never ends a page. An odd last page faces a
     NOTES page, as booklets did.
-  - **Keys:** `space` opens the cover; `← →` (`h l`, `pgup pgdn`) turn a spread; `[ ]`
-    go to the previous or next chapter; `c` goes back to the contents; `esc`/`q` close.
+  - **Keys:** `← →` (`h l`, `pgup pgdn`) turn a spread; `[ ]` go to the previous or
+    next chapter; `c` goes back to the contents; `esc` leans back to the desk, `q`
+    closes.
 - **Where it opens:** a MANUAL row on the title (before QUIT) and in the pause menu
-  (after SETTINGS), both on the cover; and from the `?` key list, whose last line says
+  (after SETTINGS), both at the desk; and from the `?` key list, whose last line says
   `space opens the manual`, on the Controls chapter.
 - **How the text draws:** headings in the game's cyan, text in its text grey, `code` in
   cyan like the key list, bold as bold, list items hanging under a `·`, tables as
   aligned columns whose last column wraps, tips behind a cyan bar.
+
+## 3a · The desk
+
+Chosen from the second mock (`2026-11-06-manual-desk-mock/`, open `index.html` from a
+server at the repo root; framing B, "the corner"): the manual opens with you at your
+desk, first person, a high floor at night. It takes the closed booklet's place as the
+cover.
+
+- **The room.** A tall window on the left over the city; your wall on the right with a
+  gunmetal rack (servers blinking, an eye in a jar looking round, a coil of cable, a box
+  of shards, a chrome arm on hooks), a vent fan turning and a pink `◆ STAY WIRED` sign.
+  Concrete walls, a riveted window frame, a pipe along the ceiling with a cyan tube
+  under it (one stretch dead, one flickering) and cables sagging off it.
+- **The desk.** Worn gunmetal with a magenta neon strip along its back edge. The screen
+  on its arm (stickers on the bezel, a status light), the keyboard's underglow turning
+  through the neon, your deck with its cable running off the bottom of the picture to
+  your jack, a holo-projector turning a wireframe cube, a can, and the brew: a black mug
+  with a band of cyan light, steaming.
+- **The city.** Three rows of towers whose windows go on and off, neon tubes that won't
+  stay lit, an ad screen washing pink to cyan, mast lights, a searchlight in the cloud,
+  a flying car now and then, rain falling a little sideways and drops sliding down the
+  glass.
+- **The light.** The screen cool on the walls, the strip magenta on the desk, the tube
+  cyan from above, the sign pink on its wall; the room otherwise dark.
+- **On the screen** is the cover: STRATA / ZERO in the logo's letters where the screen
+  is big enough, spaced capitals where it isn't, PLAYER'S MANUAL, and a blinking
+  `▸ press space to read`.
+- **Leaning in.** `space` (or `enter`, `→`) leans in: over about 0.7 s the screen grows
+  until it is the booklet's spread, open on the contents. Round the spread the room
+  stays, dimmed, where the terminal has room for it. In the booklet `esc` leans back to
+  the desk and `q` closes the manual; at the desk `esc` or `q` closes it. `←` on the
+  contents spread leans back too.
+- **Everything is drawn from the tick**, the same picture for the same tick: half-block
+  pixels as the game draws its other pictures, the cover's words as text. The scene
+  lays itself out for any terminal from 100×30 up.
+- The `?` key list's way in (`space`) opens the booklet already leaned in, on the
+  Controls chapter.
 
 ## 4 · On stratazero.io: /manual
 

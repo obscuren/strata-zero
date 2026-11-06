@@ -1,6 +1,6 @@
 # The city and the world
 
-The city is five strata deep. From the bottom up:
+The city is five strata deep, from the undercity at the bottom to the Net over everything, and past its edge lies a whole country to cross.
 
 | Stratum | What's there |
 |---|---|
