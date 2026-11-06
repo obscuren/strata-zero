@@ -642,12 +642,12 @@ pub fn build_params(
 pub const RUN_ON: u64 = 24 * 60 * sim::TICKS_PER_MINUTE;
 
 /// What a city's people are seeded with: in a city of the world other than home,
-/// everyone who works in it lives in it, crowded where its flats run short
-/// (`SimParams::crowded`), so its people live their day in town; the home city's (the
-/// story's people) keep their commute.
+/// everyone who works in it lives in it, anywhere in town (`SimParams::housed`), so its
+/// people live their day in town; the home city's (the story's people) keep their
+/// commute.
 pub fn sim_params(home: bool) -> sim::SimParams {
     sim::SimParams {
-        crowded: !home,
+        housed: !home,
         ..Default::default()
     }
 }

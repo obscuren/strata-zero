@@ -364,46 +364,31 @@ fn a_city_you_come_into_lives_in_town() {
 
 #[test]
 fn every_city_you_come_into_has_its_traffic() {
-    // seed 3's other cities with housing as you find them: cars for their people as the
-    // home city has for its, and at least half as much driving in a day, for the size of
-    // the map or for its people
-    let people = sim::People::load().unwrap();
-    let (home_s, home) = &settlements()[0];
-    let cells = |c: &City| u64::from(c.size.w) * u64::from(c.size.h);
-    // ticks of driving in a day
-    let driving = |city: &City, w: World| {
-        let mut ticks = 0;
-        a_day_of(city, w, 24 * 60, |w| {
-            ticks += w.people().iter().map(|p| drives(w, p)).sum::<u64>();
-        });
-        ticks
-    };
-    let at_home = World::seed(home, &people, &sim::SimParams::default(), FOUR, 0);
-    let (home_cars, home_people) = (at_home.cars().len(), at_home.people().len());
-    let home_ticks = driving(home, at_home);
+    // seed 3's other cities with housing as you find them: a car for at least one in ten
+    // who live there, and the cars driven, a drive a day for every three at least. The
+    // bound is each city's own, not the home city's: most of home's driving is couriers
+    // with cars on their rounds, and its long commutes come from its big map and its
+    // housing far from its work
+    let (home, _) = &settlements()[0];
     let mut short = Vec::new();
     for (s, city) in settlements() {
         let there = come_into(city);
-        if s == home_s || s.town.is_some() || there.cars().is_empty() {
+        if s == home || s.town.is_some() || there.cars().is_empty() {
             continue;
         }
-        let (cars, n) = (there.cars().len(), there.people().len());
-        let ticks = driving(city, there);
-        let for_the_map = ticks * cells(home) * 2 >= home_ticks * cells(city);
-        let for_its_people = ticks * home_people as u64 * 2 >= home_ticks * n as u64;
-        if cars * home_people * 2 < home_cars * n || !(for_the_map || for_its_people) {
+        let lives = there.people().iter().filter(|p| p.home.is_some()).count();
+        let cars = there.cars().len();
+        let mut driven = 0;
+        a_day_of(city, there, 24 * 60, |w| {
+            driven += w.people().iter().filter(|p| drives(w, p) > 0).count();
+        });
+        if cars * 10 < lives || driven * 3 < cars {
             short.push(format!(
-                "{s:?}: {cars} cars for {n}, {ticks} ticks driven on {} cells",
-                cells(city)
+                "{s:?}: {cars} cars for {lives} who live there, {driven} drives a day"
             ));
         }
     }
-    assert!(
-        short.is_empty(),
-        "the home city {home_cars} cars for {home_people}, {home_ticks} ticks driven on {} \
-         cells; short of half: {short:#?}",
-        cells(home)
-    );
+    assert!(short.is_empty(), "short of traffic: {short:#?}");
 }
 
 /// New games' home cities for seeds 1 to 8, as a new game builds them: built once.
