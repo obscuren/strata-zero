@@ -264,6 +264,11 @@ pub struct Overworld {
     pub washes: Vec<Vec<Pos>>,
     pub pois: Vec<Poi>,
     pub regions: Vec<Region>,
+    /// Where each POI's signs stand, decided by the first patch that lays it
+    /// (`poi_ground`): the world's alone, so kept with it rather than decided again.
+    /// Rebuilt as asked for, never saved.
+    #[serde(skip)]
+    pub(crate) signs: poi_ground::SignSpots,
 }
 
 impl Overworld {
@@ -509,6 +514,7 @@ impl Ctx {
             washes: self.washes,
             pois: self.pois,
             regions: self.regions,
+            signs: Default::default(),
         }
     }
 }

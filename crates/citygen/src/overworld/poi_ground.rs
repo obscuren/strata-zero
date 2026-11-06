@@ -7,6 +7,7 @@ use super::{LINK_E, LINK_N, LINK_S, LINK_W, Overworld, Poi, PoiKind, Water};
 use crate::geom::{Pos, Rect};
 use crate::rng::hash64;
 use crate::tile::{Feature, Furniture, Terrain};
+use std::sync::OnceLock;
 
 /// How far any POI's layout reaches from its tile's middle, in cells each way.
 const REACH: i32 = 80;
@@ -20,7 +21,12 @@ pub(crate) fn lay(p: &mut Patch) {
             continue;
         }
         let h = hash64(hash64(world.seed, 3100), i as u64);
-        let mut site = Site { p, world, h };
+        let mut site = Site {
+            p,
+            world,
+            h,
+            index: i,
+        };
         match poi.kind {
             PoiKind::TruckStop => site.truck_stop(poi),
             PoiKind::Checkpoint => site.checkpoint(poi),
@@ -36,11 +42,95 @@ pub(crate) fn lay(p: &mut Patch) {
     }
 }
 
-/// One POI being laid: the patch, its world and the POI's own hash.
+/// One POI being laid: the patch, its world, the POI's own hash and its place in the
+/// world's list.
 struct Site<'p, 'w> {
     p: &'p mut Patch<'w>,
     world: &'w Overworld,
     h: u64,
+    index: usize,
+}
+
+/// A sign's spots in turn, each every cell of it with what stands there (posts and all).
+type Spots = Vec<Vec<(Pos, Feature)>>;
+
+/// For each POI of a world (by its place in the list), which of each of its signs' spots
+/// it stands on (none: left out), decided the first time a patch lays it and kept: the
+/// choice is the world's alone, and deciding builds the ground round the sign. Shared by
+/// every thread that lays the world's ground. Not part of what a world is: any two are
+/// equal, and it prints as nothing.
+#[derive(Clone, Default)]
+pub(crate) struct SignSpots(OnceLock<Box<[OnceLock<Chosen>]>>);
+
+/// Which spot of each of a POI's signs stands, in order; none for one left out.
+type Chosen = Box<[Option<usize>]>;
+
+impl SignSpots {
+    /// POI `poi`'s choice, decided by `decide` if it never was.
+    fn of(&self, pois: usize, poi: usize, decide: impl FnOnce() -> Chosen) -> Chosen {
+        let all = self
+            .0
+            .get_or_init(|| (0..pois).map(|_| OnceLock::new()).collect());
+        match all.get(poi) {
+            Some(kept) => kept.get_or_init(decide).clone(),
+            None => decide(),
+        }
+    }
+}
+
+impl PartialEq for SignSpots {
+    fn eq(&self, _: &SignSpots) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for SignSpots {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SignSpots")
+    }
+}
+
+/// Which spot of each of `signs` stands (none: left out) round a POI of `world`: the
+/// first that parts no way through, tried against the ground round it as it lies with no
+/// POI's sign on it (but those taken before), built alone, so every patch decides the
+/// same.
+fn decide(world: &Overworld, signs: &[Spots]) -> Chosen {
+    let cells_of = |spot: &[(Pos, Feature)]| spot.iter().map(|(q, _)| *q).collect::<Vec<_>>();
+    let mut chosen = vec![None; signs.len()];
+    // the ground round every sign's first spot, built once; round a later spot only when
+    // one past it is tried
+    let firsts: Vec<Pos> = signs
+        .iter()
+        .filter_map(|spots| spots.first())
+        .flat_map(|spot| cells_of(spot))
+        .collect();
+    if firsts.is_empty() {
+        return chosen.into();
+    }
+    let mut core = Rect::around(&firsts).grow(SIGN_ROUND);
+    let mut ground = super::detail::signless(world, core);
+    let mut taken: Vec<Pos> = Vec::new();
+    for (spots, pick) in signs.iter().zip(&mut chosen) {
+        for (k, spot) in spots.iter().enumerate() {
+            let at = cells_of(spot);
+            let window = Rect::around(&at).grow(SIGN_ROUND);
+            if window.intersection(core) != Some(window) {
+                core = window;
+                ground = super::detail::signless(world, core);
+            }
+            // the cells it would stand on, as `put` lays it
+            let solid: Vec<Pos> = at.into_iter().filter(|q| open_in(&ground, *q)).collect();
+            let walkable =
+                |q: Pos| !taken.contains(&q) && ground.get(q).is_some_and(|t| t.is_walkable());
+            if crate::pathing::cuts(window, walkable, &solid) {
+                continue;
+            }
+            *pick = Some(k);
+            taken.extend(solid);
+            break;
+        }
+    }
+    chosen.into()
 }
 
 /// A road POI's frame: `along` the road and `away` from it, mapped to cells with the
@@ -194,47 +284,19 @@ impl Site<'_, '_> {
     /// Signs stood up where they part no way through. Each of `signs` is its spots in
     /// turn (every cell of a spot with what stands on it, posts and all): the first spot
     /// that cuts nothing is taken, and a sign none of whose spots will do is left out.
-    /// They're tried against the ground round them as it lies with no POI's sign on it
-    /// (but those taken before), built alone, so every patch that lays the POI decides
-    /// the same.
-    fn signs(&mut self, signs: &[Vec<Vec<(Pos, Feature)>>]) {
+    /// Decided once for the world (`decide`, `SignSpots`), so every patch that lays the
+    /// POI stands them the same.
+    fn signs(&mut self, signs: &[Spots]) {
         if !self.p.signs {
             return;
         }
-        let cells_of = |spot: &[(Pos, Feature)]| spot.iter().map(|(q, _)| *q).collect::<Vec<_>>();
-        // the ground round every sign's first spot, built once; round a later spot
-        // only when one past it is tried
-        let firsts: Vec<Pos> = signs
-            .iter()
-            .filter_map(|spots| spots.first())
-            .flat_map(|spot| cells_of(spot))
-            .collect();
-        if firsts.is_empty() {
-            return;
-        }
-        let mut core = Rect::around(&firsts).grow(SIGN_ROUND);
-        let mut ground = super::detail::signless(self.world, core);
-        let mut taken: Vec<Pos> = Vec::new();
-        for spots in signs {
-            for spot in spots {
-                let at = cells_of(spot);
-                let window = Rect::around(&at).grow(SIGN_ROUND);
-                if window.intersection(core) != Some(window) {
-                    core = window;
-                    ground = super::detail::signless(self.world, core);
-                }
-                // the cells it would stand on, as `put` lays it
-                let solid: Vec<Pos> = at.into_iter().filter(|q| open_in(&ground, *q)).collect();
-                let walkable =
-                    |q: Pos| !taken.contains(&q) && ground.get(q).is_some_and(|t| t.is_walkable());
-                if crate::pathing::cuts(window, walkable, &solid) {
-                    continue;
-                }
-                for (q, f) in spot {
-                    self.put(*q, *f);
-                }
-                taken.extend(solid);
-                break;
+        let world = self.world;
+        let chosen = world
+            .signs
+            .of(world.pois.len(), self.index, || decide(world, signs));
+        for (spots, k) in signs.iter().zip(chosen.iter()) {
+            for (q, f) in k.and_then(|k| spots.get(k)).into_iter().flatten() {
+                self.put(*q, *f);
             }
         }
     }
@@ -799,7 +861,7 @@ impl Site<'_, '_> {
         let pen = Self::centred(c, 30, 13);
         let gate = self.gate(pen, pen.x + 3);
         self.fence(pen, Some(gate));
-        let warnings: Vec<Vec<Vec<(Pos, Feature)>>> = (0..4)
+        let warnings: Vec<Spots> = (0..4)
             .flat_map(|k| {
                 let x = pen.x + 4 + 7 * k;
                 [Pos::new(x, pen.y - 1), Pos::new(x, pen.y + pen.h)]
@@ -1052,6 +1114,71 @@ mod tests {
             }
         }
         assert!(signs >= 20, "{signs} signs");
+    }
+
+    /// Every sign round each truck stop and test range of `w` (six tiles each way), as
+    /// where and what, in order.
+    fn every_sign(w: &Overworld) -> Vec<(Pos, char)> {
+        let mut out = Vec::new();
+        for poi in w
+            .pois
+            .iter()
+            .filter(|p| matches!(p.kind, PoiKind::TruckStop | PoiKind::TestRange))
+        {
+            let (o, g) = round(w, poi, 6);
+            for (p, t) in g.iter() {
+                if let Some(Feature::Sign(c)) = t.feature {
+                    out.push((p.offset(o.x, o.y), c));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_pois_signs_are_decided_once_a_world() {
+        // where a truck stop's sign or a test range's warnings stand is decided once for
+        // the world, by the first patch that lays it: the next builds no ground round
+        // them to decide again; and they stand where they did before (pinned at
+        // 5ba85d7), whichever patch laid them first
+        use crate::overworld::detail::signless_built;
+        use crate::rng::hash64;
+        let mut all = Vec::new();
+        for seed in 0..6 {
+            let w = small(seed);
+            for poi in w
+                .pois
+                .iter()
+                .filter(|p| matches!(p.kind, PoiKind::TruckStop | PoiKind::TestRange))
+            {
+                round(&w, poi, 3);
+                let before = signless_built();
+                round(&w, poi, 2);
+                assert_eq!(
+                    signless_built(),
+                    before,
+                    "seed {seed} {:?} at {:?}: decided again",
+                    poi.kind,
+                    poi.at
+                );
+            }
+            let signs = every_sign(&w);
+            // another world of the seed, its POIs laid first by patches to their side
+            let w2 = small(seed);
+            for poi in w2.pois.iter().rev() {
+                let (x, y) = (TILE * (poi.at.x + 2), TILE * (poi.at.y - 3));
+                region(&w2, x, y, (4 * TILE) as u32, (5 * TILE) as u32);
+            }
+            assert_eq!(every_sign(&w2), signs, "seed {seed}");
+            all.extend(signs);
+        }
+        let digest = all.iter().fold(0, |h, (p, c)| {
+            hash64(
+                h,
+                ((p.x as u32 as u64) << 32 | p.y as u32 as u64) ^ ((*c as u64) << 20),
+            )
+        });
+        assert_eq!((all.len(), digest), (99, 0x3580_770a_3da8_3977));
     }
 
     #[test]

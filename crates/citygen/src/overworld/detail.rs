@@ -34,7 +34,20 @@ pub fn region(world: &Overworld, x0: i32, y0: i32, w: u32, h: u32) -> Grid<Tile>
 /// The ground over world-wide `rect` as `region` lays it, but no POI's sign stood up:
 /// what a sign is tried against (`poi_ground`), the same whichever patch asks.
 pub(crate) fn signless(world: &Overworld, rect: Rect) -> Patch<'_> {
+    #[cfg(test)]
+    SIGNLESS.with(|n| n.set(n.get() + 1));
     build(world, rect, false)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SIGNLESS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many signless patches this thread has built.
+#[cfg(test)]
+pub(crate) fn signless_built() -> usize {
+    SIGNLESS.with(|n| n.get())
 }
 
 /// `rect` and the margin round it built, every rule laid; POIs' signs stood up or not.
