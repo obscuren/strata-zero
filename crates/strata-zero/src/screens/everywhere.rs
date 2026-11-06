@@ -1179,3 +1179,37 @@ fn the_free_camera_names_a_cell_as_look_does() {
         assert!(band.contains(&head), "{what}: {said}\n{band}");
     }
 }
+
+#[test]
+fn the_light_you_stand_in_reads_as_drawn() {
+    // on the open ground by a truck stop at night, on the cell its lights light most:
+    // the exposure readout reads the light the map draws there, not the hour's alone
+    let (mut st, mut m) = on_the_ground();
+    let (lit, light, ambient) = {
+        let city = st.city.as_ref().unwrap();
+        let b = Beyond::of(&st).unwrap();
+        let map = MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day()).beyond(&b);
+        let lit = cells(&st, Area::Ground, Scope::Near(16))
+            .into_iter()
+            .filter(|q| map.walkable(*q) && nobody(&st, *q))
+            .max_by_key(|q| (map.emitted(*q), std::cmp::Reverse(q.chebyshev(me(&st)))))
+            .expect("open ground by the stop");
+        let ambient = citygen::lighting::ambient(StratumKind::Street, st.minute_of_day());
+        (lit, map.light(lit), ambient)
+    };
+    use crate::exposure::band;
+    assert_ne!(
+        band(light),
+        band(ambient),
+        "lit past the hour's light: {light}"
+    );
+    on_foot(&mut st, lit);
+    m.update(&mut st, &[]);
+    assert_eq!(
+        crate::exposure::of(&st).light,
+        light,
+        "the light at {lit:?}"
+    );
+    let (page, _) = drawn(&st, m.as_ref(), 180, 60);
+    assert!(page.contains(&format!("{} · ", band(light))), "{page}");
+}

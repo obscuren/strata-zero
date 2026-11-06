@@ -17,8 +17,8 @@ pub struct Exposure {
     pub cameras: Vec<citygen::Pos>,
 }
 
-/// The exposure right now: on a stratum, from the walkers around you; dark and
-/// unseen anywhere else.
+/// The exposure right now: on a stratum, the light where you stand (whoever's cell it
+/// is) and the walkers around you; dark and unseen anywhere else.
 pub fn of(st: &AppState) -> Exposure {
     let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Exposure::default();
@@ -30,7 +30,12 @@ pub fn of(st: &AppState) -> Exposure {
         return Exposure::default();
     }
     let map = MapRef::stratum_at(city, k, st.minute_of_day());
-    let light = map.light(player.pos);
+    // the light on your tile as the map draws it: past the city's edge, and on the cells
+    // other areas own, theirs
+    let light = match crate::outside::stream::Beyond::of(st) {
+        Some(b) => map.beyond(&b).light(player.pos),
+        None => map.light(player.pos),
+    };
     // The city's walkers are on the Street; above and below it nobody looks.
     let Some(world) = st.world.as_ref().filter(|_| k == StratumKind::Street) else {
         return Exposure {
