@@ -16032,6 +16032,15 @@ mod tests {
 
         /// Jacked in at a street port of the live city's, your body beside it.
         fn jacked_at_a_port(st: &mut AppState, s: &mut MapScreen) {
+            jacked_at_a_port_where(st, s, &|_, _| true);
+        }
+
+        /// `jacked_at_a_port`, at the first street port `ok` takes.
+        fn jacked_at_a_port_where(
+            st: &mut AppState,
+            s: &mut MapScreen,
+            ok: &dyn Fn(&citygen::City, Pos) -> bool,
+        ) {
             let city = st.city.clone().unwrap();
             let port = city
                 .connectors
@@ -16040,6 +16049,7 @@ mod tests {
                     c.kind == citygen::ConnectorKind::Jack
                         && c.serves.contains(&StratumKind::Street)
                         && city.walkable(StratumKind::Net, c.pos)
+                        && ok(&city, c.pos)
                 })
                 .expect("a street terminal")
                 .pos;
@@ -16624,9 +16634,18 @@ mod tests {
 
         #[test]
         fn the_cord_runs_out_of_a_ports_room() {
-            // home's street port is a node in a building's room on the Net: a few steps
-            // out onto a lane of home's, the cord runs back over the room's floor to it
-            let (mut st, mut s, port) = jacked_at_home();
+            // jacked in at a street port of home's that is a node in a building's room on
+            // the Net: a few steps out onto a lane of home's, the cord runs back over the
+            // room's floor to it
+            let mut st = home_run();
+            st.rain = false;
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
+            jacked_at_a_port_where(&mut st, &mut s, &|city, p| {
+                city.tile(StratumKind::Net, p)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::NetFloor)
+            });
+            let port = crate::net::port_of(&st).expect("the port");
             assert_eq!(
                 net_at(&st, port).map(|t| t.terrain),
                 Some(citygen::Terrain::NetFloor),
@@ -16767,7 +16786,7 @@ mod tests {
             // short where the Net isn't built yet, and rides on once it has come in
             const LONG: usize = 140;
             let (mut st, mut s, port) = jacked_at_home();
-            let far = trunk_off(&mut st, port, 170);
+            let far = trunk_off(&mut st, port, 140);
             let lanes = open_lanes_near(&mut st, far, 4 * TILE);
             crate::outside::stream::tend(
                 &mut st,
@@ -17197,23 +17216,19 @@ mod tests {
             const SIZE: (u16, u16) = (200, 60);
 
             /// A cell of the open ground you can stand on a step short of held
-            /// settlement `c`'s map, where its buildings are nearest as a wide view takes
-            /// them in (a step north or south counting three), and the step onto its
-            /// cells: in the live city's frame.
-            fn beside_its_buildings(st: &AppState, c: Settlement) -> (Pos, Dir) {
+            /// settlement `c`'s map, where its walkers on the street are nearest as a
+            /// wide view takes them in (a step north or south counting three), and the
+            /// step onto its cells: in the live city's frame.
+            fn beside_its_walkers(st: &AppState, c: Settlement) -> (Pos, Dir) {
                 use citygen::overworld::detail;
                 let o = st.outside.as_ref().unwrap();
                 let w = o.world();
                 let city = o.held_city(c).unwrap();
                 let origin = o.origin(city);
                 let tile = |p: Pos| Pos::new(p.x.div_euclid(TILE), p.y.div_euclid(TILE));
-                let built: Vec<Pos> = city
-                    .stratum(StratumKind::Street)
-                    .unwrap()
-                    .tiles
-                    .iter()
-                    .filter(|(_, t)| t.building.is_some())
-                    .map(|(p, _)| p)
+                let walking: Vec<Pos> = walkers(st, c)
+                    .values()
+                    .map(|p| Pos::new(p.x - origin.x, p.y - origin.y))
                     .collect();
                 let map = TileRect::new(0, 0, city.size.w as i32, city.size.h as i32);
                 map.border()
@@ -17228,7 +17243,7 @@ mod tests {
                             && detail::region(w, x.x, x.y, 1, 1)[Pos::new(0, 0)].is_walkable()
                     })
                     .min_by_key(|(q, _)| {
-                        built
+                        walking
                             .iter()
                             .map(|b| (b.x - q.x).abs().max(3 * (b.y - q.y).abs()))
                             .min()
@@ -17238,12 +17253,13 @@ mod tests {
                         let x = origin.offset(q.x, q.y).step(d.opposite());
                         (handover::local(st, x), d)
                     })
-                    .expect("open ground beside its buildings")
+                    .expect("open ground beside its walkers")
             }
 
-            /// Seed 3's home run at one in the afternoon, the next city held beside it
-            /// with its people seeded as its build seeds them, you on foot on the open
-            /// ground a step short of its map by its buildings, the screen on you: the
+            /// Seed 3's home run at one in the afternoon, Vantawick held beside it (its
+            /// docks a city where nobody has a home, its people walking in and out all
+            /// day) with its people seeded as its build seeds them, you on foot on the
+            /// open ground a step short of its map by its walkers, the screen on you: the
             /// run, the screen, the city, your cell and the step in.
             fn beside_its_people() -> (AppState, MapScreen, Settlement, Pos, Dir) {
                 let mut st = AppState::new();
@@ -17251,9 +17267,9 @@ mod tests {
                 st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
                 crate::outside::ensure(&mut st);
                 st.rain = false;
-                let (c, ..) = handover::beside_a_city(&mut st);
+                let (c, ..) = handover::beside_a_city_where(&mut st, &|s| s.city == 3);
                 handover::seed_its_people(&mut st, c);
-                let (x, d) = beside_its_buildings(&st, c);
+                let (x, d) = beside_its_walkers(&st, c);
                 handover::on_foot(&mut st, x);
                 let mut s = MapScreen::walking(&mut st);
                 draw_buffer(&s, &st, SIZE.0, SIZE.1);

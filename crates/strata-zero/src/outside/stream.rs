@@ -2294,13 +2294,21 @@ pub(crate) mod tests {
         /// cell it owns that its street lets you onto: the city, the ground cell (in the
         /// live city's frame) and the step.
         pub(crate) fn beside_a_city(st: &mut AppState) -> (Settlement, Pos, Dir) {
+            beside_a_city_where(st, &|_| true)
+        }
+
+        /// `beside_a_city`, the first city `ok` takes.
+        pub(crate) fn beside_a_city_where(
+            st: &mut AppState,
+            ok: &dyn Fn(Settlement) -> bool,
+        ) -> (Settlement, Pos, Dir) {
             let (s, city, x, d) = {
                 let o = o(st);
                 let w = o.world();
                 let here = o.here();
                 settlements()
                     .iter()
-                    .filter(|(s, _)| s.town.is_none() && *s != here && *s != o.home())
+                    .filter(|(s, _)| s.town.is_none() && *s != here && *s != o.home() && ok(*s))
                     .find_map(|(s, city)| {
                         let origin = o.origin(city);
                         let (cw, ch) = (city.size.w as i32, city.size.h as i32);

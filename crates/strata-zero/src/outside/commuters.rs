@@ -9,9 +9,10 @@ use citygen::{City, Pos, StratumKind, Terrain};
 use sim::{Dest, Goal, Leisure, PersonId, Whereabouts, Work, World};
 use std::collections::BTreeSet;
 
-/// Seed 3's corporate neighbour: towers and offices, and homes for few who work there.
+/// Seed 3's neighbour of docks, the strip and a corp core: homes for under a third who
+/// work there.
 const CORPORATE: Settlement = Settlement {
-    city: 1,
+    city: 2,
     town: None,
 };
 
@@ -128,7 +129,7 @@ fn a_city_without_homes_still_has_its_commute() {
     let seeded = World::seed(city, &people, &sim::SimParams::default(), FOUR, 0);
     let homes = seeded.people().iter().filter(|p| p.home.is_some()).count();
     assert!(
-        homes * 4 < seeded.people().len(),
+        homes * 3 < seeded.people().len(),
         "few work there with a home in it: {homes} of {}",
         seeded.people().len()
     );
@@ -278,14 +279,14 @@ fn a_city_with_homes_keeps_its_day() {
     let kept = of_the_schedule(&w, &trips);
     assert_eq!(
         (kept.len(), digest(&kept)),
-        (760, 0x854a_e2f5_e865_f21f),
+        (535, 0xd8e5_b189_5c1c_dd26),
         "the home city's people with a home changed their day"
     );
     // towns where everyone has a home and every trip has a place in it: their whole day
     // as it was
     for (s, was) in [
         ((5, 0), (42, 0xaac3_6dfd_b8e6_2a07)),
-        ((6, 0), (35, 0x2365_2568_85cf_091c)),
+        ((6, 0), (12, 0x4399_9970_2b31_d156)),
         ((6, 1), (18, 0x8fea_6f3e_57f4_b188)),
     ] {
         let town = settlement(Settlement {
@@ -322,8 +323,8 @@ fn drives(w: &World, p: &sim::Person) -> u64 {
 
 #[test]
 fn a_city_you_come_into_lives_in_town() {
-    // seed 3's corporate neighbour as you find it, with flats for one in ten who work
-    // there: those who work there live there all the same, so its people live their day
+    // seed 3's corporate neighbour as you find it, with flats for few who work there:
+    // those who work there live there all the same, so its people live their day
     // in town as the home city's do: home by night, and nobody walks out of town, not
     // even for a drink it hasn't got
     let city = settlement(CORPORATE);
@@ -363,10 +364,9 @@ fn a_city_you_come_into_lives_in_town() {
 
 #[test]
 fn every_city_you_come_into_has_its_traffic() {
-    // seed 3's other cities with housing as you find them (the docks with flats for one
-    // in five who work there; the corporate neighbour, small, its flats among its
-    // towers): cars for their people as the home city has for its, and at least half as
-    // much driving in a day, for the size of the map or for its people
+    // seed 3's other cities with housing as you find them: cars for their people as the
+    // home city has for its, and at least half as much driving in a day, for the size of
+    // the map or for its people
     let people = sim::People::load().unwrap();
     let (home_s, home) = &settlements()[0];
     let cells = |c: &City| u64::from(c.size.w) * u64::from(c.size.h);
