@@ -528,6 +528,133 @@ mod tests {
         assert!(boards >= 2, "{boards} billboards");
     }
 
+    /// The cities and towns of world `seed` as a game builds them on their sites
+    /// (`screens::build_home`, `outside::build_params`): the home city on the world's own
+    /// seed, the rest each on a seed of its own. Each named as the world names it.
+    fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
+        use crate::generate::site::sited_town;
+        use crate::overworld::WorldSize;
+        use crate::rng::hash64;
+        let d = WorldParams::default();
+        let crate::geom::Size { w, h } = d.size.size();
+        let size = WorldSize::Custom { w, h };
+        let world = Overworld::generate(WorldParams { seed, size, ..d }).unwrap();
+        let base = GenParams {
+            size: SizePreset::Large,
+            ..Default::default()
+        };
+        let home = world.cities.iter().position(|c| c.home).unwrap_or(0) as u8;
+        let mut out = vec![(
+            world.settlement_name(home, None),
+            sited(&world, home, base.clone().with_seed(seed)),
+        )];
+        for (i, c) in world.cities.iter().enumerate() {
+            let i = i as u8;
+            let own = |t: Option<u8>| {
+                let at = (u64::from(i) << 8) | t.map_or(0, |t| u64::from(t) + 1);
+                base.clone()
+                    .with_seed(hash64(world.seed ^ 0xC17E, at) % 1_000_000_007)
+            };
+            if i != home {
+                out.push((c.name.clone(), sited(&world, i, own(None))));
+            }
+            for t in 0..c.towns.len() as u8 {
+                if let Some(p) = sited_town(&world, i, t, own(Some(t))) {
+                    out.push((format!("{}'s town {t}", c.name), p));
+                }
+            }
+        }
+        out
+    }
+
+    /// The signs `c` has lost: each billboard of its street that doesn't read a brand
+    /// between its caps, and each sign of the world's ground past its outline it didn't
+    /// keep.
+    fn lost_signs(c: &City, site: &Site) -> Vec<String> {
+        let st = street(c);
+        let mut lost = Vec::new();
+        for shape in billboards(c, site) {
+            let text: String = shape
+                .iter()
+                .filter_map(|p| match st[*p].feature {
+                    Some(Feature::Sign(ch)) => Some(ch),
+                    _ => None,
+                })
+                .collect();
+            let brand = text.strip_prefix('▣').and_then(|t| t.strip_suffix('▣'));
+            if !brand.is_some_and(|b| super::BRANDS.contains(&b)) {
+                lost.push(format!("the billboard at {:?} reads {text}", shape[0]));
+            }
+        }
+        for (p, t) in site.ground.iter() {
+            if !site.builds(p)
+                && matches!(t.feature, Some(Feature::Sign(_)))
+                && st[p].feature != t.feature
+            {
+                lost.push(format!("the world's {:?} at {p:?} is gone", t.feature));
+            }
+        }
+        lost
+    }
+
+    #[test]
+    fn a_billboard_stands_whole() {
+        // the cities where the review found a billboard with letters or a cap taken down
+        // by the street's dressing: each reads its brand between its caps
+        for (seed, name) in [
+            (4, "Porthaven"),
+            (25, "Chromehaven"),
+            (33, "Greyside"),
+            (38, "Hollowmouth"),
+        ] {
+            let (_, params) = settlements_of(seed)
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .unwrap();
+            let c = Generator::run(params).unwrap();
+            let site = prepare(c.params.site.as_ref().unwrap(), c.size).unwrap();
+            let boards = billboards(&c, &site).len();
+            assert!(boards >= 1, "seed {seed} {name}: no billboard");
+            let lost = lost_signs(&c, &site);
+            assert!(lost.is_empty(), "seed {seed} {name}: {lost:?}");
+        }
+    }
+
+    #[test]
+    fn a_worlds_sign_past_the_outline_stays() {
+        // a test range's warnings in the world's ground past seed 49 Neoreach's outline,
+        // beside ground its street never reaches: the dressing leaves them standing
+        let (_, params) = settlements_of(49)
+            .into_iter()
+            .find(|(n, _)| n == "Neoreach")
+            .unwrap();
+        let c = Generator::run(params).unwrap();
+        let site = prepare(c.params.site.as_ref().unwrap(), c.size).unwrap();
+        let lost = lost_signs(&c, &site);
+        assert!(lost.is_empty(), "seed 49 Neoreach: {lost:?}");
+    }
+
+    #[test]
+    #[ignore = "every city and town of 80 worlds: minutes in the debug profile"]
+    fn every_sign_stands_whole() {
+        let (mut boards, mut lost) = (0, 0);
+        for seed in 0..80 {
+            for (name, params) in settlements_of(seed) {
+                let Ok(c) = Generator::run(params) else {
+                    continue;
+                };
+                let site = prepare(c.params.site.as_ref().unwrap(), c.size).unwrap();
+                boards += billboards(&c, &site).len();
+                for l in lost_signs(&c, &site) {
+                    println!("seed {seed} {name}: {l}");
+                    lost += 1;
+                }
+            }
+        }
+        println!("{lost} lost of {boards} billboards and the world's signs");
+        assert_eq!(lost, 0);
+    }
+
     #[test]
     fn an_outskirts_door_is_reached_on_foot() {
         for (seed, c, _) in homes() {
