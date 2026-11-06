@@ -2598,8 +2598,15 @@ impl MapScreen {
             .find(|d| from.step(*d) == to)
             .map(|d| ride_over(st, from, d))
             .unwrap_or_default();
-        ride.path = path.into_iter().skip(usize::from(from != here)).collect();
-        ride.runs_on = runs_on;
+        let ahead: Vec<Pos> = path.into_iter().skip(usize::from(from != here)).collect();
+        // it stops short of a tile it has ridden: a loop of lane is ridden once
+        let fresh = ahead
+            .iter()
+            .position(|q| ride.done.contains(q))
+            .unwrap_or(ahead.len());
+        ride.runs_on = runs_on && fresh == ahead.len();
+        ride.path = ahead;
+        ride.path.truncate(fresh);
         if ride.path.is_empty() {
             self.riding = None;
         }
@@ -16985,6 +16992,60 @@ mod tests {
                 .filter(|w| mine(&st, *w) && !rides(*w))
                 .collect();
             assert!(off.is_empty(), "ridden off their lanes at {off:?}");
+        }
+
+        #[test]
+        fn a_ride_found_again_rides_a_loop_of_lane_once() {
+            // a ring of lane on open grid of home's Net, ridden round while the ride is
+            // found again every frame (as the stream coming in finds it): it goes round
+            // once and stops, never on a tile it has ridden
+            let (mut st, mut s, port) = jacked_at_home();
+            let (w, h) = (8, 5);
+            let ring = {
+                let city = st.city.as_ref().unwrap();
+                let plain = |q: Pos| {
+                    crate::outside::stream::live_owns(&st, q)
+                        && city.tile(StratumKind::Net, q).is_some_and(|t| {
+                            t.terrain == citygen::Terrain::NetGrid && t.feature.is_none()
+                        })
+                };
+                TileRect::new(port.x - 60, port.y - 40, 121, 81)
+                    .iter()
+                    .map(|q| TileRect::new(q.x, q.y, w, h))
+                    .find(|r| r.grow(1).iter().all(plain))
+                    .expect("open grid of home's for a ring")
+            };
+            {
+                let net = st
+                    .city
+                    .as_mut()
+                    .unwrap()
+                    .stratum_mut(StratumKind::Net)
+                    .unwrap();
+                for q in ring.border() {
+                    net.tiles[q].terrain = citygen::Terrain::NetLane;
+                }
+            }
+            st.character
+                .talents
+                .insert(game::TalentId::new("data_surfer"), 1);
+            let from = Pos::new(ring.x, ring.y);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            s.update(&mut st, &[key(KeyCode::Char('l'))]);
+            assert!(s.riding.is_some(), "a ride round the ring");
+            let mut ridden = vec![from, you(&st)];
+            for _ in 0..2 * (w + h) {
+                st.tick += crate::ride::RIDE_TICKS;
+                s.update(&mut st, &[]);
+                s.ride_again(&st);
+                if you(&st) != *ridden.last().unwrap() {
+                    ridden.push(you(&st));
+                }
+            }
+            assert!(s.riding.is_none(), "the ride over");
+            let once: std::collections::BTreeSet<Pos> = ridden.iter().copied().collect();
+            assert_eq!(once.len(), ridden.len(), "a tile ridden twice: {ridden:?}");
+            assert_eq!(ridden.len() as i32, 2 * (w + h) - 4, "round once");
         }
 
         #[test]
