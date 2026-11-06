@@ -5,9 +5,9 @@
 //! types (`content`), casting (`cast`), what a step does (`effects`), and what the
 //! player sees: the HOLO feed and call (`feed`, `call`, `face`), the scenes played on
 //! the map (`scene`, with `marks` and `visitors`), the news put out (`news`) and its
-//! broadcast on the holo set (`broadcast`), the bubbles that leave you the keys
-//! (`asides`), the daze (`daze`), the JOBS lines (`ui`) and an item's readings and
-//! their card (`reading`).
+//! broadcast on the holo set (`broadcast`), a line torn through a holo ad (`ad`), the
+//! bubbles that leave you the keys (`asides`), the daze (`daze`), the JOBS lines (`ui`)
+//! and an item's readings and their card (`reading`).
 //! No mission, step or role id appears in Rust outside tests; the book names them.
 //!
 //! Adding a block (spec `docs/superpowers/specs/2026-10-31-story-missions-design.md`, 15):
@@ -21,6 +21,7 @@
 //! - A reading's row: a variant on `Row`, its texts in `Reading::texts` and its lines
 //!   in `reading::lines`.
 
+pub mod ad;
 pub mod asides;
 pub mod broadcast;
 pub mod bubbles;
@@ -102,6 +103,13 @@ pub struct Missions {
     pub tray: Option<TrayOffer>,
     /// The piece taken from a tray, on someone's tab.
     pub tab: Option<Tab>,
+    /// The line an `Ad` put up, waiting to tear through a holo ad.
+    #[serde(default)]
+    pub ad: Option<ad::AdLine>,
+    /// The holo ad that line tore through, and the clock tick its glow ends.
+    // Never saved: it lasts as long as its aside, which isn't saved either.
+    #[serde(skip)]
+    pub ad_cut: Option<(Pos, u64)>,
 }
 
 impl Missions {

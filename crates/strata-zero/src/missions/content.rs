@@ -492,6 +492,13 @@ pub enum Effect {
         from: String,
         text: String,
     },
+    /// The role's line, torn through a holo ad on the street once you have walked off;
+    /// its showing marks the step `Ended`, as a feed's close does, and thirty game
+    /// minutes with none shown end it unshown.
+    Ad {
+        from: String,
+        text: String,
+    },
     /// Leaves a line under the Look of the mark's tile; a newer one replaces it.
     Note {
         at: Mark,
@@ -562,7 +569,9 @@ impl Effect {
             Effect::Dead { look, .. } => vec![look],
             Effect::Objective(s) | Effect::Log(s) => vec![s],
             Effect::ObjectiveFit(fits) => fits.iter().map(|f| f.text.as_str()).collect(),
-            Effect::Holo { text, .. } | Effect::Note { text, .. } => vec![text],
+            Effect::Holo { text, .. } | Effect::Ad { text, .. } | Effect::Note { text, .. } => {
+                vec![text]
+            }
             Effect::Tray { title, line, .. } => vec![title, line],
             Effect::Mail { subject, body, .. } => body
                 .iter()
@@ -601,7 +610,8 @@ impl Effect {
             Effect::Feed { from, .. }
             | Effect::Call { from, .. }
             | Effect::Mail { from, .. }
-            | Effect::Holo { from, .. } => {
+            | Effect::Holo { from, .. }
+            | Effect::Ad { from, .. } => {
                 vec![from]
             }
             Effect::Arrive { role, .. } if role == YOU => vec![],
@@ -624,6 +634,7 @@ impl Effect {
                 | Effect::Scene(_)
                 | Effect::News(_)
                 | Effect::Mail { .. }
+                | Effect::Ad { .. }
         )
     }
 }
@@ -2263,6 +2274,40 @@ mod tests {
             holds(r#"All([Not(Done("nope"))])"#),
             Err(BookError::UnknownMission(_))
         ));
+    }
+
+    #[test]
+    fn ad_presents_and_names_its_speaker() {
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        let ad = r#"Ad(from: "seren", text: "Work for {marlo}.")"#;
+        let b = with_steps(&format!(
+            r#"{}, Step(id: "after", when: Ended("a"), then: [Log("x")])"#,
+            step(ad)
+        ))
+        .unwrap();
+        assert_eq!(
+            b.missions[0].steps[0].then[0],
+            Effect::Ad {
+                from: "seren".into(),
+                text: "Work for {marlo}.".into()
+            }
+        );
+        // From a role nobody plays, or saying one: refused, as a holo line is.
+        for e in [
+            r#"Ad(from: "nobody", text: "x")"#,
+            r#"Holo(from: "nobody", text: "x")"#,
+            r#"Ad(from: "seren", text: "{nobody}")"#,
+        ] {
+            assert!(
+                matches!(with_steps(&step(e)), Err(BookError::UnknownRole { .. })),
+                "{e}"
+            );
+        }
+        // Whoever says it needn't be cast.
+        assert_eq!(
+            needed(&step(r#"Ad(from: "zed", text: "x")"#)),
+            BTreeSet::new()
+        );
     }
 
     #[test]

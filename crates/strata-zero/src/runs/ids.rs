@@ -360,7 +360,8 @@ pub mod runs {
 
 /// A run read against `book`, made whole: each of the book's missions the run had no
 /// run for starts as `begin` starts one, and whatever holds a step the book lacks goes
-/// (a call, a feed, a scene, the news, the tray, a mail's link to its step, the track).
+/// (a call, a feed, a scene, the news, the tray, the ad line, a mail's link to its step,
+/// the track).
 /// The lines saying what is gone.
 fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
     let Found {
@@ -455,6 +456,8 @@ fn clear_lost(
         notes: _,
         tray,
         tab: _,
+        ad,
+        ad_cut: _, // never saved
     } = missions;
     feeds.retain(|f| !gone(&f.story));
     if call.as_ref().is_some_and(|c| gone(&c.story)) {
@@ -468,6 +471,9 @@ fn clear_lost(
     news_ends.retain(|r| !r.lost());
     if tray.as_ref().is_some_and(|t| t.story.lost()) {
         *tray = None;
+    }
+    if ad.as_ref().is_some_and(|a| a.story.lost()) {
+        *ad = None;
     }
     for mail in &mut journal.mails {
         if gone(&mail.story) {

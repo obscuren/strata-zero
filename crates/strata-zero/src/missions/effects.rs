@@ -104,6 +104,7 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Leave(role) => visitors::leave(st, role),
         Effect::Lights(level) => lights(st, *level),
         Effect::Holo { from, text } => holo(st, from, text),
+        Effect::Ad { from, text } => super::ad::put_up(st, from, text, here),
         Effect::Note { at, text } => note(st, at, text),
         Effect::News(id) => news::put_out(st, id, Some(here)),
         Effect::Daze(seconds) => daze::start(st, *seconds),
@@ -231,20 +232,10 @@ fn holo(st: &mut AppState, from: &str, text: &str) {
     if !super::at(st, &super::Where::Home) {
         return;
     }
-    let (Some(city), Some((place, pos))) = (st.city.as_ref(), news::set_tile(st)) else {
+    let Some((place, pos)) = news::set_tile(st) else {
         return;
     };
-    let channel = news::channel(city);
-    let keep = channel.chars().count().saturating_sub(3);
-    let initial = role_name(st, from)
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_default();
-    let label = format!(
-        "{}▚▞▚ {initial}",
-        channel.chars().take(keep).collect::<String>()
-    );
+    let label = holo_label(st, from);
     let colour = visitors::colour(&st.book, from);
     let text = fill(st, text);
     super::asides::say(
@@ -254,6 +245,23 @@ fn holo(st: &mut AppState, from: &str, text: &str) {
         colour,
         text,
     );
+}
+
+/// The label of a role's line through a holo, your set or an ad on the street: the news
+/// channel cut short, glitched into the speaker's initial (`HEXTEK NEWSL▚▞▚ S`). No
+/// city, no channel.
+pub(super) fn holo_label(st: &AppState, from: &str) -> String {
+    let channel = st.city.as_ref().map(news::channel).unwrap_or_default();
+    let keep = channel.chars().count().saturating_sub(3);
+    let initial = role_name(st, from)
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    format!(
+        "{}▚▞▚ {initial}",
+        channel.chars().take(keep).collect::<String>()
+    )
 }
 
 /// Leaves the filled line under the Look of the mark's tile, replacing any there. A mark

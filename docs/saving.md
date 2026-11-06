@@ -31,6 +31,7 @@ Elsewhere:
 - `credentials.rs`: `run_items` / `put_back`, the run-made `keycard:*` items.
 - `sim::World::rebuild`, `track::refollow`, `holds::relight`, `forget_unknown` on `game::Character`, `game::Ground` and `missions::Missions`.
 - `net.rs`: `NetState` is saved whole: the Net's nodes with it (`holds`: held nodes and the verbs spent, a camera's loop among them, the feed, hijacks, lights out, a decoy; `owners`: the districts' traces; `grid::GridState`: the open Net's trail, sentinels posted, tracers' and sentinels' pace, sweeps' rings, owners on alert). Grid ICE is a `foes::Foe` with `ice`. `RollEcho` reads the first saves' `building` as its `scene` (`EchoRead`).
+- `missions/`: `Missions` is saved whole inside the snapshot, so a new field of it needs no line in `snapshot`/`restore`, only one in `runs::ids::clear_lost`, which names every field. The ad line waiting to tear through a holo ad (`Missions.ad`, `ad::AdLine`, `#[serde(default)]`) is saved with its step, the minute it went up and where you stood, so a reopened run still waits for you to walk off; `clear_lost` drops it with a lost step. The glow once it shows (`Missions.ad_cut`) is `#[serde(skip)]`, as the asides are: it lasts a few seconds.
 - Content: `flavor/flatline.ron` (the taunts), `flavor/broadcasts.ron` (`during` on a broadcast).
 
 ## The world beyond the city

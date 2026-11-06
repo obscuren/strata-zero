@@ -41,6 +41,11 @@
 // `Standing(role: r, by: n)` adds n to your standing with the role's person, a fixer. `Stay(role)`
 // keeps the role's person where they are now, against their hours, until `Release(role)`
 // lets them go (as `Hold` keeps them at work). `Standing` and `Stay` need the role cast.
+// `Ad(from, text)` tears the role's line through a holo ad on the street, labelled as a
+// `Holo` line is, in their tint: it waits until you have walked off (6 tiles from where you
+// stood, or onto another place), then shows over the first ad in sight, as the news cuts
+// in. Its showing marks the step `Ended`; 30 game minutes with none shown end it unshown.
+// `from` names a role of the cast (a visitor too); nobody need play it.
 // The trigger `Later` never fires: the story stands on that step until a later version
 // gives it a real trigger. Saves name it by id, so a reopened run carries on from it.
 Story(
