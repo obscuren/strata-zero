@@ -1,7 +1,10 @@
 //! Lanes carry you: on the open Net a step along a lane runs on to the next stop.
 //! Spec `docs/superpowers/specs/2026-11-03-net-look-design.md`, "Lanes carry you".
+//! The lanes are the Net's wherever it goes: the city's, and past its edge the open
+//! Net's trunks and the other cities' and towns' lanes.
 
-use citygen::{City, Dir, Feature, Pos, StratumKind, Terrain, Tile};
+use crate::render::map::TileMap;
+use citygen::{Dir, Feature, Pos, Terrain};
 
 /// Ticks a ride takes per tile.
 pub const RIDE_TICKS: u64 = 1;
@@ -13,6 +16,9 @@ pub struct Ride {
     pub path: Vec<Pos>,
     pub done: Vec<Pos>,
     pub next_at: u64,
+    /// Its stop is only where the Net wasn't built yet when the path was found
+    /// (`runs_on`): from there it rides on over what has come in since.
+    pub runs_on: bool,
 }
 /// Whether you ride the lanes: the Data surfer talent.
 pub fn surfs(st: &crate::app::AppState) -> bool {
@@ -66,51 +72,51 @@ pub fn slipstream(st: &mut crate::app::AppState, at: Pos) -> bool {
 /// The longest ride, so a loop of lane can never run away.
 const MAX_RIDE: usize = 512;
 
-fn tile(city: &City, p: Pos) -> Option<&Tile> {
-    city.tile(StratumKind::Net, p)
-}
-
-fn lane(city: &City, p: Pos) -> bool {
-    tile(city, p).is_some_and(|t| t.terrain == Terrain::NetLane)
+fn lane(net: &dyn TileMap, p: Pos) -> bool {
+    net.tile(p).is_some_and(|t| t.terrain == Terrain::NetLane)
 }
 
 /// A hub's gate: a gate no construct owns, walked like lane.
-fn hub_gate(city: &City, p: Pos) -> bool {
-    tile(city, p).is_some_and(|t| t.terrain == Terrain::NetGate && t.building.is_none())
+fn hub_gate(net: &dyn TileMap, p: Pos) -> bool {
+    net.tile(p)
+        .is_some_and(|t| t.terrain == Terrain::NetGate && t.building.is_none())
 }
 
-fn construct_gate(city: &City, p: Pos) -> bool {
-    tile(city, p).is_some_and(|t| t.terrain == Terrain::NetGate && t.building.is_some())
+fn construct_gate(net: &dyn TileMap, p: Pos) -> bool {
+    net.tile(p)
+        .is_some_and(|t| t.terrain == Terrain::NetGate && t.building.is_some())
 }
 
-fn rideable(city: &City, p: Pos) -> bool {
-    lane(city, p) || hub_gate(city, p)
+fn rideable(net: &dyn TileMap, p: Pos) -> bool {
+    lane(net, p) || hub_gate(net, p)
 }
 
-fn has_node(city: &City, p: Pos) -> bool {
-    tile(city, p).is_some_and(|t| matches!(t.feature, Some(Feature::Node(_))))
+fn has_node(net: &dyn TileMap, p: Pos) -> bool {
+    net.tile(p)
+        .is_some_and(|t| matches!(t.feature, Some(Feature::Node(_))))
 }
 
-/// The tiles a step from `from` toward `dir` rides, up to and including its stop; empty
-/// when the step does not run along a lane. A ride starts on a lane or a hub's gate,
-/// onto lane; it follows the lane round a bend and stops on a junction, a hub's gate, a
-/// node, the lane's end, or beside a construct's gate (it never goes in).
-pub fn ride_path(city: &City, from: Pos, dir: Dir) -> Vec<Pos> {
+/// The tiles a step from `from` toward `dir` rides over the Net `net`, up to and
+/// including its stop; empty when the step does not run along a lane. A ride starts on
+/// a lane or a hub's gate, onto lane; it follows the lane round a bend and stops on a
+/// junction, a hub's gate, a node, the lane's end, or beside a construct's gate (it
+/// never goes in). Where the Net isn't built yet the lane ends for now (`runs_on`).
+pub fn ride_path(net: &dyn TileMap, from: Pos, dir: Dir) -> Vec<Pos> {
     let first = from.step(dir);
-    if !rideable(city, from) || !lane(city, first) {
+    if !rideable(net, from) || !lane(net, first) {
         return Vec::new();
     }
     let mut path = vec![first];
     let (mut came, mut at) = (from, first);
     while path.len() < MAX_RIDE {
-        if has_node(city, at) || hub_gate(city, at) {
+        if has_node(net, at) || hub_gate(net, at) {
             break;
         }
         let around: Vec<Pos> = at.neighbors4().filter(|q| *q != came).collect();
-        if around.iter().any(|q| construct_gate(city, *q)) {
+        if around.iter().any(|q| construct_gate(net, *q)) {
             break;
         }
-        let ways: Vec<Pos> = around.into_iter().filter(|q| rideable(city, *q)).collect();
+        let ways: Vec<Pos> = around.into_iter().filter(|q| rideable(net, *q)).collect();
         let [next] = ways[..] else {
             break;
         };
@@ -123,10 +129,32 @@ pub fn ride_path(city: &City, from: Pos, dir: Dir) -> Vec<Pos> {
     path
 }
 
+/// Whether a ride that came from `came` onto `at` may have stopped there only because
+/// the Net past it isn't built yet: a plain lane cell with no way on and a cell beside
+/// it not built.
+fn cut_short(net: &dyn TileMap, came: Pos, at: Pos) -> bool {
+    let around = || at.neighbors4().filter(move |q| *q != came);
+    lane(net, at)
+        && !has_node(net, at)
+        && !around().any(|q| rideable(net, q) || construct_gate(net, q))
+        && around().any(|q| net.tile(q).is_none())
+}
+
+/// Whether `path`, a ride from `from` over `net` as `ride_path` found it, stopped only
+/// short of the Net not built yet (`cut_short` at its stop): once the Net past it has
+/// come in, it rides on (`ride_path` from its last tile but one). Asked of a map that
+/// carries on past the city's edge; on one with nothing past it, a cell off it is
+/// nothing to wait for.
+pub fn runs_on(net: &dyn TileMap, from: Pos, path: &[Pos]) -> bool {
+    let came = path.len().checked_sub(2).map_or(from, |i| path[i]);
+    path.last().is_some_and(|at| cut_short(net, came, *at))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use citygen::{BuildingId, NodeKind, Tile};
+    use crate::render::map::MapRef;
+    use citygen::{BuildingId, City, NodeKind, StratumKind, Tile};
 
     /// A Net of open grid with lanes, gates and nodes painted from rows of text:
     /// `=` lane, `h` hub gate, `g` a construct's gate, `n` a node on lane, `.` grid.
@@ -164,8 +192,84 @@ mod tests {
         city
     }
 
+    /// The ride a step `dir` from `from` takes over `c`'s Net.
+    fn ride(c: &City, from: (i32, i32), dir: Dir) -> Vec<Pos> {
+        let net = MapRef::stratum_of(c, StratumKind::Net);
+        ride_path(&net, Pos::new(from.0, from.1), dir)
+    }
+
     fn end(c: &City, from: (i32, i32), dir: Dir) -> Option<Pos> {
-        ride_path(c, Pos::new(from.0, from.1), dir).last().copied()
+        ride(c, from, dir).last().copied()
+    }
+
+    /// `c`'s Net built only west of column `past`, as the stream holds the open Net
+    /// round the view.
+    struct Built<'a> {
+        net: MapRef<'a>,
+        past: i32,
+    }
+
+    impl TileMap for Built<'_> {
+        fn size(&self) -> citygen::Size {
+            self.net.size()
+        }
+        fn tile(&self, p: Pos) -> Option<&citygen::Tile> {
+            self.net.tile(p).filter(|_| p.x < self.past)
+        }
+        fn light(&self, _p: Pos) -> u8 {
+            0
+        }
+        fn theme(&self, _p: Pos) -> Option<citygen::Theme> {
+            None
+        }
+        fn kind(&self, _p: Pos) -> Option<citygen::BuildingKind> {
+            None
+        }
+        fn connector(&self, _p: Pos) -> Option<crate::render::ConnDir> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_ride_stops_where_the_net_isnt_built_and_runs_on_once_it_is() {
+        let c = net(&[
+            "........", //
+            "========", //
+            "...=....", //
+        ]);
+        let cut = Built {
+            net: MapRef::stratum_of(&c, StratumKind::Net),
+            past: 3,
+        };
+        let path = ride_path(&cut, Pos::new(0, 1), Dir::E);
+        assert_eq!(
+            path,
+            vec![Pos::new(1, 1), Pos::new(2, 1)],
+            "up to what's built"
+        );
+        assert!(runs_on(&cut, Pos::new(0, 1), &path));
+        // built on: from its last tile but one, on to the junction, a stop
+        let on = ride(&c, (1, 1), Dir::E);
+        assert_eq!(on, vec![Pos::new(2, 1), Pos::new(3, 1)]);
+        let full = MapRef::stratum_of(&c, StratumKind::Net);
+        assert!(!runs_on(&full, Pos::new(1, 1), &on));
+        // a lane's end or a loop closing is a stop
+        let c = net(&[
+            "........", //
+            "=====...", //
+            "........", //
+        ]);
+        let full = MapRef::stratum_of(&c, StratumKind::Net);
+        assert!(!runs_on(&full, Pos::new(0, 1), &ride(&c, (0, 1), Dir::E)));
+        let c = net(&[
+            "......", //
+            ".====.", //
+            ".=..=.", //
+            ".====.", //
+            "......", //
+        ]);
+        let full = MapRef::stratum_of(&c, StratumKind::Net);
+        assert!(!runs_on(&full, Pos::new(1, 1), &ride(&c, (1, 1), Dir::E)));
     }
 
     #[test]
@@ -220,11 +324,8 @@ mod tests {
             "========", //
             "........", //
         ]);
-        assert!(
-            ride_path(&c, Pos::new(2, 0), Dir::S).is_empty(),
-            "onto the lane"
-        );
-        assert!(ride_path(&c, Pos::new(2, 1), Dir::N).is_empty(), "off it");
+        assert!(ride(&c, (2, 0), Dir::S).is_empty(), "onto the lane");
+        assert!(ride(&c, (2, 1), Dir::N).is_empty(), "off it");
         assert_eq!(end(&c, (2, 1), Dir::W), Some(Pos::new(0, 1)));
     }
 
@@ -235,7 +336,7 @@ mod tests {
             "=..=", //
             "====", //
         ]);
-        let path = ride_path(&c, Pos::new(0, 0), Dir::E);
+        let path = ride(&c, (0, 0), Dir::E);
         assert!(path.len() < 12, "{path:?}");
     }
 }

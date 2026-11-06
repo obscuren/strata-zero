@@ -306,6 +306,20 @@ fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
     walked_map(st, city, place, beyond.as_ref()).walkable(to)
 }
 
+/// The ride a step `dir` from `from` takes over the Net, past the city's edge where it
+/// goes on (`ride::ride_path`), and whether it stops only short of the Net not built
+/// yet there (`ride::runs_on`).
+fn ride_over(st: &AppState, from: Pos, dir: Dir) -> (Vec<Pos>, bool) {
+    let Some(city) = st.city.as_ref() else {
+        return (Vec::new(), false);
+    };
+    let beyond = Beyond::of(st);
+    let net = walked_map(st, city, Place::Stratum(StratumKind::Net), beyond.as_ref());
+    let path = crate::ride::ride_path(&net, from, dir);
+    let on = beyond.is_some() && crate::ride::runs_on(&net, from, &path);
+    (path, on)
+}
+
 /// Why a step from `from` to `to` may not cross now: on foot on the street, off the
 /// cells the city owns or into another city's or town's; your Net self on the Net, into
 /// another's (a fight, a call, a scene, a run in flight). `None` when it may, or when it
@@ -2465,19 +2479,20 @@ impl MapScreen {
     /// A construct's gate on the Net, stepped onto from the open grid, leads inside; the
     /// entry inside, stepped off outward, leads back onto the grid.
     /// A step along a lane of the open Net, out of a fight: the lane carries you on to
-    /// its next stop. Whether a ride started.
+    /// its next stop, past the city's edge too (the open Net's trunks, another city's or
+    /// town's lanes). Whether a ride started.
     fn start_ride(&mut self, st: &mut AppState, dir: Dir) -> bool {
         // Riding the lanes is the Data surfer talent's; without it a lane is walked.
         if st.net.engaged.is_some() || !crate::ride::surfs(st) {
             return false;
         }
-        let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
+        let Some(p) = st.player.as_ref() else {
             return false;
         };
         if p.place != Place::Stratum(StratumKind::Net) {
             return false;
         }
-        let path = crate::ride::ride_path(city, p.pos, dir);
+        let (path, runs_on) = ride_over(st, p.pos, dir);
         if path.is_empty() {
             return false;
         }
@@ -2485,6 +2500,7 @@ impl MapScreen {
             path,
             done: Vec::new(),
             next_at: st.clock_tick(),
+            runs_on,
         });
         // A ride is a move: the run in flight is dropped, a feed closed.
         if st.net.run.take().is_some() {
@@ -2496,36 +2512,67 @@ impl MapScreen {
         true
     }
 
-    /// The ride's tiles whose time has come, taken in turn; it ends at its stop, or
-    /// when you are no longer on the open Net.
+    /// The ride's tiles whose time has come, taken in turn over the Net past the city's
+    /// edge too, the live city following you over a line as a step does; it ends at its
+    /// stop, at a line it may not cross now (saying why), or when you are no longer on
+    /// the open Net. One that stopped short of the Net not built yet runs on once it
+    /// has come in.
     fn ride_step(&mut self, st: &mut AppState) {
-        let Some(mut ride) = self.riding.take() else {
-            return;
-        };
+        const NET: Place = Place::Stratum(StratumKind::Net);
         let now = st.clock_tick();
-        let bonus = st.sight_bonus();
-        let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_mut()) else {
-            return;
-        };
-        if player.place != Place::Stratum(StratumKind::Net) {
-            return;
-        }
-        let map = MapRef::stratum_of(city, StratumKind::Net);
         let mut ridden = Vec::new();
-        while now >= ride.next_at && !ride.path.is_empty() {
-            let next = ride.path.remove(0);
-            if !map.walkable(next) {
-                ride.path.clear();
+        while let Some(ride) = self.riding.as_mut() {
+            let Some(here) = st.player.as_ref().filter(|p| p.place == NET).map(|p| p.pos) else {
+                self.riding = None;
+                break;
+            };
+            if now < ride.next_at {
                 break;
             }
-            ride.done.push(player.pos);
-            player.pos = next;
-            ridden.push(next);
+            if ride.path.is_empty() {
+                // stopped short of the Net not built yet: on from where it stopped, over
+                // what has come in since (the next frame's, built round you first)
+                if !ridden.is_empty() {
+                    break;
+                }
+                let came = ride.done.last().copied().unwrap_or(here);
+                let (path, runs_on) = Dir::CARDINAL
+                    .into_iter()
+                    .find(|d| came.step(*d) == here)
+                    .map(|d| ride_over(st, came, d))
+                    .unwrap_or_default();
+                ride.path = path.into_iter().skip(1).collect();
+                ride.runs_on = runs_on;
+                if ride.path.is_empty() {
+                    self.riding = None;
+                    break;
+                }
+            }
+            let next = ride.path[0];
+            if let Some(why) = crossing_refused(st, here, next) {
+                self.riding = None;
+                st.warn(why);
+                break;
+            }
+            if !open_at(st, NET, next) {
+                self.riding = None;
+                break;
+            }
+            ride.path.remove(0);
+            ride.done.push(here);
             ride.next_at += crate::ride::RIDE_TICKS;
+            // at its stop it ends, unless it stopped short of the Net not built yet
+            if ride.path.is_empty() && !ride.runs_on {
+                self.riding = None;
+            }
+            if let Some(p) = st.player.as_mut() {
+                p.pos = next;
+            }
+            ridden.push(next);
+            self.hand_over(st);
         }
-        player.update_fov(&map, bonus);
-        if !ride.path.is_empty() {
-            self.riding = Some(ride);
+        if !ridden.is_empty() {
+            look(st);
         }
         // Slipstream: each tile ridden, a chance the trace loses some of you.
         for at in ridden {
@@ -2599,12 +2646,17 @@ impl MapScreen {
                 *p = by(*p);
             }
         }
-        // what pointed into the city you left: its foes, what was in reach, the Net's
-        // walks and the floor's people
+        // a ride rides on over the line
+        if let Some(r) = self.riding.as_mut() {
+            for p in r.path.iter_mut().chain(r.done.iter_mut()) {
+                *p = by(*p);
+            }
+        }
+        // what pointed into the city you left: its foes, what was in reach, the cord's
+        // walk and the floor's people
         self.last_enemy = None;
         self.which_way = None;
         self.targeting = None;
-        self.riding = None;
         self.placement = None;
         self.cord_walk.borrow_mut().walk_again();
         // back from the Net onto your body's cell, woken in it where its city kept it
@@ -10165,11 +10217,12 @@ mod tests {
     fn a_lane_to_ride(st: &AppState) -> (Pos, Vec<Pos>) {
         let city = st.city.as_ref().unwrap();
         let net = city.stratum(StratumKind::Net).unwrap();
+        let map = MapRef::stratum_of(city, StratumKind::Net);
         net.tiles
             .iter()
             .filter(|(_, t)| t.terrain == citygen::Terrain::NetLane)
             .find_map(|(p, _)| {
-                let path = crate::ride::ride_path(city, p, Dir::E);
+                let path = crate::ride::ride_path(&map, p, Dir::E);
                 (path.len() >= 3).then_some((p, path))
             })
             .expect("a lane to ride")
@@ -11060,7 +11113,10 @@ mod tests {
                         .any(|(t, _)| *t == game::HackTarget::Node(n.id));
                     [Dir::E, Dir::W, Dir::S, Dir::N]
                         .into_iter()
-                        .find(|d| reach && crate::ride::ride_path(&city, q, *d).len() >= 3)
+                        .find(|d| {
+                            let map = MapRef::stratum_of(&city, StratumKind::Net);
+                            reach && crate::ride::ride_path(&map, q, *d).len() >= 3
+                        })
                         .map(|d| (n.id, q, d))
                 })
             })
@@ -16635,6 +16691,166 @@ mod tests {
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), out);
             assert_eq!(st.outside.as_ref().unwrap().here(), them, "still theirs");
             the_cord_runs_the_net(&mut st, &mut s);
+        }
+
+        /// A cell of the open Net's lane within four tiles of `near` with `len` cells
+        /// of plain lane straight on from it (no lane, gate or node beside them), where
+        /// `want` takes the cell and the way: the cell and the way.
+        fn a_straight_trunk(
+            st: &mut AppState,
+            near: Pos,
+            len: i32,
+            want: &dyn Fn(&AppState, Pos, Dir) -> bool,
+        ) -> (Pos, Dir) {
+            let lanes = open_lanes_near(st, near, 4 * TILE);
+            let lane = |q: Pos| {
+                net_at(st, q)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::NetLane && t.feature.is_none())
+            };
+            let side = |q: Pos| {
+                net_at(st, q).is_some_and(|t| {
+                    matches!(
+                        t.terrain,
+                        citygen::Terrain::NetLane | citygen::Terrain::NetGate
+                    ) || t.feature.is_some()
+                })
+            };
+            lanes
+                .iter()
+                .find_map(|&from| {
+                    Dir::CARDINAL.into_iter().find_map(|d| {
+                        let (dx, dy) = d.delta();
+                        let straight = (1..=len).all(|i| {
+                            let q = from.offset(dx * i, dy * i);
+                            lane(q) && !side(q.offset(dy, dx)) && !side(q.offset(-dy, -dx))
+                        });
+                        (straight && want(st, from, d)).then_some((from, d))
+                    })
+                })
+                .expect("a straight run of trunk")
+        }
+
+        /// With the Data surfer talent, a step `d` from `from` on the Net (jacked in),
+        /// then a tick at a time `ticks` more: where the ride has you, as a world cell.
+        fn ride_from(st: &mut AppState, s: &mut MapScreen, from: Pos, d: Dir, ticks: u64) -> Pos {
+            st.character
+                .talents
+                .insert(game::TalentId::new("data_surfer"), 1);
+            stand(st, s, Place::Stratum(StratumKind::Net), from);
+            s.update(st, &[key(dir_key(d))]);
+            assert!(s.riding.is_some(), "a ride from {from:?}");
+            for _ in 0..ticks {
+                st.tick += crate::ride::RIDE_TICKS;
+                s.update(st, &[]);
+            }
+            handover::world_of(st, you(st))
+        }
+
+        #[test]
+        fn a_trunk_rides_as_a_lane_does() {
+            // out on the open Net's trunk, a step along it rides on
+            let (mut st, mut s, port) = jacked_at_home();
+            let far = trunk_off(&mut st, port, 120);
+            let (from, d) = a_straight_trunk(&mut st, far, 6, &|_, _, _| true);
+            let (dx, dy) = d.delta();
+            let six_on = handover::world_of(&st, from.offset(6 * dx, 6 * dy));
+            assert_eq!(
+                ride_from(&mut st, &mut s, from, d, 5),
+                six_on,
+                "six cells on"
+            );
+        }
+
+        #[test]
+        fn a_ride_runs_on_as_the_net_past_it_comes_in() {
+            // a ride along the trunk longer than the open Net built round you: it stops
+            // short where the Net isn't built yet, and rides on once it has come in
+            const LONG: usize = 140;
+            let (mut st, mut s, port) = jacked_at_home();
+            let far = trunk_off(&mut st, port, 170);
+            let lanes = open_lanes_near(&mut st, far, 4 * TILE);
+            crate::outside::stream::tend(
+                &mut st,
+                TileRect::new(far.x - 160, far.y - 160, 321, 321),
+            );
+            let (from, d, whole) = {
+                let city = st.city.as_ref().unwrap();
+                let b = Beyond::of(&st).unwrap();
+                let net = walked_map(&st, city, Place::Stratum(StratumKind::Net), Some(&b));
+                lanes
+                    .iter()
+                    .flat_map(|q| Dir::CARDINAL.into_iter().map(move |d| (*q, d)))
+                    .map(|(q, d)| (q, d, crate::ride::ride_path(&net, q, d)))
+                    .find(|(_, _, path)| path.len() >= LONG)
+                    .expect("a long ride on the trunk")
+            };
+            st.outside.as_mut().unwrap().stream = Default::default();
+            s.last_map.set(Rect::new(0, 0, 8, 4));
+            st.character
+                .talents
+                .insert(game::TalentId::new("data_surfer"), 1);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            s.update(&mut st, &[key(dir_key(d))]);
+            let first = s.riding.as_ref().map_or(0, |r| r.path.len() + 1);
+            assert!(
+                (1..LONG).contains(&first),
+                "cut short at first: {first} cells"
+            );
+            for _ in 1..LONG {
+                st.tick += crate::ride::RIDE_TICKS;
+                s.update(&mut st, &[]);
+            }
+            assert_eq!(you(&st), whole[LONG - 1], "ridden on");
+        }
+
+        #[test]
+        fn a_ride_on_a_trunk_runs_on_into_the_next_citys_net() {
+            // a straight run of trunk over the line into the settlement nearest home:
+            // the ride hands the run over to it and goes on past the line
+            let (mut st, mut s, port) = jacked_at_home();
+            let near = {
+                let o = st.outside.as_ref().unwrap();
+                let origin = o.origin(st.city.as_ref().unwrap());
+                let pt = origin.offset(port.x, port.y);
+                let pt = Pos::new(pt.x.div_euclid(TILE), pt.y.div_euclid(TILE));
+                // the tile of its block nearest the port
+                let edge = |b: TileRect| {
+                    Pos::new(
+                        pt.x.clamp(b.x, b.x + b.w - 1),
+                        pt.y.clamp(b.y, b.y + b.h - 1),
+                    )
+                };
+                let t = o
+                    .others()
+                    .into_iter()
+                    .map(|(_, b)| edge(b))
+                    .min_by_key(|t| t.chebyshev(pt))
+                    .unwrap();
+                Pos::new(
+                    TILE * t.x + TILE / 2 - origin.x,
+                    TILE * t.y + TILE / 2 - origin.y,
+                )
+            };
+            let here = st.outside.as_ref().unwrap().here();
+            let theirs = |st: &AppState, q: Pos| {
+                crate::outside::stream::owner_of(st, q).filter(|s| *s != here)
+            };
+            let line = |st: &AppState, from: Pos, d: Dir| {
+                let (dx, dy) = d.delta();
+                (1..=3).find(|i| theirs(st, from.offset(dx * i, dy * i)).is_some())
+            };
+            let (from, d) =
+                a_straight_trunk(&mut st, near, 6, &|st, from, d| line(st, from, d).is_some());
+            let (dx, dy) = d.delta();
+            let at = line(&st, from, d).unwrap();
+            let them = theirs(&st, from.offset(at * dx, at * dy)).unwrap();
+            let six_on = handover::world_of(&st, from.offset(6 * dx, 6 * dy));
+            assert_eq!(
+                ride_from(&mut st, &mut s, from, d, 5),
+                six_on,
+                "on past the line"
+            );
+            assert_eq!(st.outside.as_ref().unwrap().here(), them, "handed over");
         }
 
         /// A cell of another city's Net (held), in the live city's frame, where `want`
