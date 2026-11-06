@@ -79,7 +79,7 @@ impl AtlasState {
     }
 }
 
-/// Tiles a pixel covers.
+/// How close the map is: zoom 3 the whole stratum, 2 and 1 closer, 4 the world.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Zoom {
     One,
@@ -91,13 +91,30 @@ pub enum Zoom {
 }
 
 impl Zoom {
-    /// The tiles a pixel covers when `fit` fits the whole stratum: never more than fit.
-    pub fn tiles(self, fit: i32) -> i32 {
-        let fit = fit.max(1);
+    /// How close the zoom draws when `fit` tiles a pixel fit the whole stratum: the
+    /// tiles a pixel covers and the pixels a tile spans, across and down (one of them
+    /// 1). Fit is the whole stratum; 2 and 1 are two tiles a pixel and one where fit is
+    /// more than both, else each a step closer: from a tile a pixel, a tile over 2
+    /// pixels, then 4. So each zoom in is closer, in a city of any size.
+    pub fn scale(self, fit: i32) -> (i32, i32) {
+        let fit = (fit.max(1), 1);
+        let closer = |(s, m): (i32, i32)| if s > 1 { (s - 1, 1) } else { (1, 2 * m) };
+        let two = if fit.0 > 2 { (2, 1) } else { closer(fit) };
+        match self {
+            Zoom::One if fit.0 > 2 => (1, 1),
+            Zoom::One => closer(two),
+            Zoom::Two => two,
+            Zoom::Fit | Zoom::World => fit,
+        }
+    }
+
+    /// The zoom's number on the title row: 1, 2, 3 the whole stratum, 4 the world.
+    pub fn number(self) -> u8 {
         match self {
             Zoom::One => 1,
-            Zoom::Two => fit.min(2),
-            Zoom::Fit | Zoom::World => fit,
+            Zoom::Two => 2,
+            Zoom::Fit => 3,
+            Zoom::World => 4,
         }
     }
 
@@ -309,7 +326,13 @@ fn title(st: &AppState, l: &MapLayout, body: Rect, buf: &mut Buffer) {
         city.name.to_uppercase(),
         k.label().to_uppercase()
     );
-    let rest = format!(" · zoom {}", l.s);
+    // the zoom's number, the same in every city (the city's map at the world's zoom,
+    // with no world to show, is the whole city's)
+    let zoom = match st.atlas.zoom {
+        Zoom::World => Zoom::Fit,
+        z => z,
+    };
+    let rest = format!(" · zoom {}", zoom.number());
     let right = l.area.right();
     let x = body.x + 1;
     let bold = Style::default()

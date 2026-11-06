@@ -100,7 +100,7 @@ pub fn key(st: &mut AppState, code: KeyCode) -> bool {
 }
 
 /// Moves the cursor `dx` cells across and `dy` down, a cell `s` tiles wide and `2s`
-/// tall; it stops at the stratum's edge.
+/// tall, a tile at least closer in; it stops at the stratum's edge.
 fn step(st: &mut AppState, l: &MapLayout, dx: i32, dy: i32) {
     let size = l
         .stratum
@@ -110,8 +110,10 @@ fn step(st: &mut AppState, l: &MapLayout, dx: i32, dy: i32) {
         return;
     };
     let (w, h) = (size.w as i32, size.h as i32);
-    let x = (c.x + dx * l.s).clamp(0, w - 1);
-    let y = (c.y + dy * 2 * l.s).clamp(0, h - 1);
+    let m = l.m.max(1);
+    let (across, down) = ((l.s / m).max(1), (2 * l.s / m).max(1));
+    let x = (c.x + dx * across).clamp(0, w - 1);
+    let y = (c.y + dy * down).clamp(0, h - 1);
     st.atlas.cursor = Some(Pos::new(x, y));
 }
 
@@ -446,9 +448,9 @@ mod tests {
             press(&mut st, c);
             assert_eq!(st.atlas.zoom, z, "{c}");
             let buf = frame(&mut st, BODY_120);
-            let s = laid(&st).s;
+            let n = z.number();
             assert!(
-                title(&buf).contains(&format!("zoom {s}")),
+                title(&buf).contains(&format!("zoom {n}")),
                 "{}",
                 title(&buf)
             );
@@ -476,6 +478,83 @@ mod tests {
         let edge_y = l.origin.y == 0 || l.origin.y + rows * 2 * l.s >= size.h as i32;
         assert!(x.abs_diff(mid.0) <= 1 || edge_x, "{x} {mid:?}");
         assert!(y.abs_diff(mid.1) <= 1 || edge_y, "{y} {mid:?}");
+    }
+
+    /// Seed 3's run walked into the world's first other city (not a town), on its
+    /// street nearest its block's middle: a city much smaller than the home city.
+    fn in_another_city() -> AppState {
+        let mut st = crate::outside::tests::home_run();
+        let o = st.outside.as_ref().unwrap();
+        let (s, b) = o
+            .others()
+            .into_iter()
+            .find(|(s, _)| s.town.is_none())
+            .unwrap();
+        crate::outside::enter(&mut st, s).unwrap();
+        let o = st.outside.as_ref().unwrap();
+        let middle = Pos::new(b.x + b.w / 2, b.y + b.h / 2);
+        let cell = o.street_of(st.city.as_ref().unwrap(), middle);
+        crate::outside::moves::into_city(&mut st, cell);
+        st
+    }
+
+    #[test]
+    fn every_zoom_step_is_closer_in_every_city() {
+        // Zoom 3 is the whole city, 2 closer and 1 closer still, in the home city and
+        // in a smaller one, on a small deck and a wide one: a city that fits at a tile a
+        // pixel spreads a tile over more pixels closer in.
+        const BODY_200: ratatui::layout::Rect = ratatui::layout::Rect::new(1, 10, 198, 47);
+        let cities = [
+            ("another", in_another_city()),
+            ("home", crate::outside::tests::home_run()),
+        ];
+        for (name, mut st) in cities {
+            for body in [BODY_120, BODY_200] {
+                let mid = st.city.as_ref().unwrap().size.center();
+                st.atlas.zoom = Zoom::Fit;
+                st.atlas.stratum = Some(STREET);
+                st.atlas.cursor = Some(mid);
+                st.atlas.recentre = true;
+                let mut was = 0;
+                let mut titles = Vec::new();
+                for (z, n) in [(Zoom::Fit, 3), (Zoom::Two, 2), (Zoom::One, 1)] {
+                    if z != Zoom::Fit {
+                        press(&mut st, '+');
+                    }
+                    let buf = frame(&mut st, body);
+                    assert_eq!(st.atlas.zoom, z);
+                    let l = laid(&st);
+                    let at = l.cell_of(mid).expect("the cursor in view");
+                    assert!(l.tiles_of(at).contains(mid), "{name} zoom {n}");
+                    let east = l.cell_of(mid.offset(8, 0)).expect("8 tiles on in view");
+                    let across = (east.0 - at.0) as i32;
+                    assert!(
+                        across > was,
+                        "{name} at {body:?}, zoom {n}: 8 tiles over {across} cells, {was} before"
+                    );
+                    was = across;
+                    titles.push((n, text(&buf, body.y, 2..body.right())));
+                }
+                // the title names the step, not the tiles a pixel covers
+                for (n, title) in titles {
+                    assert!(title.contains(&format!(" · zoom {n}")), "{name}: {title}");
+                }
+                // closest in, a step is the tiles a cell covers, a tile at least
+                for (code, east) in [('l', true), ('j', false)] {
+                    let from = cursor(&st);
+                    let l = laid(&st);
+                    let r = l.tiles_of(l.cell_of(from).unwrap());
+                    press(&mut st, code);
+                    frame(&mut st, body);
+                    let to = if east {
+                        from.offset(r.w, 0)
+                    } else {
+                        from.offset(0, r.h)
+                    };
+                    assert_eq!(cursor(&st), to, "{name}: {code}");
+                }
+            }
+        }
     }
 
     #[test]
