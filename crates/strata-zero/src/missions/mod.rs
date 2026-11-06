@@ -532,6 +532,7 @@ impl Trigger {
                     matches!(r.state, RunState::Done { at: done } if now.saturating_sub(done) >= *minutes)
                 }),
             Trigger::Holds(need) => holds(st, Some(m), need),
+            Trigger::Later => false,
             // The tab with the role's person as its doc is spent, and you are up out of
             // the chair.
             Trigger::Chromed(role) => {
@@ -635,6 +636,14 @@ pub fn holds(st: &AppState, mission: Option<usize>, need: &Need) -> bool {
             .and_then(|m| st.missions.runs.get(m))
             .and_then(|r| r.began)
             .is_some_and(|began| st.net.now(st) > first_at(st, began, *minute)),
+        Need::Build(id) => st.character.profession.0 == *id,
+        Need::Done(id) => st
+            .book
+            .missions
+            .iter()
+            .position(|m| &m.id == id)
+            .and_then(|i| st.missions.runs.get(i))
+            .is_some_and(|r| matches!(r.state, RunState::Done { .. })),
         Need::Not(need) => !holds(st, mission, need),
         Need::All(needs) => needs.iter().all(|n| holds(st, mission, n)),
     }
@@ -2056,6 +2065,60 @@ pub(crate) mod tests {
         st.character.give(ItemId::new("ledger_shard"), 1);
         tick(&mut st);
         assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn build_holds_for_the_chosen_build() {
+        let st = state_home();
+        let chosen = st.character.profession.0.clone();
+        assert!(holds(&st, None, &Need::Build(chosen.clone())));
+        assert!(!holds(&st, None, &Need::Build(format!("not_{chosen}"))));
+        let mut st = st;
+        st.character.profession = game::ProfessionId::new("techie");
+        assert!(holds(&st, None, &Need::Build("techie".into())));
+        assert!(!holds(&st, None, &Need::Build("solo".into())));
+    }
+
+    #[test]
+    fn done_holds_once_the_mission_is_done() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "a", title: "A", from: "mezz", steps: [
+                Step(id: "s", when: Holds(Carries("ledger_shard")), then: [Log("a")]),
+            ]),
+            Mission(id: "b", title: "B", from: "mezz", steps: [
+                Step(id: "w", when: Holds(Done("a")), then: [Log("b")]),
+            ])"#,
+        );
+        begin(&mut st);
+        tick(&mut st);
+        assert!(!holds(&st, None, &Need::Done("a".into())));
+        assert_eq!(st.missions.runs[1].state, RunState::Waiting);
+        st.character.give(ItemId::new("ledger_shard"), 1);
+        tick(&mut st);
+        assert!(holds(&st, None, &Need::Done("a".into())));
+        assert!(!holds(&st, None, &Need::Done("nope".into())));
+        assert!(matches!(st.missions.runs[1].state, RunState::Done { .. }));
+    }
+
+    #[test]
+    fn later_never_fires() {
+        let mut st = state_home();
+        st.book = book(
+            r#"Mission(id: "m", title: "M", from: "mezz", steps: [
+                Step(id: "a", when: NewGame, then: [Log("a")]),
+                Step(id: "later", when: Later, then: [Log("never")]),
+            ])"#,
+        );
+        begin(&mut st);
+        tick(&mut st);
+        assert_eq!(st.missions.runs[0].at, 1, "waiting on the Later step");
+        for _ in 0..24 {
+            advance(&mut st, 60);
+            tick(&mut st);
+        }
+        assert_eq!(st.missions.runs[0].at, 1);
+        assert!(!matches!(st.missions.runs[0].state, RunState::Done { .. }));
     }
 
     #[test]

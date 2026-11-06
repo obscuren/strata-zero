@@ -34,6 +34,15 @@
 // Look; the first whose need holds there is the one read. One with `tells: true` makes
 // `Read(item)` hold once it shows: its card at the rig or the bench, the pack's card of
 // the item for a Look.
+// More needs: `Build(id)` is the build you chose (your profession's id: netrunner, fixer,
+// solo, techie); `Done(mission)` holds once that mission is done. Both name something
+// real: a `Done` must name a mission here, a `Build` a profession in content.ron.
+// More effects: `Pay(n)` adds n credits, silently (the step's `Log` says what it means).
+// `Standing(role: r, by: n)` adds n to your standing with the role's person, a fixer. `Stay(role)`
+// keeps the role's person where they are now, against their hours, until `Release(role)`
+// lets them go (as `Hold` keeps them at work). `Standing` and `Stay` need the role cast.
+// The trigger `Later` never fires: the story stands on that step until a later version
+// gives it a real trigger. Saves name it by id, so a reopened run carries on from it.
 Story(
     cast: {
         "mezz": Role(

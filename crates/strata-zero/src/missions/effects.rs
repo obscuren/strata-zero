@@ -115,6 +115,17 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
         Effect::Release(role) => {
             st.missions.releasing.insert(role.clone());
         }
+        Effect::Stay(role) => {
+            if let (Some(id), Some(w)) = (person_of(st, role), st.world.as_mut()) {
+                w.keep_where(id);
+            }
+        }
+        Effect::Pay(n) => st.character.credits = st.character.credits.saturating_add(*n),
+        Effect::Standing { role, by } => {
+            if let Some(id) = person_of(st, role) {
+                st.jobs.fixer_mut(id).standing += by;
+            }
+        }
         Effect::Tray {
             from,
             tab,
@@ -477,6 +488,74 @@ mod tests {
         apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
         crate::missions::tick(&mut st);
         assert!(st.missions.releasing.is_empty());
+    }
+
+    #[test]
+    fn pay_adds_credits() {
+        let mut st = state_home();
+        let before = st.character.credits;
+        apply(&mut st, 0, 0, &Effect::Pay(800));
+        assert_eq!(st.character.credits, before + 800);
+        st.character.credits = u32::MAX - 1;
+        apply(&mut st, 0, 0, &Effect::Pay(800));
+        assert_eq!(st.character.credits, u32::MAX, "no wrapping");
+    }
+
+    #[test]
+    fn standing_raises_the_fixers_standing() {
+        let mut st = state_home();
+        crate::missions::begin(&mut st);
+        let mezz = person_of(&st, "mezz").expect("mezz is cast");
+        let before = st.jobs.standing(mezz);
+        let up = Effect::Standing {
+            role: "mezz".into(),
+            by: 1,
+        };
+        apply(&mut st, 0, 0, &up);
+        assert_eq!(st.jobs.standing(mezz), before + 1);
+        // A role nobody plays changes nothing.
+        let nobody = Effect::Standing {
+            role: "nobody".into(),
+            by: 1,
+        };
+        apply(&mut st, 0, 0, &nobody);
+        assert_eq!(st.jobs.standing(mezz), before + 1);
+    }
+
+    #[test]
+    fn stay_keeps_the_person_where_they_are() {
+        let mut st = state_home();
+        // Someone out on the street by day, whoever they are.
+        let w = st.world.as_mut().unwrap();
+        let city = st.city.as_ref().unwrap();
+        let mut walker = None;
+        for _ in 0..(14 * 60) {
+            w.advance(city, w.tick() + sim::TICKS_PER_MINUTE);
+            walker = w
+                .people()
+                .iter()
+                .map(|p| p.id)
+                .find(|id| w.pos_of(*id).is_some() && !w.is_held(*id));
+            if walker.is_some() {
+                break;
+            }
+        }
+        let who = walker.expect("someone out on the street");
+        st.missions.cast.insert("zed".into(), who);
+        let spot = st.world.as_ref().unwrap().pos_of(who);
+        apply(&mut st, 0, 0, &Effect::Stay("zed".into()));
+        assert!(held(&st, who));
+        let (city, w) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        w.advance(city, w.tick() + 90 * sim::TICKS_PER_MINUTE);
+        let w = st.world.as_ref().unwrap();
+        assert_eq!(w.pos_of(who), spot, "not moved by the schedule");
+        assert!(w.is_held(who));
+        // Release frees them through the existing path.
+        apply(&mut st, 0, 0, &Effect::Release("zed".into()));
+        crate::missions::tick(&mut st);
+        assert!(!held(&st, who));
+        // Nobody cast: nothing happens.
+        apply(&mut st, 0, 0, &Effect::Stay("nobody".into()));
     }
 
     /// The doc's tray on Castellan's tab: a NETRUNNER's set, then one for anyone.

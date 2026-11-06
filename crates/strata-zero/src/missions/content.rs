@@ -304,6 +304,10 @@ pub enum Need {
     /// Now is past the first time the clock showed this minute of the day after the
     /// mission began.
     Late(u16),
+    /// The build you chose: your profession's id.
+    Build(String),
+    /// The mission is done.
+    Done(String),
     Not(Box<Need>),
     All(Vec<Need>),
 }
@@ -413,6 +417,9 @@ pub enum Trigger {
     Chromed(String),
     /// Fires on any pass once the need holds.
     Holds(Need),
+    /// Never fires: the story stands here until a later version gives the step a real
+    /// trigger.
+    Later,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -498,6 +505,15 @@ pub enum Effect {
     Hold(String),
     /// Lets the role's person go, the first minute you are out of their work building.
     Release(String),
+    /// Keeps the role's person where they are now, against their hours, until `Release`.
+    Stay(String),
+    /// Adds credits, silently.
+    Pay(u32),
+    /// Adds `by` to your standing with the role's person, a fixer.
+    Standing {
+        role: String,
+        by: i32,
+    },
     /// The `from` role holds out the first set whose need holds: one piece to take, on
     /// the `tab` role's tab, which pays for it in `from`'s chair.
     Tray {
@@ -564,7 +580,10 @@ impl Effect {
             | Effect::News(_)
             | Effect::Daze(_)
             | Effect::Hold(_)
-            | Effect::Release(_) => vec![],
+            | Effect::Release(_)
+            | Effect::Stay(_)
+            | Effect::Pay(_)
+            | Effect::Standing { .. } => vec![],
         }
     }
 
@@ -590,7 +609,9 @@ impl Effect {
             | Effect::Arrive { role, .. }
             | Effect::Leave(role)
             | Effect::Hold(role)
-            | Effect::Release(role) => vec![role],
+            | Effect::Release(role)
+            | Effect::Stay(role)
+            | Effect::Standing { role, .. } => vec![role],
             _ => vec![],
         }
     }
@@ -778,6 +799,8 @@ impl Book {
                     Effect::Dead { role, .. }
                     | Effect::Hold(role)
                     | Effect::Release(role)
+                    | Effect::Stay(role)
+                    | Effect::Standing { role, .. }
                     | Effect::Tray { from: role, .. }
                     | Effect::Mail {
                         code: Some(CodeOf::Clinic(role)),
@@ -982,7 +1005,7 @@ impl Book {
                     positive(place, "hold", *h)?;
                 }
                 if let Some(need) = need {
-                    check_need(place, need)?;
+                    self.check_need(place, need)?;
                 }
             }
             Beat::Stage(text) => self.check_text(place, text)?,
@@ -1040,7 +1063,7 @@ impl Book {
     /// A reading: its need, its slots, the verb that offers it at the rig or the bench or
     /// the text a Look reads, and ledgers that show no more than they hold.
     fn check_reading(&self, place: &str, r: &Reading) -> Result<(), BookError> {
-        check_need(place, &r.need)?;
+        self.check_need(place, &r.need)?;
         let (what, said) = match r.at {
             ReadAt::Look => ("text", &r.text),
             ReadAt::Rig | ReadAt::Bench => ("verb", &r.verb),
@@ -1062,6 +1085,64 @@ impl Book {
             }
         }
         Ok(())
+    }
+
+    /// A tray holds a set, each set's need checked, and a set from one piece to one a key.
+    fn check_tray(&self, place: &str, sets: &[TraySet]) -> Result<(), BookError> {
+        if sets.is_empty() {
+            return Err(BookError::Empty(format!("tray in {place}")));
+        }
+        for set in sets {
+            self.check_need(place, &set.need)?;
+            if set.items.is_empty() {
+                return Err(BookError::Empty(format!("a tray's set in {place}")));
+            }
+            if set.items.len() > TRAY_MAX {
+                return Err(BookError::BadNumber {
+                    place: place.into(),
+                    what: format!(
+                        "a tray's set of {}, wanted {TRAY_MAX} at most",
+                        set.items.len()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// An objective's fits: at least one, each need checked, and the last always holds, as
+    /// the tray's sets are checked.
+    fn check_fits(&self, place: &str, fits: &[Fit]) -> Result<(), BookError> {
+        let Some(last) = fits.last() else {
+            return Err(BookError::Empty(format!("objective fits in {place}")));
+        };
+        for fit in fits {
+            self.check_need(place, &fit.need)?;
+        }
+        if last.need != Need::All(vec![]) {
+            return Err(BookError::BadFits {
+                place: place.into(),
+                why: "the last fit's need is not All([]), so a player could be left with no objective"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// A `Late` minute is a minute of the day, inside `Not` and `All` too.
+    fn check_need(&self, place: &str, need: &Need) -> Result<(), BookError> {
+        match need {
+            Need::Late(minute) if *minute >= sim::DAY => Err(BookError::BadNumber {
+                place: place.into(),
+                what: format!("Late({minute}), wanted 0 to {}", sim::DAY - 1),
+            }),
+            Need::Not(inner) => self.check_need(place, inner),
+            Need::All(needs) => needs.iter().try_for_each(|n| self.check_need(place, n)),
+            Need::Done(mission) if !self.missions.iter().any(|o| &o.id == mission) => {
+                Err(BookError::UnknownMission(mission.clone()))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn check_mission(&self, m: &Mission) -> Result<(), BookError> {
@@ -1112,7 +1193,7 @@ impl Book {
                         return Err(BookError::UnknownMission(mission.clone()));
                     }
                 }
-                Trigger::Holds(need) => check_need(&place, need)?,
+                Trigger::Holds(need) => self.check_need(&place, need)?,
                 other => {
                     for role in other.named_roles() {
                         self.check_role(&place, role)?;
@@ -1160,8 +1241,8 @@ impl Book {
                     Effect::Call { lines, .. } if lines.is_empty() => {
                         return Err(BookError::Empty(format!("call in {place}")));
                     }
-                    Effect::Tray { sets, .. } => check_tray(&place, sets)?,
-                    Effect::ObjectiveFit(fits) => check_fits(&place, fits)?,
+                    Effect::Tray { sets, .. } => self.check_tray(&place, sets)?,
+                    Effect::ObjectiveFit(fits) => self.check_fits(&place, fits)?,
                     _ => {}
                 }
             }
@@ -1295,61 +1376,6 @@ fn check_level(place: &str, level: f32) -> Result<(), BookError> {
             place: place.into(),
             what: format!("light level {level}, wanted 0 to 1"),
         })
-    }
-}
-
-/// A tray holds a set, each set's need checked, and a set from one piece to one a key.
-fn check_tray(place: &str, sets: &[TraySet]) -> Result<(), BookError> {
-    if sets.is_empty() {
-        return Err(BookError::Empty(format!("tray in {place}")));
-    }
-    for set in sets {
-        check_need(place, &set.need)?;
-        if set.items.is_empty() {
-            return Err(BookError::Empty(format!("a tray's set in {place}")));
-        }
-        if set.items.len() > TRAY_MAX {
-            return Err(BookError::BadNumber {
-                place: place.into(),
-                what: format!(
-                    "a tray's set of {}, wanted {TRAY_MAX} at most",
-                    set.items.len()
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// An objective's fits: at least one, each need checked, and the last always holds, as
-/// the tray's sets are checked.
-fn check_fits(place: &str, fits: &[Fit]) -> Result<(), BookError> {
-    let Some(last) = fits.last() else {
-        return Err(BookError::Empty(format!("objective fits in {place}")));
-    };
-    for fit in fits {
-        check_need(place, &fit.need)?;
-    }
-    if last.need != Need::All(vec![]) {
-        return Err(BookError::BadFits {
-            place: place.into(),
-            why: "the last fit's need is not All([]), so a player could be left with no objective"
-                .into(),
-        });
-    }
-    Ok(())
-}
-
-/// A `Late` minute is a minute of the day, inside `Not` and `All` too.
-fn check_need(place: &str, need: &Need) -> Result<(), BookError> {
-    match need {
-        Need::Late(minute) if *minute >= sim::DAY => Err(BookError::BadNumber {
-            place: place.into(),
-            what: format!("Late({minute}), wanted 0 to {}", sim::DAY - 1),
-        }),
-        Need::Not(inner) => check_need(place, inner),
-        Need::All(needs) => needs.iter().try_for_each(|n| check_need(place, n)),
-        _ => Ok(()),
     }
 }
 
@@ -2191,6 +2217,117 @@ mod tests {
                 "{e}"
             );
         }
+    }
+
+    #[test]
+    fn stay_and_standing_need_their_role() {
+        let zed: BTreeSet<String> = ["zed"].map(String::from).into();
+        let cast = r#""zed": Role(name: "Zed", title: "fixer", pick: NearestFixer, face: None),
+            "kay": Role(name: "Kay", title: "fixer", pick: NearestFixer, face: None),"#;
+        let step = |e: &str| format!(r#"Step(id: "a", when: NewGame, then: [{e}])"#);
+        assert_eq!(needed(&step(r#"Stay("zed")"#)), zed);
+        assert_eq!(
+            needed(&step(r#"Standing(role: "zed", by: 1)"#)),
+            zed,
+            "standing needs the fixer cast"
+        );
+        // Both held in one step: each role is needed.
+        let both = step(r#"Stay("zed"), Standing(role: "kay", by: 1)"#);
+        let b = tiny(cast, &both, "").unwrap();
+        let want: BTreeSet<String> = ["kay", "zed"].map(String::from).into();
+        assert_eq!(b.needs_cast(&b.missions[0]), want);
+        for e in [r#"Stay("nobody")"#, r#"Standing(role: "nobody", by: 1)"#] {
+            assert!(
+                matches!(with_steps(&step(e)), Err(BookError::UnknownRole { .. })),
+                "{e}"
+            );
+        }
+        // Pay names nobody.
+        assert_eq!(needed(&step("Pay(800)")), BTreeSet::new());
+    }
+
+    #[test]
+    fn done_names_a_mission() {
+        let holds = |need: &str| {
+            with_steps(&format!(
+                r#"Step(id: "a", when: Holds({need}), then: [Log("hi")])"#
+            ))
+        };
+        assert!(matches!(
+            holds(r#"Done("nope")"#),
+            Err(BookError::UnknownMission(m)) if m == "nope"
+        ));
+        assert!(holds(r#"Done("m")"#).is_ok());
+        // Inside Not and All too.
+        assert!(matches!(
+            holds(r#"All([Not(Done("nope"))])"#),
+            Err(BookError::UnknownMission(_))
+        ));
+    }
+
+    #[test]
+    fn later_parses() {
+        let b = with_steps(
+            r#"Step(id: "a", when: NewGame, then: [Log("hi")]),
+            Step(id: "later", when: Later, then: [Log("more")])"#,
+        )
+        .unwrap();
+        assert_eq!(b.missions[0].steps[1].when, Trigger::Later);
+    }
+
+    /// The builds a book's needs ask for, inside `Not` and `All` too.
+    fn builds_in(need: &Need, out: &mut Vec<String>) {
+        match need {
+            Need::Build(id) => out.push(id.clone()),
+            Need::Not(inner) => builds_in(inner, out),
+            Need::All(needs) => needs.iter().for_each(|n| builds_in(n, out)),
+            _ => {}
+        }
+    }
+
+    /// Every `Build` a book's needs ask for that `content` has no profession for.
+    fn unknown_builds(b: &Book, content: &Content) -> Vec<String> {
+        let mut builds = Vec::new();
+        for step in b.missions.iter().flat_map(|m| &m.steps) {
+            if let Trigger::Holds(n) = &step.when {
+                builds_in(n, &mut builds);
+            }
+            for e in &step.then {
+                match e {
+                    Effect::ObjectiveFit(fits) => {
+                        fits.iter().for_each(|f| builds_in(&f.need, &mut builds));
+                    }
+                    Effect::Tray { sets, .. } => {
+                        sets.iter().for_each(|s| builds_in(&s.need, &mut builds));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for r in b.readings.values().flatten() {
+            builds_in(&r.need, &mut builds);
+        }
+        for beat in b.scenes.values().flat_map(|s| &s.beats) {
+            if let Beat::Say { need: Some(n), .. } = beat {
+                builds_in(n, &mut builds);
+            }
+        }
+        builds
+            .into_iter()
+            .filter(|id| content.profession(&game::ProfessionId::new(id)).is_none())
+            .collect()
+    }
+
+    #[test]
+    fn every_build_need_names_a_build() {
+        let c = Content::load().unwrap();
+        assert!(unknown_builds(&book(), &c).is_empty());
+        // The same check catches a build the content lacks.
+        let chef = with_steps(
+            r#"Step(id: "a", when: Holds(All([Build("solo"), Build("chef")])), then: [Log("hi")])"#,
+        )
+        .unwrap();
+        assert_eq!(unknown_builds(&chef, &c), ["chef"]);
     }
 
     #[test]

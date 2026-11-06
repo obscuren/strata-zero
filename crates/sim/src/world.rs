@@ -319,6 +319,51 @@ impl World {
         self.refresh_open();
     }
 
+    /// Holds a person where they are now: a walker stops where they stand and loiters
+    /// there, someone inside stays inside, someone already standing somewhere stays so.
+    /// The schedule does not move them until `release` (held as `keep_at_work` holds, and
+    /// saved with the world). A date they are on ends. Someone off the map or dead is
+    /// left alone.
+    pub fn keep_where(&mut self, id: PersonId) {
+        let i = id.0 as usize;
+        if i >= self.people.len() || self.dead.contains(&id) {
+            return;
+        }
+        let here = self.displaced.get(&id).map(|d| d.to);
+        let at = match &self.people[i].whereabouts {
+            Whereabouts::Away => return,
+            Whereabouts::Inside(b) => Whereabouts::Inside(*b),
+            Whereabouts::At { pos, activity } => Whereabouts::At {
+                pos: here.unwrap_or(*pos),
+                activity: *activity,
+            },
+            Whereabouts::Travelling(t) => Whereabouts::At {
+                pos: here
+                    .unwrap_or_else(|| Self::trip_pos(t, self.tick.saturating_sub(t.depart)).0),
+                activity: Activity::Loitering,
+            },
+        };
+        self.end_dates_of(id);
+        self.park_cars_of(i);
+        self.displaced.remove(&id);
+        self.chat_resume.remove(&id);
+        self.pending.retain(|r| r.who != id);
+        self.satisfied.remove(&id);
+        // A walker's trip is cut short: their goal is no longer where they stand, so
+        // the schedule sends them on again the minute they are released.
+        if matches!(self.people[i].whereabouts, Whereabouts::Travelling(_)) {
+            let due = self.due(i, self.minute_of_day());
+            self.people[i].goal = if due == Goal::Home {
+                Goal::Work
+            } else {
+                Goal::Home
+            };
+        }
+        self.people[i].whereabouts = at;
+        self.held.insert(id);
+        self.refresh_open();
+    }
+
     /// Ends any date this person is on: the other one comes out as a date's end has
     /// them, the worker back on the beat, the client at the hotel's door.
     fn end_dates_of(&mut self, id: PersonId) {
@@ -1206,7 +1251,11 @@ impl World {
             .people
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.profession == "sex_worker" && !self.dead.contains(&p.id))
+            .filter(|(_, p)| {
+                p.profession == "sex_worker"
+                    && !self.dead.contains(&p.id)
+                    && !self.held.contains(&p.id)
+            })
             .filter_map(|(i, p)| match p.whereabouts {
                 Whereabouts::At {
                     pos,
@@ -1220,7 +1269,10 @@ impl World {
             .iter()
             .enumerate()
             .filter(|(_, p)| {
-                !self.dead.contains(&p.id) && p.client && p.goal == Goal::Leisure(Leisure::Strip)
+                !self.dead.contains(&p.id)
+                    && !self.held.contains(&p.id)
+                    && p.client
+                    && p.goal == Goal::Leisure(Leisure::Strip)
             })
             .filter_map(|(i, p)| match p.whereabouts {
                 Whereabouts::At {
@@ -1640,6 +1692,63 @@ mod tests {
         run_to(&mut w, &c, tick_at(16 * 60, 1));
         assert!(working_in(&w, b, id), "still at work six hours on");
         assert!(w.is_open(b));
+    }
+
+    #[test]
+    fn keep_where_holds_a_walker_where_they_stand() {
+        let c = city();
+        let mut w = world(&c);
+        // Step through a morning until someone is out walking.
+        let mut t = tick_at(7 * 60, 1);
+        run_to(&mut w, &c, t);
+        let walker = |w: &World| {
+            w.people().iter().map(|p| p.id).find(|id| {
+                matches!(
+                    w.people[id.0 as usize].whereabouts,
+                    Whereabouts::Travelling(_)
+                ) && w.pos_of(*id).is_some()
+            })
+        };
+        let id = loop {
+            if let Some(id) = walker(&w) {
+                break id;
+            }
+            t += TICKS_PER_MINUTE;
+            assert!(t < tick_at(11 * 60, 1), "nobody walked all morning");
+            run_to(&mut w, &c, t);
+        };
+        let spot = w.pos_of(id).unwrap();
+        w.keep_where(id);
+        assert!(w.is_held(id));
+        assert_eq!(w.pos_of(id), Some(spot));
+        run_to(&mut w, &c, t + 60 * TICKS_PER_MINUTE);
+        assert_eq!(w.pos_of(id), Some(spot), "an hour on, not a step taken");
+        assert!(w.is_held(id));
+        w.release(id);
+        assert!(!w.is_held(id));
+        run_to(&mut w, &c, t + 180 * TICKS_PER_MINUTE);
+        assert_ne!(
+            w.people[id.0 as usize].whereabouts,
+            Whereabouts::At {
+                pos: spot,
+                activity: Activity::Loitering
+            },
+            "the schedule moves them again"
+        );
+    }
+
+    #[test]
+    fn keep_where_keeps_someone_inside_inside() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, b) = a_doc(&w);
+        run_to(&mut w, &c, tick_at(10 * 60, 1));
+        w.keep_at_work(id);
+        w.release(id);
+        w.keep_where(id);
+        assert!(w.is_held(id));
+        run_to(&mut w, &c, tick_at(16 * 60, 1));
+        assert!(w.inside(b).iter().any(|o| o.id == id), "still in");
     }
 
     #[test]
