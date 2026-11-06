@@ -16,6 +16,7 @@ pub mod help;
 pub mod jobs_tab;
 pub mod keypad;
 pub mod kit;
+pub mod manual;
 pub mod messages;
 pub mod outside;
 pub mod pause;

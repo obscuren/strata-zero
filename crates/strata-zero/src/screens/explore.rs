@@ -1807,6 +1807,14 @@ impl MapScreen {
             }
             KeyCode::Char('d') => self.digital = !self.digital,
             KeyCode::Char('?') => self.help = !self.help,
+            // The key list's last line: space turns to the manual's Controls chapter.
+            KeyCode::Char(' ') if self.help => {
+                self.help = false;
+                return Some(ScreenCmd::Push {
+                    to: Box::new(crate::screens::manual::Manual::at_chapter("controls")),
+                    fx: TransitionKind::None,
+                });
+            }
             KeyCode::Tab => {
                 // off the live city's cells your mark is off its map: the MAP is the
                 // world's, as it is out on the overworld

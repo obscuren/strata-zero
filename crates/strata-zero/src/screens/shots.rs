@@ -5520,3 +5520,43 @@ fn coz_shots() {
         shot_stack(&name("keep"), &st, &[&map, &deck, &pop], size);
     }
 }
+
+/// The MANUAL booklet over the title: the cover, the contents, and a spread from every
+/// chapter, at the smallest terminal and the window's usual size.
+#[test]
+#[ignore]
+fn manual_pages() {
+    use crate::manual::book::{Book, book};
+    use crate::screens::manual::Manual;
+    let st = AppState::new();
+    let title = crate::screens::title::Title::new(&st, 0);
+    let mut shots: Vec<(String, Manual)> = vec![("cover".into(), Manual::new())];
+    let mut spreads = vec![1];
+    for (c, ch) in crate::manual::chapters().iter().enumerate() {
+        let s = Book::spread_of(book().starts[c]);
+        if !spreads.contains(&s) {
+            spreads.push(s);
+            shots.push((ch.slug.to_string(), Manual::at_chapter(ch.slug)));
+        }
+    }
+    shots.insert(
+        1,
+        ("contents".into(), Manual::at_chapter("getting-started")),
+    );
+    let mut last = Manual::at_chapter("saving-and-dying");
+    let mut stx = AppState::new();
+    for _ in 0..book().spreads() {
+        last.update(&mut stx, &[key(KeyCode::Right)]);
+    }
+    shots.push(("last".into(), last));
+    for (name, m) in &shots {
+        for size in [(100, 30), (120, 40)] {
+            shot_stack(
+                &format!("manual_{name}_{}x{}", size.0, size.1),
+                &st,
+                &[&title, m],
+                size,
+            );
+        }
+    }
+}

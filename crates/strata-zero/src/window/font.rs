@@ -710,6 +710,7 @@ mod tests {
         let mut found = Vec::new();
         files(&root.join("src"), "rs", &mut found);
         files(&root.join("../../flavor"), "ron", &mut found);
+        files(&root.join("../../manual"), "md", &mut found);
         let shape = |c: char| super::super::shapes::shape(c, 8, 16).is_some();
         let mut chars = BTreeSet::new();
         for file in found {

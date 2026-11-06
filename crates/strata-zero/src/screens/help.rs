@@ -27,39 +27,21 @@ const EXPLORE: &[(&str, &str)] = &[
     ("esc q", "pause menu"),
 ];
 
-const WALK: &[(&str, &str)] = &[
+/// The keys on foot; the Controls chapter's On foot table lists the same keys
+/// (`manual::tests::the_on_foot_table_is_the_key_list`).
+pub(crate) const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
-    ("< >", "take stairs, lift, ladder or manhole"),
-    ("W", "up to the overworld, from the street or the ground"),
-    ("W on the Net", "the Net over the world, to walk"),
-    (
-        "space",
-        "the thing in reach: look, talk, take, jack in, stairs · continue a run",
-    ),
-    ("1-5", "fire an ability · jacked in: run a program"),
+    ("< >", "down · up: stairs, a lift, a ladder, a manhole"),
+    ("W", "the overworld, from the open street or the Net"),
+    ("space", "the thing in reach: look, talk, take, jack in"),
+    ("space", "on turns: stay put · jacked in: run the program"),
+    ("x", "look: a cursor on the map · tab next · esc back"),
+    ("1-5", "fire an ability · jacked in: pick a program"),
     ("a", "abilities: the full list"),
     ("J", "jacked in: jack out (asks first)"),
-    (
-        "x",
-        "look: a cursor on the map · tab next thing · space opens it · esc back",
-    ),
-    (".", "hurry the beat · in a fight: end your turn"),
-    (
-        "e",
-        "jacked in: turns by hand, and back when nothing hunts you",
-    ),
-    (
-        "g",
-        "aim a walk (on turns the arrows aim) · space or enter walks · esc drops",
-    ),
-    (
-        "space",
-        "on turns: stay put (move half over) · runs the picked program",
-    ),
-    (
-        "1-5",
-        "jacked in: pick a program, then its target (tab) · space runs it",
-    ),
+    ("e", "turns by hand · again: back to real time"),
+    (".", "end your turn · jacked in: hurry the beat"),
+    ("g", "on turns: aim a walk · enter walks · esc drops"),
     ("tab", "the deck: Q E switch tabs · tab again closes"),
     ("F1-F4", "panes: here · jobs · map · log"),
     ("F5 F6", "inspect · legend (dev mode)"),
@@ -75,7 +57,10 @@ const WALK: &[(&str, &str)] = &[
 ];
 
 /// The keys that only work in dev mode, left off the list until it is unlocked.
-const DEV_KEYS: &[&str] = &["F5 F6", "c", ":", "`"];
+pub(crate) const DEV_KEYS: &[&str] = &["F5 F6", "c", ":", "`"];
+
+/// The line under the keys: the way on to the manual.
+pub const MANUAL_LINE: &str = " space opens the manual · ? closes";
 
 /// Draws the key list for `mode` centred over whatever is already on screen; the dev
 /// mode keys only with `dev` (dev mode unlocked).
@@ -92,14 +77,20 @@ pub fn draw(f: &mut Frame, mode: Mode, dev: bool) {
         Mode::Explore => "KEYS · EXPLORE",
         Mode::Walk => "KEYS · WALK",
     };
-    draw_keys(f, title, &rows);
+    draw_keys_and(f, title, &rows, Some(MANUAL_LINE));
 }
 
 /// A key list under `title`, centred over whatever is already on screen.
 pub fn draw_keys(f: &mut Frame, title: &str, rows: &[(&str, &str)]) {
+    draw_keys_and(f, title, rows, None);
+}
+
+/// `draw_keys`, with `foot` dim on a last line of its own.
+fn draw_keys_and(f: &mut Frame, title: &str, rows: &[(&str, &str)], foot: Option<&str>) {
     let area = f.area();
     let w = area.width.min(72);
-    let h = area.height.min(rows.len() as u16 + 2);
+    let extra = if foot.is_some() { 2 } else { 0 };
+    let h = area.height.min(rows.len() as u16 + 2 + extra);
     let rect = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height - h) / 2,
@@ -110,7 +101,7 @@ pub fn draw_keys(f: &mut Frame, title: &str, rows: &[(&str, &str)]) {
     let block = boxed(title);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let lines: Vec<Line> = rows
+    let mut lines: Vec<Line> = rows
         .iter()
         .map(|(k, what)| {
             Line::from(vec![
@@ -125,6 +116,13 @@ pub fn draw_keys(f: &mut Frame, title: &str, rows: &[(&str, &str)]) {
             ])
         })
         .collect();
+    if let Some(foot) = foot {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            foot.to_string(),
+            Style::default().fg(Color::Rgb(120, 130, 145)),
+        )));
+    }
     f.render_widget(Paragraph::new(lines), inner);
 }
 

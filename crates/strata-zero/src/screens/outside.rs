@@ -1137,8 +1137,10 @@ mod tests {
         t.draw(|f| crate::screens::help::draw(f, crate::screens::explore::Mode::Walk, false))
             .unwrap();
         let page = buffer_text(t.backend().buffer());
-        assert!(page.contains("up to the overworld"), "{page}");
-        assert!(page.contains("the street or the ground"), "{page}");
+        assert!(
+            page.contains("the overworld, from the open street"),
+            "{page}"
+        );
     }
 
     #[test]
@@ -1951,7 +1953,7 @@ mod tests {
         t.draw(|f| crate::screens::help::draw(f, crate::screens::explore::Mode::Walk, false))
             .unwrap();
         let page = buffer_text(t.backend().buffer());
-        assert!(page.contains("the Net over the world, to walk"), "{page}");
+        assert!(page.contains("open street or the Net"), "{page}");
     }
 
     #[test]

@@ -30,6 +30,7 @@ mod interiors;
 mod jobs;
 mod look;
 mod mail_mark;
+mod manual;
 mod messages;
 mod missions;
 mod net;
