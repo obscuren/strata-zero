@@ -612,13 +612,13 @@ pub(crate) mod tests {
 
     #[test]
     fn someone_whose_way_in_never_walks_to_work_stays_in_town() {
-        // seed 0's Northmarch as the game seeds it (housed): many who work there have no
+        // seed 55's Staticgate as the game seeds it (housed): some who work there have no
         // flat they can walk to work from, and no way in that walks to their work: they
         // don't commute, but stay at or inside their work all day, as before anyone
         // commuted
-        let (_, params) = settlements_of(0)
+        let (_, params) = settlements_of(55)
             .into_iter()
-            .find(|(n, _)| n == "Northmarch")
+            .find(|(n, _)| n == "Staticgate")
             .unwrap();
         let c = Generator::run(params).unwrap();
         let places = Places::derive(&c);
@@ -643,7 +643,7 @@ pub(crate) mod tests {
             .filter(|(_, p)| matches!(p.work, Work::Building(b) if !walks_to(b)))
             .map(|(i, _)| i)
             .collect();
-        assert!(stay.len() >= 50, "{} stay in town", stay.len());
+        assert!(stay.len() >= 15, "{} stay in town", stay.len());
         for m in 0..24 * 60 {
             for &i in &stay {
                 let p = &w.people()[i];
@@ -859,14 +859,14 @@ pub(crate) mod tests {
     #[test]
     fn a_commuters_way_in_walks_to_work() {
         // the cities and towns where the review found people coming in by a way that
-        // never walks to their work (and 21's Ironfall, as 21's Ironburg has nobody
-        // commuting since its districts are its colours): every one now comes by one
-        // that does, or stays in town
+        // never walks to their work (and 21's Chromegate, as 21's Ironburg and Ironfall
+        // have nobody commuting since their districts are their colours and they house
+        // their people): every one now comes by one that does, or stays in town
         for (seed, name) in [
             (0, "Portgate"),
             (2, "Porthaven"),
             (10, "Northspire"),
-            (21, "Ironfall"),
+            (21, "Chromegate"),
             (23, "Staticwick"),
         ] {
             let (_, params) = settlements_of(seed)
