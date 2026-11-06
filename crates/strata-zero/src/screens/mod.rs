@@ -169,13 +169,27 @@ mod tests {
 
     #[test]
     fn a_home_city_casts_the_whole_story() {
-        // a home city on its site is smaller than a lone large city: it still has the
-        // runner's home and someone for every role the story needs (but a second fixer)
-        for seed in [41u64, 3, 8, 26] {
+        // a new game's home city takes its districts from the overworld's colours, and
+        // the world colours it with what the story needs: the blocks for the runner's
+        // home, a night market for the cook's noodle bar across town (not in your own
+        // building), a ripperdoc in a clinic, and the strip's two fixers, Mezz and Coz
+        // (the world's colours left 2 and 19 without a market, 11 and 20 without the
+        // strip, before the story's needs were given to the home city)
+        for seed in [41u64, 3, 8, 26, 2, 11, 19, 20] {
             let mut st = AppState::new();
             let city = super::build_home(st.params.clone().with_seed(seed)).unwrap();
+            for need in [
+                citygen::Theme::NightMarket,
+                citygen::Theme::NeonStrip,
+                citygen::Theme::Megablocks,
+            ] {
+                assert!(
+                    city.districts.iter().any(|d| d.theme == need),
+                    "seed {seed}: no {need:?} district"
+                );
+            }
             st.enter_city(city);
-            assert!(st.home.is_some(), "seed {seed}: no home rig");
+            let home = st.home.expect("a home rig").home.building;
             crate::missions::begin(&mut st);
             let uncast: Vec<&str> = st
                 .missions
@@ -185,19 +199,23 @@ mod tests {
                 .filter(|(r, _)| r.state == crate::missions::RunState::Uncast)
                 .map(|(_, m)| m.id.as_str())
                 .collect();
-            // a city with one fixer leaves Coz's ledger unplayed, as the story allows
-            let fixers = st
-                .world
-                .as_ref()
-                .unwrap()
-                .people()
-                .iter()
-                .filter(|p| p.profession == "fixer")
-                .count();
-            let allowed: &[&str] = if fixers < 2 { &["ledger"] } else { &[] };
-            assert!(
-                uncast.iter().all(|m| allowed.contains(m)),
-                "seed {seed}: uncast {uncast:?} with {fixers} fixers"
+            assert!(uncast.is_empty(), "seed {seed}: uncast {uncast:?}");
+            let city = st.city.as_ref().unwrap();
+            let works_at = |role: &str| {
+                let who = st.missions.cast[role];
+                crate::missions::cast::work_building(&st, who).map(|b| (b, city.building(b).kind))
+            };
+            let (cook, kind) = works_at("marlo").expect("the cook works indoors");
+            assert_eq!(kind, citygen::BuildingKind::NoodleBar, "seed {seed}");
+            assert_ne!(cook, home, "seed {seed}: the cook is in your own building");
+            assert_eq!(
+                works_at("odile").map(|(_, k)| k),
+                Some(citygen::BuildingKind::Clinic),
+                "seed {seed}"
+            );
+            assert_ne!(
+                st.missions.cast["mezz"], st.missions.cast["coz"],
+                "seed {seed}: two fixers"
             );
         }
     }
