@@ -947,6 +947,31 @@ pub fn path_within(
     Some(path.into_iter().map(outer).collect())
 }
 
+/// The cheapest way from `start` to the nearest cell `target` takes, four ways within
+/// `area`, as `citygen::pathing::cheapest_to` finds it on a map of its own; `cost` and
+/// `target` are asked in the live city's frame, as `path_within` asks.
+pub fn cheapest_within(
+    area: Rect,
+    start: Pos,
+    cost: impl Fn(Pos, Pos) -> Option<u32>,
+    target: impl Fn(Pos) -> bool,
+) -> Option<Vec<Pos>> {
+    let o = Pos::new(area.x, area.y);
+    let size = Size {
+        w: area.w.max(0) as u32,
+        h: area.h.max(0) as u32,
+    };
+    let inner = |p: Pos| Pos::new(p.x - o.x, p.y - o.y);
+    let outer = |p: Pos| Pos::new(p.x + o.x, p.y + o.y);
+    let path = citygen::pathing::cheapest_to(
+        size,
+        inner(start),
+        |a, b| cost(outer(a), outer(b)),
+        |p| target(outer(p)),
+    )?;
+    Some(path.into_iter().map(outer).collect())
+}
+
 /// On foot on the street, or your Net self on the Net, on a cell another city or town
 /// owns: the run handed over to it in place (`enter`), you on the same world cell in its
 /// frame, its street remembering what the world's record has seen of it, your bots

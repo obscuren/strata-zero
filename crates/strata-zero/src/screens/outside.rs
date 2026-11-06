@@ -1870,7 +1870,8 @@ mod tests {
         assert!(you.chebyshev(came) > 4, "{you:?} from {came:?}");
         let v = crate::net::cord_view(&st).expect("the cord");
         assert_eq!((v.entry, v.port), (came, Some(came)));
-        let walk = crate::net::cord_walk_beyond(&st, v.entry, you);
+        let view = citygen::Rect::new(you.x - 60, you.y - 20, 120, 40);
+        let walk = crate::net::cord_walk_beyond(&st, v.entry, you, view);
         assert_eq!(walk.first(), Some(&came));
         assert_eq!(walk.last().map(|q| q.manhattan(you)), Some(1));
         assert!(walk.windows(2).all(|w| w[0].manhattan(w[1]) == 1));
@@ -1879,26 +1880,6 @@ mod tests {
         let page = text(&st, &m, 120, 40);
         assert!(page.contains('▣'), "the port on the map: {page}");
         assert!(page.contains('▪'), "the port on the minimap: {page}");
-    }
-
-    #[test]
-    fn far_out_the_cord_runs_straight() {
-        let (mut st, _m) = jacked_by_a_pump();
-        let port = crate::net::port_of(&st).unwrap();
-        let far = port.offset(crate::net::CORD_REACH + 40, -30);
-        st.player.as_mut().unwrap().pos = far;
-        let walk = crate::net::cord_walk_beyond(&st, port, far);
-        assert_eq!(walk.len() as i32, port.manhattan(far));
-        assert_eq!(walk.first(), Some(&port));
-        let mut to_go = port.manhattan(far);
-        for q in &walk[1..] {
-            assert_eq!(q.manhattan(far), to_go - 1, "straight on: {q:?}");
-            to_go -= 1;
-        }
-        // and off the world altogether, the same
-        let gone = port.offset(-5000, 10);
-        let walk = crate::net::cord_walk_beyond(&st, port, gone);
-        assert_eq!(walk.len() as i32, port.manhattan(gone));
     }
 
     #[test]
