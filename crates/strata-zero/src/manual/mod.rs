@@ -2,6 +2,7 @@
 //! written in the manual's own Markdown (`manual/README.md`), and the booklet they make.
 
 pub mod book;
+pub mod desk;
 pub mod layout;
 pub mod markdown;
 

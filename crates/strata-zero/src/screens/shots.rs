@@ -5560,3 +5560,28 @@ fn manual_pages() {
         }
     }
 }
+
+/// The desk the MANUAL opens at, a few moments apart, then halfway through leaning in
+/// and leaned in.
+#[test]
+#[ignore]
+fn manual_desk() {
+    use crate::screens::manual::{LEAN_TICKS, Manual};
+    for size in [(100, 30), (120, 40), (160, 50)] {
+        let mut st = AppState::new();
+        let mut m = Manual::new();
+        for tick in [40, 400, 1300] {
+            st.tick = tick;
+            let name = format!("manual_desk_{tick}_{}x{}", size.0, size.1);
+            shot_stack(&name, &st, &[&m], size);
+        }
+        m.update(&mut st, &[key(KeyCode::Char(' '))]);
+        st.tick += LEAN_TICKS / 2;
+        let name = format!("manual_desk_leaning_{}x{}", size.0, size.1);
+        shot_stack(&name, &st, &[&m], size);
+        st.tick += LEAN_TICKS;
+        m.update(&mut st, &[]);
+        let name = format!("manual_desk_leaned_{}x{}", size.0, size.1);
+        shot_stack(&name, &st, &[&m], size);
+    }
+}

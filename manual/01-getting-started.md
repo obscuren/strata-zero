@@ -49,4 +49,4 @@ From there the city comes to you. Calls ring in, mail lands on your rig, and the
 
 ## Finding your way around this manual
 
-The contents are on page 1. Use `↑↓` to pick a chapter and `space` to turn to it. While reading, `← →` turns the page, `[ ]` jumps a chapter at a time, `c` takes you back to the contents and `esc` closes the booklet. It opens from the title screen, from the pause menu, and from the `?` key list.
+The manual opens at your desk, its cover on your screen. Press `space` to lean in and read. The contents are on page 1: `↑↓` picks a chapter and `space` turns to it. While reading, `← →` turns the page, `[ ]` jumps a chapter at a time and `c` takes you back to the contents. `esc` leans back from the screen, and `q` closes the manual. It opens from the title screen, from the pause menu, and from the `?` key list.

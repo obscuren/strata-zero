@@ -1,22 +1,19 @@
-//! MANUAL: the booklet from the box. The cover alone first, the closed booklet; then two
-//! pages at a time on the game's own dark, stapled at the spine: the contents on page
-//! 1, every chapter opening on a page of its own (`manual::book`).
+//! MANUAL: the booklet from the box, read at your desk. It opens with you at the desk
+//! (`manual::desk`), the cover on the screen; space leans in until the screen is the
+//! booklet: two pages at a time on the game's own dark, stapled at the spine, the
+//! contents on page 1, every chapter opening on a page of its own (`manual::book`).
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::manual::book::{Book, Page, book};
 use crate::manual::chapters;
-use crate::render::Rgb;
-use crate::ui::chrome::{CYAN, DIM, FAINT, MAGENTA, MAGENTA_RGB, PANEL_BG, RULE, TEXT};
-use crate::ui::cyberdeck::Pen;
-use crate::ui::logo::{self, Logo};
-use crate::ui::pixels::Pixels;
+use crate::manual::desk::Desk;
+use crate::ui::chrome::{CYAN, DIM, FAINT, MAGENTA, PANEL_BG, RULE, TEXT};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
 
 /// A page, its frame and margins included.
 const PAGE_W: u16 = 46;
@@ -28,46 +25,57 @@ const SPREAD_W: u16 = 2 * PAGE_W + SPINE_W;
 /// Where a page's text starts, from its top left.
 const TEXT_X: u16 = 3;
 const TEXT_Y: u16 = 4;
+/// How long leaning in or out takes: about 0.7 s.
+pub const LEAN_TICKS: u64 = 22;
 
 /// The paper, the spine and its staples.
 const SHEET: Color = Color::Rgb(10, 14, 21);
 const SPINE: Color = Color::Rgb(21, 28, 39);
 const STAPLE: Color = Color::Rgb(140, 150, 164);
-/// The edge the closed booklet casts on what it lies on.
-const EDGE: Color = Color::Rgb(31, 40, 54);
 /// A contents line's dots.
 const LEADER: Color = Color::Rgb(58, 70, 86);
 
-/// Where the booklet is open.
+/// Where you are with the booklet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum At {
-    /// Closed, the cover up.
-    Cover,
-    /// Open on spread `n`: pages 2n-1 and 2n.
+    /// Sat back at the desk, the cover on the screen.
+    Desk,
+    /// Leaned in, open on spread `n`: pages 2n-1 and 2n.
     Spread(usize),
+}
+
+/// A lean in flight: from which tick, and which way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Lean {
+    start: u64,
+    inward: bool,
 }
 
 pub struct Manual {
     at: At,
     /// The chapter the contents' cursor is on.
     pick: usize,
+    lean: Option<Lean>,
 }
 
 impl Manual {
-    /// The booklet closed, the cover up.
+    /// You at your desk, the cover on the screen.
     pub fn new() -> Self {
         Manual {
-            at: At::Cover,
+            at: At::Desk,
             pick: 0,
+            lean: None,
         }
     }
 
-    /// The booklet open where chapter `slug` begins; the cover for one it doesn't have.
+    /// Leaned in already, the booklet open where chapter `slug` begins; the desk for a
+    /// chapter it doesn't have.
     pub fn at_chapter(slug: &str) -> Self {
         match crate::manual::find(slug) {
             Some(c) => Manual {
                 at: At::Spread(Book::spread_of(book().starts[c])),
                 pick: c,
+                lean: None,
             },
             None => Manual::new(),
         }
@@ -79,11 +87,30 @@ impl Manual {
         self.at = At::Spread(Book::spread_of(book().starts[c]));
     }
 
+    /// How far leaned in at `tick`: 0 at the desk, 1 in the booklet, eased between.
+    fn leaned(&self, tick: u64) -> f32 {
+        let Some(l) = self.lean else {
+            return if self.at == At::Desk { 0.0 } else { 1.0 };
+        };
+        let p = (tick.saturating_sub(l.start) as f32 / LEAN_TICKS as f32).min(1.0);
+        let p = if l.inward { p } else { 1.0 - p };
+        if p < 0.5 {
+            4.0 * p * p * p
+        } else {
+            1.0 - (-2.0 * p + 2.0).powi(3) / 2.0
+        }
+    }
+
     fn keys_line(&self) -> &'static str {
-        match self.at {
-            At::Cover => "space open · esc close",
-            At::Spread(1) => "↑↓ choose · space turn to it · → turn the page · esc close",
-            At::Spread(_) => "← → turn the page · [ ] chapters · c contents · esc close",
+        match (self.lean, self.at) {
+            (Some(_), _) => "",
+            (None, At::Desk) => "space read the manual · esc close",
+            (None, At::Spread(1)) => {
+                "↑↓ choose · space turn to it · → turn the page · esc lean back · q close"
+            }
+            (None, At::Spread(_)) => {
+                "← → turn the page · [ ] chapters · c contents · esc lean back · q close"
+            }
         }
     }
 }
@@ -95,27 +122,58 @@ impl Default for Manual {
 }
 
 impl Screen for Manual {
-    fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+    fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // a lean done: in, you're in the booklet; out, you're back at the desk
+        if let Some(l) = self.lean
+            && st.tick >= l.start + LEAN_TICKS
+        {
+            if !l.inward {
+                self.at = At::Desk;
+            }
+            self.lean = None;
+        }
         let book = book();
         let last = book.spreads();
         let count = chapters().len();
         for k in keys {
+            if k.code == KeyCode::Char('q') {
+                return ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                };
+            }
+            if self.lean.is_some() {
+                continue;
+            }
+            let lean_out = Some(Lean {
+                start: st.tick,
+                inward: false,
+            });
             match (self.at, k.code) {
-                (_, KeyCode::Esc | KeyCode::Char('q')) => {
+                (At::Desk, KeyCode::Esc) => {
                     return ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     };
                 }
                 (
-                    At::Cover,
+                    At::Desk,
                     KeyCode::Char(' ')
                     | KeyCode::Enter
                     | KeyCode::Right
                     | KeyCode::Char('l')
                     | KeyCode::PageDown,
-                ) => self.at = At::Spread(1),
+                ) => {
+                    self.at = At::Spread(1);
+                    self.lean = Some(Lean {
+                        start: st.tick,
+                        inward: true,
+                    });
+                }
+                (At::Spread(_), KeyCode::Esc) => self.lean = lean_out,
+                (At::Spread(1), KeyCode::Left | KeyCode::Char('h') | KeyCode::PageUp) => {
+                    self.lean = lean_out;
+                }
                 (At::Spread(s), KeyCode::Left | KeyCode::Char('h') | KeyCode::PageUp) => {
-                    self.at = if s <= 1 { At::Cover } else { At::Spread(s - 1) };
+                    self.at = At::Spread(s - 1);
                 }
                 (At::Spread(s), KeyCode::Right | KeyCode::Char('l') | KeyCode::PageDown) => {
                     self.at = At::Spread((s + 1).min(last));
@@ -154,32 +212,46 @@ impl Screen for Manual {
         if area.width < SPREAD_W || area.height < PAGE_H + 1 {
             return;
         }
+        let x = area.x + (area.width - SPREAD_W) / 2;
         let y = area.y + (area.height - PAGE_H - 1) / 2;
         let buf = f.buffer_mut();
-        match self.at {
-            At::Cover => cover(buf, area.x + (area.width - PAGE_W) / 2, y, st.tick),
-            At::Spread(s) => {
-                let x = area.x + (area.width - SPREAD_W) / 2;
+        let desk = Desk::new(area.width, area.height);
+        let booklet = Rect::new(x, y, SPREAD_W, PAGE_H);
+        match (self.lean, self.at) {
+            (None, At::Desk) => desk.draw(buf, area, st.tick),
+            (None, At::Spread(s)) => {
+                desk.draw_leaned(buf, area, st.tick, 1.0, booklet);
                 spread(buf, x, y, s, self.pick);
             }
-        }
-        // the keys line on a strip of its own, so nothing beneath reads through it
-        let strip = Rect::new(
-            area.x + (area.width - SPREAD_W) / 2,
-            y + PAGE_H,
-            SPREAD_W,
-            1,
-        );
-        for x in strip.x..strip.right() {
-            buf[(x, strip.y)].reset();
-            buf[(x, strip.y)].set_bg(PANEL_BG);
+            (Some(_), _) => {
+                desk.draw_leaned(buf, area, st.tick, self.leaned(st.tick), booklet);
+            }
         }
         let keys = self.keys_line();
+        if keys.is_empty() {
+            return;
+        }
+        // the keys line on a strip of its own, so nothing beneath reads through it: under
+        // the booklet, or along the bottom at the desk
         let w = keys.chars().count() as u16;
+        let strip = if self.at == At::Desk {
+            Rect::new(
+                area.x + area.width.saturating_sub(w + 2) / 2,
+                area.bottom() - 1,
+                (w + 2).min(area.width),
+                1,
+            )
+        } else {
+            Rect::new(x, y + PAGE_H, SPREAD_W, 1)
+        };
+        for cx in strip.x..strip.right() {
+            buf[(cx, strip.y)].reset();
+            buf[(cx, strip.y)].set_bg(PANEL_BG);
+        }
         put(
             buf,
             area.x + area.width.saturating_sub(w) / 2,
-            y + PAGE_H,
+            strip.y,
             keys,
             Style::default().fg(DIM).bg(PANEL_BG),
         );
@@ -222,148 +294,6 @@ fn sheet(buf: &mut Buffer, r: Rect) {
             buf[(x, y)].set_bg(SHEET);
         }
     }
-}
-
-/// The closed booklet: its frame, the logo in neon, the city drawn under it, its name.
-fn cover(buf: &mut Buffer, x: u16, y: u16, tick: u64) {
-    sheet(buf, Rect::new(x, y, PAGE_W, PAGE_H));
-    if x > buf.area.x {
-        for j in 0..PAGE_H {
-            let c = &mut buf[(x - 1, y + j)];
-            c.set_char('▐').set_fg(EDGE);
-        }
-    }
-    // the frame: heavy rules top and bottom, light sides
-    let edge = Style::default().fg(CYAN);
-    let rule = "━".repeat(PAGE_W as usize - 2);
-    put(buf, x, y, &format!("┍{rule}┑"), edge);
-    put(buf, x, y + PAGE_H - 1, &format!("┕{rule}┙"), edge);
-    for j in 1..PAGE_H - 1 {
-        put(buf, x, y + j, "│", edge);
-        put(buf, x + PAGE_W - 1, y + j, "│", edge);
-    }
-    // STRATA over ZERO, their right edges lined up
-    let lx = x + 5;
-    let gap = logo::width("STRATA") - logo::width("ZERO");
-    for (word, wx, wy) in [("STRATA", lx, y + 2), ("ZERO", lx + gap, y + 8)] {
-        Logo {
-            text: word,
-            tick,
-            accent: MAGENTA_RGB,
-            steady: true,
-        }
-        .render(Rect::new(wx, wy, logo::width(word), logo::ROWS), buf);
-    }
-    let art = city(PAGE_W - 4, 9);
-    let mut pen = Pen {
-        buf,
-        ox: x + 2,
-        oy: y + 14,
-        clip: Rect::new(x + 2, y + 14, PAGE_W - 4, 9),
-    };
-    art.fold(&mut pen, 0, 0);
-    let bold = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
-    put(buf, x + 3, y + 24, "PLAYER'S MANUAL", bold);
-    put(
-        buf,
-        x + 3,
-        y + 25,
-        "high tech · low life",
-        Style::default().fg(DIM),
-    );
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let vx = x + PAGE_W - 3 - version.chars().count() as u16;
-    put(buf, vx, y + 25, &version, Style::default().fg(FAINT));
-}
-
-/// The cover's drawing, `w` cells by `rows`: the Net's grid running back to a horizon
-/// high in the sky, the towers with their windows lit, the street's neon, the
-/// undercity's pipes and lamps under it. The same city every time.
-fn city(w: u16, rows: u16) -> Pixels {
-    let mut px = Pixels::new(w, rows);
-    let (w, h) = (i32::from(w), i32::from(rows) * 2);
-    let street = h * 3 / 4;
-    let col = |c: Rgb| c.to_color();
-    for y in 0..h {
-        let c = if y < street {
-            Rgb(20, 10, 42).mix(Rgb(42, 15, 58), y as f32 / street as f32)
-        } else {
-            Rgb(11, 7, 16).mix(Rgb(2, 2, 4), (y - street) as f32 / (h - street) as f32)
-        };
-        px.hline(0, w, y, col(c));
-    }
-    // the Net: rungs across the sky, rails running back to its horizon
-    let hz = (h / 6).max(3);
-    for y in [1, hz / 2] {
-        px.hline(0, w, y, col(Rgb(10, 61, 74)));
-    }
-    let cx = w / 2;
-    for k in -10..=10 {
-        for y in 0..hz {
-            let t = (hz - y) as f32 / hz as f32;
-            let x = cx + k * 3 + (k as f32 * 9.0 * t) as i32;
-            px.px(x, y, Some(col(Rgb(11, 90, 106))));
-        }
-    }
-    px.hline(0, w, hz, col(Rgb(10, 109, 128)));
-    // towers: a dim row behind, a darker one in front with its windows lit
-    let mut dice = 0x5eed_u64;
-    let mut roll = |n: i32| -> i32 {
-        dice = citygen::rng::hash64(dice, 7);
-        (dice % n.max(1) as u64) as i32
-    };
-    let lights = [
-        Rgb(255, 209, 102),
-        Rgb(0, 229, 255),
-        Rgb(255, 79, 216),
-        Rgb(255, 233, 168),
-    ];
-    for (front, shade, lit) in [(false, Rgb(34, 24, 58), 10), (true, Rgb(18, 13, 30), 22)] {
-        let mut x = -roll(3);
-        while x < w {
-            let tw = 4 + roll(6);
-            let top = hz + 2 + roll((street - 5 - hz - 2).max(1)) + if front { 2 } else { 0 };
-            px.rect(x, top, x + tw, street, col(shade));
-            if roll(100) < 45 {
-                px.vline(x + tw / 2, top - 3, top, col(shade));
-            }
-            let mut wy = top + 2;
-            while wy < street - 1 {
-                let mut wx = x + 1;
-                while wx < x + tw - 1 {
-                    if roll(100) < lit {
-                        px.px(wx, wy, Some(col(lights[roll(4) as usize])));
-                    }
-                    wx += 2;
-                }
-                wy += 2;
-            }
-            if front && roll(100) < 40 && street - 4 >= top + 2 {
-                let sy = top + 2 + roll(street - 4 - top - 1);
-                let sign = if roll(2) == 0 {
-                    MAGENTA_RGB
-                } else {
-                    Rgb(0, 229, 255)
-                };
-                px.hline(x + 1, x + (tw - 1).max(3), sy, col(sign));
-            }
-            x += tw + roll(3);
-        }
-    }
-    // the street's neon and its glow, the undercity's pipes and lamps
-    px.hline(0, w, street, col(MAGENTA_RGB));
-    px.hline(0, w, street + 1, col(Rgb(90, 11, 72)));
-    for y in [street + 4, street + 7] {
-        for x in 0..w {
-            if (x / 7 + y) % 3 != 0 {
-                px.px(x, y, Some(col(Rgb(29, 36, 48))));
-            }
-        }
-    }
-    for x in (3..w).step_by(11) {
-        px.px(x, street + 5, Some(col(Rgb(255, 179, 71))));
-    }
-    px
 }
 
 /// The booklet open on spread `s`: two pages and the spine, staples in it.
@@ -541,10 +471,11 @@ mod tests {
 
     #[test]
     fn the_booklet_fits_every_size_without_panicking() {
-        let st = AppState::new();
+        let mut st = AppState::new();
         let mut m = Manual::new();
         let mut stx = AppState::new();
-        for at in 0..4 {
+        for at in 0..6 {
+            st.tick += 7;
             for (w, h) in [
                 (100u16, 30u16),
                 (94, 29),
@@ -560,27 +491,70 @@ mod tests {
         }
     }
 
+    /// Lets a lean in flight finish: the ticks go by and a frame passes.
+    fn settle(m: &mut Manual, st: &mut AppState) {
+        st.tick += LEAN_TICKS;
+        m.update(st, &[]);
+    }
+
     #[test]
-    fn the_cover_opens_on_the_contents() {
+    fn the_desk_leans_in_to_the_contents() {
         let mut st = AppState::new();
         let mut m = Manual::new();
-        let cover = draw(&m, &st, 100, 30);
+        let desk = draw(&m, &st, 100, 30);
         assert!(
-            cover.contains("PLAYER'S MANUAL") && cover.contains("space open"),
-            "{cover}"
+            desk.contains("PLAYER'S MANUAL") && desk.contains("space read the manual"),
+            "{desk}"
         );
         assert!(matches!(
             press(&mut m, &mut st, KeyCode::Char(' ')),
             ScreenCmd::Stay
         ));
+        // on the way in: no words yet, keys wait
+        st.tick += LEAN_TICKS / 2;
+        let halfway = draw(&m, &st, 100, 30);
+        assert!(!halfway.contains("CONTENTS"), "{halfway}");
+        assert!(m.leaned(st.tick) > 0.0 && m.leaned(st.tick) < 1.0);
+        press(&mut m, &mut st, KeyCode::Down);
+        assert_eq!(m.pick, 0, "keys wait for the lean");
+        settle(&mut m, &mut st);
         let open = draw(&m, &st, 100, 30);
-        assert!(open.contains("CONTENTS"), "{open}");
+        assert!(
+            open.contains("CONTENTS") && open.contains("esc lean back"),
+            "{open}"
+        );
         for ch in chapters() {
             assert!(open.contains(&ch.title), "{} missing:\n{open}", ch.title);
         }
-        // back past the contents closes it again
+    }
+
+    #[test]
+    fn esc_leans_back_and_esc_at_the_desk_closes() {
+        let mut st = AppState::new();
+        let mut m = Manual::at_chapter("controls");
+        assert!(matches!(
+            press(&mut m, &mut st, KeyCode::Esc),
+            ScreenCmd::Stay
+        ));
+        settle(&mut m, &mut st);
+        assert_eq!((m.at, m.lean), (At::Desk, None));
+        assert!(draw(&m, &st, 120, 40).contains("PLAYER'S MANUAL"));
+        assert!(matches!(
+            press(&mut m, &mut st, KeyCode::Esc),
+            ScreenCmd::Pop { .. }
+        ));
+        // q closes from anywhere, mid-lean included
+        let mut m = Manual::new();
+        press(&mut m, &mut st, KeyCode::Char(' '));
+        assert!(matches!(
+            press(&mut m, &mut st, KeyCode::Char('q')),
+            ScreenCmd::Pop { .. }
+        ));
+        // left past the contents leans back out too
+        let mut m = Manual::at_chapter("getting-started");
         press(&mut m, &mut st, KeyCode::Left);
-        assert!(draw(&m, &st, 100, 30).contains("PLAYER'S MANUAL"));
+        settle(&mut m, &mut st);
+        assert_eq!(m.at, At::Desk);
     }
 
     #[test]
@@ -588,6 +562,7 @@ mod tests {
         let mut st = AppState::new();
         let mut m = Manual::new();
         press(&mut m, &mut st, KeyCode::Char(' '));
+        settle(&mut m, &mut st);
         let to = chapters().len() - 1;
         for _ in 0..to + 3 {
             press(&mut m, &mut st, KeyCode::Down);
@@ -610,16 +585,17 @@ mod tests {
     fn pages_turn_and_stop_at_the_ends() {
         let mut st = AppState::new();
         let mut m = Manual::at_chapter("getting-started");
-        assert_eq!(m.at, At::Spread(1));
+        assert_eq!((m.at, m.lean), (At::Spread(1), None), "already leaned in");
         let last = book().spreads();
         for _ in 0..last + 5 {
             press(&mut m, &mut st, KeyCode::Right);
         }
         assert_eq!(m.at, At::Spread(last));
-        for _ in 0..last + 5 {
+        for _ in 0..last - 1 {
             press(&mut m, &mut st, KeyCode::Left);
         }
-        assert_eq!(m.at, At::Cover);
+        assert_eq!(m.at, At::Spread(1));
+        assert_eq!(Manual::at_chapter("no-such-chapter").at, At::Desk);
     }
 
     #[test]
@@ -637,24 +613,6 @@ mod tests {
         );
         press(&mut m, &mut st, KeyCode::Char('['));
         assert_eq!(m.at, At::Spread(1));
-    }
-
-    #[test]
-    fn controls_opens_on_its_chapter_and_esc_closes() {
-        let mut st = AppState::new();
-        let mut m = Manual::at_chapter("controls");
-        let text = draw(&m, &st, 100, 30);
-        assert!(text.contains("CONTROLS"), "{text}");
-        assert!(matches!(
-            press(&mut m, &mut st, KeyCode::Esc),
-            ScreenCmd::Pop { .. }
-        ));
-        let mut m = Manual::new();
-        assert!(matches!(
-            press(&mut m, &mut st, KeyCode::Char('q')),
-            ScreenCmd::Pop { .. }
-        ));
-        assert_eq!(Manual::at_chapter("no-such-chapter").at, At::Cover);
     }
 
     #[test]
