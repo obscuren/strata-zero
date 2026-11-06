@@ -217,7 +217,9 @@ All parsed from `flavor/missions.ron` and documented in its header comment.
 
 - New state: the waiting ad line in `Missions` (`#[serde(default)]`; the glow after it
   shows is `#[serde(skip)]`, as asides are), with a line in `runs::ids::clear_lost`.
-  A held-in-place person (`Stay`) is the sim's state, saved as `keep_at_work`'s is.
+  A held-in-place person (`Stay`) is the sim's state, saved as `keep_at_work`'s is; so is
+  whether `Stay` cut a walker's trip short (`#[serde(default)]`), which has the schedule
+  send them on the minute after release, whatever is due by then.
 - New mission `the_three`: a run saved before it existed opens with it `Waiting`
   (`runs::ids` already puts a fresh run in place of a missing mission). A run saved at
   the ledger's `sell` step opens there and goes on to `paid`.

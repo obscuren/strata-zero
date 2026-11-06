@@ -142,6 +142,10 @@ pub struct World {
     dead: BTreeSet<PersonId>,
     /// People held at work: the schedule does not send them home.
     held: BTreeSet<PersonId>,
+    /// People `keep_where` stopped mid-trip: once let go, the schedule's next minute sends
+    /// them on, whatever goal they keep.
+    #[serde(default)]
+    cut_short: BTreeSet<PersonId>,
     /// People who never go off the map, whom the story has cast: not saved, made again
     /// from the cast whenever a run is reopened (`keep_in_town`).
     #[serde(skip)]
@@ -214,6 +218,7 @@ impl World {
             satisfied: HashMap::new(),
             dead: BTreeSet::new(),
             held: BTreeSet::new(),
+            cut_short: BTreeSet::new(),
             in_town: BTreeSet::new(),
         };
         w.place_everyone(city);
@@ -273,6 +278,7 @@ impl World {
         self.displaced.remove(&id);
         self.pending.retain(|r| r.who != id);
         self.chat_resume.remove(&id);
+        self.cut_short.remove(&id);
         self.park_cars_of(i);
     }
 
@@ -313,6 +319,7 @@ impl World {
         self.chat_resume.remove(&id);
         self.pending.retain(|r| r.who != id);
         self.satisfied.remove(&id);
+        self.cut_short.remove(&id);
         self.people[i].goal = Goal::Work;
         self.people[i].whereabouts = at;
         self.held.insert(id);
@@ -349,15 +356,10 @@ impl World {
         self.chat_resume.remove(&id);
         self.pending.retain(|r| r.who != id);
         self.satisfied.remove(&id);
-        // A walker's trip is cut short: their goal is no longer where they stand, so
-        // the schedule sends them on again the minute they are released.
+        // A walker's trip is cut short: they stand where no goal of theirs is, so the
+        // schedule sends them on the minute they are released, whatever is due by then.
         if matches!(self.people[i].whereabouts, Whereabouts::Travelling(_)) {
-            let due = self.due(i, self.minute_of_day());
-            self.people[i].goal = if due == Goal::Home {
-                Goal::Work
-            } else {
-                Goal::Home
-            };
+            self.cut_short.insert(id);
         }
         self.people[i].whereabouts = at;
         self.held.insert(id);
@@ -388,7 +390,8 @@ impl World {
         }
     }
 
-    /// Lets a held person follow their schedule again.
+    /// Lets a held person follow their schedule again: one `keep_where` stopped mid-trip
+    /// sets off the next minute for whatever is due then.
     pub fn release(&mut self, id: PersonId) {
         self.held.remove(&id);
     }
@@ -1177,7 +1180,9 @@ impl World {
             let roaming = self.people[i].work == Work::Roaming
                 && goal == Goal::Work
                 && self.rng.random::<f32>() < 0.2;
-            if goal != self.people[i].goal || roaming {
+            // Stopped mid-trip and since let go: sent on, though their goal is what is due.
+            let cut_short = self.cut_short.remove(&PersonId(i as u32));
+            if goal != self.people[i].goal || roaming || cut_short {
                 self.people[i].goal = goal;
                 if let Some(dest) = self.dest_for(city, i, goal) {
                     self.pending.push_back(TripRequest {
@@ -1695,13 +1700,10 @@ mod tests {
         assert!(w.is_open(b));
     }
 
-    #[test]
-    fn keep_where_holds_a_walker_where_they_stand() {
-        let c = city();
-        let mut w = world(&c);
-        // Step through a morning until someone is out walking.
+    /// Steps through a morning until someone is out walking: who, and the tick.
+    fn a_morning_walker(w: &mut World, c: &City) -> (PersonId, u64) {
         let mut t = tick_at(7 * 60, 1);
-        run_to(&mut w, &c, t);
+        run_to(w, c, t);
         let walker = |w: &World| {
             w.people().iter().map(|p| p.id).find(|id| {
                 matches!(
@@ -1710,14 +1712,21 @@ mod tests {
                 ) && w.pos_of(*id).is_some()
             })
         };
-        let id = loop {
-            if let Some(id) = walker(&w) {
-                break id;
+        loop {
+            if let Some(id) = walker(w) {
+                return (id, t);
             }
             t += TICKS_PER_MINUTE;
             assert!(t < tick_at(11 * 60, 1), "nobody walked all morning");
-            run_to(&mut w, &c, t);
-        };
+            run_to(w, c, t);
+        }
+    }
+
+    #[test]
+    fn keep_where_holds_a_walker_where_they_stand() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, t) = a_morning_walker(&mut w, &c);
         let spot = w.pos_of(id).unwrap();
         w.keep_where(id);
         assert!(w.is_held(id));
@@ -1736,6 +1745,37 @@ mod tests {
             },
             "the schedule moves them again"
         );
+    }
+
+    #[test]
+    fn a_walker_held_while_their_schedule_turns_walks_on_when_released() {
+        let c = city();
+        let mut w = world(&c);
+        let (id, t) = a_morning_walker(&mut w, &c);
+        let i = id.0 as usize;
+        let spot = w.pos_of(id).unwrap();
+        // Held while the day turns: what was due when they stopped is not due at release.
+        let due = w.due(i, w.minute_of_day());
+        let turned = if due == Goal::Home {
+            Goal::Work
+        } else {
+            Goal::Home
+        };
+        w.keep_where(id);
+        let mut at = t;
+        while w.due(i, w.minute_of_day()) != turned {
+            at += TICKS_PER_MINUTE;
+            assert!(at < t + 2 * 1440 * TICKS_PER_MINUTE, "{turned:?} never due");
+            run_to(&mut w, &c, at);
+        }
+        assert_eq!(w.pos_of(id), Some(spot), "held while it turned");
+        w.release(id);
+        let mut moved = false;
+        for m in 1..=60 {
+            run_to(&mut w, &c, at + m * TICKS_PER_MINUTE);
+            moved |= w.pos_of(id) != Some(spot);
+        }
+        assert!(moved, "released, they walk on to what is due now");
     }
 
     #[test]
