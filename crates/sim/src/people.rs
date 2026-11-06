@@ -22,11 +22,17 @@ pub struct CarId(pub u32);
 )]
 pub struct HouseholdId(pub u32);
 
-/// How many people, and how many cars.
+/// How many people, how many cars, and whether everyone who works in the city lives in
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SimParams {
     pub density: f32,
     pub car_share: f32,
+    /// Its housing full, the rest who work in the city still live in it, crowded into
+    /// the housing nearest their work; not crowded, they have no home in it and come in
+    /// from off the map (`commute`).
+    #[serde(default)]
+    pub crowded: bool,
 }
 
 impl Default for SimParams {
@@ -34,6 +40,7 @@ impl Default for SimParams {
         SimParams {
             density: 1.0,
             car_share: 0.25,
+            crowded: false,
         }
     }
 }
@@ -399,6 +406,14 @@ pub fn seed_population(
                 housing[k].2 -= 1;
                 housing[k].0
             })
+            // every flat taken: a crowded city puts them in the housing nearest the job
+            // all the same (the first of those as near)
+            .or_else(|| {
+                let nearest = housing
+                    .iter()
+                    .min_by_key(|(_, door, _)| door.manhattan(o.at));
+                nearest.filter(|_| params.crowded).map(|(b, _, _)| *b)
+            })
         };
         if let Some(h) = home {
             by_home.entry(h).or_default().push(id);
@@ -661,6 +676,51 @@ mod tests {
         }
         let housed = pop.people.iter().filter(|p| p.home.is_some()).count();
         assert!(housed * 10 >= n * 9, "{housed} of {n} housed");
+    }
+
+    #[test]
+    fn a_crowded_city_houses_everyone_who_works_in_it() {
+        // seed 6 at five districts has flats for few who work in it: crowded, the rest
+        // live in it all the same, in the housing nearest their work, and those with a
+        // flat to spare keep theirs; not crowded, the rest have no home in it
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let people = People::load().unwrap();
+        let places = Places::derive(&c);
+        let names = FlavorPack::load("default").unwrap().people;
+        let pop = |crowded: bool| {
+            let params = SimParams {
+                crowded,
+                ..SimParams::default()
+            };
+            let mut rng = ChaCha8Rng::seed_from_u64(c.seed);
+            seed_population(&c, &people, &places, &params, &names, &mut rng)
+        };
+        let (spare, crowded) = (pop(false), pop(true));
+        let n = spare.people.len();
+        let housed = spare.people.iter().filter(|p| p.home.is_some()).count();
+        assert!(housed * 2 < n, "{housed} of {n} with a flat to spare");
+        assert_eq!(crowded.people.len(), n);
+        for (was, p) in spare.people.iter().zip(&crowded.people) {
+            assert_eq!((&p.work, &p.schedule), (&was.work, &was.schedule));
+            let home = p.home.expect("everyone lives in town");
+            if was.home.is_some() {
+                assert_eq!(Some(home), was.home, "{} keeps their flat", p.name);
+            }
+            let b = &c.buildings[home.index()];
+            assert!(
+                housing_capacity(b) > 0,
+                "{} lives in a {:?}",
+                p.name,
+                b.kind
+            );
+            assert_ne!(c.district(b.district).theme, Theme::NeonStrip);
+        }
     }
 
     #[test]
