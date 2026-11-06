@@ -53,6 +53,7 @@ pub const NET_UP_KEYS: &[(&str, &str)] = &[
         "enter",
         "down onto this tile's Net, on its trunk if it has one",
     ),
+    ("enter over yours", "back down to where you were, as W"),
     ("W", "back down to where you were on the Net"),
     ("J", "jack out onto your body"),
     ("?", "this help"),
@@ -119,7 +120,8 @@ impl OutsideScreen {
     }
 
     /// The keys on the Net over the world: the arrows walk it, ↵ goes down onto the
-    /// tile's Net, W back down where you were, J jacks out.
+    /// tile's Net (over the tile you're over, where you were), W back down where you
+    /// were, J jacks out.
     fn net_up_key(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
         let down = ScreenCmd::Pop {
             fx: TransitionKind::Glitch,
@@ -1909,6 +1911,27 @@ mod tests {
             !page.contains("save game"),
             "the overworld's keys aren't these"
         );
+    }
+
+    #[test]
+    fn enter_over_your_own_tile_is_back_where_you_were_and_says_so() {
+        // ↵ over the tile your Net self is over already leaves it where it stood, as W
+        // does; the help says so beside ↵ onto another tile's trunk
+        let (mut st, _m, mut up) = up_here();
+        let was = st.player.as_ref().map(|p| (p.place, p.pos, p.body));
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Pop { .. }
+        ));
+        assert_eq!(st.player.as_ref().map(|p| (p.place, p.pos, p.body)), was);
+        up.update(&mut st, &[key(KeyCode::Char('?'))]);
+        let page = text(&st, &up, 120, 40);
+        assert!(page.contains("on its trunk if it has one"), "{page}");
+        let own = page
+            .lines()
+            .find(|l| l.contains("enter over yours"))
+            .unwrap_or_else(|| panic!("↵ over your own tile\n{page}"));
+        assert!(own.contains("back down to where you were"), "{own}");
     }
 
     #[test]
