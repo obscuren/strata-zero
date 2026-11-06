@@ -2680,7 +2680,11 @@ pub(crate) mod tests {
     /// `open`, its shard read at the rig when `read`; then in at the street door on the
     /// mailed code, beside her, her scene, the tray's first piece, her chair on the tab,
     /// up, her parting words, and out on the street, where she is let go.
-    fn play_the_doctor(st: &mut AppState, open: bool, read: bool) -> (Vec<String>, Vec<ItemId>) {
+    pub(crate) fn play_the_doctor(
+        st: &mut AppState,
+        open: bool,
+        read: bool,
+    ) -> (Vec<String>, Vec<ItemId>) {
         use crate::credentials::{STREET_DOOR, Source, street_code};
         let doctor = mission_at(st, "doctor");
         let doc = person_of(st, "odile").expect("odile is cast");
@@ -3269,7 +3273,7 @@ pub(crate) mod tests {
     /// Seren's line through the ad, filled.
     const SEREN_AD: &str = "He's gone quiet. Work for Coz. I'll find you. —S";
 
-    fn coz(st: &AppState) -> PersonId {
+    pub(crate) fn coz(st: &AppState) -> PersonId {
         person_of(st, "coz").expect("coz is cast")
     }
 
@@ -3278,7 +3282,7 @@ pub(crate) mod tests {
     }
 
     /// Runs the world on to the next `h:m`.
-    fn to_the_clock(st: &mut AppState, h: u64, m: u64) {
+    pub(crate) fn to_the_clock(st: &mut AppState, h: u64, m: u64) {
         let (hh, mm) = st.clock();
         let now = u64::from(hh) * 60 + u64::from(mm);
         advance(st, (h * 60 + m + 1440 - now) % 1440);
@@ -3286,7 +3290,7 @@ pub(crate) mod tests {
     }
 
     /// You on a free street tile beside Coz, seeing him: the tile.
-    fn beside_coz(st: &mut AppState) -> Pos {
+    pub(crate) fn beside_coz(st: &mut AppState) -> Pos {
         let (place, at) = crate::interiors::drawn_at(st, coz(st)).expect("coz is drawn");
         assert_eq!(place, STREET, "coz is on the street");
         let (city, world) = (st.city.as_ref().unwrap(), st.world.as_ref().unwrap());
@@ -3327,7 +3331,7 @@ pub(crate) mod tests {
 
     /// Talking to Coz with the shard known: his scene plays, and esc skips through it to
     /// the sale. Gives back the lines of it that were said.
-    fn through_coz_scene(st: &mut AppState) -> Vec<String> {
+    pub(crate) fn through_coz_scene(st: &mut AppState) -> Vec<String> {
         let coz = coz(st);
         send(st, Event::Talked(coz));
         tick(st);
@@ -3339,7 +3343,7 @@ pub(crate) mod tests {
 
     /// A netrunner with the doctor done (through her scene and chair, the shard read at
     /// the rig on the way), at 21:40 beside Coz on his corner.
-    fn by_coz_at_night() -> AppState {
+    pub(crate) fn by_coz_at_night() -> AppState {
         let mut st = the_morning_call();
         to_the_word(&mut st);
         assert_eq!(st.character.profession.0, "netrunner");
@@ -3351,7 +3355,7 @@ pub(crate) mod tests {
 
     /// Off from where Seren's line went up and by a holo ad, the line torn through it:
     /// her mail lands.
-    fn the_line_tears_through(st: &mut AppState) {
+    pub(crate) fn the_line_tears_through(st: &mut AppState) {
         let start = st.missions.ad.as_ref().expect("the line waits").at;
         news::tests::by_an_ad(st);
         let you = st.player.as_ref().unwrap();

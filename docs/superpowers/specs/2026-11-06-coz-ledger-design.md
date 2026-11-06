@@ -91,8 +91,8 @@ An item the story gave you stays in your pack until the story takes it back.
 
 - The ledger's `know` objective gains his hours: `Bring it to {coz} · {coz.place} ·
   {coz.district} · {coz.hours}`, which reads *"Bring it to Coz · the corner · Siren
-  Avenue · 18:00–04:00"*. A fixer works a corner from 18:00 to 04:00; by day there is
-  nobody there.
+  Avenue · 18:00–04:00"*. The objective gives his working hours, when he is sure
+  to be found there; off shift a fixer with no home keeps to his spot too.
 - Tracking already resolves `Talk("coz")` to Coz. Nothing new.
 
 ## 3. The sale
