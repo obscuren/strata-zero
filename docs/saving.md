@@ -86,7 +86,8 @@ A city or town held but not live whose map is in view runs its
 people's day on the clock (`outside::stream::run_neighbours`: the home city set aside,
 those kept, and those built in the background with the people their build seeded), so
 the home city set aside is saved with its people as they've run; nothing about it is
-saved besides. Only the one furthest behind catches up in a frame. Someone who works in
+saved besides. One behind by no more than a frame catches up (an hour) runs every
+frame; of those further behind, only the one furthest behind catches up in a frame. Someone who works in
 a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming in and
 going out by a road across the map's edge (`sim::commute`; which road is theirs is made
 again from the map, not saved), and so does anyone whose trip has no place in the city
