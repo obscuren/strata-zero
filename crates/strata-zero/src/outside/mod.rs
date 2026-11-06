@@ -641,13 +641,24 @@ pub fn build_params(
 /// stepping every minute between on the frame.
 pub const RUN_ON: u64 = 24 * 60 * sim::TICKS_PER_MINUTE;
 
+/// What a city's people are seeded with: in a city of the world other than home,
+/// everyone who works in it lives in it, crowded where its flats run short
+/// (`SimParams::crowded`), so its people live their day in town; the home city's (the
+/// story's people) keep their commute.
+pub fn sim_params(home: bool) -> sim::SimParams {
+    sim::SimParams {
+        crowded: !home,
+        ..Default::default()
+    }
+}
+
 /// `city`'s people as you first come into it at clock tick `now`, minute `minute` of
-/// the day: each at their day.
+/// the day: each at their day, as a city other than home seeds them (`sim_params`).
 pub fn seed_people(city: &City, people: &sim::People, now: u64, minute: u16) -> sim::World {
     let day = 24 * 60;
     let spent = (now / sim::TICKS_PER_MINUTE) % day;
     let start = (minute as u64 + day - spent) % day;
-    sim::World::seed(city, people, &sim::SimParams::default(), start as u16, now)
+    sim::World::seed(city, people, &sim_params(false), start as u16, now)
 }
 
 /// Whether the run is in a city or town other than its home: the story waits there.

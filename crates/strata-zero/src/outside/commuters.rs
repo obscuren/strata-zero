@@ -37,14 +37,20 @@ fn settlement(s: Settlement) -> &'static City {
 /// `city`'s people seeded at `minute` of the day (tick 0) and run on `minutes` a minute at
 /// a time, every trip pathed as it's asked for; `look` sees the world after each minute.
 /// Every trip set off, in order.
-fn a_day(
+fn a_day(city: &City, minute: u16, minutes: u64, look: impl FnMut(&World)) -> (World, Vec<Trip>) {
+    let people = sim::People::load().unwrap();
+    let w = World::seed(city, &people, &sim::SimParams::default(), minute, 0);
+    a_day_of(city, w, minutes, look)
+}
+
+/// `w`, `city`'s people seeded at tick 0, run on `minutes` a minute at a time, as
+/// `a_day` runs them.
+fn a_day_of(
     city: &City,
-    minute: u16,
+    mut w: World,
     minutes: u64,
     mut look: impl FnMut(&World),
 ) -> (World, Vec<Trip>) {
-    let people = sim::People::load().unwrap();
-    let mut w = World::seed(city, &people, &sim::SimParams::default(), minute, 0);
     let mut trips = Vec::new();
     for m in 1..=minutes {
         w.advance(city, m * sim::TICKS_PER_MINUTE);
@@ -293,6 +299,103 @@ fn a_city_with_homes_keeps_its_day() {
             "town {s:?} changed its day"
         );
     }
+}
+
+/// `city`'s people as the game seeds them when you come into it or see it next door
+/// (`outside::seed_people`), at `FOUR` on the clock's first day.
+fn come_into(city: &City) -> World {
+    crate::outside::seed_people(city, &sim::People::load().unwrap(), 0, FOUR)
+}
+
+/// The ticks `w`'s person `p` drives on a trip set off this minute: none on foot.
+fn drives(w: &World, p: &sim::Person) -> u64 {
+    match &p.whereabouts {
+        Whereabouts::Travelling(t) if t.depart == w.tick() => t
+            .legs
+            .iter()
+            .filter(|l| l.car.is_some())
+            .map(|l| l.path.len().saturating_sub(1) as u64 * sim::DRIVE_TICKS)
+            .sum(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn a_city_you_come_into_lives_in_town() {
+    // seed 3's corporate neighbour as you find it, with flats for one in ten who work
+    // there: those who work there live there all the same, so its people live their day
+    // in town as the home city's do: home by night, and nobody walks out of town, not
+    // even for a drink it hasn't got
+    let city = settlement(CORPORATE);
+    let w = come_into(city);
+    let n = w.people().len();
+    let homes = w.people().iter().filter(|p| p.home.is_some()).count();
+    assert_eq!(homes, n, "{homes} of {n} have a home in town");
+    let (mut away, mut at_home) = (Vec::new(), 0);
+    let (_, trips) = a_day_of(city, w, 24 * 60, |w| {
+        let off = w
+            .people()
+            .iter()
+            .filter(|p| p.whereabouts == Whereabouts::Away)
+            .count();
+        if off > 0 && w.minute_of_day() % 60 == 0 {
+            away.push((w.minute_of_day() / 60, off));
+        }
+        if w.minute_of_day() == 3 * 60 {
+            at_home = w
+                .people()
+                .iter()
+                .filter(|p| {
+                    p.home
+                        .is_some_and(|h| p.whereabouts == Whereabouts::Inside(h))
+                })
+                .count();
+        }
+    });
+    assert!(away.is_empty(), "off the map, by the hour: {away:?}");
+    let out: Vec<&Trip> = trips
+        .iter()
+        .filter(|t| matches!(t.dest, Dest::Away(_)))
+        .collect();
+    assert!(out.is_empty(), "out of town: {out:?}");
+    assert!(at_home * 2 > n, "{at_home} of {n} at home at three");
+}
+
+#[test]
+fn a_city_you_come_into_has_its_traffic() {
+    // seed 3's docks as you find them, with flats for one in five who work there: cars
+    // for their people as the home city has for its, and as many on the road in a day
+    // for the size of the map
+    let people = sim::People::load().unwrap();
+    let (_, home) = &settlements()[0];
+    let docks = settlement(Settlement {
+        city: 2,
+        town: None,
+    });
+    let cells = |c: &City| u64::from(c.size.w) * u64::from(c.size.h);
+    let at_home = World::seed(home, &people, &sim::SimParams::default(), FOUR, 0);
+    let there = come_into(docks);
+    let (home_cars, home_people) = (at_home.cars().len(), at_home.people().len());
+    let (cars, n) = (there.cars().len(), there.people().len());
+    assert!(
+        cars * home_people * 2 >= home_cars * n,
+        "{cars} cars for {n} people; the home city {home_cars} for {home_people}"
+    );
+    // ticks of driving in a day
+    let driving = |city: &City, w: World| {
+        let mut ticks = 0;
+        a_day_of(city, w, 24 * 60, |w| {
+            ticks += w.people().iter().map(|p| drives(w, p)).sum::<u64>();
+        });
+        ticks
+    };
+    let (home_ticks, ticks) = (driving(home, at_home), driving(docks, there));
+    assert!(
+        ticks * cells(home) * 2 >= home_ticks * cells(docks),
+        "{ticks} ticks driven on {} cells; the home city {home_ticks} on {}",
+        cells(docks),
+        cells(home)
+    );
 }
 
 /// New games' home cities for seeds 1 to 8, as a new game builds them: built once.
