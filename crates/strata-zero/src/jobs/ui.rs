@@ -29,7 +29,7 @@ pub fn district_of_fixer(st: &AppState, id: PersonId) -> String {
     };
     world
         .spot_of(id)
-        .and_then(|pos| city.districts.iter().find(|d| d.bounds.contains(pos)))
+        .and_then(|pos| city.district_at(pos))
         .map(|d| d.name.clone())
         .unwrap_or_else(|| "the street".to_string())
 }
