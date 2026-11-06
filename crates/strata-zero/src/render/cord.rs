@@ -25,6 +25,9 @@ const DEAD: Rgb = Rgb(96, 104, 116);
 
 pub struct CordOverlay<'a> {
     pub view: &'a CordView,
+    /// The Net the cord is walked over, past the city's edge and on the cells other
+    /// areas own too: on a lane of any of them the lane's own glyph stays, tinted.
+    pub walked: &'a dyn TileMap,
 }
 
 fn rgb(c: Color) -> Rgb {
@@ -50,7 +53,7 @@ fn set(buf: &mut Buffer, at: (u16, u16), ch: Option<char>, fg: Rgb, glow: Option
 impl Overlay for CordOverlay<'_> {
     fn draw(
         &self,
-        map: &MapRef,
+        _map: &MapRef,
         origin: Pos,
         area: Rect,
         _tick: u64,
@@ -68,7 +71,8 @@ impl Overlay for CordOverlay<'_> {
             let Some(at) = tile_to_screen(area, origin, *p) else {
                 continue;
             };
-            let lane = map
+            let lane = self
+                .walked
                 .tile(*p)
                 .is_some_and(|t| matches!(t.terrain, Terrain::NetLane | Terrain::NetGate));
             let ch = (!lane).then(|| {

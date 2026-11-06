@@ -3861,9 +3861,11 @@ impl Screen for MapScreen {
                 }
                 view
             });
-        let cord_overlay = cord
-            .as_ref()
-            .map(|view| crate::render::cord::CordOverlay { view });
+        let walked = walked_map(st, city, self.place, beyond.as_ref());
+        let cord_overlay = cord.as_ref().map(|view| crate::render::cord::CordOverlay {
+            view,
+            walked: &walked,
+        });
         if let Some(o) = cord_overlay.as_ref() {
             overlays.push(o);
         }
@@ -16292,6 +16294,116 @@ mod tests {
                     .any(|(q, _)| !crate::outside::stream::live_owns(&st, *q)),
                 "over the cells you came from"
             );
+        }
+
+        /// The cord's cells that lie on a lane (or a gate) of the Net as drawn, the
+        /// view put on the one nearest you that `want` takes: each in view keeps the
+        /// lane's own glyph, drawn in the cord's colour, as on the live city's own
+        /// lanes. How many in view `want` takes.
+        fn cord_keeps_the_lanes(
+            st: &mut AppState,
+            s: &mut MapScreen,
+            want: &dyn Fn(&AppState, Pos) -> bool,
+        ) -> usize {
+            const CORD: Color = Color::Rgb(230, 240, 245);
+            draw_buffer(s, st, 120, 40);
+            let walk = s
+                .cord_walk
+                .borrow()
+                .as_ref()
+                .map(|(_, _, w)| w.clone())
+                .expect("the cord drawn");
+            let lane = |st: &AppState, q: Pos| {
+                net_at(st, q).is_some_and(|t| {
+                    matches!(
+                        t.terrain,
+                        citygen::Terrain::NetLane | citygen::Terrain::NetGate
+                    )
+                })
+            };
+            let me = you(st);
+            let Some(look) = walk
+                .iter()
+                .copied()
+                .filter(|q| lane(st, *q) && want(st, *q))
+                .min_by_key(|q| q.manhattan(me))
+            else {
+                return 0;
+            };
+            s.cam.snap(look);
+            st.cord = false;
+            let bare = draw_buffer(s, st, 120, 40);
+            st.cord = true;
+            let corded = draw_buffer(s, st, 120, 40);
+            let area = s.last_map.get();
+            let origin = s.cam.origin(area.width, area.height);
+            let mut wanted = 0;
+            for q in walk {
+                let Some(at) = tile_to_screen(area, origin, q).filter(|_| lane(st, q)) else {
+                    continue;
+                };
+                assert_eq!(
+                    corded[at].symbol(),
+                    bare[at].symbol(),
+                    "the lane's glyph at {q:?}"
+                );
+                assert_eq!(corded[at].fg, CORD, "the cord's colour at {q:?}");
+                wanted += usize::from(want(st, q));
+            }
+            wanted
+        }
+
+        #[test]
+        fn the_cord_keeps_a_lanes_glyph_whoever_owns_the_lane() {
+            // into the next city's Net: the cord back over the city you came from (held
+            // now) keeps its lanes as the live city's own keep theirs
+            let (mut st, mut s, c, x, d) = beside_the_next_city();
+            jacked_near(&mut st, &mut s, x);
+            for _ in 0..3 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            assert_eq!(st.outside.as_ref().unwrap().here(), c, "handed over");
+            let held = cord_keeps_the_lanes(&mut st, &mut s, &|st, q| {
+                !crate::outside::stream::live_owns(st, q)
+                    && crate::outside::stream::owner_of(st, q).is_some()
+            });
+            assert!(held > 0, "the cord over the held city's lanes");
+            // jacked in by a truck stop's pump, out on the open Net onto the trunk
+            // nearest it: its lanes the same
+            let mut st = home_run();
+            st.rain = false;
+            let mut s = MapScreen::walking(&mut st);
+            s.update(&mut st, &[]);
+            let pump = by_a_pump(&st);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), pump);
+            s.update(&mut st, &[key(KeyCode::Char(' '))]);
+            assert!(st.player.as_ref().unwrap().jacked_in(), "{:?}", last(&st));
+            let landed = you(&st);
+            crate::outside::stream::tend(
+                &mut st,
+                TileRect::new(landed.x - 64, landed.y - 64, 129, 129),
+            );
+            // a cell of a trunk running straight on, some twenty cells off: the cord
+            // runs the trunk back
+            let open_lane = |q: Pos| {
+                crate::outside::stream::owner_of(&st, q).is_none()
+                    && net_at(&st, q).is_some_and(|t| t.terrain == citygen::Terrain::NetLane)
+            };
+            let far = TileRect::new(landed.x - 48, landed.y - 48, 97, 97)
+                .iter()
+                .filter(|q| {
+                    q.manhattan(landed) >= 20
+                        && ((-4..=4).all(|i| open_lane(q.offset(i, 0)))
+                            || (-4..=4).all(|i| open_lane(q.offset(0, i))))
+                })
+                .min_by_key(|q| q.manhattan(landed))
+                .expect("a trunk by the truck stop");
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), far);
+            s.update(&mut st, &[]);
+            let open = cord_keeps_the_lanes(&mut st, &mut s, &|st, q| {
+                crate::outside::stream::owner_of(st, q).is_none()
+            });
+            assert!(open > 0, "the cord over the open Net's trunk");
         }
 
         /// A cell of another city's Net (held), in the live city's frame, where `want`
