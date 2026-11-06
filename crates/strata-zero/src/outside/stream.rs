@@ -127,11 +127,17 @@ struct Builds {
     people: BTreeMap<Settlement, sim::World>,
     /// Those that wouldn't build: not tried again this session.
     failed: BTreeSet<Settlement>,
-    /// Those that wouldn't build when walked into either: not walked into again this
-    /// session.
+    /// Those that wouldn't build when walked into either, or whose build broke: not
+    /// walked into again this session.
     refused: BTreeSet<Settlement>,
+    /// Builds that broke and what each said, until `say_broke` says it.
+    broke: Vec<(Settlement, String)>,
     /// Builds started this session.
     started: usize,
+    /// In a test, a build that panics is said as play says it rather than panicking
+    /// again on collecting it.
+    #[cfg(test)]
+    quiet: bool,
 }
 
 /// In a test no build outlives the run that started it: dropped, it waits for them.
@@ -249,9 +255,10 @@ impl Stream {
 
     /// What settlement `s`'s build came to: its city into `built` and its people kept,
     /// else remembered as one that won't build. Whether the city came in. A build that
-    /// panicked panics here, on the main thread, with what it said, as building it on
-    /// the spot would have: the front ends' panic hooks (which left the build's thread
-    /// be) take it for the end of the game.
+    /// panicked is refused (it would panic again on the spot: the generator is the same
+    /// every time) and what it said kept for `say_broke` to say, so a save near it
+    /// still opens and the game goes on; in a test it panics again here, on the main
+    /// thread, so the test fails loudly.
     fn land(
         &mut self,
         s: Settlement,
@@ -273,7 +280,16 @@ impl Stream {
                 self.builds.failed.insert(s);
                 false
             }
-            Err(said) => panic!("building {s:?} broke: {said}"),
+            Err(said) => {
+                #[cfg(test)]
+                if !self.builds.quiet {
+                    panic!("building {s:?} broke: {said}");
+                }
+                self.builds.failed.insert(s);
+                self.builds.refused.insert(s);
+                self.builds.broke.push((s, said));
+                false
+            }
         }
     }
 
@@ -289,7 +305,7 @@ impl Stream {
         self.builds.refused.insert(s);
     }
 
-    /// Whether settlement `s` wouldn't build when walked into.
+    /// Whether settlement `s` wouldn't build when walked into, or its build broke.
     pub fn refused(&self, s: Settlement) -> bool {
         self.builds.refused.contains(&s)
     }
@@ -713,7 +729,9 @@ fn tend_builds(st: &mut AppState, area: Rect) -> bool {
     let Some(o) = st.outside.as_mut() else {
         return false;
     };
-    o.stream.tend(&mut o.built, wanted, &st.people, now, minute)
+    let came = o.stream.tend(&mut o.built, wanted, &st.people, now, minute);
+    say_broke(st);
+    came
 }
 
 /// Cells past the view a held city's or town's map may lie and its people still live:
@@ -815,7 +833,9 @@ pub fn collect(st: &mut AppState) -> bool {
     let Some(o) = st.outside.as_mut() else {
         return false;
     };
-    o.stream.collect(&mut o.built, false)
+    let came = o.stream.collect(&mut o.built, false);
+    say_broke(st);
+    came
 }
 
 /// Every city and town building waited for and collected, so a test or a shot sees
@@ -825,7 +845,22 @@ pub fn finish(st: &mut AppState) -> bool {
     let Some(o) = st.outside.as_mut() else {
         return false;
     };
-    o.stream.finish(&mut o.built)
+    let came = o.stream.finish(&mut o.built);
+    say_broke(st);
+    came
+}
+
+/// What each build that broke said, said as a warning: the bug stays loud while the
+/// game goes on without that city or town.
+pub fn say_broke(st: &mut AppState) {
+    let Some(o) = st.outside.as_mut() else {
+        return;
+    };
+    let broke = std::mem::take(&mut o.stream.builds.broke);
+    for (s, said) in broke {
+        let name = st.outside.as_ref().map(|o| o.name(s)).unwrap_or_default();
+        st.warn(format!("building {name} broke: {said}"));
+    }
 }
 
 impl Beyond<'_> {
@@ -2097,7 +2132,7 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn a_build_that_panics_is_said_on_the_main_thread() {
+        fn a_build_that_panics_fails_a_test_on_the_main_thread() {
             let mut stream = Stream::default();
             let mut built = BTreeMap::new();
             let s = Settlement {
@@ -2110,13 +2145,39 @@ pub(crate) mod tests {
                 assert_eq!(std::thread::current().name(), Some("build 9.1"));
                 panic!("the generator broke");
             });
-            // the frame goes on: nothing is said until it's collected
+            // the frame goes on: nothing is said until it's collected, and then, in a
+            // test, loudly
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 stream.finish(&mut built)
             }));
             let said = said(&*caught.expect_err("the main thread panics on collecting it"));
             assert!(said.contains("the generator broke"), "{said}");
             assert!(built.is_empty() && !stream.building(s));
+        }
+
+        #[test]
+        fn a_build_that_panics_leaves_the_game_running() {
+            // as play has it: the settlement refused (its ground walked as the open
+            // ground's, never walked into, never built again) and the panic said
+            let mut st = home_run();
+            let (s, _) = a_city(&st);
+            let name = o(&st).name(s);
+            let stream = &mut st.outside.as_mut().unwrap().stream;
+            stream.builds.quiet = true;
+            stream.start_with(s, || panic!("the generator broke"));
+            assert!(!finish(&mut st), "no city came in");
+            assert!(o(&st).stream.refused(s) && o(&st).stream.asked(s));
+            assert!(o(&st).held_city(s).is_none());
+            let said = format!("building {name} broke: the generator broke");
+            assert!(
+                st.log.iter().any(|e| e.text.starts_with(&said)),
+                "{:?}",
+                st.log.iter().map(|e| &e.text).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                crate::outside::enter(&mut st, s),
+                Err(format!("no way into {name}"))
+            );
         }
 
         #[test]

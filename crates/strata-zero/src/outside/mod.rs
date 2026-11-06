@@ -686,6 +686,11 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     }
     // one building in the background is waited for: no slower than building it here
     o.stream.wait(s, &mut o.built);
+    // one whose build broke is never built here: it would break the same way
+    if o.stream.refused(s) {
+        stream::say_broke(st);
+        return Err(format!("no way into {name}"));
+    }
     let next = if s == home {
         Next::Home
     } else if let Some(stay) = o.kept.take(s) {
