@@ -310,6 +310,13 @@ impl Stream {
         self.builds.refused.contains(&s)
     }
 
+    /// Settlement `s` never built in the background, only on the spot when walked into
+    /// (a test's way to keep the stream answering for its cells until then).
+    #[cfg(test)]
+    pub fn on_the_spot(&mut self, s: Settlement) {
+        self.builds.failed.insert(s);
+    }
+
     /// Whether settlement `s` is building.
     #[cfg(test)]
     pub fn building(&self, s: Settlement) -> bool {
