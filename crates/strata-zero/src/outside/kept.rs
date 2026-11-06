@@ -472,16 +472,22 @@ pub fn remake(st: &mut AppState) -> Vec<String> {
         let flight: Vec<_> = jobs
             .into_iter()
             .map(|(s, params, k)| {
-                let build = move || {
-                    super::stream::build_thread(|| {
-                        let city = citygen::Generator::run(params?).ok()?;
-                        let built = Built::of(&city);
-                        Some((city, built))
-                    })
+                let build = |params: Option<citygen::GenParams>| {
+                    move || {
+                        super::stream::build_thread(|| {
+                            let city = citygen::Generator::run(params?).ok()?;
+                            let built = Built::of(&city);
+                            Some((city, built))
+                        })
+                    }
                 };
                 let name = super::stream::build_name(s);
-                let thread = std::thread::Builder::new().name(name);
-                (s, k, thread.spawn_scoped(scope, build))
+                let thread = std::thread::Builder::new()
+                    .name(name)
+                    .spawn_scoped(scope, build(params.clone()))
+                    // no thread to be had: built here
+                    .map_err(|_| build(params)());
+                (s, k, thread)
             })
             .collect();
         flight
@@ -489,7 +495,7 @@ pub fn remake(st: &mut AppState) -> Vec<String> {
             .map(|(s, k, thread)| {
                 let landed = match thread {
                     Ok(t) => t.join().unwrap_or_else(|p| Err(super::stream::said(&*p))),
-                    Err(_) => Ok(None),
+                    Err(here) => here,
                 };
                 (s, k, landed)
             })
