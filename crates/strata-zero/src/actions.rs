@@ -11,6 +11,9 @@ pub const JACKED_IN: &str = "jacked in · gear and pack locked until you jack ou
 /// What dropping an item is refused with off the cells the city owns.
 pub const OUT_HERE: &str = "nowhere to leave it out here";
 
+/// What dropping an item the story still needs is refused with.
+pub const KEPT: &str = "You're not leaving that lying around.";
+
 /// Jacked in: the body sits still and its gear and pack can't be touched; only the
 /// Net acts.
 pub fn jacked_in(st: &AppState) -> bool {
@@ -75,6 +78,15 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         })
     {
         return Err(OUT_HERE.to_string());
+    }
+    // The story keeps what it still needs.
+    let dropped = match &action {
+        Action::Drop { item, .. } => Some(item.clone()),
+        Action::DropCopy(copy) => st.character.copy_in_pack(*copy).map(|s| s.item.clone()),
+        _ => None,
+    };
+    if dropped.is_some_and(|item| crate::missions::kept(st, &item)) {
+        return Err(KEPT.to_string());
     }
     // The story keeps some things shut until it says otherwise.
     if let Action::Open(id) = &action
@@ -841,5 +853,55 @@ mod tests {
         perform(&mut st, Action::Fire(AbilityId::new("ping"))).unwrap();
         let radii: Vec<i32> = st.fx.iter().map(|i| i.radius).collect();
         assert!(radii.iter().all(|r| *r == base + 4), "{radii:?}");
+    }
+
+    #[test]
+    fn a_story_item_is_not_dropped() {
+        let mut st = crate::missions::tests::the_word_with(&[]);
+        crate::missions::tests::open_the_package(&mut st);
+        let shard = ItemId::new("ledger_shard");
+        for qty in [1, 2] {
+            let refused = perform(
+                &mut st,
+                Action::Drop {
+                    item: shard.clone(),
+                    qty,
+                },
+            );
+            assert_eq!(refused, Err(KEPT.to_string()), "qty {qty}");
+            assert_eq!(st.character.count(&shard), 1);
+        }
+    }
+
+    #[test]
+    fn a_kept_copy_is_not_dropped() {
+        let mut st = crate::missions::tests::the_word_with(&[]);
+        crate::missions::tests::open_the_package(&mut st);
+        let copies: Vec<ItemId> = st
+            .book
+            .gives(&st.content)
+            .into_iter()
+            .filter(|i| st.content.item(i).is_some_and(game::Item::per_copy))
+            .collect();
+        // No item the story gives has a copy form today, so the DropCopy arm is written
+        // but untestable; the day one does, it must be refused while the story needs it.
+        assert!(copies.is_empty(), "{copies:?} can be copies: test DropCopy");
+    }
+
+    #[test]
+    fn other_items_still_drop() {
+        let mut st = crate::missions::tests::the_word_with(&[]);
+        let stim = ItemId::new("stim_patch");
+        st.character.give(stim.clone(), 1);
+        let had = st.character.count(&stim);
+        let dropped = perform(
+            &mut st,
+            Action::Drop {
+                item: stim.clone(),
+                qty: 1,
+            },
+        );
+        assert!(dropped.is_ok(), "{dropped:?}");
+        assert_eq!(st.character.count(&stim), had - 1);
     }
 }

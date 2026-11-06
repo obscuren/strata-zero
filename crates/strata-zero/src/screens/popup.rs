@@ -391,6 +391,11 @@ impl Popup {
         &self.choices
     }
 
+    #[cfg(test)]
+    pub fn body(&self) -> &[String] {
+        &self.body
+    }
+
     /// Rows above the choices: the subtitle and the blank row under it, then the body.
     fn lead(&self, inner_w: usize) -> u16 {
         (if self.subtitle.is_some() { 2 } else { 0 }) + self.body_rows(inner_w)

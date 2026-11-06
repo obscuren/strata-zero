@@ -263,6 +263,22 @@ fn hands_off(st: &AppState, choices: &mut [Choice]) -> Vec<String> {
     vec![capitalised(crate::actions::JACKED_IN)]
 }
 
+/// The story still needs the item: the drops are dimmed and the popup's body says why.
+fn keeps(st: &AppState, item: &ItemId, choices: &mut [Choice]) -> Option<String> {
+    if !crate::missions::kept(st, item) {
+        return None;
+    }
+    for c in choices.iter_mut() {
+        if matches!(
+            &c.pick,
+            Pick::Act(Action::Drop { .. } | Action::DropCopy(_))
+        ) {
+            c.enabled = false;
+        }
+    }
+    Some(capitalised(crate::actions::KEPT))
+}
+
 /// The popup for a gear slot: a picker for what fits it, then Unequip and Inspect for
 /// what is worn. Nothing fits and nothing is worn says so in the strip.
 pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> Option<Popup> {
@@ -384,7 +400,8 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> 
             }),
         ));
     }
-    let body = hands_off(st, &mut choices);
+    let mut body = hands_off(st, &mut choices);
+    body.extend(keeps(st, id, &mut choices));
     Some(
         Popup::verbs(&item.name, choices, st.tick)
             .with_body(body)
@@ -414,7 +431,8 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
         choices.push(Choice::new('o', "Open", Pick::Act(open)));
     }
     choices.push(Choice::new('d', "Drop", Pick::Act(Action::DropCopy(copy))));
-    let body = hands_off(st, &mut choices);
+    let mut body = hands_off(st, &mut choices);
+    body.extend(keeps(st, &stack.item, &mut choices));
     Some(
         Popup::verbs(&item.name, choices, st.tick)
             .with_body(body)
@@ -4245,5 +4263,21 @@ mod tests {
         assert_eq!(buf[(1, 1)].symbol(), "▸");
         assert_eq!(buf[(1, 1)].fg, DIM);
         assert_ne!(buf[(1, 1)].bg, BAR_BG);
+    }
+
+    #[test]
+    fn the_pack_greys_drop_for_a_kept_item() {
+        let mut st = crate::missions::tests::the_word_with(&[]);
+        crate::missions::tests::open_the_package(&mut st);
+        let kept = ItemId::new("ledger_shard");
+        let drop_of = |p: &Popup| p.choices().iter().find(|c| c.key == 'd').unwrap().enabled;
+        let popup = item_popup(&mut st, &kept, (0, 0)).unwrap();
+        assert!(!drop_of(&popup));
+        assert!(popup.body().iter().any(|l| l == crate::actions::KEPT));
+        let stim = ItemId::new("stim_patch");
+        st.character.give(stim.clone(), 1);
+        let popup = item_popup(&mut st, &stim, (0, 0)).unwrap();
+        assert!(drop_of(&popup));
+        assert!(!popup.body().iter().any(|l| l == crate::actions::KEPT));
     }
 }

@@ -1190,6 +1190,32 @@ impl Book {
         out.into_iter().collect()
     }
 
+    /// Every item id a mission's steps name: in a trigger's need or in an effect (`Give`,
+    /// `Take`, `Unseal`, `Told`, and the needs of an `ObjectiveFit`).
+    pub fn items_named(&self, m: &Mission) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        for step in &m.steps {
+            if let Trigger::Holds(need) = &step.when {
+                items_in(need, &mut out);
+            }
+            for e in &step.then {
+                match e {
+                    Effect::ObjectiveFit(fits) => {
+                        fits.iter().for_each(|f| items_in(&f.need, &mut out));
+                    }
+                    Effect::Give { item, .. }
+                    | Effect::Take { item, .. }
+                    | Effect::Unseal(item)
+                    | Effect::Told(item) => {
+                        out.insert(item.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
     /// Every item a `Give`, `Take` or `Unseal` names, a tray holds or a reading reads, for
     /// the test that has the content.
     #[cfg(test)]
@@ -1237,11 +1263,10 @@ impl Book {
 }
 
 /// The items a need names, inside `Not` and `All` too.
-#[cfg(test)]
-fn items_in<'a>(need: &'a Need, out: &mut BTreeSet<&'a str>) {
+fn items_in<'a, S: From<&'a str> + Ord>(need: &'a Need, out: &mut BTreeSet<S>) {
     match need {
         Need::Carries(i) | Need::Read(i) | Need::Unsealed(i) => {
-            out.insert(i);
+            out.insert(S::from(i.as_str()));
         }
         Need::Not(inner) => items_in(inner, out),
         Need::All(needs) => needs.iter().for_each(|n| items_in(n, out)),
@@ -2334,5 +2359,13 @@ mod tests {
             refused(r#"Reading(at: Look, need: Late(1440), text: "x")"#),
             Err(BookError::BadNumber { .. })
         ));
+    }
+
+    #[test]
+    fn items_named_reads_needs_and_effects() {
+        let b = book();
+        let named = |id: &str| b.items_named(b.missions.iter().find(|m| m.id == id).unwrap());
+        assert!(named("ledger").contains("ledger_shard"));
+        assert!(named("the_drop").contains("taped_package"));
     }
 }

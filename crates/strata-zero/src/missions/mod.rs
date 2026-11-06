@@ -316,6 +316,21 @@ pub fn unsealed(st: &AppState, id: &ItemId) -> bool {
     st.missions.unsealed.contains(&id.0)
 }
 
+/// Whether the story still needs the item in your pack: one of the items its missions
+/// give, and named by a mission that is waiting or open.
+pub fn kept(st: &AppState, item: &ItemId) -> bool {
+    st.book.gives(&st.content).contains(item)
+        && st
+            .book
+            .missions
+            .iter()
+            .zip(&st.missions.runs)
+            .any(|(m, r)| {
+                matches!(r.state, RunState::Waiting | RunState::Open)
+                    && st.book.items_named(m).contains(&item.0)
+            })
+}
+
 /// The person holding out the tray, while one waits.
 pub fn tray_from(st: &AppState) -> Option<PersonId> {
     st.missions
@@ -2496,7 +2511,7 @@ pub(crate) mod tests {
     }
 
     /// The index of the book's mission `id`, and of its run.
-    fn mission_at(st: &AppState, id: &str) -> usize {
+    pub(crate) fn mission_at(st: &AppState, id: &str) -> usize {
         st.book.missions.iter().position(|m| m.id == id).unwrap()
     }
 
@@ -3117,5 +3132,65 @@ pub(crate) mod tests {
         // `Book::parse` validates, and `book` unwraps it.
         let b = book(MAIL_STEPS);
         assert!(b.validate().is_ok());
+    }
+
+    #[test]
+    fn dropping_the_shard_before_reading_it_is_refused() {
+        let mut st = the_word_with(&[]);
+        open_the_package(&mut st);
+        let shard = ItemId::new("ledger_shard");
+        let before = ledger_objectives(&st);
+        let refused = crate::actions::perform(
+            &mut st,
+            game::Action::Drop {
+                item: shard.clone(),
+                qty: 1,
+            },
+        );
+        assert_eq!(refused, Err(crate::actions::KEPT.to_string()));
+        tick(&mut st);
+        assert_eq!(st.character.count(&shard), 1);
+        assert_eq!(ledger_objectives(&st), before);
+        assert!(
+            ledger_objectives(&st)
+                .last()
+                .is_some_and(|o| o.starts_with("Find out whose shard this is"))
+        );
+    }
+
+    #[test]
+    fn the_package_is_kept_until_opened() {
+        let mut st = the_word_with(&[]);
+        let package = ItemId::new("taped_package");
+        assert_eq!(st.character.count(&package), 1);
+        let refused = crate::actions::perform(
+            &mut st,
+            game::Action::Drop {
+                item: package.clone(),
+                qty: 1,
+            },
+        );
+        assert_eq!(refused, Err(crate::actions::KEPT.to_string()));
+        assert_eq!(st.character.count(&package), 1);
+    }
+
+    #[test]
+    fn a_story_item_no_live_mission_names_drops() {
+        let mut st = the_word_with(&[]);
+        open_the_package(&mut st);
+        for run in &mut st.missions.runs {
+            run.state = RunState::Done { at: 0 };
+        }
+        let shard = ItemId::new("ledger_shard");
+        assert!(!kept(&st, &shard));
+        let dropped = crate::actions::perform(
+            &mut st,
+            game::Action::Drop {
+                item: shard.clone(),
+                qty: 1,
+            },
+        );
+        assert!(dropped.is_ok(), "{dropped:?}");
+        assert_eq!(st.character.count(&shard), 0);
     }
 }
