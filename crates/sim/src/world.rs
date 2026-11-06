@@ -1188,7 +1188,8 @@ impl World {
                 }
             }
         }
-        // Spots breathe: a one-tile shuffle around the anchor now and then. Chats start.
+        // Spots breathe: a one-tile shuffle around the anchor now and then, though not for
+        // someone held, who keeps the tile the story holds them on. Chats start.
         self.chats.retain(|(_, until)| *until > self.minute);
         let mut by_tile: HashMap<Pos, Vec<usize>> = HashMap::new();
         for i in 0..self.people.len() {
@@ -1196,7 +1197,7 @@ impl World {
                 continue;
             }
             let anchor = match self.people[i].work {
-                Work::Spot(a) => Some(a),
+                Work::Spot(a) if !self.held.contains(&PersonId(i as u32)) => Some(a),
                 _ => None,
             };
             let roll = self.rng.random::<f32>();
@@ -1749,6 +1750,31 @@ mod tests {
         assert!(w.is_held(id));
         run_to(&mut w, &c, tick_at(16 * 60, 1));
         assert!(w.inside(b).iter().any(|o| o.id == id), "still in");
+    }
+
+    #[test]
+    fn a_held_spot_worker_stays_on_their_tile() {
+        let c = city();
+        // The same fixer on his corner in two runs of one world: held in one, let go in
+        // the other.
+        let (mut held, mut free) = (world(&c), world(&c));
+        let fx = one(&held, |p| p.profession == "fixer").id;
+        let spot = held.spot_of(fx).unwrap();
+        let start = tick_at(20 * 60, 1);
+        for w in [&mut held, &mut free] {
+            run_to(w, &c, start);
+            w.keep_at_work(fx);
+        }
+        free.release(fx);
+        let mut drifted = false;
+        for m in 1..=120 {
+            let t = start + m * TICKS_PER_MINUTE;
+            run_to(&mut held, &c, t);
+            run_to(&mut free, &c, t);
+            assert_eq!(held.pos_of(fx), Some(spot), "held, not a tile off");
+            drifted |= free.pos_of(fx) != Some(spot);
+        }
+        assert!(drifted, "let go, his corner breathes");
     }
 
     #[test]

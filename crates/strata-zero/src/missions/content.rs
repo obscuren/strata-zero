@@ -1449,11 +1449,11 @@ mod tests {
     #[test]
     fn the_shipped_book_parses_and_validates() {
         let b = book();
-        assert_eq!(b.missions.len(), 5);
+        assert_eq!(b.missions.len(), 6);
         assert_eq!(b.missions[0].id, "the_drop");
         assert_eq!(b.missions[1].id, "house_call");
         assert_eq!(b.missions[2].id, "morning_after");
-        assert_eq!(b.scenes.len(), 5);
+        assert_eq!(b.scenes.len(), 6);
         assert_eq!(b.missions[0].steps.len(), 6);
         assert!(b.cast.contains_key("mezz") && b.cast.contains_key("marlo"));
         assert_eq!(b.face_of("mezz").eye, (255, 0, 200));
@@ -1481,10 +1481,11 @@ mod tests {
                 "house_call",
                 "morning_after",
                 "doctor",
-                "ledger"
+                "ledger",
+                "the_three"
             ]
         );
-        let (doctor, ledger) = (&b.missions[3], &b.missions[4]);
+        let (doctor, ledger, three) = (&b.missions[3], &b.missions[4], &b.missions[5]);
         assert_eq!(doctor.title, "Doctor's in by ten");
         let steps: Vec<&str> = doctor.steps.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(steps, ["word", "in", "tray", "out", "free"]);
@@ -1495,7 +1496,12 @@ mod tests {
         assert_eq!(needs(doctor), ["marlo", "odile"]);
         assert_eq!(needs(ledger), ["coz", "odile"]);
         let steps: Vec<&str> = ledger.steps.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(steps, ["whose", "know", "sell"]);
+        assert_eq!(steps, ["whose", "know", "sell", "paid"]);
+        // The act's end needs nobody in the city: in one without Coz it never opens.
+        assert_eq!(three.title, "The three");
+        let steps: Vec<&str> = three.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(steps, ["ask", "quiet", "later"]);
+        assert!(needs(three).is_empty(), "{:?}", needs(three));
         let morning = &b.missions[2];
         let steps: Vec<&str> = morning.steps.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(steps, ["wake", "news", "saw", "word", "open"]);
@@ -1505,9 +1511,29 @@ mod tests {
             &b.cast["coz"].pick,
             Pick::Worker { professions, .. } if professions == &["fixer"]
         ));
-        for id in ["odile", "odile_out"] {
+        for id in ["odile", "odile_out", "coz"] {
             assert_eq!(b.scenes[id].look, Look::Bubbles, "{id}");
         }
+        // Coz's scene is the doctor's pace; what it stages, in order.
+        assert_eq!(b.scenes["coz"].title, "The ledger");
+        assert_eq!(b.scenes["coz"].pace, b.scenes["odile"].pace);
+        let staged: Vec<&str> = b.scenes["coz"]
+            .beats
+            .iter()
+            .filter_map(|beat| match beat {
+                Beat::Stage(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            staged,
+            [
+                "He pulls you into a doorway.",
+                "He turns it under the light.",
+                "A long breath.",
+                "He peels off a roll, and doesn't look at you while he counts.",
+            ]
+        );
         let at = |item: &str| b.readings[item].iter().map(|r| r.at).collect::<Vec<_>>();
         assert_eq!(
             at("ledger_shard"),
@@ -1550,7 +1576,7 @@ mod tests {
                 skills_in(n, &mut skills);
             }
         }
-        assert_eq!(skills.len(), 15, "{skills:?}");
+        assert_eq!(skills.len(), 17, "{skills:?}");
         let c = Content::load().unwrap();
         for id in skills {
             assert!(

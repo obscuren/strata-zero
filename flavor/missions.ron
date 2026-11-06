@@ -243,7 +243,9 @@ Story(
         ]),
         // The hook, its own mission so a city with one fixer (Mezz) still plays the doctor.
         // It opens with the package; its last fit places the doctor, so a city without
-        // one leaves it uncast.
+        // one leaves it uncast. Known, the shard goes back to Coz wherever you catch him:
+        // he stays put through his scene, and its end sells it: the shard taken, ¤800
+        // paid, a point of standing with him.
         Mission(id: "ledger", title: "The ledger", from: "castellan", steps: [
             Step(id: "whose", when: Holds(Carries("ledger_shard")), then: [
                 // Told already (the doctor named him): no hint, and the next step ticks it.
@@ -260,11 +262,32 @@ Story(
                 ]),
             ]),
             Step(id: "know", when: Holds(Read("ledger_shard")), then: [
-                Objective("Bring it to {coz} · {coz.place} · {coz.district}"),
+                Objective("Bring it to {coz} · {coz.place} · {coz.district} · {coz.hours}"),
             ]),
-            Step(id: "sell", when: Talk("coz"), then: [
-                Log("`{coz}` · \"The ledger? Not here. I'll find you.\""),
+            Step(id: "sell", when: Talk("coz"), then: [Stay("coz"), Scene("coz")]),
+            Step(id: "paid", when: Ended("sell"), then: [
+                Release("coz"),
+                Take(item: "ledger_shard", count: 1),
+                Pay(800),
+                Standing(role: "coz", by: 1),
+                Log("`{coz}` · ¤800 · for bringing it home"),
             ]),
+        ]),
+        // Where the story stands: the act over once the ledger and the doctor are both
+        // done, Seren's word through a holo ad and her mail, then a step for later.
+        Mission(id: "the_three", title: "The three", from: "coz", steps: [
+            Step(id: "ask", when: Holds(All([Done("ledger"), Done("doctor")])), then: [
+                Objective("Ask {castellan} where they are · Seren will find you"),
+                Ad(from: "seren", text: "He's gone quiet. Work for {coz}. I'll find you. —S"),
+            ]),
+            Step(id: "quiet", when: Ended("ask"), then: [
+                Mail(from: "seren", subject: "quiet", body: [
+                    "He's gone quiet. When he goes quiet, so do we.",
+                    "Work for {coz}. Keep your head down. I'll find you.",
+                    "— S",
+                ]),
+            ]),
+            Step(id: "later", when: Later, then: []),
         ]),
     ],
     scenes: {
@@ -346,6 +369,31 @@ Story(
             Say(who: "odile", text: "Three sat in that chair on his money before you."),
             Say(who: "odile", hold: Some(4.0), text: "Ask him where they are."),
             Note(at: Chair("odile"), text: "Three clinic tags hang off the lamp arm. The names are scratched off."),
+        ]),
+        "coz": Scene(title: "The ledger", look: Bubbles,
+            pace: Pace(type: 45, walk: 0.3, hold: Some(2.5)), beats: [
+            Say(who: "coz", text: "Not here, choom. Not out in the open."),
+            Stage("He pulls you into a doorway."),
+            Say(who: "coz", text: "Black tape, three turns. You're holdin' somethin' of mine, choomie."),
+            Stage("He turns it under the light."),
+            Say(who: "coz", text: "Seal's been popped. Somebody's been in my book. Fuck."),
+            Say(who: "coz", need: Some(Skill("hacking")),
+                text: "You got sum skills, huh. You been in it too, ain't you."),
+            Say(who: "coz", need: Some(All([Build("fixer"), Not(Skill("hacking"))])),
+                text: "You're in the trade, I can smell it on you. You checked it, ey?"),
+            Say(who: "coz", text: "So who sent you?"),
+            Say(who: "you", text: "{castellan}."),
+            Stage("A long breath."),
+            Say(who: "coz", text: "Course it was him."),
+            Say(who: "coz", text: "Three years of my work in there, choom. Who I sent, where, who paid."),
+            Say(who: "coz", text: "Fuck! How'd it all go so sideways?"),
+            Say(who: "coz", text: "Last page is his. Three of mine, on his scrip. One job, in an' out."),
+            Say(who: "coz", text: "We were s'posed to walk out clean. Damn it."),
+            Say(who: "coz", hold: Some(4.0), text: "The money came home. They didn't."),
+            Stage("He peels off a roll, and doesn't look at you while he counts."),
+            Say(who: "coz", text: "Eight hun'. For bringin' it home, an' for not shoppin' it round first."),
+            Say(who: "coz", text: "You want work, you come to me. Not {mezz}. Me."),
+            Say(who: "coz", hold: Some(4.0), text: "An' when {castellan} sits you in a chair, an' he will, you ask him where my people are. Then you come tell me."),
         ]),
     },
     news: {

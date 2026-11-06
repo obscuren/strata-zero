@@ -2845,15 +2845,9 @@ pub(crate) mod tests {
             ]
         );
         send(&mut st, Event::Talked(coz));
-        assert!(matches!(
-            st.missions.runs[ledger].state,
-            RunState::Done { .. }
-        ));
-        assert!(
-            st.log
-                .iter()
-                .any(|e| e.text == "Coz · \"The ledger? Not here. I'll find you.\"")
-        );
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("coz"));
+        assert_eq!(st.missions.runs[ledger].state, RunState::Open);
     }
 
     #[test]
@@ -2896,9 +2890,10 @@ pub(crate) mod tests {
     pub(crate) fn bring_it_to_coz(st: &AppState) -> String {
         let coz = person_of(st, "coz").expect("coz is cast");
         format!(
-            "Bring it to Coz · {} · {}",
+            "Bring it to Coz · {} · {} · {}",
             cast::place_of(st, coz),
-            cast::district_of(st, coz)
+            cast::district_of(st, coz),
+            cast::hours_of(st, coz)
         )
     }
 
@@ -3263,5 +3258,354 @@ pub(crate) mod tests {
         );
         assert!(dropped.is_ok(), "{dropped:?}");
         assert_eq!(st.character.count(&shard), 0);
+    }
+
+    /// The line Coz says to whoever reads shards.
+    const RUNNER: &str = "You got sum skills, huh. You been in it too, ain't you.";
+    /// The line Coz says to a fixer who doesn't.
+    const TRADE: &str = "You're in the trade, I can smell it on you. You checked it, ey?";
+    /// The three's objective.
+    const ASK: &str = "Ask Castellan where they are · Seren will find you";
+    /// Seren's line through the ad, filled.
+    const SEREN_AD: &str = "He's gone quiet. Work for Coz. I'll find you. —S";
+
+    fn coz(st: &AppState) -> PersonId {
+        person_of(st, "coz").expect("coz is cast")
+    }
+
+    fn held(st: &AppState, id: PersonId) -> bool {
+        st.world.as_ref().unwrap().is_held(id)
+    }
+
+    /// Runs the world on to the next `h:m`.
+    fn to_the_clock(st: &mut AppState, h: u64, m: u64) {
+        let (hh, mm) = st.clock();
+        let now = u64::from(hh) * 60 + u64::from(mm);
+        advance(st, (h * 60 + m + 1440 - now) % 1440);
+        assert_eq!(st.clock(), (h as u8, m as u8));
+    }
+
+    /// You on a free street tile beside Coz, seeing him: the tile.
+    fn beside_coz(st: &mut AppState) -> Pos {
+        let (place, at) = crate::interiors::drawn_at(st, coz(st)).expect("coz is drawn");
+        assert_eq!(place, STREET, "coz is on the street");
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_ref().unwrap());
+        let by = at
+            .neighbors4()
+            .chain(at.neighbors8())
+            .find(|&p| city.walkable(StratumKind::Street, p) && world.person_at(p).is_none())
+            .expect("a free tile beside coz");
+        on_street(st, by);
+        let seen = st.player.as_ref().unwrap().vis().get(at);
+        assert_eq!(seen, Some(&Visibility::Visible), "you see him");
+        by
+    }
+
+    /// The shard read at the rig, as a runner reads it: the ledger sends you to Coz.
+    fn read_at_the_rig(st: &mut AppState) {
+        let shard = ItemId::new("ledger_shard");
+        assert!(reading::ReadCard::open(st, &shard, ReadAt::Rig).is_some());
+        tick(st);
+        assert_eq!(ledger_objectives(st).last(), Some(&bring_it_to_coz(st)));
+    }
+
+    /// The lines of a scene that were said, filled, as the log has them.
+    fn said_in(st: &AppState, scene: &str) -> Vec<String> {
+        st.book.scenes[scene]
+            .beats
+            .iter()
+            .filter_map(|beat| match beat {
+                Beat::Say { text, .. } => Some(fill(st, text)),
+                _ => None,
+            })
+            .filter(|t| {
+                let quoted = format!("\u{201c}{t}\u{201d}");
+                st.log.iter().any(|e| e.text.ends_with(&quoted))
+            })
+            .collect()
+    }
+
+    /// Talking to Coz with the shard known: his scene plays, and esc skips through it to
+    /// the sale. Gives back the lines of it that were said.
+    fn through_coz_scene(st: &mut AppState) -> Vec<String> {
+        let coz = coz(st);
+        send(st, Event::Talked(coz));
+        tick(st);
+        assert_eq!(scene::running(st).map(|r| r.id()), Some("coz"));
+        scene::skip(st);
+        tick(st);
+        said_in(st, "coz")
+    }
+
+    /// A netrunner with the doctor done (through her scene and chair, the shard read at
+    /// the rig on the way), at 21:40 beside Coz on his corner.
+    fn by_coz_at_night() -> AppState {
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        assert_eq!(st.character.profession.0, "netrunner");
+        play_the_doctor(&mut st, true, true);
+        to_the_clock(&mut st, 21, 40);
+        beside_coz(&mut st);
+        st
+    }
+
+    /// Off from where Seren's line went up and by a holo ad, the line torn through it:
+    /// her mail lands.
+    fn the_line_tears_through(st: &mut AppState) {
+        let start = st.missions.ad.as_ref().expect("the line waits").at;
+        news::tests::by_an_ad(st);
+        let you = st.player.as_ref().unwrap();
+        assert!(
+            you.place != start.0 || you.pos.chebyshev(start.1) >= ad::WALK_OFF,
+            "walked off"
+        );
+        ad::tick(st, true);
+        assert_eq!(st.missions.ad, None);
+    }
+
+    /// Seren's last mail of the act, landed once.
+    fn quiet_mail(st: &AppState) -> &crate::credentials::Mail {
+        let mut mails = st.journal.mails.iter().filter(|m| m.subject == "quiet");
+        let mail = mails.next().expect("Seren's quiet mail");
+        assert!(mails.next().is_none(), "one quiet mail");
+        mail
+    }
+
+    /// The three stands on its step `later`, open, its one objective kept.
+    fn the_three_waits_on_later(st: &AppState) {
+        let three = mission_at(st, "the_three");
+        let run = &st.missions.runs[three];
+        assert_eq!(run.state, RunState::Open);
+        assert_eq!(st.book.missions[three].steps[run.at].id, "later");
+        assert_eq!(run.objectives, [ASK]);
+    }
+
+    #[test]
+    fn selling_the_ledger_ends_the_act() {
+        let mut st = by_coz_at_night();
+        let (ledger, three) = (mission_at(&st, "ledger"), mission_at(&st, "the_three"));
+        let (coz, shard) = (coz(&st), ItemId::new("ledger_shard"));
+        assert_eq!(st.missions.runs[three].state, RunState::Waiting);
+        let (credits, standing) = (st.character.credits, st.jobs.standing(coz));
+        let caught = crate::interiors::drawn_at(&st, coz);
+        // Talk: his scene plays, and he stays where you caught him.
+        send(&mut st, Event::Talked(coz));
+        tick(&mut st);
+        assert_eq!(scene::running(&st).map(|r| r.id()), Some("coz"));
+        assert!(held(&st, coz));
+        assert_eq!(crate::interiors::drawn_at(&st, coz), caught);
+        assert_eq!(st.missions.runs[ledger].state, RunState::Open);
+        assert_eq!(st.character.count(&shard), 1, "his until the end");
+        // Esc through it: its end pays, takes the shard and lets him go.
+        scene::skip(&mut st);
+        tick(&mut st);
+        assert_eq!(st.character.count(&shard), 0);
+        assert_eq!(st.character.credits, credits + 800);
+        assert_eq!(st.jobs.standing(coz), standing + 1);
+        assert!(!held(&st, coz));
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text == "Coz · ¤800 · for bringing it home")
+        );
+        assert!(matches!(
+            st.missions.runs[ledger].state,
+            RunState::Done { .. }
+        ));
+        // The act is over: The three open, Seren's line waiting for an ad.
+        assert_eq!(st.missions.runs[three].state, RunState::Open);
+        assert_eq!(st.missions.runs[three].objectives, [ASK]);
+        let line = st.missions.ad.clone().expect("Seren's line waits");
+        assert_eq!(
+            (line.from.as_str(), line.text.as_str()),
+            ("seren", SEREN_AD)
+        );
+        // Beside Coz still, an ad in view of his corner: it waits.
+        assert!(news::ad_in_view(&st).is_some(), "an ad by his corner");
+        ad::tick(&mut st, true);
+        assert_eq!(st.missions.ad.as_ref(), Some(&line));
+        assert!(st.journal.mails.iter().all(|m| m.subject != "quiet"));
+        // Walked off, by an ad: it tears through, and her mail lands.
+        the_line_tears_through(&mut st);
+        let torn = st.missions.asides.iter().find(|a| a.text == SEREN_AD);
+        assert!(torn.is_some(), "{:?}", st.missions.asides);
+        let mail = quiet_mail(&st);
+        assert_eq!(mail.from, "Seren");
+        assert_eq!(
+            mail.body,
+            [
+                "He's gone quiet. When he goes quiet, so do we.",
+                "Work for Coz. Keep your head down. I'll find you.",
+                "— S",
+            ]
+        );
+        // There the story stands.
+        the_three_waits_on_later(&st);
+        advance(&mut st, 600);
+        tick(&mut st);
+        the_three_waits_on_later(&st);
+    }
+
+    #[test]
+    fn sold_before_the_doctor_the_act_waits_for_her() {
+        let mut st = the_morning_call();
+        to_the_word(&mut st);
+        let (ledger, three) = (mission_at(&st, "ledger"), mission_at(&st, "the_three"));
+        open_the_package(&mut st);
+        read_at_the_rig(&mut st);
+        // Sold first: the ledger done, The three waits on the doctor.
+        through_coz_scene(&mut st);
+        assert!(matches!(
+            st.missions.runs[ledger].state,
+            RunState::Done { .. }
+        ));
+        assert_eq!(st.missions.runs[three].state, RunState::Waiting);
+        assert_eq!(st.missions.ad, None);
+        // Up out of her chair, her parting words: on the way out it opens.
+        play_the_doctor(&mut st, false, false);
+        assert_eq!(st.missions.runs[three].state, RunState::Open);
+        assert_eq!(st.missions.runs[three].objectives, [ASK]);
+        let line = st.missions.ad.as_ref().expect("Seren's line waits");
+        assert_eq!(line.text, SEREN_AD);
+    }
+
+    #[test]
+    fn coz_hears_who_you_are() {
+        let shard = ItemId::new("ledger_shard");
+        // A netrunner, read at the rig: all of it but the trade.
+        let mut st = the_word_with(&["hacking"]);
+        assert_eq!(st.character.profession.0, "netrunner");
+        open_the_package(&mut st);
+        read_at_the_rig(&mut st);
+        assert_eq!(
+            through_coz_scene(&mut st),
+            [
+                "Not here, choom. Not out in the open.",
+                "Black tape, three turns. You're holdin' somethin' of mine, choomie.",
+                "Seal's been popped. Somebody's been in my book. Fuck.",
+                RUNNER,
+                "So who sent you?",
+                "Castellan.",
+                "Course it was him.",
+                "Three years of my work in there, choom. Who I sent, where, who paid.",
+                "Fuck! How'd it all go so sideways?",
+                "Last page is his. Three of mine, on his scrip. One job, in an' out.",
+                "We were s'posed to walk out clean. Damn it.",
+                "The money came home. They didn't.",
+                "Eight hun'. For bringin' it home, an' for not shoppin' it round first.",
+                "You want work, you come to me. Not Mezz. Me.",
+                "An' when Castellan sits you in a chair, an' he will, you ask him where my people are. Then you come tell me.",
+            ]
+        );
+        // A fixer who can't hack, the tape known from the pack: the trade, not the runner.
+        let mut st = the_word_with(&["streetwise"]);
+        st.character.profession = game::ProfessionId::new("fixer");
+        open_the_package(&mut st);
+        assert!(reading::look_tells(&mut st, &shard));
+        tick(&mut st);
+        let said = through_coz_scene(&mut st);
+        assert!(said.iter().any(|l| l == TRADE), "{said:?}");
+        assert!(said.iter().all(|l| l != RUNNER), "{said:?}");
+        assert_eq!(said.len(), 15);
+        // A solo told by the doctor: neither.
+        let mut st = the_word_with(&["handguns"]);
+        st.character.profession = game::ProfessionId::new("solo");
+        open_the_package(&mut st);
+        through_her_scene(&mut st);
+        assert_eq!(ledger_objectives(&st).last(), Some(&bring_it_to_coz(&st)));
+        let said = through_coz_scene(&mut st);
+        assert!(said.iter().all(|l| l != RUNNER && l != TRADE), "{said:?}");
+        assert_eq!(said.len(), 14);
+    }
+
+    #[test]
+    fn coz_stays_where_you_caught_him() {
+        let mut st = the_word_with(&["hacking"]);
+        open_the_package(&mut st);
+        read_at_the_rig(&mut st);
+        let coz = coz(&st);
+        let spot = st.world.as_ref().unwrap().spot_of(coz).expect("a corner");
+        // By day. In seed 8 he has no home and keeps to his corner all day, so he is
+        // caught on a tile of it off his spot, where its shuffle has him.
+        let caught = loop {
+            let at = crate::interiors::drawn_at(&st, coz).expect("drawn");
+            if at.1 != spot {
+                break at;
+            }
+            advance(&mut st, 1);
+            assert!(st.clock() < (18, 0), "never off his spot by day");
+        };
+        assert!(st.clock() >= (4, 0), "by day: {:?}", st.clock());
+        beside_coz(&mut st);
+        send(&mut st, Event::Talked(coz));
+        // Played through on the clock: never moved, and each of his lines on him.
+        let mut lines = 0;
+        for _ in 0..(10 * 60 * call::TICKS_PER_SECOND) {
+            tick(&mut st);
+            let Some(run) = scene::running(&st) else {
+                break;
+            };
+            assert_eq!(run.id(), "coz");
+            assert!(held(&st, coz));
+            assert_eq!(crate::interiors::drawn_at(&st, coz), Some(caught));
+            if let Some(line) = run.line().filter(|l| l.who == "coz") {
+                assert_eq!(line.anchor, Some(caught), "{}", line.text);
+                lines += 1;
+            }
+            let (city, w) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+            w.advance(city, w.tick() + 1);
+        }
+        assert!(scene::running(&st).is_none(), "the scene ran out");
+        assert!(lines > 0);
+        // Its end lets him go.
+        tick(&mut st);
+        assert!(!held(&st, coz));
+    }
+
+    #[test]
+    fn coz_is_only_a_fixer_off_the_story() {
+        let quiet = |st: &AppState| scene::running(st).is_none() && st.missions.scenes.is_empty();
+        // The shard in your pack, not yet read: he is a fixer like any other.
+        let mut st = the_word_with(&["hacking"]);
+        open_the_package(&mut st);
+        let coz = coz(&st);
+        let before = ledger_objectives(&st);
+        assert!(!listens(&st, coz));
+        send(&mut st, Event::Talked(coz));
+        tick(&mut st);
+        assert!(quiet(&st));
+        assert_eq!(ledger_objectives(&st), before);
+        // Read, he listens; sold, he is a fixer again.
+        read_at_the_rig(&mut st);
+        assert!(listens(&st, coz));
+        through_coz_scene(&mut st);
+        assert!(!listens(&st, coz));
+        send(&mut st, Event::Talked(coz));
+        tick(&mut st);
+        assert!(quiet(&st));
+    }
+
+    #[test]
+    fn a_run_saved_at_the_three_reopens_there() {
+        use crate::runs::file::{read, write};
+        use crate::runs::snapshot::{after_restore, restore};
+        let mut st = by_coz_at_night();
+        through_coz_scene(&mut st);
+        the_line_tears_through(&mut st);
+        quiet_mail(&st);
+        the_three_waits_on_later(&st);
+        let dir = crate::runs::testutil::Dir::new("the-three");
+        let st = crate::runs::testutil::running(st);
+        let path = write(&dir.0, &st).unwrap();
+        let mut back = AppState::new();
+        back.book = st.book.clone();
+        let (_, snap, lost) = read(&path, &back.book).unwrap();
+        assert!(lost.is_empty(), "{lost:?}");
+        restore(&mut back, snap);
+        after_restore(&mut back, lost);
+        the_three_waits_on_later(&back);
+        tick(&mut back);
+        the_three_waits_on_later(&back);
+        quiet_mail(&back);
     }
 }
