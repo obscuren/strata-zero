@@ -362,25 +362,14 @@ fn a_city_you_come_into_lives_in_town() {
 }
 
 #[test]
-fn a_city_you_come_into_has_its_traffic() {
-    // seed 3's docks as you find them, with flats for one in five who work there: cars
-    // for their people as the home city has for its, and as many on the road in a day
-    // for the size of the map
+fn every_city_you_come_into_has_its_traffic() {
+    // seed 3's other cities with housing as you find them (the docks with flats for one
+    // in five who work there; the corporate neighbour, small, its flats among its
+    // towers): cars for their people as the home city has for its, and at least half as
+    // much driving in a day, for the size of the map or for its people
     let people = sim::People::load().unwrap();
-    let (_, home) = &settlements()[0];
-    let docks = settlement(Settlement {
-        city: 2,
-        town: None,
-    });
+    let (home_s, home) = &settlements()[0];
     let cells = |c: &City| u64::from(c.size.w) * u64::from(c.size.h);
-    let at_home = World::seed(home, &people, &sim::SimParams::default(), FOUR, 0);
-    let there = come_into(docks);
-    let (home_cars, home_people) = (at_home.cars().len(), at_home.people().len());
-    let (cars, n) = (there.cars().len(), there.people().len());
-    assert!(
-        cars * home_people * 2 >= home_cars * n,
-        "{cars} cars for {n} people; the home city {home_cars} for {home_people}"
-    );
     // ticks of driving in a day
     let driving = |city: &City, w: World| {
         let mut ticks = 0;
@@ -389,11 +378,30 @@ fn a_city_you_come_into_has_its_traffic() {
         });
         ticks
     };
-    let (home_ticks, ticks) = (driving(home, at_home), driving(docks, there));
+    let at_home = World::seed(home, &people, &sim::SimParams::default(), FOUR, 0);
+    let (home_cars, home_people) = (at_home.cars().len(), at_home.people().len());
+    let home_ticks = driving(home, at_home);
+    let mut short = Vec::new();
+    for (s, city) in settlements() {
+        let there = come_into(city);
+        if s == home_s || s.town.is_some() || there.cars().is_empty() {
+            continue;
+        }
+        let (cars, n) = (there.cars().len(), there.people().len());
+        let ticks = driving(city, there);
+        let for_the_map = ticks * cells(home) * 2 >= home_ticks * cells(city);
+        let for_its_people = ticks * home_people as u64 * 2 >= home_ticks * n as u64;
+        if cars * home_people * 2 < home_cars * n || !(for_the_map || for_its_people) {
+            short.push(format!(
+                "{s:?}: {cars} cars for {n}, {ticks} ticks driven on {} cells",
+                cells(city)
+            ));
+        }
+    }
     assert!(
-        ticks * cells(home) * 2 >= home_ticks * cells(docks),
-        "{ticks} ticks driven on {} cells; the home city {home_ticks} on {}",
-        cells(docks),
+        short.is_empty(),
+        "the home city {home_cars} cars for {home_people}, {home_ticks} ticks driven on {} \
+         cells; short of half: {short:#?}",
         cells(home)
     );
 }

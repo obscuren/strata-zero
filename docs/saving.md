@@ -99,10 +99,10 @@ isn't saved, and is made again from `missions.cast` on reopening. A break at mid
 (`sim::Goal::Lunch`) and a drink after work are picked by a hash of who someone is, so
 nothing about them is saved but the goal and the trip in flight. A city other than home
 is seeded crowded (`outside::seed_people`, `sim::SimParams::crowded`): once its flats are
-full, the rest who work in it live in the housing nearest their work, so only one with
-no housing off the Strip has commuters, and its people's cars are as many as its homes
-make. Who has a home is the people's own, saved with them: a city kept in a save from
-before keeps its commuters.
+full they take another round, and another, each taken as the first was, so everyone who
+works in it lives in it and only one with no housing off the Strip has commuters; its
+people's cars are as many as its homes make. Who has a home is the people's own, saved
+with them: a city kept in a save from before keeps its commuters.
 
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on

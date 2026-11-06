@@ -28,9 +28,9 @@ pub struct HouseholdId(pub u32);
 pub struct SimParams {
     pub density: f32,
     pub car_share: f32,
-    /// Its housing full, the rest who work in the city still live in it, crowded into
-    /// the housing nearest their work; not crowded, they have no home in it and come in
-    /// from off the map (`commute`).
+    /// Its housing full, the rest who work in the city still live in it: its flats take
+    /// another round, then another, each taken as the first was (the nearest with room);
+    /// not crowded, they have no home in it and come in from off the map (`commute`).
     #[serde(default)]
     pub crowded: bool,
 }
@@ -203,6 +203,33 @@ fn housing_capacity(b: &Building) -> usize {
     }
 }
 
+/// Of `housing` (each with its door and the room it has left), the nearest to `at`
+/// with room, a place in it taken; none with room, none. Anyone but one who takes
+/// anything (`far_ok`) keeps within 60 cells when somewhere that near has room.
+fn take_home(
+    housing: &mut [(BuildingId, Pos, usize)],
+    at: Pos,
+    far_ok: bool,
+) -> Option<BuildingId> {
+    let mut best: Option<(i32, usize)> = None;
+    for (k, (_, door, cap)) in housing.iter().enumerate() {
+        if *cap == 0 {
+            continue;
+        }
+        let d = door.manhattan(at);
+        if !far_ok && d > 60 && best.is_some_and(|(bd, _)| bd <= 60) {
+            continue;
+        }
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, k));
+        }
+    }
+    best.map(|(_, k)| {
+        housing[k].2 -= 1;
+        housing[k].0
+    })
+}
+
 /// A job to fill: the profession, where, and which shift.
 struct Opening<'a> {
     profession: &'a Profession,
@@ -369,6 +396,8 @@ pub fn seed_population(
             Some((b.id, door, cap))
         })
         .collect();
+    // the room each has, for a crowded city's next round
+    let rooms: Vec<usize> = housing.iter().map(|h| h.2).collect();
 
     // Shared departure jitter per workplace and shift, so colleagues leave together.
     let mut group_jitter: HashMap<(Work, u16), i32> = HashMap::new();
@@ -388,33 +417,17 @@ pub fn seed_population(
         });
         // The nearest housing with room; corp drones take anything, others prefer close.
         let far_ok = o.profession.id == "corp_drone";
-        let home = {
-            let mut best: Option<(i32, usize)> = None;
-            for (k, (_, door, cap)) in housing.iter().enumerate() {
-                if *cap == 0 {
-                    continue;
-                }
-                let d = door.manhattan(o.at);
-                if !far_ok && d > 60 && best.is_some_and(|(bd, _)| bd <= 60) {
-                    continue;
-                }
-                if best.is_none_or(|(bd, _)| d < bd) {
-                    best = Some((d, k));
-                }
+        let home = take_home(&mut housing, o.at, far_ok).or_else(|| {
+            // every flat taken: a crowded city packs another round into its flats, taken
+            // as the first were
+            if !params.crowded {
+                return None;
             }
-            best.map(|(_, k)| {
-                housing[k].2 -= 1;
-                housing[k].0
-            })
-            // every flat taken: a crowded city puts them in the housing nearest the job
-            // all the same (the first of those as near)
-            .or_else(|| {
-                let nearest = housing
-                    .iter()
-                    .min_by_key(|(_, door, _)| door.manhattan(o.at));
-                nearest.filter(|_| params.crowded).map(|(b, _, _)| *b)
-            })
-        };
+            for (h, room) in housing.iter_mut().zip(&rooms) {
+                h.2 = *room;
+            }
+            take_home(&mut housing, o.at, far_ok)
+        });
         if let Some(h) = home {
             by_home.entry(h).or_default().push(id);
         }
@@ -681,8 +694,9 @@ mod tests {
     #[test]
     fn a_crowded_city_houses_everyone_who_works_in_it() {
         // seed 6 at five districts has flats for few who work in it: crowded, the rest
-        // live in it all the same, in the housing nearest their work, and those with a
-        // flat to spare keep theirs; not crowded, the rest have no home in it
+        // live in it all the same, its flats taking round after round as they took the
+        // first, and those with a flat to spare keep theirs; not crowded, the rest have
+        // no home in it
         let c = Generator::run(GenParams {
             seed: 6,
             size: SizePreset::Custom { w: 120, h: 60 },
@@ -720,6 +734,27 @@ mod tests {
                 b.kind
             );
             assert_ne!(c.district(b.district).theme, Theme::NeonStrip);
+        }
+        // round after round: no building holds more than its room for each round
+        let room: HashMap<BuildingId, usize> = c
+            .buildings
+            .iter()
+            .filter(|b| housing_capacity(b) > 0 && places.doors.contains_key(&b.id))
+            .filter(|b| c.district(b.district).theme != Theme::NeonStrip)
+            .map(|b| (b.id, housing_capacity(b)))
+            .collect();
+        let rounds = n.div_ceil(room.values().sum::<usize>());
+        assert!(rounds > 1, "{rounds} rounds");
+        let mut lives: HashMap<BuildingId, usize> = HashMap::new();
+        for p in &crowded.people {
+            *lives.entry(p.home.unwrap()).or_default() += 1;
+        }
+        for (b, n) in lives {
+            assert!(
+                n <= room[&b] * rounds,
+                "{n} in {b:?}, room for {}",
+                room[&b]
+            );
         }
     }
 
