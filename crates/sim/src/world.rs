@@ -596,14 +596,27 @@ impl World {
             .or_else(|| drinks.first().copied())
     }
 
+    /// `goal` as someone who lives in town keeps it: never out of town for a drink. One
+    /// the city has no place for is had at the first it has, else they stay home.
+    fn in_town(&self, goal: Goal) -> Goal {
+        let drinks = &self.places.drinks;
+        match goal {
+            Goal::Leisure(l) if !drinks.contains(&l) => {
+                drinks.first().map_or(Goal::Home, |l| Goal::Leisure(*l))
+            }
+            _ => goal,
+        }
+    }
+
     /// The goal `i` keeps at `minute` of the day: their schedule's, but someone who comes
     /// in from off the map sets off for work as much earlier as the walk in takes, may
-    /// take a break at midday and may stay on in town for a drink after.
+    /// take a break at midday and may stay on in town for a drink after; and someone who
+    /// lives in town has their drink in town (`in_town`).
     fn due(&self, i: usize, minute: u16) -> Goal {
         let schedule = &self.people[i].schedule;
         let now = goal_at(schedule, minute);
         if !self.commuter(i) {
-            return now;
+            return self.in_town(now);
         }
         if now == Goal::Work {
             return if self.at_lunch(i, minute) {

@@ -1,7 +1,8 @@
 //! Commuting: someone who works in the city with no home in it lives off the map. They
 //! come in by a road where it crosses the map's edge, walk to work, and walk back out the
-//! same way; so does anyone whose trip ends at no place in the city (a bar the city
-//! hasn't got). Off the map they are `Whereabouts::Away`, drawn nowhere.
+//! same way; so do they when a trip of theirs ends at no place in the city (a bar the
+//! city hasn't got). Someone who lives in town has their drink in town. Off the map they
+//! are `Whereabouts::Away`, drawn nowhere.
 
 use crate::paths::walk_cost;
 use crate::people::PersonId;
@@ -194,7 +195,7 @@ mod tests {
     use crate::people::{Dest, Goal, SimParams, Whereabouts, Work};
     use crate::places::Places;
     use crate::world::{TICKS_PER_MINUTE, World};
-    use citygen::world::BuildingKind;
+    use citygen::world::{BuildingKind, Theme};
     use citygen::{GenParams, Generator, SizePreset};
     use std::collections::HashMap;
 
@@ -378,9 +379,10 @@ mod tests {
     }
 
     #[test]
-    fn a_trip_with_no_place_in_the_city_goes_out_of_town_and_back() {
-        // no bar in the city: those who go for a drink after work go out of town for it,
-        // and come home from there
+    fn someone_who_lives_in_town_has_their_drink_in_town() {
+        // no bar in the city: those with a home in it who'd go for a drink after work
+        // have it at what it has (a noodle bar, the Strip) and never go out of town for
+        // it; with nowhere at all for a drink, they stay home
         let mut c = Generator::run(GenParams {
             seed: 6,
             size: SizePreset::Custom { w: 120, h: 60 },
@@ -393,39 +395,60 @@ mod tests {
                 b.kind = BuildingKind::Warehouse;
             }
         }
-        let mut w = world(&c, 4 * 60);
-        let drinkers: Vec<usize> = w
-            .people()
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| {
-                p.home.is_some()
-                    && p.schedule
-                        .iter()
-                        .any(|s| s.goal == Goal::Leisure(crate::Leisure::Bar))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        assert!(!drinkers.is_empty());
-        let (mut out, mut back) = (vec![false; w.people().len()], vec![false; w.people().len()]);
-        for _ in 0..24 * 60 {
-            a_minute(&mut w, &c);
-            for &i in &drinkers {
-                let p = &w.people()[i];
-                if p.whereabouts == Whereabouts::Away
-                    && p.goal == Goal::Leisure(crate::Leisure::Bar)
-                {
-                    out[i] = true;
-                }
-                if out[i] && p.whereabouts == Whereabouts::Inside(p.home.unwrap()) {
-                    back[i] = true;
-                }
+        let mut dry = c.clone();
+        for b in &mut dry.buildings {
+            if b.kind == BuildingKind::NoodleBar {
+                b.kind = BuildingKind::Warehouse;
             }
         }
-        for &i in &drinkers {
-            let p = &w.people()[i];
-            assert!(out[i], "{} went out of town for a drink", p.name);
-            assert!(back[i], "{} came home", p.name);
+        for d in &mut dry.districts {
+            if matches!(d.theme, Theme::NeonStrip | Theme::NightMarket) {
+                d.theme = Theme::OldTown;
+            }
+        }
+        assert!(!Places::derive(&c).drinks.is_empty());
+        assert!(Places::derive(&dry).drinks.is_empty());
+        for (c, somewhere) in [(&c, true), (&dry, false)] {
+            let mut w = world(c, 4 * 60);
+            let drinkers: Vec<usize> = w
+                .people()
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    p.home.is_some()
+                        && p.schedule
+                            .iter()
+                            .any(|s| s.goal == Goal::Leisure(crate::Leisure::Bar))
+                })
+                .map(|(i, _)| i)
+                .collect();
+            assert!(!drinkers.is_empty());
+            let mut had_one = vec![false; w.people().len()];
+            for _ in 0..24 * 60 {
+                a_minute(&mut w, c);
+                for &i in &drinkers {
+                    let p = &w.people()[i];
+                    assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
+                    // in for a drink: inside somewhere neither home nor work
+                    if let Whereabouts::Inside(b) = p.whereabouts
+                        && matches!(p.goal, Goal::Leisure(_))
+                        && Some(b) != p.home
+                        && p.work != Work::Building(b)
+                    {
+                        had_one[i] = true;
+                    }
+                }
+            }
+            let drank = drinkers.iter().filter(|i| had_one[**i]).count();
+            if somewhere {
+                assert!(
+                    drank * 2 > drinkers.len(),
+                    "{drank} of {} had a drink in town",
+                    drinkers.len()
+                );
+            } else {
+                assert_eq!(drank, 0, "a drink with nowhere to have one");
+            }
         }
     }
 
