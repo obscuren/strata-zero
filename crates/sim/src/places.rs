@@ -170,10 +170,15 @@ impl Places {
                 .iter()
                 .filter(|d| d.theme == Theme::NightMarket)
             {
+                // its bounds hold other districts' tiles too: only its own
                 let alleys: Vec<Pos> = d
                     .bounds
                     .iter()
-                    .filter(|p| terrain(city, *p) == Some(Terrain::Alley))
+                    .filter(|p| {
+                        city.tile(StratumKind::Street, *p).is_some_and(|t| {
+                            t.terrain == Terrain::Alley && t.district == Some(d.id)
+                        })
+                    })
                     .collect();
                 if !alleys.is_empty() {
                     beats.insert(d.id, alleys);
@@ -434,6 +439,31 @@ mod tests {
                     assert_eq!(terrain(&c, p), Some(Terrain::Alley));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_beat_lies_in_its_district() {
+        // the test city's districts, and seed 4's Porthaven, sited, whose districts are
+        // its colours on the overworld (no strip there: its beats are its night market's
+        // alleys): every beat is on a tile of its own district
+        let (_, porthaven) = crate::commute::tests::settlements_of(4)
+            .into_iter()
+            .find(|(n, _)| n == "Porthaven")
+            .unwrap();
+        for c in [city(), Generator::run(porthaven).unwrap()] {
+            let pl = Places::derive(&c);
+            assert!(!pl.beats.is_empty());
+            let (mut out, mut all) = (0, 0);
+            for (d, beats) in &pl.beats {
+                for p in beats {
+                    all += 1;
+                    if c.tile(StratumKind::Street, *p).and_then(|t| t.district) != Some(*d) {
+                        out += 1;
+                    }
+                }
+            }
+            assert_eq!(out, 0, "{out} of {all} beats out of their district");
         }
     }
 

@@ -27,13 +27,15 @@ pub fn fit_scale(size: Size, cols: u16, rows: u16) -> i32 {
         .max(1)
 }
 
-/// Where the map was drawn: the cells, the tiles a pixel covers, the tile at the
-/// top-left cell, the cursor and stratum the draw settled on, and the width of the
-/// places pane beside it (none folded).
+/// Where the map was drawn: the cells, the tiles a pixel covers (`s`) or, closer in,
+/// the pixels a tile spans (`m`, else 1), the tile at the top-left cell, the cursor and
+/// stratum the draw settled on, and the width of the places pane beside it (none
+/// folded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapLayout {
     pub area: Rect,
     pub s: i32,
+    pub m: i32,
     pub origin: Pos,
     pub cursor: Option<Pos>,
     pub stratum: Option<StratumKind>,
@@ -41,32 +43,49 @@ pub struct MapLayout {
 }
 
 impl MapLayout {
-    /// The cell a tile falls in, when it is in view.
+    /// The cell a tile falls in, when it is in view: the middle one of those it spans.
     pub fn cell_of(&self, tile: Pos) -> Option<(u16, u16)> {
-        let s = self.s.max(1);
-        let x = (tile.x - self.origin.x).div_euclid(s);
-        let y = (tile.y - self.origin.y).div_euclid(2 * s);
+        let m = self.m.max(1);
+        let (x, y) = self.pixel_of(tile);
+        let (x, y) = (x + m / 2, (y + m / 2).div_euclid(2));
         ((0..self.area.width as i32).contains(&x) && (0..self.area.height as i32).contains(&y))
             .then(|| (self.area.x + x as u16, self.area.y + y as u16))
     }
 
-    /// The `s` × `2s` tiles a cell covers.
+    /// The tiles a cell covers: `s` × `2s`, or the one tile under it closer in.
     pub fn tiles_of(&self, (x, y): (u16, u16)) -> TileRect {
-        let s = self.s.max(1);
+        let (s, m) = (self.s.max(1), self.m.max(1));
+        // the cell is a pixel across and two down
+        let (px, py) = (
+            x as i32 - self.area.x as i32,
+            2 * (y as i32 - self.area.y as i32),
+        );
+        let (x0, x1) = ((px * s).div_euclid(m), ((px + 1) * s - 1).div_euclid(m));
+        let (y0, y1) = ((py * s).div_euclid(m), ((py + 2) * s - 1).div_euclid(m));
         TileRect::new(
-            self.origin.x + (x as i32 - self.area.x as i32) * s,
-            self.origin.y + (y as i32 - self.area.y as i32) * 2 * s,
-            s,
-            2 * s,
+            self.origin.x + x0,
+            self.origin.y + y0,
+            x1 - x0 + 1,
+            y1 - y0 + 1,
         )
     }
 
-    /// The pixel a tile falls in, counted from the top-left one; may be out of view.
+    /// The pixel a tile falls in, counted from the top-left one (closer in, the top-left
+    /// of the `m` × `m` it spans); may be out of view.
     fn pixel_of(&self, tile: Pos) -> (i32, i32) {
-        let s = self.s.max(1);
+        let (s, m) = (self.s.max(1), self.m.max(1));
         (
-            (tile.x - self.origin.x).div_euclid(s),
-            (tile.y - self.origin.y).div_euclid(s),
+            ((tile.x - self.origin.x) * m).div_euclid(s),
+            ((tile.y - self.origin.y) * m).div_euclid(s),
+        )
+    }
+
+    /// The tile pixel `(x, y)` lies on, the first of the `s` × `s` it covers.
+    fn tile_at(&self, x: i32, y: i32) -> Pos {
+        let (s, m) = (self.s.max(1), self.m.max(1));
+        Pos::new(
+            self.origin.x + (x * s).div_euclid(m),
+            self.origin.y + (y * s).div_euclid(m),
         )
     }
 }
@@ -107,20 +126,24 @@ fn walk_on<'a>(
 fn pixels_of(st: &AppState, city: &City, k: StratumKind, l: &MapLayout) -> Pixels {
     let (w, h) = (l.area.width as i32, 2 * l.area.height as i32);
     Pixels::new(w, h, |x, y| {
-        let (x0, y0) = (l.origin.x + x * l.s, l.origin.y + y * l.s);
-        stratum_px(city, &st.style, k, x0, y0, l.s).unwrap_or(PANEL_BG_RGB)
+        let at = l.tile_at(x, y);
+        stratum_px(city, &st.style, k, at.x, at.y, l.s).unwrap_or(PANEL_BG_RGB)
     })
 }
 
 /// How much of the cyan each pixel the walk crosses takes at tick `t`, in the street's
-/// floor glow: the best of the tiles it holds.
+/// floor glow: the best of the tiles it holds (closer in, every pixel a tile spans).
 fn glows(l: &MapLayout, leg: &Leg, pulses: &[Pulse], t: u64) -> HashMap<(i32, i32), f32> {
     let n = leg.path.len();
+    let m = l.m.max(1);
     let mut lit: HashMap<(i32, i32), f32> = HashMap::new();
     for (i, p) in leg.path.iter().enumerate() {
         let f = glow(from_goal(i, n), pulses, t);
-        let best = lit.entry(l.pixel_of(*p)).or_insert(f);
-        *best = best.max(f);
+        let (x, y) = l.pixel_of(*p);
+        for (dx, dy) in (0..m).flat_map(|dy| (0..m).map(move |dx| (dx, dy))) {
+            let best = lit.entry((x + dx, y + dy)).or_insert(f);
+            *best = best.max(f);
+        }
     }
     lit
 }
@@ -156,7 +179,9 @@ fn glow_walk(
         Some(p) => (p, MAGENTA_RGB, 1.0),
         None => (leg.goal, CYAN_RGB, 0.5),
     };
+    // round the middle of the tile's pixels
     let (cx, cy) = l.pixel_of(centre);
+    let (cx, cy) = (cx + l.m.max(1) / 2, cy + l.m.max(1) / 2);
     for dy in -7..=7 {
         for dx in -7..=7 {
             let f = strength * ripple_px(((dx * dx + dy * dy) as f32).sqrt(), t);
@@ -290,12 +315,15 @@ fn draw_names(
 /// The first tile of the view along one axis, `cells` cells of `per` tiles over a
 /// stratum `len` long: centred when the stratum is shorter than the view; else panned
 /// to keep the cursor `c` four cells inside (centred on it when it starts or leaves the
-/// view) and clamped to the stratum. Always on the stratum's grid of cells, so a cell
-/// covers the same tiles however the view got there.
-fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 {
+/// view) and clamped to the stratum, its far end in view. Always on a grid of `align`
+/// tiles (a multiple of `per`: the stratum's grid of cells), so a cell covers the same
+/// tiles however the view got there.
+fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, align: i32, restart: bool) -> i32 {
     if len <= cells * per {
         let used = (len + per - 1) / per;
-        return -((cells - used) / 2) * per;
+        // back from the middle to the grid, so the far end stays in view
+        let back = (cells - used) / 2 * per;
+        return -(back - back.rem_euclid(align));
     }
     let margin = MARGIN.min((cells - 1) / 2);
     let at = (c - prev).div_euclid(per);
@@ -308,9 +336,30 @@ fn pan(prev: i32, c: i32, len: i32, cells: i32, per: i32, restart: bool) -> i32 
     } else {
         prev
     };
-    let grid = |o: i32| o - o.rem_euclid(per);
+    let grid = |o: i32| o - o.rem_euclid(align);
     let far = len - cells * per;
-    grid(o).clamp(0, far + (per - far.rem_euclid(per)) % per)
+    grid(o).clamp(0, far + (align - far.rem_euclid(align)) % align)
+}
+
+/// `pan` for a cell `num` / `den` tiles long, less than a tile closer in: worked in
+/// `1/den` tiles from the middle of the cursor's tile, on a grid of whole tiles, so
+/// the view starts on a tile and the stratum's last tile is whole in view.
+fn pan_by(prev: i32, c: i32, len: i32, cells: i32, (num, den): (i32, i32), restart: bool) -> i32 {
+    let g = (1..=num.min(den))
+        .rev()
+        .find(|g| num % g == 0 && den % g == 0)
+        .unwrap_or(1);
+    let (num, den) = (num / g, den / g);
+    let o = pan(
+        prev * den,
+        c * den + den / 2,
+        len * den,
+        cells,
+        num,
+        num * den,
+        restart,
+    );
+    o / den
 }
 
 /// Where the map in `area` looks and where its cursor stands (spec 7): the cursor
@@ -321,6 +370,7 @@ pub fn layout(st: &AppState, area: Rect) -> MapLayout {
     let mut layout = MapLayout {
         area,
         s: 1,
+        m: 1,
         origin: Pos::default(),
         cursor: None,
         stratum: None,
@@ -336,10 +386,10 @@ pub fn layout(st: &AppState, area: Rect) -> MapLayout {
     let (false, Some(size), Some(_)) = (area.is_empty(), size, st.player.as_ref()) else {
         return layout;
     };
-    let s = st
+    let (s, m) = st
         .atlas
         .zoom
-        .tiles(fit_scale(size, area.width, area.height));
+        .scale(fit_scale(size, area.width, area.height));
     let restart = st.atlas.stratum != Some(k) || st.atlas.cursor.is_none();
     let start = || {
         target_now(st)
@@ -355,10 +405,11 @@ pub fn layout(st: &AppState, area: Rect) -> MapLayout {
     let cursor = Pos::new(c.x.clamp(0, w - 1), c.y.clamp(0, h - 1));
     let (prev, cols, rows) = (st.atlas.origin, area.width as i32, area.height as i32);
     let centre = restart || st.atlas.recentre;
-    layout.s = s;
+    (layout.s, layout.m) = (s, m);
+    // a cell is a pixel across and two down
     layout.origin = Pos::new(
-        pan(prev.x, cursor.x, w, cols, s, centre),
-        pan(prev.y, cursor.y, h, rows, 2 * s, centre),
+        pan_by(prev.x, cursor.x, w, cols, (s, m), centre),
+        pan_by(prev.y, cursor.y, h, rows, (2 * s, m), centre),
     );
     layout.cursor = Some(cursor);
     layout.stratum = Some(k);
@@ -474,12 +525,49 @@ mod tests {
         assert_eq!(fit_scale(Size { w: 30, h: 10 }, 81, 26), 1);
         assert!(fit_scale(city, 0, 0) >= 1, "no cells never divides by zero");
         assert_eq!(Zoom::default(), Zoom::Two);
-        assert_eq!(Zoom::One.tiles(3), 1);
-        assert_eq!(Zoom::Two.tiles(3), 2);
-        assert_eq!(Zoom::Fit.tiles(3), 3);
-        // Fit is never further out than the whole city needs, and 2 never past fit.
-        assert_eq!(Zoom::Two.tiles(1), 1);
-        assert_eq!(Zoom::Fit.tiles(1), 1);
+        // Tiles a pixel and pixels a tile: 1, 2 and fit where fit is wider than both.
+        for fit in [3, 6] {
+            assert_eq!(Zoom::One.scale(fit), (1, 1));
+            assert_eq!(Zoom::Two.scale(fit), (2, 1));
+            assert_eq!(Zoom::Fit.scale(fit), (fit, 1));
+        }
+        // Fit is never further out than the whole city needs, and each zoom in is a
+        // step closer: past a tile a pixel, a tile over 2 pixels, then 4.
+        assert_eq!(Zoom::Fit.scale(2), (2, 1));
+        assert_eq!(Zoom::Two.scale(2), (1, 1));
+        assert_eq!(Zoom::One.scale(2), (1, 2));
+        assert_eq!(Zoom::Fit.scale(1), (1, 1));
+        assert_eq!(Zoom::Two.scale(1), (1, 2));
+        assert_eq!(Zoom::One.scale(1), (1, 4));
+    }
+
+    #[test]
+    fn closer_than_a_tile_a_pixel_a_tile_spans_pixels() {
+        // a tile over 2 pixels: 2 cells across, a cell down; over 4: 4 across, 2 down
+        for (m, across, down) in [(2, 2, 1), (4, 4, 2)] {
+            let l = MapLayout {
+                area: Rect::new(3, 2, 40, 20),
+                s: 1,
+                m,
+                origin: Pos::new(10, 20),
+                cursor: None,
+                stratum: None,
+                pane: 0,
+            };
+            for t in [Pos::new(10, 20), Pos::new(13, 22), Pos::new(15, 24)] {
+                let cell = l.cell_of(t).expect("in view");
+                assert_eq!(l.tiles_of(cell), TileRect::new(t.x, t.y, 1, 1), "{m} {t:?}");
+                let next = l.cell_of(t.offset(1, 1)).unwrap();
+                assert_eq!((next.0 - cell.0, next.1 - cell.1), (across, down));
+                // every cell the tile spans covers it
+                let (x, y) = l.pixel_of(t);
+                for c in (x..x + m).flat_map(|x| (y / 2..(y + m) / 2).map(move |y| (x, y))) {
+                    let c = (l.area.x + c.0 as u16, l.area.y + c.1 as u16);
+                    assert_eq!(l.tiles_of(c), TileRect::new(t.x, t.y, 1, 1));
+                }
+            }
+            assert_eq!(l.tile_at(2 * m + 1, m), Pos::new(12, 21));
+        }
     }
 
     /// The first 2 × 2 block of street tiles of one district that `f` accepts.

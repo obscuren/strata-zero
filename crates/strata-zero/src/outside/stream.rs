@@ -310,6 +310,13 @@ impl Stream {
         self.builds.refused.contains(&s)
     }
 
+    /// Settlement `s` never built in the background, only on the spot when walked into
+    /// (a test's way to keep the stream answering for its cells until then).
+    #[cfg(test)]
+    pub fn on_the_spot(&mut self, s: Settlement) {
+        self.builds.failed.insert(s);
+    }
+
     /// Whether settlement `s` is building.
     #[cfg(test)]
     pub fn building(&self, s: Settlement) -> bool {
@@ -944,6 +951,31 @@ pub fn path_within(
     let path = citygen::pathing::astar(size, inner(start), inner(goal), |a, b| {
         cost(outer(a), outer(b))
     })?;
+    Some(path.into_iter().map(outer).collect())
+}
+
+/// The cheapest way from `start` to the nearest cell `target` takes, four ways within
+/// `area`, as `citygen::pathing::cheapest_to` finds it on a map of its own; `cost` and
+/// `target` are asked in the live city's frame, as `path_within` asks.
+pub fn cheapest_within(
+    area: Rect,
+    start: Pos,
+    cost: impl Fn(Pos, Pos) -> Option<u32>,
+    target: impl Fn(Pos) -> bool,
+) -> Option<Vec<Pos>> {
+    let o = Pos::new(area.x, area.y);
+    let size = Size {
+        w: area.w.max(0) as u32,
+        h: area.h.max(0) as u32,
+    };
+    let inner = |p: Pos| Pos::new(p.x - o.x, p.y - o.y);
+    let outer = |p: Pos| Pos::new(p.x + o.x, p.y + o.y);
+    let path = citygen::pathing::cheapest_to(
+        size,
+        inner(start),
+        |a, b| cost(outer(a), outer(b)),
+        |p| target(outer(p)),
+    )?;
     Some(path.into_iter().map(outer).collect())
 }
 
@@ -2269,13 +2301,21 @@ pub(crate) mod tests {
         /// cell it owns that its street lets you onto: the city, the ground cell (in the
         /// live city's frame) and the step.
         pub(crate) fn beside_a_city(st: &mut AppState) -> (Settlement, Pos, Dir) {
+            beside_a_city_where(st, &|_| true)
+        }
+
+        /// `beside_a_city`, the first city `ok` takes.
+        pub(crate) fn beside_a_city_where(
+            st: &mut AppState,
+            ok: &dyn Fn(Settlement) -> bool,
+        ) -> (Settlement, Pos, Dir) {
             let (s, city, x, d) = {
                 let o = o(st);
                 let w = o.world();
                 let here = o.here();
                 settlements()
                     .iter()
-                    .filter(|(s, _)| s.town.is_none() && *s != here && *s != o.home())
+                    .filter(|(s, _)| s.town.is_none() && *s != here && *s != o.home() && ok(*s))
                     .find_map(|(s, city)| {
                         let origin = o.origin(city);
                         let (cw, ch) = (city.size.w as i32, city.size.h as i32);

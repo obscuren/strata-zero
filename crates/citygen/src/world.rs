@@ -490,6 +490,15 @@ impl City {
         self.districts.get(id.index())
     }
 
+    /// The district a street cell is in; else the first whose bounds take it in (a cell
+    /// the city left to the open ground, past its outline).
+    pub fn district_at(&self, p: Pos) -> Option<&District> {
+        self.tile(StratumKind::Street, p)
+            .and_then(|t| t.district)
+            .and_then(|d| self.district_opt(d))
+            .or_else(|| self.districts.iter().find(|d| d.bounds.contains(p)))
+    }
+
     /// Panics if the id is unknown; use `building_opt` on a city that may still be generating.
     pub fn building(&self, id: BuildingId) -> &Building {
         &self.buildings[id.index()]

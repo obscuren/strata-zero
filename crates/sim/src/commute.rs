@@ -1,7 +1,8 @@
 //! Commuting: someone who works in the city with no home in it lives off the map. They
 //! come in by a road where it crosses the map's edge, walk to work, and walk back out the
-//! same way; so does anyone whose trip ends at no place in the city (a bar the city
-//! hasn't got). Off the map they are `Whereabouts::Away`, drawn nowhere.
+//! same way; so do they when a trip of theirs ends at no place in the city (a bar the
+//! city hasn't got). Someone who lives in town has their drink in town. Off the map they
+//! are `Whereabouts::Away`, drawn nowhere.
 
 use crate::paths::walk_cost;
 use crate::people::PersonId;
@@ -188,13 +189,13 @@ pub fn walk_minutes(from: Pos, to: Pos) -> u16 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::content::People;
     use crate::people::{Dest, Goal, SimParams, Whereabouts, Work};
     use crate::places::Places;
     use crate::world::{TICKS_PER_MINUTE, World};
-    use citygen::world::BuildingKind;
+    use citygen::world::{BuildingKind, Theme};
     use citygen::{GenParams, Generator, SizePreset};
     use std::collections::HashMap;
 
@@ -378,9 +379,10 @@ mod tests {
     }
 
     #[test]
-    fn a_trip_with_no_place_in_the_city_goes_out_of_town_and_back() {
-        // no bar in the city: those who go for a drink after work go out of town for it,
-        // and come home from there
+    fn someone_who_lives_in_town_has_their_drink_in_town() {
+        // no bar in the city: those with a home in it who'd go for a drink after work
+        // have it at what it has (a noodle bar, the Strip) and never go out of town for
+        // it; with nowhere at all for a drink, they stay home
         let mut c = Generator::run(GenParams {
             seed: 6,
             size: SizePreset::Custom { w: 120, h: 60 },
@@ -393,39 +395,60 @@ mod tests {
                 b.kind = BuildingKind::Warehouse;
             }
         }
-        let mut w = world(&c, 4 * 60);
-        let drinkers: Vec<usize> = w
-            .people()
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| {
-                p.home.is_some()
-                    && p.schedule
-                        .iter()
-                        .any(|s| s.goal == Goal::Leisure(crate::Leisure::Bar))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        assert!(!drinkers.is_empty());
-        let (mut out, mut back) = (vec![false; w.people().len()], vec![false; w.people().len()]);
-        for _ in 0..24 * 60 {
-            a_minute(&mut w, &c);
-            for &i in &drinkers {
-                let p = &w.people()[i];
-                if p.whereabouts == Whereabouts::Away
-                    && p.goal == Goal::Leisure(crate::Leisure::Bar)
-                {
-                    out[i] = true;
-                }
-                if out[i] && p.whereabouts == Whereabouts::Inside(p.home.unwrap()) {
-                    back[i] = true;
-                }
+        let mut dry = c.clone();
+        for b in &mut dry.buildings {
+            if b.kind == BuildingKind::NoodleBar {
+                b.kind = BuildingKind::Warehouse;
             }
         }
-        for &i in &drinkers {
-            let p = &w.people()[i];
-            assert!(out[i], "{} went out of town for a drink", p.name);
-            assert!(back[i], "{} came home", p.name);
+        for d in &mut dry.districts {
+            if matches!(d.theme, Theme::NeonStrip | Theme::NightMarket) {
+                d.theme = Theme::OldTown;
+            }
+        }
+        assert!(!Places::derive(&c).drinks.is_empty());
+        assert!(Places::derive(&dry).drinks.is_empty());
+        for (c, somewhere) in [(&c, true), (&dry, false)] {
+            let mut w = world(c, 4 * 60);
+            let drinkers: Vec<usize> = w
+                .people()
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    p.home.is_some()
+                        && p.schedule
+                            .iter()
+                            .any(|s| s.goal == Goal::Leisure(crate::Leisure::Bar))
+                })
+                .map(|(i, _)| i)
+                .collect();
+            assert!(!drinkers.is_empty());
+            let mut had_one = vec![false; w.people().len()];
+            for _ in 0..24 * 60 {
+                a_minute(&mut w, c);
+                for &i in &drinkers {
+                    let p = &w.people()[i];
+                    assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
+                    // in for a drink: inside somewhere neither home nor work
+                    if let Whereabouts::Inside(b) = p.whereabouts
+                        && matches!(p.goal, Goal::Leisure(_))
+                        && Some(b) != p.home
+                        && p.work != Work::Building(b)
+                    {
+                        had_one[i] = true;
+                    }
+                }
+            }
+            let drank = drinkers.iter().filter(|i| had_one[**i]).count();
+            if somewhere {
+                assert!(
+                    drank * 2 > drinkers.len(),
+                    "{drank} of {} had a drink in town",
+                    drinkers.len()
+                );
+            } else {
+                assert_eq!(drank, 0, "a drink with nowhere to have one");
+            }
         }
     }
 
@@ -589,12 +612,13 @@ mod tests {
 
     #[test]
     fn someone_whose_way_in_never_walks_to_work_stays_in_town() {
-        // half of those who work in seed 2's Porthaven with no home there have no way in
-        // that walks to their work: they don't commute, but stay at or inside their work
-        // all day, as before anyone commuted
-        let (_, params) = settlements_of(2)
+        // seed 55's Staticgate as the game seeds it (housed): some who work there have no
+        // flat they can walk to work from, and no way in that walks to their work: they
+        // don't commute, but stay at or inside their work all day, as before anyone
+        // commuted
+        let (_, params) = settlements_of(55)
             .into_iter()
-            .find(|(n, _)| n == "Porthaven")
+            .find(|(n, _)| n == "Staticgate")
             .unwrap();
         let c = Generator::run(params).unwrap();
         let places = Places::derive(&c);
@@ -610,7 +634,7 @@ mod tests {
                 walk[*into] && walk[doors[0]]
             })
         };
-        let mut w = world(&c, 4 * 60);
+        let mut w = housed(&c, 4 * 60);
         let stay: Vec<usize> = w
             .people()
             .iter()
@@ -619,7 +643,7 @@ mod tests {
             .filter(|(_, p)| matches!(p.work, Work::Building(b) if !walks_to(b)))
             .map(|(i, _)| i)
             .collect();
-        assert!(stay.len() >= 50, "{} stay in town", stay.len());
+        assert!(stay.len() >= 15, "{} stay in town", stay.len());
         for m in 0..24 * 60 {
             for &i in &stay {
                 let p = &w.people()[i];
@@ -634,10 +658,123 @@ mod tests {
         }
     }
 
+    /// `c`'s people at `minute` of the day as a city of the world other than home seeds
+    /// them (`SimParams::housed`).
+    fn housed(c: &City, minute: u16) -> World {
+        let params = SimParams {
+            housed: true,
+            ..SimParams::default()
+        };
+        World::seed(c, &People::load().unwrap(), &params, minute, 0)
+    }
+
+    /// Those of `w` with a home in `c` who can't walk between it and their job, one way
+    /// or the other, as their trips are walked: from the door they're in (the first) to
+    /// the door of the other nearest it.
+    fn cut_off_from_work(c: &City, w: &World) -> Vec<usize> {
+        let places = Places::derive(c);
+        let region = crate::paths::walk_regions(c);
+        let walks = |a: Pos, b: Pos| region[a] != 0 && region[a] == region[b];
+        let cut = |p: &crate::Person| {
+            let Some(h) = p.home else {
+                return false;
+            };
+            let home = places.doors[&h][0];
+            let (at, to_work) = match p.work {
+                Work::Building(b) => (places.doors[&b][0], places.door_from(b, home).unwrap()),
+                Work::Spot(s) => (s, s),
+                Work::Roaming => return false,
+            };
+            !walks(home, to_work) || !walks(at, places.door_from(h, at).unwrap())
+        };
+        w.people()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| cut(p))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn everyone_housed_can_walk_to_work() {
+        // seed 0's Northmarch, seeded as a city of the world other than home: everyone
+        // with a home in it can walk from it to their work and back, and over a day goes
+        // to work and comes home
+        let (_, params) = settlements_of(0)
+            .into_iter()
+            .find(|(n, _)| n == "Northmarch")
+            .unwrap();
+        let c = Generator::run(params).unwrap();
+        let mut w = housed(&c, 4 * 60);
+        let cut = cut_off_from_work(&c, &w);
+        let names: Vec<&str> = cut.iter().map(|i| w.people()[*i].name.as_str()).collect();
+        assert!(
+            cut.is_empty(),
+            "{} of {} cut off from work: {:?}",
+            cut.len(),
+            w.people().len(),
+            &names[..names.len().min(5)]
+        );
+        let n = w.people().len();
+        let (mut at_work, mut at_home) = (vec![false; n], vec![false; n]);
+        for _ in 0..24 * 60 {
+            a_minute(&mut w, &c);
+            for (i, p) in w.people().iter().enumerate() {
+                if let (Some(h), Work::Building(b)) = (p.home, p.work) {
+                    at_work[i] |= p.whereabouts == Whereabouts::Inside(b);
+                    at_home[i] |= p.whereabouts == Whereabouts::Inside(h);
+                }
+            }
+        }
+        let stuck: Vec<&str> = w
+            .people()
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| {
+                p.home.is_some()
+                    && matches!(p.work, Work::Building(_))
+                    && !(at_work[*i] && at_home[*i])
+            })
+            .map(|(_, p)| p.name.as_str())
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "{} never at work or never home: {stuck:?}",
+            stuck.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "every city and town of 20 worlds: a minute in the release profile"]
+    fn no_one_in_twenty_worlds_is_cut_off_from_work() {
+        // seeded as a home city is and as any other is (housed): nobody has a home they
+        // can't walk to work from; those with no flat that's a walk from work have none
+        let (mut cut_all, mut no_home_all, mut all) = (0, 0, 0);
+        for seed in 0..20 {
+            for (name, params) in settlements_of(seed) {
+                let Ok(c) = Generator::run(params) else {
+                    continue;
+                };
+                let (at_home, w) = (world(&c, 4 * 60), housed(&c, 4 * 60));
+                let cut = cut_off_from_work(&c, &at_home).len() + cut_off_from_work(&c, &w).len();
+                let no_home = w.people().iter().filter(|p| p.home.is_none()).count();
+                println!(
+                    "seed {seed} {name}: {cut} cut off; housed, {no_home} of {} with no home",
+                    w.people().len()
+                );
+                cut_all += cut;
+                no_home_all += no_home;
+                all += w.people().len();
+            }
+        }
+        println!("{cut_all} cut off; housed, {no_home_all} of {all} with no home");
+        assert_eq!(cut_all, 0);
+    }
+
     /// The cities and towns of world `seed` as a game builds them on their sites
     /// (`screens::build_home`, `outside::build_params`): the home city on the world's own
     /// seed, the rest each on a seed of its own. Each named as the world names it.
-    fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
+    pub(crate) fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
         use citygen::overworld::{Overworld, WorldParams, WorldSize};
         use citygen::{sited, sited_town};
         let d = WorldParams::default();
@@ -722,13 +859,14 @@ mod tests {
     #[test]
     fn a_commuters_way_in_walks_to_work() {
         // the cities and towns where the review found people coming in by a way that
-        // never walks to their work: every one now comes by one that does, or stays in
-        // town
+        // never walks to their work (and 21's Chromegate, as 21's Ironburg and Ironfall
+        // have nobody commuting since their districts are their colours and they house
+        // their people): every one now comes by one that does, or stays in town
         for (seed, name) in [
             (0, "Portgate"),
             (2, "Porthaven"),
             (10, "Northspire"),
-            (21, "Ironburg"),
+            (21, "Chromegate"),
             (23, "Staticwick"),
         ] {
             let (_, params) = settlements_of(seed)

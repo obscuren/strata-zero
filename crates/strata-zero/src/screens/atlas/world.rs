@@ -143,6 +143,7 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     let none = MapLayout {
         area: body,
         s: 1,
+        m: 1,
         origin: Pos::new(0, 0),
         cursor: None,
         stratum: None,
@@ -281,6 +282,7 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     MapLayout {
         area: map,
         s: 1,
+        m: 1,
         origin: at,
         cursor: None,
         stratum: None,

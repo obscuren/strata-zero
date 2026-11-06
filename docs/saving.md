@@ -90,13 +90,21 @@ saved besides. One behind by no more than a frame catches up (an hour) runs ever
 frame; of those further behind, only the one furthest behind catches up in a frame. Someone who works in
 a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming in and
 going out by a road across the map's edge (`sim::commute`; which road is theirs is made
-again from the map, not saved), and so does anyone whose trip has no place in the city
-(`sim::Dest::Away`); a run saved before that has them where the sim left them, and they
-take up the commute at their next change of goal. A spot worker with no home keeps to the
+again from the map, not saved), and so do they when a trip of theirs has no place in the
+city (`sim::Dest::Away`); a run saved before that has them where the sim left them, and they
+take up the commute at their next change of goal. Someone who lives in town has a drink
+the city has no place for at the first it has, else stays home. A spot worker with no home keeps to the
 spot, and fixers and the story's cast never leave town: the sim's mark for the cast
 isn't saved, and is made again from `missions.cast` on reopening. A break at midday
 (`sim::Goal::Lunch`) and a drink after work are picked by a hash of who someone is, so
-nothing about them is saved but the goal and the trip in flight.
+nothing about them is saved but the goal and the trip in flight. A city other than home
+is seeded housed (`outside::seed_people`, `sim::SimParams::housed`): everyone who works
+in it lives in it, anywhere in town with room they can walk to work from (by a hash of
+who they are, not the flat nearest their job), and once those flats are full they take
+another round, and another, so only those with no housing a walk from work (off the
+Strip) commute; its people's cars are as many as its homes make. No city, home or not,
+gives anyone a home they can't walk to work from. Who has a home is the people's own, saved
+with them: a city kept in a save from before keeps its commuters.
 
 Your Net self hands over the same way: walked (or dropped by the Net overworld) onto Net
 cells another city or town owns, that city is the live one and your Net self is in it on

@@ -114,7 +114,7 @@ impl GenParams {
     }
 
     /// The fewest districts the city may have: one on its site in a world (a small
-    /// city's or a town's, by its tiles); four for a lone city.
+    /// city or a town of one colour on the overworld); four for a lone city.
     pub fn least_districts(&self) -> u8 {
         if self.site.is_some() { 1 } else { 4 }
     }

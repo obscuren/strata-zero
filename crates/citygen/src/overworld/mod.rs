@@ -704,7 +704,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Small,
                 ..Default::default()
             },
-            79558088959877066,
+            5894991581056870077,
         ),
         (
             "large 11",
@@ -713,7 +713,7 @@ fn fingerprints_are_pinned() {
                 size: WorldSize::Large,
                 ..Default::default()
             },
-            9615291062386294431,
+            12634320053200398156,
         ),
         (
             "two seas 5",
@@ -737,7 +737,7 @@ fn fingerprints_are_pinned() {
                 },
                 ..Default::default()
             },
-            7913621416750777667,
+            448009234283075742,
         ),
     ];
     let got: Vec<(&str, u64)> = cases

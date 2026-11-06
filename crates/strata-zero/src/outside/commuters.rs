@@ -9,9 +9,18 @@ use citygen::{City, Pos, StratumKind, Terrain};
 use sim::{Dest, Goal, Leisure, PersonId, Whereabouts, Work, World};
 use std::collections::BTreeSet;
 
-/// Seed 3's corporate neighbour: towers and offices, and homes for few who work there.
+/// Seed 3's neighbour of docks, the strip and a corp core: homes for under a third who
+/// work there.
 const CORPORATE: Settlement = Settlement {
-    city: 1,
+    city: 2,
+    town: None,
+};
+
+/// Seed 3's home city, seeded as home is (not housed): homes for under half who work
+/// there, the rest coming in from off the map. Every other city has homes for half its
+/// people at least.
+const HOME: Settlement = Settlement {
+    city: 0,
     town: None,
 };
 
@@ -37,14 +46,20 @@ fn settlement(s: Settlement) -> &'static City {
 /// `city`'s people seeded at `minute` of the day (tick 0) and run on `minutes` a minute at
 /// a time, every trip pathed as it's asked for; `look` sees the world after each minute.
 /// Every trip set off, in order.
-fn a_day(
+fn a_day(city: &City, minute: u16, minutes: u64, look: impl FnMut(&World)) -> (World, Vec<Trip>) {
+    let people = sim::People::load().unwrap();
+    let w = World::seed(city, &people, &sim::SimParams::default(), minute, 0);
+    a_day_of(city, w, minutes, look)
+}
+
+/// `w`, `city`'s people seeded at tick 0, run on `minutes` a minute at a time, as
+/// `a_day` runs them.
+fn a_day_of(
     city: &City,
-    minute: u16,
+    mut w: World,
     minutes: u64,
     mut look: impl FnMut(&World),
 ) -> (World, Vec<Trip>) {
-    let people = sim::People::load().unwrap();
-    let mut w = World::seed(city, &people, &sim::SimParams::default(), minute, 0);
     let mut trips = Vec::new();
     for m in 1..=minutes {
         w.advance(city, m * sim::TICKS_PER_MINUTE);
@@ -117,21 +132,23 @@ fn off_the_map(w: &World, id: PersonId) -> bool {
 
 #[test]
 fn a_city_without_homes_still_has_its_commute() {
-    let city = settlement(CORPORATE);
+    let city = settlement(HOME);
     let people = sim::People::load().unwrap();
     let seeded = World::seed(city, &people, &sim::SimParams::default(), FOUR, 0);
     let homes = seeded.people().iter().filter(|p| p.home.is_some()).count();
     assert!(
-        homes * 4 < seeded.people().len(),
+        homes * 2 < seeded.people().len(),
         "few work there with a home in it: {homes} of {}",
         seeded.people().len()
     );
-    // those who work its buildings by day with no home in it
+    // those who work its buildings by day with no home in it, and a way in that walks
+    // to their work (the rest stay in town)
     let day: BTreeSet<PersonId> = seeded
         .people()
         .iter()
         .filter(|p| p.home.is_none() && matches!(p.work, Work::Building(_)))
         .filter(|p| (7 * 60..=11 * 60).contains(&p.shift_start))
+        .filter(|p| seeded.comes_in_by(p.id).is_some())
         .map(|p| p.id)
         .collect();
     assert!(day.len() >= 40, "{} day workers", day.len());
@@ -272,14 +289,14 @@ fn a_city_with_homes_keeps_its_day() {
     let kept = of_the_schedule(&w, &trips);
     assert_eq!(
         (kept.len(), digest(&kept)),
-        (760, 0x854a_e2f5_e865_f21f),
+        (535, 0xd8e5_b189_5c1c_dd26),
         "the home city's people with a home changed their day"
     );
     // towns where everyone has a home and every trip has a place in it: their whole day
     // as it was
     for (s, was) in [
         ((5, 0), (42, 0xaac3_6dfd_b8e6_2a07)),
-        ((6, 0), (35, 0x2365_2568_85cf_091c)),
+        ((6, 0), (12, 0x4399_9970_2b31_d156)),
         ((6, 1), (18, 0x8fea_6f3e_57f4_b188)),
     ] {
         let town = settlement(Settlement {
@@ -293,6 +310,95 @@ fn a_city_with_homes_keeps_its_day() {
             "town {s:?} changed its day"
         );
     }
+}
+
+/// `city`'s people as the game seeds them when you come into it or see it next door
+/// (`outside::seed_people`), at `FOUR` on the clock's first day.
+fn come_into(city: &City) -> World {
+    crate::outside::seed_people(city, &sim::People::load().unwrap(), 0, FOUR)
+}
+
+/// The ticks `w`'s person `p` drives on a trip set off this minute: none on foot.
+fn drives(w: &World, p: &sim::Person) -> u64 {
+    match &p.whereabouts {
+        Whereabouts::Travelling(t) if t.depart == w.tick() => t
+            .legs
+            .iter()
+            .filter(|l| l.car.is_some())
+            .map(|l| l.path.len().saturating_sub(1) as u64 * sim::DRIVE_TICKS)
+            .sum(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn a_city_you_come_into_lives_in_town() {
+    // seed 3's corporate neighbour as you find it, with flats for few who work there:
+    // those who work there live there all the same, so its people live their day
+    // in town as the home city's do: home by night, and nobody walks out of town, not
+    // even for a drink it hasn't got
+    let city = settlement(CORPORATE);
+    let w = come_into(city);
+    let n = w.people().len();
+    let homes = w.people().iter().filter(|p| p.home.is_some()).count();
+    assert_eq!(homes, n, "{homes} of {n} have a home in town");
+    let (mut away, mut at_home) = (Vec::new(), 0);
+    let (_, trips) = a_day_of(city, w, 24 * 60, |w| {
+        let off = w
+            .people()
+            .iter()
+            .filter(|p| p.whereabouts == Whereabouts::Away)
+            .count();
+        if off > 0 && w.minute_of_day() % 60 == 0 {
+            away.push((w.minute_of_day() / 60, off));
+        }
+        if w.minute_of_day() == 3 * 60 {
+            at_home = w
+                .people()
+                .iter()
+                .filter(|p| {
+                    p.home
+                        .is_some_and(|h| p.whereabouts == Whereabouts::Inside(h))
+                })
+                .count();
+        }
+    });
+    assert!(away.is_empty(), "off the map, by the hour: {away:?}");
+    let out: Vec<&Trip> = trips
+        .iter()
+        .filter(|t| matches!(t.dest, Dest::Away(_)))
+        .collect();
+    assert!(out.is_empty(), "out of town: {out:?}");
+    assert!(at_home * 2 > n, "{at_home} of {n} at home at three");
+}
+
+#[test]
+fn every_city_you_come_into_has_its_traffic() {
+    // seed 3's other cities with housing as you find them: a car for at least one in ten
+    // who live there, and the cars driven, a drive a day for every three at least. The
+    // bound is each city's own, not the home city's: most of home's driving is couriers
+    // with cars on their rounds, and its long commutes come from its big map and its
+    // housing far from its work
+    let (home, _) = &settlements()[0];
+    let mut short = Vec::new();
+    for (s, city) in settlements() {
+        let there = come_into(city);
+        if s == home || s.town.is_some() || there.cars().is_empty() {
+            continue;
+        }
+        let lives = there.people().iter().filter(|p| p.home.is_some()).count();
+        let cars = there.cars().len();
+        let mut driven = 0;
+        a_day_of(city, there, 24 * 60, |w| {
+            driven += w.people().iter().filter(|p| drives(w, p) > 0).count();
+        });
+        if cars * 10 < lives || driven * 3 < cars {
+            short.push(format!(
+                "{s:?}: {cars} cars for {lives} who live there, {driven} drives a day"
+            ));
+        }
+    }
+    assert!(short.is_empty(), "short of traffic: {short:#?}");
 }
 
 /// New games' home cities for seeds 1 to 8, as a new game builds them: built once.
@@ -421,7 +527,7 @@ fn day_commuters(w: &World) -> Vec<(PersonId, citygen::BuildingId)> {
 fn commuters_take_lunch() {
     // a third or so of those who come in to work step out at midday, to something to eat
     // or a spot along the street, and are back at work after
-    let city = settlement(CORPORATE);
+    let city = settlement(HOME);
     let people = sim::People::load().unwrap();
     let day = day_commuters(&World::seed(
         city,

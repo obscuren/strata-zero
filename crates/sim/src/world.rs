@@ -10,7 +10,7 @@ use crate::people::{
 };
 use crate::places::Places;
 use citygen::world::{BuildingKind, City, StratumKind, Theme};
-use citygen::{BuildingId, FlavorPack, Hue, Pos, Rect, Terrain};
+use citygen::{BuildingId, FlavorPack, Hue, Pos, Rect, Size, Terrain};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -23,8 +23,18 @@ pub const TICKS_PER_MINUTE: u64 = 90;
 pub const WALK_TICKS: u64 = 9;
 /// Ticks a car spends per tile: three times a walker.
 pub const DRIVE_TICKS: u64 = 3;
-/// A trip longer than this, on foot, is driven when there is a car.
+/// A trip longer than this, on foot, is driven when there is a car; on a small map,
+/// one longer than half its short side (`drive_from`).
 pub const DRIVE_FROM: i32 = 60;
+
+/// How long a trip on a map of `size` is driven from (when there is a car):
+/// `DRIVE_FROM`, or half the map's short side if that's shorter, so a small city drives
+/// its longer trips as a big one does.
+pub fn drive_from(size: Size) -> i32 {
+    let short = size.w.min(size.h) as i32;
+    DRIVE_FROM.min(short / 2)
+}
+
 /// The profession that never leaves town: the city's jobs go through its fixers.
 const FIXER: &str = "fixer";
 
@@ -596,14 +606,27 @@ impl World {
             .or_else(|| drinks.first().copied())
     }
 
+    /// `goal` as someone who lives in town keeps it: never out of town for a drink. One
+    /// the city has no place for is had at the first it has, else they stay home.
+    fn in_town(&self, goal: Goal) -> Goal {
+        let drinks = &self.places.drinks;
+        match goal {
+            Goal::Leisure(l) if !drinks.contains(&l) => {
+                drinks.first().map_or(Goal::Home, |l| Goal::Leisure(*l))
+            }
+            _ => goal,
+        }
+    }
+
     /// The goal `i` keeps at `minute` of the day: their schedule's, but someone who comes
     /// in from off the map sets off for work as much earlier as the walk in takes, may
-    /// take a break at midday and may stay on in town for a drink after.
+    /// take a break at midday and may stay on in town for a drink after; and someone who
+    /// lives in town has their drink in town (`in_town`).
     fn due(&self, i: usize, minute: u16) -> Goal {
         let schedule = &self.people[i].schedule;
         let now = goal_at(schedule, minute);
         if !self.commuter(i) {
-            return now;
+            return self.in_town(now);
         }
         if now == Goal::Work {
             return if self.at_lunch(i, minute) {
@@ -849,7 +872,7 @@ impl World {
                 .car
                 .filter(|c| self.cars[c.0 as usize].parked && !off_the_map);
             if let Some(car_id) = car
-                && from.manhattan(to) > DRIVE_FROM
+                && from.manhattan(to) > drive_from(city.size)
             {
                 let car_pos = self.cars[car_id.0 as usize].pos;
                 let mut occupied = self.occupied_tiles();
@@ -1897,6 +1920,40 @@ mod tests {
             car.pos,
             work
         );
+    }
+
+    #[test]
+    fn a_small_city_drives_its_longer_trips() {
+        // driven past 60 cells on a map with a short side of 120 or more (a home city's:
+        // the smallest of worlds 0 to 199 is 128), past half the short side on a smaller
+        // one
+        let size = |w, h| Size { w, h };
+        assert_eq!(drive_from(size(336, 176)), DRIVE_FROM);
+        assert_eq!(drive_from(size(288, 128)), DRIVE_FROM);
+        assert_eq!(drive_from(size(200, 120)), DRIVE_FROM);
+        assert_eq!(drive_from(size(200, 118)), 59);
+        assert_eq!(drive_from(size(136, 80)), 40);
+        assert_eq!(drive_from(size(60, 120)), 30);
+        // on the test city, 120 by 60, a commute with a car of 40 to 60 cells is driven
+        let c = city();
+        let mut w = world(&c);
+        let places = Places::derive(&c);
+        let driver = one(&w, |p| {
+            p.car.is_some()
+                && matches!((p.home, p.work), (Some(h), Work::Building(b))
+                    if (40..=60).contains(&places.doors[&h][0].manhattan(places.doors[&b][0])))
+        })
+        .clone();
+        let mut drove = false;
+        let mut t = w.tick();
+        while t < tick_at(22 * 60, 1) {
+            t += TICKS_PER_MINUTE;
+            w.advance(&c, t);
+            w.path_some(&c, usize::MAX);
+            drove |= matches!(&w.people()[driver.id.0 as usize].whereabouts,
+                Whereabouts::Travelling(trip) if trip.legs.iter().any(|l| l.car.is_some()));
+        }
+        assert!(drove, "{} drives to work", driver.name);
     }
 
     #[test]

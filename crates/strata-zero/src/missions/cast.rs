@@ -224,7 +224,7 @@ pub fn district_of(st: &AppState, id: PersonId) -> String {
     st.city
         .as_ref()
         .zip(pos)
-        .and_then(|(c, pos)| c.districts.iter().find(|d| d.bounds.contains(pos)))
+        .and_then(|(c, pos)| c.district_at(pos))
         .map_or_else(|| "the street".to_string(), |d| d.name.clone())
 }
 

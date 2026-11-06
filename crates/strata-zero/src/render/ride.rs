@@ -90,6 +90,7 @@ mod tests {
             path: vec![Pos::new(6, 2), Pos::new(7, 2)],
             done: vec![Pos::new(3, 2), Pos::new(4, 2)],
             next_at: 0,
+            runs_on: false,
         };
         let area = Rect::new(0, 0, 10, 4);
         let mut buf = Buffer::empty(area);

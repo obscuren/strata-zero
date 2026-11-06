@@ -3232,8 +3232,9 @@ pub fn ground_port(st: &AppState, body: Pos) -> Option<Pos> {
 pub struct CordView {
     /// Where the run came onto the grid: the last relay's gate, or the port.
     pub entry: Pos,
-    /// From `entry` to the tile before you; filled by `cord_walk`, which the caller
-    /// keeps while neither end moves.
+    /// From `entry` (or, with it far off, from past the view on the way home) to the
+    /// tile before you; filled by `CordWalk::walk`, which the map keeps while neither
+    /// end nor the view moves.
     pub walk: Vec<Pos>,
     /// Straight links, nearest you first: relay to relay, then the first relay home.
     pub hops: Vec<(Pos, Pos)>,
@@ -3251,7 +3252,7 @@ pub struct CordView {
 }
 
 /// The cord while you stand on the open Net, jacked in, with the cord on in Settings;
-/// its walk left empty for `cord_walk`. A trace shows on it only when it walks this
+/// its walk left empty for `CordWalk::walk`. A trace shows on it only when it walks this
 /// run's route. The route and its relays are the body's city's: when your Net self has
 /// walked out of it, as it holds them, in this frame.
 pub fn cord_view(st: &AppState) -> Option<CordView> {
@@ -3330,75 +3331,200 @@ pub fn cord_walk(city: &City, entry: Pos, you: Pos) -> Vec<Pos> {
     let Some(net) = city.stratum(StratumKind::Net) else {
         return Vec::new();
     };
-    let cost = |_: Pos, to: Pos| match net.tiles.get(to)?.terrain {
-        Terrain::NetLane | Terrain::NetGate => Some(1),
-        Terrain::NetGrid => Some(3),
-        _ => None,
-    };
+    let cost = |_: Pos, to: Pos| cord_cost(net.tiles.get(to)?, None);
     let mut walk = citygen::pathing::astar(city.size, entry, you, cost).unwrap_or_default();
     walk.pop();
     walk
 }
 
-/// How far apart, each way, the cord's ends are walked over the Net past the city's
-/// edge; farther, the cord runs straight: a way looked for over more of the world
-/// would cost a frame.
-pub const CORD_REACH: i32 = 64;
+/// What a cell of the void costs the cord, against a lane's 1 and the grid's 3: it
+/// keeps to the Net's lines and runs over the void only where nothing else goes.
+const CORD_VOID: u32 = 12;
 
-/// The cord's walk from `entry` to `you`, `you` left off: over the city's own Net as
-/// `cord_walk` finds it while both ends are on cells the city owns (or there is no
-/// world past it); else over the Net past its edge, whichever area owns each cell,
-/// lanes cheap and the open grid and the void dear, looked for round both ends
-/// (`stream::path_area`). Ends more than `CORD_REACH` apart, or no way found (ground
-/// not built), it runs straight.
-pub fn cord_walk_beyond(st: &AppState, entry: Pos, you: Pos) -> Vec<Pos> {
-    use crate::outside::stream::{Beyond, path_area, path_within};
-    use crate::render::map::TileMap;
-    let Some(city) = st.city.as_ref() else {
-        return Vec::new();
-    };
-    let Some(b) = Beyond::of(st) else {
-        return cord_walk(city, entry, you);
-    };
-    if b.live_owns(entry) && b.live_owns(you) {
-        return cord_walk(city, entry, you);
-    }
-    if entry.chebyshev(you) > CORD_REACH {
-        return straight(entry, you);
-    }
-    let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
-    let cost = |_: Pos, to: Pos| match net.tile(to)?.terrain {
+/// What the cord pays to run over a cell of the Net: a lane or a gate least, the grid
+/// and the floor of a room you can stand in (a port's, a node's) more, the void
+/// `void` where it may be walked; none where it can't run (a wall).
+fn cord_cost(t: &citygen::Tile, void: Option<u32>) -> Option<u32> {
+    match t.terrain {
         Terrain::NetLane | Terrain::NetGate => Some(1),
-        Terrain::NetGrid | Terrain::Void => Some(3),
+        Terrain::NetGrid | Terrain::NetFloor => Some(3),
+        Terrain::Void => void,
         _ => None,
-    };
-    match path_within(path_area(city.size, entry, you), entry, you, cost) {
-        Some(mut walk) => {
-            walk.pop();
-            walk
-        }
-        None => straight(entry, you),
     }
 }
 
-/// A four-way line from `a` toward `b`, `b` left off: the cord where no way is looked
-/// for, each step along whichever axis lags the straight line more.
-fn straight(a: Pos, b: Pos) -> Vec<Pos> {
-    let (n, m) = ((b.x - a.x).abs(), (b.y - a.y).abs());
-    let (sx, sy) = ((b.x - a.x).signum(), (b.y - a.y).signum());
-    let mut out = Vec::with_capacity((n + m) as usize);
-    let (mut x, mut y, mut p) = (0, 0, a);
-    while (x, y) != (n, m) {
-        out.push(p);
-        if y == m || (x < n && (2 * x + 1) * m < (2 * y + 1) * n) {
-            x += 1;
-            p = p.offset(sx, 0);
-        } else {
-            y += 1;
-            p = p.offset(0, sy);
-        }
+/// The cord's walk from `entry` to `you`, `you` left off, as far as `view` (cells of
+/// the live city's frame) shows it: `CordWalk::walk` with nothing kept.
+#[cfg(test)]
+pub fn cord_walk_beyond(st: &AppState, entry: Pos, you: Pos, view: citygen::Rect) -> Vec<Pos> {
+    CordWalk::default().walk(st, entry, you, view)
+}
+
+/// The cord's walk as the map keeps it between frames: its way home over the world's
+/// tiles, found again when either end moves onto another tile, and its walk, walked
+/// again when either end or the view moves.
+#[derive(Debug, Default)]
+pub struct CordWalk {
+    /// The tiles of your end and the entry's, and the way between (`cord_route`).
+    route: Option<((Pos, Pos), Vec<Pos>)>,
+    /// The ends and the view, and the walk.
+    walk: Option<((Pos, Pos, citygen::Rect), Vec<Pos>)>,
+}
+
+impl CordWalk {
+    /// The walk last walked.
+    #[cfg(test)]
+    pub fn last(&self) -> Option<&[Pos]> {
+        self.walk.as_ref().map(|(_, w)| w.as_slice())
     }
-    out
+
+    /// The walk walked again next time (the frame moved under it, or more of the Net
+    /// came in); the way home over the world's tiles stays.
+    pub fn walk_again(&mut self) {
+        self.walk = None;
+    }
+
+    /// The cord's walk from `entry` to `you`, `you` left off: over the city's own Net
+    /// as `cord_walk` finds it while both ends are on cells the city owns (or there is
+    /// no world past it); else over the Net past its edge, whichever area owns each
+    /// cell, lanes cheap, the grid dearer and the void dearest, looked for over the
+    /// view a tile wider all round (and round you) out to whole overworld tiles. To
+    /// `entry` when it lies in there (looked for round both ends too); else from where
+    /// the way home over the world's tiles (`cord_route`) leaves it, so the cord runs
+    /// on out of sight the way home goes, at any distance. Empty where the Net there
+    /// isn't built, and with the view far from you.
+    pub fn walk(&mut self, st: &AppState, entry: Pos, you: Pos, view: citygen::Rect) -> Vec<Pos> {
+        if let Some((k, w)) = &self.walk
+            && *k == (entry, you, view)
+        {
+            return w.clone();
+        }
+        let w = self.walked(st, entry, you, view);
+        self.walk = Some(((entry, you, view), w.clone()));
+        w
+    }
+
+    fn walked(&mut self, st: &AppState, entry: Pos, you: Pos, view: citygen::Rect) -> Vec<Pos> {
+        use crate::outside::TILE;
+        use crate::outside::stream::{Beyond, cheapest_within, path_area, path_within};
+        use crate::render::map::TileMap;
+        use citygen::Rect;
+        let Some(city) = st.city.as_ref() else {
+            return Vec::new();
+        };
+        let (Some(b), Some(o)) = (Beyond::of(st), st.outside.as_ref()) else {
+            return cord_walk(city, entry, you);
+        };
+        if b.live_owns(entry) && b.live_owns(you) {
+            return cord_walk(city, entry, you);
+        }
+        // the view far from you (a free camera): not looked for over all between
+        if !view.grow(view.w.max(view.h)).contains(you) {
+            return Vec::new();
+        }
+        let net = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+        let cost = |_: Pos, to: Pos| cord_cost(net.tile(to)?, Some(CORD_VOID));
+        let lane = |q: Pos| {
+            net.tile(q)
+                .is_some_and(|t| matches!(t.terrain, Terrain::NetLane | Terrain::NetGate))
+        };
+        // the overworld tiles under the view a tile wider all round, and round you: the
+        // ring of them outermost lies past the view
+        let origin = b.origin();
+        let tile = |p: Pos| o.tile_of(city, p);
+        let lo = tile(Pos::new(
+            (view.x - TILE).min(you.x - TILE),
+            (view.y - TILE).min(you.y - TILE),
+        ));
+        let hi = tile(Pos::new(
+            (view.right() - 1 + TILE).max(you.x + TILE),
+            (view.bottom() - 1 + TILE).max(you.y + TILE),
+        ));
+        let tiles = Rect::new(lo.x, lo.y, hi.x - lo.x + 1, hi.y - lo.y + 1);
+        let cells = |t: Rect| {
+            Rect::new(
+                TILE * t.x - origin.x,
+                TILE * t.y - origin.y,
+                TILE * t.w,
+                TILE * t.h,
+            )
+        };
+        let area = cells(tiles);
+        let walk = if tiles.contains(tile(entry)) {
+            let near = path_area(city.size, entry, you);
+            let both = Rect::around(&[
+                Pos::new(area.x, area.y),
+                Pos::new(area.right() - 1, area.bottom() - 1),
+                Pos::new(near.x, near.y),
+                Pos::new(near.right() - 1, near.bottom() - 1),
+            ]);
+            path_within(both, entry, you, cost)
+        } else {
+            // the last tile of the way home in there that's built: the walk ends on its
+            // lanes, or anywhere on it with none
+            let built = |t: Pos| {
+                net.tile(cells(Rect::new(t.x, t.y, 1, 1)).center())
+                    .is_some()
+            };
+            let out = self
+                .route(st, tile(you), tile(entry))
+                .iter()
+                .take_while(|t| tiles.contains(**t) && built(**t))
+                .last()
+                .copied();
+            out.and_then(|t| {
+                let goal = cells(Rect::new(t.x, t.y, 1, 1));
+                let lanes = goal.iter().any(lane);
+                cheapest_within(area, you, cost, |q| goal.contains(q) && (!lanes || lane(q)))
+            })
+            .map(|mut w| {
+                w.reverse();
+                w
+            })
+        };
+        let mut walk = walk.unwrap_or_default();
+        walk.pop();
+        walk
+    }
+
+    /// `cord_route` from tile `from` to tile `to`, kept while neither changes.
+    fn route(&mut self, st: &AppState, from: Pos, to: Pos) -> &[Pos] {
+        if self.route.as_ref().is_none_or(|(k, _)| *k != (from, to)) {
+            let way = st
+                .outside
+                .as_ref()
+                .and_then(|o| o.world.as_ref())
+                .map(|w| cord_route(w, from, to))
+                .unwrap_or_default();
+            self.route = Some(((from, to), way));
+        }
+        self.route.as_ref().map_or(&[], |(_, r)| r)
+    }
+}
+
+/// The cord's way home over the world's tiles, from tile `from` to tile `to`: along the
+/// open Net's trunks (a road's tile to the next its road runs to), through the cities'
+/// and towns' own tiles (their lanes and grid), and over the void between, each as dear
+/// a tile as the cord's walk makes it a cell. Overworld tiles, `from` first; none off
+/// the world.
+fn cord_route(world: &citygen::overworld::Overworld, from: Pos, to: Pos) -> Vec<Pos> {
+    use citygen::overworld::link_toward;
+    let road = |a: Pos, b: Pos| {
+        world
+            .tile(a)
+            .is_some_and(|t| t.road & link_toward(a, b) != 0)
+    };
+    let urban = |p: Pos| world.tile(p).is_some_and(|t| t.urban.is_some());
+    let cost = |a: Pos, b: Pos| {
+        Some(if road(a, b) || road(b, a) {
+            1
+        } else if urban(a) && urban(b) {
+            2
+        } else {
+            CORD_VOID
+        })
+    };
+    astar(world.size, from, to, cost).unwrap_or_default()
 }
 
 /// The arrow from `from` toward `to`, eight ways; none on the tile itself.

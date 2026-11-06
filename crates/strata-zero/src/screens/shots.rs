@@ -4263,6 +4263,54 @@ fn other_cities_shots() {
     }
 }
 
+/// A city's districts are its colours on the overworld: from seed 3's home city,
+/// Chromehaven's and Newport's deck MAP, the whole city, and the overworld over each.
+#[test]
+#[ignore]
+fn district_colours_shots() {
+    use crate::outside::enter;
+    use crate::screens::atlas::Zoom;
+    use crate::screens::outside::OutsideScreen;
+    let mut st = sited_run(13 * 60);
+    let others = st.outside.as_ref().unwrap().others();
+    let home = st.outside.as_ref().unwrap().home();
+    for name in ["Chromehaven", "Newport"] {
+        let world = st.outside.as_ref().unwrap().world();
+        let (s, b) = *others
+            .iter()
+            .find(|(s, _)| s.town.is_none() && world.cities[s.city as usize].name == name)
+            .expect("seed 3 has the city");
+        enter(&mut st, s).unwrap();
+        let o = st.outside.as_ref().unwrap();
+        let city = st.city.clone().unwrap();
+        let cell = o.street_of(&city, Pos::new(b.x + b.w / 2, b.y + b.h / 2));
+        crate::outside::moves::into_city(&mut st, cell);
+        let map = MapScreen::walking(&mut st);
+        built_round(&mut st);
+        let lower = name.to_lowercase();
+        let mut deck = Deck::new(st.tick);
+        deck.update(&mut st, &[key(KeyCode::Char('7'))]);
+        st.atlas.zoom = Zoom::Fit;
+        // past the deck's opening glitch
+        st.tick += 200;
+        shot_stack(
+            &format!("districts_{lower}_map"),
+            &st,
+            &[&map, &deck],
+            (120, 40),
+        );
+        crate::outside::moves::up(&mut st);
+        let out = OutsideScreen::new(&mut st);
+        shot_stack(
+            &format!("districts_{lower}_overworld"),
+            &st,
+            &[&out],
+            (120, 40),
+        );
+        enter(&mut st, home).unwrap();
+    }
+}
+
 /// The overworld jacked in (#23): looking up at the Net over the world from the open
 /// Net by the truck stop, and from the city's Net.
 #[test]

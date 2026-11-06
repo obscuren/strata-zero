@@ -168,8 +168,26 @@ const ROTATION: [Theme; 7] = [
     Theme::CombatZone,
 ];
 
+/// What the home city's story needs on its streets, first need first: a night market
+/// (the cook the first job goes to, and a fixer), the strip (the fixers who give the
+/// jobs) and the blocks (the runner's flat).
+const STORY: [Theme; 3] = [Theme::NightMarket, Theme::NeonStrip, Theme::Megablocks];
+
+/// The fewest tiles of the home city a district the story needs comes to: past a stray
+/// tile or two, a quarter with streets and buildings of its own.
+const STORY_TILES: usize = 24;
+
+/// Where a tile's colour comes from: one of its city's district seeds, or none (the
+/// outer ring's housing and the shore's docks, whatever the seed).
+#[derive(Clone, Copy, PartialEq)]
+enum Source {
+    Seed(usize),
+    Ring(Theme),
+    Shore,
+}
+
 /// The districts' colours: a corp core, themes round it, the outer ring housing, the
-/// shore docks.
+/// shore docks. The home city's seeds give the story what it needs.
 fn districts(ctx: &mut Ctx, f: &Fields) {
     let seed = ctx.seed();
     for (ci, c) in ctx.cities.clone().iter().enumerate() {
@@ -191,40 +209,83 @@ fn districts(ctx: &mut Ctx, f: &Fields) {
                 seeds.push(p);
             }
         }
-        let theme_of = |j: usize| {
-            if j == 0 {
-                Theme::CorpCore
-            } else {
-                ROTATION[(j - 1 + ci) % ROTATION.len()]
-            }
-        };
-        for p in mine {
+        // the core is seed 0's (and only seed 0's); the rest take the rotation in turn
+        let mut themes: Vec<Theme> = (0..seeds.len())
+            .map(|j| match j {
+                0 => Theme::CorpCore,
+                j => ROTATION[(j - 1 + ci) % ROTATION.len()],
+            })
+            .collect();
+        let from = |p: Pos| {
             let d = sdist(p, c.centre);
             let mut by_distance: Vec<usize> = (0..seeds.len()).collect();
             by_distance.sort_by(|a, b| sdist(p, seeds[*a]).total_cmp(&sdist(p, seeds[*b])));
-            let mut theme = theme_of(by_distance[0]);
+            let mut from = Source::Seed(by_distance[0]);
             // The core is only the core: past it, the next district out.
-            if theme == Theme::CorpCore && d > 0.4 * c.size {
-                theme = by_distance
+            if from == Source::Seed(0) && d > 0.4 * c.size {
+                from = by_distance
                     .get(1)
-                    .map(|j| theme_of(*j))
-                    .unwrap_or(Theme::OldTown);
+                    .map_or(Source::Ring(Theme::OldTown), |j| Source::Seed(*j));
             }
             if d > 1.3 * c.size {
                 let coarse = Pos::new(p.x / 4, p.y / 2);
-                theme = if roll(seed, 0x0A7, coarse) < 0.5 {
+                from = Source::Ring(if roll(seed, 0x0A7, coarse) < 0.5 {
                     Theme::Megablocks
                 } else {
                     Theme::OldTown
-                };
+                });
             }
-            if f.water[p] <= 1.5 && theme != Theme::CorpCore && roll(seed, 0xD0C, p) < 0.7 {
-                theme = Theme::Docks;
+            if f.water[p] <= 1.5 && from != Source::Seed(0) && roll(seed, 0xD0C, p) < 0.7 {
+                from = Source::Shore;
             }
+            from
+        };
+        let froms: Vec<(Pos, Source)> = mine.iter().map(|p| (*p, from(*p))).collect();
+        if c.home {
+            story(&mut themes, &froms);
+        }
+        for (p, from) in froms {
+            let theme = match from {
+                Source::Seed(j) => themes[j],
+                Source::Ring(theme) => theme,
+                Source::Shore => Theme::Docks,
+            };
             if let Some(u) = ctx.tile_mut(p).urban.as_mut() {
                 u.theme = theme;
             }
         }
+    }
+}
+
+/// The home city's seeds' themes, so each district the story needs (`STORY`) comes to
+/// `STORY_TILES` tiles or more where the seeds can give it: a need the rotation left
+/// out, or left a sliver, goes to the seed with the most tiles that no need holds yet,
+/// and the seed that had it (if one did) takes that seed's theme in its place.
+fn story(themes: &mut [Theme], froms: &[(Pos, Source)]) {
+    let mut tiles = vec![0usize; themes.len()];
+    for (_, from) in froms {
+        if let Source::Seed(j) = from {
+            tiles[*j] += 1;
+        }
+    }
+    let mut held: Vec<usize> = vec![0];
+    for need in STORY {
+        let has = (1..themes.len()).find(|j| themes[*j] == need && tiles[*j] >= STORY_TILES);
+        if let Some(j) = has {
+            held.push(j);
+            continue;
+        }
+        let Some(best) = (1..themes.len())
+            .filter(|j| !held.contains(j))
+            .max_by_key(|j| (tiles[*j], std::cmp::Reverse(*j)))
+        else {
+            continue;
+        };
+        if let Some(old) = (1..themes.len()).find(|j| themes[*j] == need) {
+            themes[old] = themes[best];
+        }
+        themes[best] = need;
+        held.push(best);
     }
 }
 
@@ -271,6 +332,31 @@ mod tests {
                     core.len() + towns >= all * 9 / 10,
                     "seed {seed}: city {i} scattered ({} + {towns} of {all})",
                     core.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_home_city_has_what_the_story_needs() {
+        // the home city is coloured with a night market, the strip and the blocks, each
+        // a quarter of its own (2's had no market, 11's no strip, 3's no blocks)
+        for seed in 0..30 {
+            let w = Overworld::generate(WorldParams {
+                seed,
+                ..Default::default()
+            })
+            .unwrap();
+            let home = w.cities.iter().position(|c| c.home).unwrap() as u8;
+            for need in super::STORY {
+                let tiles = w
+                    .city_tiles(home)
+                    .iter()
+                    .filter(|p| w.tile(**p).and_then(|t| t.urban).map(|u| u.theme) == Some(need))
+                    .count();
+                assert!(
+                    tiles >= super::STORY_TILES,
+                    "seed {seed}: {tiles} tiles of {need:?}"
                 );
             }
         }

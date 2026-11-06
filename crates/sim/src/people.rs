@@ -1,9 +1,11 @@
 //! People: who they are, where they live and work, and the day each one keeps.
 
 use crate::content::{DAY, Hours, Leisure, People, Profession, Tint};
+use crate::paths::walk_regions;
 use crate::places::Places;
+use citygen::rng::hash64;
 use citygen::world::{Building, BuildingKind, City, Theme};
-use citygen::{BuildingId, Hue, Pos};
+use citygen::{BuildingId, Grid, Hue, Pos};
 use rand::Rng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
@@ -22,11 +24,19 @@ pub struct CarId(pub u32);
 )]
 pub struct HouseholdId(pub u32);
 
-/// How many people, and how many cars.
+/// How many people, how many cars, and whether everyone who works in the city lives in
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SimParams {
     pub density: f32,
     pub car_share: f32,
+    /// Everyone who works in the city lives in it, anywhere in town with room they can
+    /// walk to work from (by who they are, not the nearest to work), and those flats
+    /// full, they take another round, then another; not housed, each takes the flat
+    /// nearest their job with room. Either way, someone with no such flat has no home in
+    /// it and comes in from off the map (`commute`), or stays in town.
+    #[serde(default)]
+    pub housed: bool,
 }
 
 impl Default for SimParams {
@@ -34,6 +44,7 @@ impl Default for SimParams {
         SimParams {
             density: 1.0,
             car_share: 0.25,
+            housed: false,
         }
     }
 }
@@ -194,6 +205,87 @@ fn housing_capacity(b: &Building) -> usize {
         BuildingKind::Hotel => 6,
         _ => 0,
     }
+}
+
+/// Of `housing` (each with its door and the room it has left), the nearest to `at`
+/// with room of those `ok` (one a walk from the job), a place in it taken; none, none.
+/// Anyone but one who takes anything (`far_ok`) keeps within 60 cells when somewhere
+/// that near has room.
+fn take_home(
+    housing: &mut [(BuildingId, Pos, usize)],
+    ok: &[bool],
+    at: Pos,
+    far_ok: bool,
+) -> Option<BuildingId> {
+    let mut best: Option<(i32, usize)> = None;
+    for (k, (_, door, cap)) in housing.iter().enumerate() {
+        if *cap == 0 || !ok[k] {
+            continue;
+        }
+        let d = door.manhattan(at);
+        if !far_ok && d > 60 && best.is_some_and(|(bd, _)| bd <= 60) {
+            continue;
+        }
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, k));
+        }
+    }
+    best.map(|(_, k)| {
+        housing[k].2 -= 1;
+        housing[k].0
+    })
+}
+
+/// What spreads a housed city's people over its flats.
+const ANYWHERE: u64 = 0xA2_7E1E;
+
+/// Of `housing` (each with its door and the room it has left), a place anywhere with
+/// room of those `ok` (one a walk from the job) for `who`, by who they are (a building
+/// the likelier the more room it has), taken; none, none.
+fn any_home(
+    housing: &mut [(BuildingId, Pos, usize)],
+    ok: &[bool],
+    who: PersonId,
+) -> Option<BuildingId> {
+    let room: usize = housing
+        .iter()
+        .zip(ok)
+        .filter(|(_, ok)| **ok)
+        .map(|(h, _)| h.2)
+        .sum();
+    if room == 0 {
+        return None;
+    }
+    let mut pick = (hash64(ANYWHERE, u64::from(who.0)) % room as u64) as usize;
+    for (h, _) in housing.iter_mut().zip(ok).filter(|(_, ok)| **ok) {
+        if pick < h.2 {
+            h.2 -= 1;
+            return Some(h.0);
+        }
+        pick -= h.2;
+    }
+    None
+}
+
+/// Whether someone living in housing `h` (its first door `door`) can walk to the job at
+/// `at` (`work`'s door, or its spot) and back, as their trips are walked: from the door
+/// they're in to the other's nearest, on one stretch of street (`walk_regions`).
+fn walks_to_work(
+    places: &Places,
+    region: &Grid<u32>,
+    (h, door): (BuildingId, Pos),
+    work: Work,
+    at: Pos,
+) -> bool {
+    let walks =
+        |a: Pos, b: Option<Pos>| b.is_some_and(|b| region[a] != 0 && region[a] == region[b]);
+    let to_work = match work {
+        Work::Building(b) => places.door_from(b, door),
+        Work::Spot(s) => Some(s),
+        // a round goes anywhere: no one stretch of street to keep to
+        Work::Roaming => return true,
+    };
+    walks(door, to_work) && walks(at, places.door_from(h, at))
 }
 
 /// A job to fill: the profession, where, and which shift.
@@ -362,6 +454,10 @@ pub fn seed_population(
             Some((b.id, door, cap))
         })
         .collect();
+    // the room each has, for a housed city's next round
+    let rooms: Vec<usize> = housing.iter().map(|h| h.2).collect();
+    // where a walk can go, so nobody is housed where they can't walk to work
+    let region = walk_regions(city);
 
     // Shared departure jitter per workplace and shift, so colleagues leave together.
     let mut group_jitter: HashMap<(Work, u16), i32> = HashMap::new();
@@ -380,26 +476,29 @@ pub fn seed_population(
             )
         });
         // The nearest housing with room; corp drones take anything, others prefer close.
+        // A housed city's people live anywhere in town with room, by who they are. Only
+        // housing they can walk to work from and back: none, they have no home in town.
         let far_ok = o.profession.id == "corp_drone";
-        let home = {
-            let mut best: Option<(i32, usize)> = None;
-            for (k, (_, door, cap)) in housing.iter().enumerate() {
-                if *cap == 0 {
-                    continue;
-                }
-                let d = door.manhattan(o.at);
-                if !far_ok && d > 60 && best.is_some_and(|(bd, _)| bd <= 60) {
-                    continue;
-                }
-                if best.is_none_or(|(bd, _)| d < bd) {
-                    best = Some((d, k));
+        let ok: Vec<bool> = housing
+            .iter()
+            .map(|(h, door, _)| walks_to_work(places, &region, (*h, *door), o.work, o.at))
+            .collect();
+        let take = |housing: &mut [(BuildingId, Pos, usize)]| match params.housed {
+            true => any_home(housing, &ok, id),
+            false => take_home(housing, &ok, o.at, far_ok),
+        };
+        let home = take(&mut housing).or_else(|| {
+            // every flat they may take taken: a housed city packs another round into them
+            if !params.housed {
+                return None;
+            }
+            for ((h, room), ok) in housing.iter_mut().zip(&rooms).zip(&ok) {
+                if *ok {
+                    h.2 = *room;
                 }
             }
-            best.map(|(_, k)| {
-                housing[k].2 -= 1;
-                housing[k].0
-            })
-        };
+            take(&mut housing)
+        });
         if let Some(h) = home {
             by_home.entry(h).or_default().push(id);
         }
@@ -661,6 +760,119 @@ mod tests {
         }
         let housed = pop.people.iter().filter(|p| p.home.is_some()).count();
         assert!(housed * 10 >= n * 9, "{housed} of {n} housed");
+    }
+
+    #[test]
+    fn a_housed_city_houses_everyone_who_works_in_it() {
+        // seed 6 at five districts has flats for few who work in it: housed, the rest
+        // live in it all the same, its flats taking round after round as they took the
+        // first; not housed, the rest have no home in it
+        let c = Generator::run(GenParams {
+            seed: 6,
+            size: SizePreset::Custom { w: 120, h: 60 },
+            districts: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        let (spare, housed) = (seed_as(&c, false), seed_as(&c, true));
+        let n = spare.people.len();
+        let with_a_flat = spare.people.iter().filter(|p| p.home.is_some()).count();
+        assert!(
+            with_a_flat * 2 < n,
+            "{with_a_flat} of {n} with a flat to spare"
+        );
+        assert_eq!(housed.people.len(), n);
+        for (was, p) in spare.people.iter().zip(&housed.people) {
+            assert_eq!((&p.work, &p.schedule), (&was.work, &was.schedule));
+            let home = p.home.expect("everyone lives in town");
+            let b = &c.buildings[home.index()];
+            assert!(
+                housing_capacity(b) > 0,
+                "{} lives in a {:?}",
+                p.name,
+                b.kind
+            );
+            assert_ne!(c.district(b.district).theme, Theme::NeonStrip);
+        }
+        // round after round: no building holds more than its room for each round
+        let room = rooms_of(&c);
+        let rounds = n.div_ceil(room.values().sum::<usize>());
+        assert!(rounds > 1, "{rounds} rounds");
+        let mut lives: HashMap<BuildingId, usize> = HashMap::new();
+        for p in &housed.people {
+            *lives.entry(p.home.unwrap()).or_default() += 1;
+        }
+        for (b, n) in lives {
+            assert!(
+                n <= room[&b] * rounds,
+                "{n} in {b:?}, room for {}",
+                room[&b]
+            );
+        }
+    }
+
+    #[test]
+    fn a_housed_city_houses_its_people_across_town() {
+        // seed 6 at eight districts has flats for nine in ten who work in it: not housed,
+        // they take the flat with room nearest their job, nearer than the town's flats
+        // are on the whole; housed, they live anywhere in town with room, by who they
+        // are, about as far from work as the town's flats are
+        let c = city();
+        let places = Places::derive(&c);
+        let room = rooms_of(&c);
+        let total: usize = room.values().sum();
+        // over those with a home and a job somewhere: how far they live from it, and how
+        // far the town's flats are from it on the whole (each building by its room)
+        let far = |pop: &Population| {
+            let (mut lives, mut flats) = (0, 0);
+            for p in &pop.people {
+                let at = match p.work {
+                    Work::Building(b) => places.doors[&b][0],
+                    Work::Spot(at) => at,
+                    Work::Roaming => continue,
+                };
+                let Some(home) = p.home else { continue };
+                lives += places.doors[&home][0].manhattan(at) as usize * total;
+                flats += room
+                    .iter()
+                    .map(|(h, r)| places.doors[h][0].manhattan(at) as usize * r)
+                    .sum::<usize>();
+            }
+            (lives, flats)
+        };
+        let (lives, flats) = far(&seed_as(&c, false));
+        assert!(lives * 4 < flats * 3, "not housed: {lives} against {flats}");
+        let (lives, flats) = far(&seed_as(&c, true));
+        assert!(lives * 4 > flats * 3, "housed: {lives} against {flats}");
+    }
+
+    /// `c`'s population, housed (`SimParams::housed`) or not.
+    fn seed_as(c: &City, housed: bool) -> Population {
+        let params = SimParams {
+            housed,
+            ..SimParams::default()
+        };
+        let names = FlavorPack::load("default").unwrap().people;
+        let mut rng = ChaCha8Rng::seed_from_u64(c.seed);
+        seed_population(
+            c,
+            &People::load().unwrap(),
+            &Places::derive(c),
+            &params,
+            &names,
+            &mut rng,
+        )
+    }
+
+    /// The room each of `c`'s housing has (off the Strip, with a street door).
+    fn rooms_of(c: &City) -> HashMap<BuildingId, usize> {
+        let places = Places::derive(c);
+        c.buildings
+            .iter()
+            .filter(|b| housing_capacity(b) > 0 && places.doors.contains_key(&b.id))
+            .filter(|b| c.district(b.district).theme != Theme::NeonStrip)
+            .map(|b| (b.id, housing_capacity(b)))
+            .collect()
     }
 
     #[test]

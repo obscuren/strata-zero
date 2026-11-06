@@ -1222,11 +1222,7 @@ pub(crate) mod tests {
         let district = fill(&st, "{marlo.district}");
         let tile = cast::work_tile(&st, marlo(&st)).unwrap();
         let city = st.city.as_ref().unwrap();
-        let want = city
-            .districts
-            .iter()
-            .find(|d| d.bounds.contains(tile))
-            .unwrap();
+        let want = city.district_at(tile).unwrap();
         assert_eq!(district, want.name);
         assert!(!fill(&st, "{marlo.place}").contains('{'));
         assert_eq!(fill(&st, "no slots"), "no slots");

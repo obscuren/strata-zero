@@ -428,6 +428,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             if minute * per_minute < world_tick {
                 minute += 1440;
             }
+            // the people as the city was seeded: another city of the world's live in it
+            let params = crate::outside::sim_params(!crate::outside::away_from_home(st));
             let city = st
                 .city
                 .as_ref()
@@ -435,7 +437,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             st.world = Some(sim::World::seed(
                 city,
                 &st.people,
-                &sim::SimParams::default(),
+                &params,
                 crate::ui::hud::START_MINUTE_OF_DAY,
                 minute * per_minute,
             ));
