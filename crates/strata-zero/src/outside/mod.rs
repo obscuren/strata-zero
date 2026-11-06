@@ -591,8 +591,8 @@ pub fn reached_mark(st: &mut AppState) {
         if near(you, m.tile) {
             return Some(true);
         }
-        // in the city it marks, on its own cells
-        if o.at == At::City && !away(st) && settlement_at(st, m.tile) == Some(o.here()) {
+        // in the city it marks (it owns the marked tile), on its own cells
+        if o.at == At::City && !away(st) && tile_owner(st, m.tile) == Some(o.here()) {
             return Some(true);
         }
         let w = o.world();
@@ -1470,6 +1470,49 @@ pub(crate) mod tests {
         let home = st.outside.as_ref().unwrap().home();
         enter(&mut st, home).unwrap();
         assert!(st.away.is_none() && st.home.is_some());
+    }
+
+    /// You on the live city's street, on a cell of its own two tiles or more from
+    /// `mark`, `mark` marked: whether you've reached it.
+    fn reached_from_afar(st: &mut AppState, mark: Pos) -> bool {
+        let (city, o) = (st.city.as_ref().unwrap(), st.outside.as_ref().unwrap());
+        let here = o.here();
+        let you = o
+            .block(city)
+            .iter()
+            .filter(|t| o.owner(*t) == Some(here) && t.chebyshev(mark) >= 2)
+            .map(|t| o.street_of(city, t))
+            .find(|p| stream::live_owns(st, *p) && o.tile_of(city, *p).chebyshev(mark) >= 2)
+            .expect("a street of its own far from the mark");
+        let name = o.name(here);
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos, p.body) = (citygen::Place::Stratum(StratumKind::Street), you, None);
+        let o = st.outside.as_mut().unwrap();
+        o.at = At::City;
+        o.mark = Some(Mark { tile: mark, name });
+        reached_mark(st);
+        st.outside.as_ref().unwrap().mark.is_none()
+    }
+
+    #[test]
+    fn a_mark_is_reached_in_the_city_or_town_that_owns_it() {
+        // a town owning tiles inside its city's map: its mark isn't reached on the
+        // city's own cells, nor the city's on the town's; each is on its own
+        let mut st = home_run();
+        let (c, town) = stream::tests::beyond::city_with_a_town(&st);
+        enter(&mut st, c).unwrap();
+        // a tile of `s` on the live city's map
+        let owned = |st: &AppState, s: Settlement| {
+            let (city, o) = (st.city.as_ref().unwrap(), st.outside.as_ref().unwrap());
+            o.block(city).iter().find(|t| o.owner(*t) == Some(s))
+        };
+        let towns = owned(&st, town).expect("the town's tile in the city's map");
+        assert!(!reached_from_afar(&mut st, towns), "not at the town yet");
+        let citys = owned(&st, c).unwrap();
+        assert!(reached_from_afar(&mut st, citys), "in the city it marks");
+        enter(&mut st, town).unwrap();
+        let theirs = owned(&st, c).expect("the city's tile in the town's map");
+        assert!(!reached_from_afar(&mut st, theirs), "not in the city yet");
     }
 
     #[test]
