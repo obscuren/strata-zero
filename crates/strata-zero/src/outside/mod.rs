@@ -1229,9 +1229,10 @@ pub fn can_cross(st: &AppState) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// What holds you in the city: a fight, a call, a scene.
+/// What holds you in the city: a fight (on turns, or a foe hunting you where you
+/// stand: over a line its hunters would hold still in the city left), a call, a scene.
 fn held_in(st: &AppState) -> Result<(), &'static str> {
-    if st.net.engaged.is_some() {
+    if crate::runs::when::fighting(st) {
         return Err("not in a fight");
     }
     let m = &st.missions;

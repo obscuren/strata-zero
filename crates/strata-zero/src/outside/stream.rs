@@ -2932,6 +2932,28 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn a_chase_holds_you_at_a_town_line() {
+            // a foe hunting you on the city's street beside a town's: the step over the
+            // line is refused as a fight is, and goes once the foe has lost you
+            let mut st = home_run();
+            let (c, town, a, d) = beside_a_town(&mut st);
+            let street = Place::Stratum(StratumKind::Street);
+            let mut goon = crate::foes::Foe::goon(street, a.step(d.opposite()));
+            goon.mode = crate::foes::FoeMode::Hunting { seen: a, lost: 0 };
+            st.foes.push(goon);
+            on_foot(&mut st, a.step(d));
+            assert_eq!(crate::outside::can_cross(&st), Err("not in a fight"));
+            assert_eq!(hand_over(&mut st), None);
+            assert_eq!(o(&st).here(), c, "held in the city");
+            assert_eq!(st.foes.len(), 1, "the hunter still on your heels");
+            // lost you: over the line
+            st.foes[0].mode = crate::foes::FoeMode::Idle;
+            assert_eq!(crate::outside::can_cross(&st), Ok(()));
+            assert!(hand_over(&mut st).is_some());
+            assert_eq!(o(&st).here(), town);
+        }
+
+        #[test]
         fn a_run_saved_right_after_a_handover_reopens_there() {
             let mut st = home_run();
             let (s, x, d) = beside_a_city(&mut st);
