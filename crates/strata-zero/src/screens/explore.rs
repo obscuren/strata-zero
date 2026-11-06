@@ -1794,12 +1794,15 @@ impl MapScreen {
             KeyCode::Char('d') => self.digital = !self.digital,
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => {
+                // off the live city's cells your mark is off its map: the MAP is the
+                // world's, as it is out on the overworld
+                let focus = self.focus_pos(st);
+                if carries_on(st, self.place) && !crate::outside::stream::live_owns(st, focus) {
+                    st.atlas.zoom = crate::screens::atlas::Zoom::World;
+                    st.atlas.world.cursor = None;
+                }
                 return Some(ScreenCmd::Push {
-                    to: Box::new(
-                        Deck::new(st.tick)
-                            .focus(self.place, self.focus_pos(st))
-                            .restore(st),
-                    ),
+                    to: Box::new(Deck::new(st.tick).focus(self.place, focus).restore(st)),
                     fx: TransitionKind::Glitch,
                 });
             }
@@ -15907,6 +15910,26 @@ mod tests {
                 s.update(&mut st, &[key(dir_key(d.opposite()))]);
             }
             assert!(band(&s, &st).contains("· Street"));
+        }
+
+        #[test]
+        fn tab_off_the_citys_cells_opens_the_worlds_map() {
+            // on the city's cells the deck's MAP is the city's; out on the open ground,
+            // where your mark is off the city's map, it opens on the world, as Tab on the
+            // overworld opens it
+            use crate::screens::atlas::Zoom;
+            let (mut st, mut s, _, d) = at_the_edge(6);
+            st.atlas.zoom = Zoom::Fit;
+            let cmd = s.update(&mut st, &[key(KeyCode::Tab)]);
+            assert!(matches!(cmd, ScreenCmd::Push { .. }), "the deck");
+            assert_eq!(st.atlas.zoom, Zoom::Fit, "the city's");
+            for _ in 0..3 {
+                s.update(&mut st, &[key(dir_key(d))]);
+            }
+            assert!(!crate::outside::stream::live_owns(&st, you(&st)));
+            let cmd = s.update(&mut st, &[key(KeyCode::Tab)]);
+            assert!(matches!(cmd, ScreenCmd::Push { .. }), "the deck");
+            assert_eq!(st.atlas.zoom, Zoom::World, "the world's");
         }
 
         #[test]
