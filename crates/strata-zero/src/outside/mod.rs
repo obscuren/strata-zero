@@ -7,6 +7,8 @@
 mod commuters;
 pub mod ground;
 pub mod here;
+#[cfg(test)]
+mod housing;
 pub mod kept;
 pub mod moves;
 pub mod stream;
