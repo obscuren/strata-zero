@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Manual · the desk</title>
+<style>
+@font-face { font-family: 'StrataFira'; font-weight: 400; src: url('../../../../crates/strata-zero/fonts/FiraCode-Regular.ttf') format('truetype'); }
+@font-face { font-family: 'StrataFira'; font-weight: 700; src: url('../../../../crates/strata-zero/fonts/FiraCode-Bold.ttf') format('truetype'); }
+body { background: #0b0f16; color: #cdd4de; font: 15px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 20px 24px; }
+h1 { font-size: 19px; margin: 0 0 4px; }
+p { margin: 0 0 10px; color: #a0aab9; max-width: 980px; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
+.bar span { color: #78828f; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
+button { background: #141b25; color: #cdd4de; border: 1px solid #283c4b; border-radius: 4px; padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+button.on { background: #00e5ff; color: #04060a; border-color: #00e5ff; font-weight: 600; }
+.screen { max-width: 1200px; }
+canvas { width: 100%; display: block; border-radius: 4px; box-shadow: 0 0 0 1px #1a2230, 0 8px 30px rgba(0,0,0,.5); image-rendering: pixelated; }
+dl { display: grid; grid-template-columns: 28px 1fr; gap: 4px 10px; max-width: 980px; color: #a0aab9; margin-top: 14px; }
+dt { color: #00e5ff; font-weight: 600; }
+</style>
+<h1>MANUAL · the desk</h1>
+<p>Opening the manual puts you at your desk, a high floor, the screen in front of a window over the city at night: rain on the glass, neon, the odd car in the air, a brew steaming beside the keyboard. The manual's cover is on the screen. <b>space</b> leans in until the screen is the booklet, with the room still round its edges where there's space; <b>esc</b> leans back. Animated at the game's 30 ticks a second, cells and half-block pixels as the window draws them.</p>
+<div class="screen" id="scene">
+  <div class="bar">
+    <span>Frame</span>
+    <button data-kind="A">A · the wide window</button>
+    <button data-kind="B">B · the corner</button>
+    <button data-kind="C">C · close in</button>
+    <span style="margin-left:16px">Size</span>
+    <button data-size="120x40">120×40 (the app)</button>
+    <button data-size="100x30">100×30 (smallest)</button>
+    <button data-lean style="margin-left:16px">lean in / back</button>
+  </div>
+  <canvas></canvas>
+</div>
+<dl>
+  <dt>A</dt><dd>The wide window. The screen in the middle of a window as wide as the wall, the city all round it. Your deck on the left cabled off to your jack, a little terminal scrolling hex on the right, a holo-projector turning a wireframe, the can and the brew. A pipe overhead with its cyan tube and cables, one bare bulb, a plastic plant under a UV light on the sill.</dd>
+  <dt>B</dt><dd>The corner. A tall window on the left, your wall on the right: a gunmetal rack with servers blinking, an eye in a jar looking round, a chrome arm on hooks; a vent fan turning, a pink STAY WIRED sign. The screen under the rack, the brew and the holo by the window.</dd>
+  <dt>C</dt><dd>Close in. The screen big in front of you, the city round it, the bulb hanging on the left. The brew and the can by your hand, the deck at the bottom right, the holo beside the screen.</dd>
+</dl>
+<script src="cells.js"></script>
+<script src="booklet.js"></script>
+<script src="scene.js"></script>
+<script src="room.js"></script>
+<script>document.fonts.load('16px StrataFira').then(() => new Scene(document.getElementById('scene')));</script>

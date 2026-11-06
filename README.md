@@ -36,6 +36,13 @@ Then run `strata`. It wants a truecolor terminal of at least 100×30 (iTerm2,
 Ghostty, kitty, WezTerm, Windows Terminal). Every build is on the
 [releases page](https://github.com/obscuren/strata-zero/releases).
 
+## How to play
+
+The manual comes with the game: `MANUAL` on the title screen or in the pause menu, or
+`?` while you play for the keys and `space` from there for the manual. The same manual
+is on [stratazero.io/manual](https://stratazero.io/manual), and its chapters are in
+[`manual/`](manual/).
+
 ## Your saves
 
 Your runs are kept in one folder, whichever way you play and wherever you start the

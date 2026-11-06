@@ -45,6 +45,8 @@ enum Entry {
     LoadCity,
     /// The runs that flatlined.
     Hall,
+    /// The player's manual, on its cover.
+    Manual,
     Quit,
 }
 
@@ -64,7 +66,7 @@ impl Entry {
         if dev {
             rows.push(Entry::LoadCity);
         }
-        rows.extend([Entry::Hall, Entry::Quit]);
+        rows.extend([Entry::Hall, Entry::Manual, Entry::Quit]);
         rows
     }
 
@@ -77,6 +79,7 @@ impl Entry {
             Entry::Load => "LOAD GAME",
             Entry::LoadCity => "LOAD CITY",
             Entry::Hall => "HALL OF FAME",
+            Entry::Manual => "MANUAL",
             Entry::Quit => "QUIT",
         }
     }
@@ -375,6 +378,10 @@ impl Screen for Title {
                             to: Box::new(RunsScreen::hall(st)),
                             fx: TransitionKind::SlideUp,
                         },
+                        Entry::Manual => ScreenCmd::Push {
+                            to: Box::new(crate::screens::manual::Manual::new()),
+                            fx: TransitionKind::SlideUp,
+                        },
                         Entry::Quit => ScreenCmd::Quit,
                     };
                     if !matches!(cmd, ScreenCmd::Stay) {
@@ -493,11 +500,18 @@ mod tests {
             title.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Quit
         ));
-        // NEW GAME, the two debug starts, LOAD GAME, LOAD CITY, HALL OF FAME, QUIT.
-        title.update(&mut st, &[key(KeyCode::Down); 6]);
+        // NEW GAME, the two debug starts, LOAD GAME, LOAD CITY, HALL OF FAME, MANUAL,
+        // QUIT.
+        title.update(&mut st, &[key(KeyCode::Down); 7]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Quit
+        ));
+        // MANUAL, one up, opens the booklet over the title
+        title.update(&mut st, &[key(KeyCode::Up)]);
+        assert!(matches!(
+            title.update(&mut st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Push { .. }
         ));
         title.update(&mut st, &[key(KeyCode::Up); 6]);
         assert!(matches!(
@@ -527,7 +541,13 @@ mod tests {
         let mut title = Title::new(&st, 0);
         assert_eq!(
             title.entries,
-            [Entry::NewGame, Entry::Load, Entry::Hall, Entry::Quit],
+            [
+                Entry::NewGame,
+                Entry::Load,
+                Entry::Hall,
+                Entry::Manual,
+                Entry::Quit
+            ],
             "a player's title"
         );
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -542,19 +562,21 @@ mod tests {
             !text.contains("DEBUG") && !text.contains("COMBAT") && !text.contains("STREET"),
             "{text}"
         );
-        // The second row loads, the third is the hall, the fourth quits; the arrows
-        // pick nothing.
+        // The second row loads, the third is the hall, the fourth the manual, the fifth
+        // quits; the arrows pick nothing.
         title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
         assert_eq!(title.combat, CombatMap::Street);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
-        title.update(&mut st, &[key(KeyCode::Down)]);
-        assert!(matches!(
-            title.update(&mut st, &[key(KeyCode::Enter)]),
-            ScreenCmd::Push { .. }
-        ));
+        for _ in 0..2 {
+            title.update(&mut st, &[key(KeyCode::Down)]);
+            assert!(matches!(
+                title.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Push { .. }
+            ));
+        }
         title.update(&mut st, &[key(KeyCode::Down)]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
@@ -563,9 +585,9 @@ mod tests {
         // Dev mode turned off in a game leaves the debug starts off the next title.
         st.unlock_dev();
         st.set_dev(false);
-        assert_eq!(Title::new(&st, 0).entries.len(), 4);
+        assert_eq!(Title::new(&st, 0).entries.len(), 5);
         st.set_dev(true);
-        assert_eq!(Title::new(&st, 0).entries.len(), 7);
+        assert_eq!(Title::new(&st, 0).entries.len(), 8);
     }
 
     #[test]
@@ -786,7 +808,7 @@ mod tests {
 
     #[test]
     fn no_continue_without_a_run() {
-        let rows = ["NEW GAME", "LOAD GAME", "HALL OF FAME", "QUIT"];
+        let rows = ["NEW GAME", "LOAD GAME", "HALL OF FAME", "MANUAL", "QUIT"];
         let mut st = AppState::new();
         assert_eq!(labels(&st), rows, "no saves folder");
         let dir = Dir::new("no-continue");
@@ -816,6 +838,7 @@ mod tests {
                 "LOAD GAME",
                 "LOAD CITY",
                 "HALL OF FAME",
+                "MANUAL",
                 "QUIT"
             ]
         );
@@ -841,6 +864,7 @@ mod tests {
                 Entry::NewGame,
                 Entry::Load,
                 Entry::Hall,
+                Entry::Manual,
                 Entry::Quit
             ]
         );
@@ -904,21 +928,21 @@ mod tests {
         let city = &run.city.as_ref().unwrap().name;
         let line = format!("VEX · NETRUNNER · {city} · day 2 07:40 · Bring it to Coz");
         let x = (120 - line.chars().count() as u16) / 2;
-        let row = text.lines().nth(22).unwrap();
+        let row = text.lines().nth(23).unwrap();
         assert_eq!(&row.trim(), &line, "two rows under the menu, centred");
         assert!(row.starts_with(&" ".repeat(x as usize)), "{row:?}");
         assert!(text.lines().nth(15).unwrap().contains("▸ CONTINUE"));
-        let v = &buf[(x, 22)];
+        let v = &buf[(x, 23)];
         assert_eq!(v.fg, Color::Rgb(0, 229, 255));
         assert!(v.modifier.contains(ratatui::style::Modifier::BOLD));
         assert_eq!(
-            buf[(x + 4, 22)].fg,
+            buf[(x + 4, 23)].fg,
             Color::Rgb(100, 110, 125),
             "the rest faint"
         );
         let bring = x + line[..line.find("Bring").unwrap()].chars().count() as u16;
         assert_eq!(
-            buf[(bring, 22)].fg,
+            buf[(bring, 23)].fg,
             Color::Rgb(160, 170, 185),
             "the objective dim"
         );
@@ -954,7 +978,7 @@ mod tests {
         term.draw(|f| t.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
         assert_eq!(
-            text.lines().nth(22).unwrap().trim(),
+            text.lines().nth(23).unwrap().trim(),
             "the run is broken",
             "where its line was"
         );

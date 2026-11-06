@@ -5520,3 +5520,68 @@ fn coz_shots() {
         shot_stack(&name("keep"), &st, &[&map, &deck, &pop], size);
     }
 }
+
+/// The MANUAL booklet over the title: the cover, the contents, and a spread from every
+/// chapter, at the smallest terminal and the window's usual size.
+#[test]
+#[ignore]
+fn manual_pages() {
+    use crate::manual::book::{Book, book};
+    use crate::screens::manual::Manual;
+    let st = AppState::new();
+    let title = crate::screens::title::Title::new(&st, 0);
+    let mut shots: Vec<(String, Manual)> = vec![("cover".into(), Manual::new())];
+    let mut spreads = vec![1];
+    for (c, ch) in crate::manual::chapters().iter().enumerate() {
+        let s = Book::spread_of(book().starts[c]);
+        if !spreads.contains(&s) {
+            spreads.push(s);
+            shots.push((ch.slug.to_string(), Manual::at_chapter(ch.slug)));
+        }
+    }
+    shots.insert(
+        1,
+        ("contents".into(), Manual::at_chapter("getting-started")),
+    );
+    let mut last = Manual::at_chapter("saving-and-dying");
+    let mut stx = AppState::new();
+    for _ in 0..book().spreads() {
+        last.update(&mut stx, &[key(KeyCode::Right)]);
+    }
+    shots.push(("last".into(), last));
+    for (name, m) in &shots {
+        for size in [(100, 30), (120, 40)] {
+            shot_stack(
+                &format!("manual_{name}_{}x{}", size.0, size.1),
+                &st,
+                &[&title, m],
+                size,
+            );
+        }
+    }
+}
+
+/// The desk the MANUAL opens at, a few moments apart, then halfway through leaning in
+/// and leaned in.
+#[test]
+#[ignore]
+fn manual_desk() {
+    use crate::screens::manual::{LEAN_TICKS, Manual};
+    for size in [(100, 30), (120, 40), (160, 50)] {
+        let mut st = AppState::new();
+        let mut m = Manual::new();
+        for tick in [40, 400, 1300] {
+            st.tick = tick;
+            let name = format!("manual_desk_{tick}_{}x{}", size.0, size.1);
+            shot_stack(&name, &st, &[&m], size);
+        }
+        m.update(&mut st, &[key(KeyCode::Char(' '))]);
+        st.tick += LEAN_TICKS / 2;
+        let name = format!("manual_desk_leaning_{}x{}", size.0, size.1);
+        shot_stack(&name, &st, &[&m], size);
+        st.tick += LEAN_TICKS;
+        m.update(&mut st, &[]);
+        let name = format!("manual_desk_leaned_{}x{}", size.0, size.1);
+        shot_stack(&name, &st, &[&m], size);
+    }
+}

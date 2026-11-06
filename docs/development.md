@@ -11,6 +11,7 @@ crates/game          characters, items, abilities, the build rules (no terminal 
 crates/sim           the living city: people, places, paths and the world's minute
 crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
 flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines) · broadcasts.ron (what the city says as you drop in)
+manual/              the player's manual, a chapter a file (format in manual/README.md): the game's MANUAL booklet and stratazero.io/manual
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
 ```

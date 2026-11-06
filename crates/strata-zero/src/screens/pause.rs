@@ -30,6 +30,8 @@ enum Row {
     SaveCity,
     LoadGame,
     Settings,
+    /// The player's manual, on its cover.
+    Manual,
     QuitToTitle,
     QuitGame,
 }
@@ -44,6 +46,7 @@ impl Row {
         rows.extend([
             Row::LoadGame,
             Row::Settings,
+            Row::Manual,
             Row::QuitToTitle,
             Row::QuitGame,
         ]);
@@ -57,6 +60,7 @@ impl Row {
             Row::SaveCity => "SAVE CITY",
             Row::LoadGame => "LOAD GAME",
             Row::Settings => "SETTINGS",
+            Row::Manual => "MANUAL",
             Row::QuitToTitle => "QUIT TO TITLE",
             Row::QuitGame => "QUIT GAME",
         }
@@ -151,6 +155,10 @@ impl Pause {
             },
             Row::Settings => ScreenCmd::Push {
                 to: Box::new(Settings::new()),
+                fx: TransitionKind::None,
+            },
+            Row::Manual => ScreenCmd::Push {
+                to: Box::new(crate::screens::manual::Manual::new()),
                 fx: TransitionKind::None,
             },
             Row::QuitToTitle => {
@@ -305,9 +313,9 @@ mod tests {
         })
         .unwrap();
         let buf = t.backend().buffer();
-        // The panel is 36x12 centred: nothing from beneath shows inside it.
-        let (x0, y0) = ((100 - 36) / 2, (30 - 12) / 2);
-        for y in y0..y0 + 12 {
+        // The panel is 36x13 centred: nothing from beneath shows inside it.
+        let (x0, y0) = ((100 - 36) / 2, (30 - 13) / 2);
+        for y in y0..y0 + 13 {
             for x in x0..x0 + 36 {
                 assert_ne!(buf[(x, y)].symbol(), "x", "({x},{y}) shows through");
             }
@@ -383,6 +391,14 @@ mod tests {
         assert!(
             matches!(
                 p.update(&mut st, &[key(KeyCode::Enter)]),
+                ScreenCmd::Push { .. }
+            ),
+            "manual"
+        );
+        down(&mut p, &mut st);
+        assert!(
+            matches!(
+                p.update(&mut st, &[key(KeyCode::Enter)]),
                 ScreenCmd::Switch { .. }
             ),
             "title"
@@ -408,6 +424,7 @@ mod tests {
                 "SAVE CITY",
                 "LOAD GAME",
                 "SETTINGS",
+                "MANUAL",
                 "QUIT TO TITLE",
                 "QUIT GAME"
             ]
@@ -486,10 +503,10 @@ mod tests {
         assert_eq!(saved_at(&st), Some(st.tick - 1));
     }
 
-    /// The row the panel's line is on, under the six rows, and its text.
+    /// The row the panel's line is on, under the seven rows, and its text.
     fn status_row(p: &Pause, st: &AppState) -> (ratatui::buffer::Buffer, u16, String) {
         let buf = draw(p, st);
-        let y = (30 - 12) / 2 + 1 + 1 + 6;
+        let y = (30 - 13) / 2 + 1 + 1 + 7;
         let row = buffer_text(&buf)
             .lines()
             .nth(y as usize)
@@ -630,8 +647,8 @@ mod tests {
         let (buf, y, row) = line(&st).expect("the line");
         assert!(row.contains("  last saved · 2 min ago"), "{row:?}");
         // Under the rows, over the keys, inside the panel.
-        let (x0, y0) = ((100 - 36) / 2, (30 - 12) / 2);
-        assert_eq!(y, y0 + 1 + 1 + 6, "right under the six rows");
+        let (x0, y0) = ((100 - 36) / 2, (30 - 13) / 2);
+        assert_eq!(y, y0 + 1 + 1 + 7, "right under the seven rows");
         let x = row[..row.find("last").unwrap()].chars().count() as u16;
         assert_eq!(x, x0 + 4, "{row:?}");
         assert_eq!(buf[(x, y)].fg, FAINT);

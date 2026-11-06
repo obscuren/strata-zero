@@ -116,6 +116,15 @@ how a run is opened. The rules that bite:
   a screen that takes story off `AppState` while open must say `holds_story()`.
 - `AppState::new()` saves nowhere; tests that save use `runs::testutil::Dir`.
 
+## The manual
+
+The player's manual lives in `manual/`, a chapter a file, and is compiled into the game
+(the MANUAL booklet, `screens/manual.rs`) and published on stratazero.io from the same
+files. A change a player sees (a key, a screen, a rule) updates the chapter that
+describes it in the same branch. `manual/README.md` has the format; the tests reject
+Markdown the booklet can't draw, and check the Controls chapter's "On foot" keys against
+the `?` key list (`screens/help.rs`).
+
 ## Design notes
 
 Specs and plans live in `docs/superpowers/specs` and `docs/superpowers/plans`. The window
