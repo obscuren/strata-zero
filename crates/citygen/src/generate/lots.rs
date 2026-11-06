@@ -391,6 +391,7 @@ impl StageRunner for LotsStage {
             Self::fill_leftovers(ctx);
             super::outskirts::belt(ctx);
             super::regions::merge_unbuilt(ctx);
+            super::housing::ensure(ctx, self.rng.as_mut().expect("begin sets rng"));
             self.filled = true;
             return Ok(StepOut::Continue(1.0));
         }

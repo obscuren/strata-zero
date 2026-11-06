@@ -6,6 +6,7 @@ pub mod cyberspace;
 pub mod districts;
 pub mod dressing;
 pub mod exterior;
+pub mod housing;
 pub mod interiors;
 pub mod lots;
 pub mod naming;
