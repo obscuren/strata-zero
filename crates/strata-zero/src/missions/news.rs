@@ -256,7 +256,7 @@ fn outlets(st: &mut AppState) {
         return;
     };
     overhear(st, seed, now, you);
-    cut(st, seed, now, you);
+    cut(st, seed, now);
 }
 
 /// A 1 in `one_in` chance for an outlet (`salt`) in a game minute of a city (`seed`):
@@ -314,8 +314,8 @@ fn overheard_by(st: &AppState, you: Pos) -> Option<PersonId> {
 }
 
 /// A holo ad cutting in: `AD_GAP` on from the last cut and the minute's roll up, the
-/// nearest ad in sight shows the headline for `CUT_TICKS`, an aside over it.
-fn cut(st: &mut AppState, seed: u64, now: u64, you: Pos) {
+/// ad `ad_in_view` finds shows the headline for `CUT_TICKS`, an aside over it.
+fn cut(st: &mut AppState, seed: u64, now: u64) {
     if st
         .missions
         .news
@@ -325,7 +325,7 @@ fn cut(st: &mut AppState, seed: u64, now: u64, you: Pos) {
     {
         return;
     }
-    let Some(ad) = ad_in_sight(st, you) else {
+    let Some(ad) = ad_in_view(st) else {
         return;
     };
     let until = st.clock_tick() + CUT_TICKS;
@@ -341,6 +341,17 @@ fn cut(st: &mut AppState, seed: u64, now: u64, you: Pos) {
     if let Some(a) = st.missions.asides.last_mut() {
         a.until = until;
     }
+}
+
+/// The holo ad a line may cut into now: you on the street and asides free to show, the
+/// ad `ad_in_sight` finds. The news cut and the story's ad line (`ad`) both go by it;
+/// walk mode is each caller's to see to.
+pub(super) fn ad_in_view(st: &AppState) -> Option<Pos> {
+    if !asides::live(st) {
+        return None;
+    }
+    let you = st.player.as_ref().filter(|p| p.place.is_street())?.pos;
+    ad_in_sight(st, you)
 }
 
 /// The holo ad on the street you see within `AD_WITHIN`, the nearest; ties to the top,
@@ -1254,7 +1265,7 @@ pub(crate) mod tests {
 
     /// You stand on a free street tile a few tiles off a holo ad, seeing it and no other
     /// within `AD_WITHIN`: the ad, the nearest the city's middle that will do.
-    fn by_an_ad(st: &mut AppState) -> Pos {
+    pub(crate) fn by_an_ad(st: &mut AppState) -> Pos {
         let ads = ads(st);
         for &ad in &ads {
             for d in 2..=4 {

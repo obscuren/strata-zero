@@ -876,6 +876,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn later_has_nothing_to_track() {
+        let mut st = state_home();
+        crate::missions::begin(&mut st);
+        st.missions.feeds.clear();
+        crate::missions::end(&mut st, 0, 0);
+        // The step the run now waits on stands on `Later`.
+        let at = st.missions.runs[0].at;
+        st.book.missions[0].steps[at].when = Trigger::Later;
+        assert_eq!(resolve(&st, &story(0, at)), Resolved::Nowhere);
+    }
+
+    #[test]
     fn a_reading_nobody_can_do_at_the_rig_tracks_nowhere() {
         use crate::missions::tests::{open_the_package, the_morning_call, to_the_word};
         let mut st = the_morning_call();

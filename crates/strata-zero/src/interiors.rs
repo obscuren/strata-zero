@@ -824,6 +824,87 @@ mod tests {
         assert!(after.people().all(|(_, id)| !w.is_dead(id)));
     }
 
+    /// Fails today: tables go to visitors in the order they are inside, worked out afresh
+    /// at every look, so the visitor before him walking out hands him that table. Placing
+    /// the held first moves him the moment he is held instead. Keeping his tile needs the
+    /// tile he was held on remembered, which `Placement` (a function of the world alone)
+    /// has nowhere to keep.
+    #[test]
+    #[ignore = "a held visitor's table needs remembering outside Placement"]
+    fn a_held_visitor_keeps_his_table_while_others_come_and_go() {
+        let c = home_city();
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        for m in 1..=60 {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        // A ground floor with two visitors at its tables: the later one is held.
+        let mut i = Interiors::default();
+        let at_tables = |plan: &FloorPlan, floor: &Floor, w: &World| -> Vec<(Pos, PersonId)> {
+            let visiting: Vec<PersonId> = w
+                .inside(plan.building)
+                .iter()
+                .filter(|o| o.role == OccupantRole::Visiting)
+                .map(|o| o.id)
+                .collect();
+            Placement::new(plan, floor, w, &Homes::default())
+                .people()
+                .filter(|(pos, id)| {
+                    visiting.contains(id)
+                        && floor.station_at(*pos).map(|s| s.role) == Some(Role::Table)
+                })
+                .collect()
+        };
+        let (b, first, held) = c
+            .buildings
+            .iter()
+            .find_map(|b| {
+                i.ensure(&c, b.id, 0)?;
+                let (plan, floor) = i.floor(b.id, 0)?;
+                let mut seated = at_tables(plan, floor, &w);
+                seated.sort_by_key(|(_, id)| id.0);
+                (seated.len() >= 2).then(|| (b.id, seated[0].1, seated[1].1))
+            })
+            .expect("a floor with two visitors at its tables");
+        let (plan, floor) = i.floor(b, 0).unwrap();
+        let tile = |w: &World, id: PersonId| {
+            Placement::new(plan, floor, w, &Homes::default())
+                .people()
+                .find(|(_, who)| *who == id)
+                .map(|(pos, _)| pos)
+        };
+        let caught = tile(&w, held).expect("drawn at a table");
+        w.keep_where(held);
+        assert_eq!(tile(&w, held), Some(caught), "held where he sat");
+        // The visitor before him walks out: he keeps his table.
+        let out = w.doors(b)[0];
+        w.park(first, out);
+        assert_eq!(tile(&w, held), Some(caught), "the one before him left");
+        // The night's comings and goings, on to six: still his.
+        let mut churn = 0;
+        let mut before: Vec<PersonId> = w
+            .inside(b)
+            .iter()
+            .map(|o| o.id)
+            .filter(|id| id.0 < held.0)
+            .collect();
+        for m in 61..=8 * 60 {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+            assert_eq!(tile(&w, held), Some(caught), "minute {m}");
+            let now: Vec<PersonId> = w
+                .inside(b)
+                .iter()
+                .map(|o| o.id)
+                .filter(|id| id.0 < held.0)
+                .collect();
+            churn += usize::from(now != before);
+            before = now;
+        }
+        assert!(churn > 0, "someone before him came or went");
+    }
+
     #[test]
     fn the_first_drone_minds_the_lobby_desk() {
         let c = Generator::run(GenParams {

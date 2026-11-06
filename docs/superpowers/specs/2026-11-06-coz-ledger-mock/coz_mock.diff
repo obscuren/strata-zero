@@ -1,0 +1,295 @@
+diff --git a/crates/strata-zero/src/screens/deck.rs b/crates/strata-zero/src/screens/deck.rs
+index 525c3d6..e0ff0e0 100644
+--- a/crates/strata-zero/src/screens/deck.rs
++++ b/crates/strata-zero/src/screens/deck.rs
+@@ -384,7 +384,14 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) ->
+             }),
+         ));
+     }
+-    let body = hands_off(st, &mut choices);
++    let mut body = hands_off(st, &mut choices);
++    // MOCK (throwaway, #5): the story keeps what it gave you.
++    if std::env::var("MOCK_KEEP").is_ok() && *id == ItemId::new("ledger_shard") {
++        for c in choices.iter_mut().filter(|c| c.key == 'd' || c.key == 'D') {
++            c.enabled = false;
++        }
++        body.push("You're not leaving that lying around.".to_string());
++    }
+     Some(
+         Popup::verbs(&item.name, choices, st.tick)
+             .with_body(body)
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index f5cecc1..2eac656 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -5354,3 +5354,270 @@ fn overworld_motion_shots() {
+     }
+     eprintln!("overworld motion shots round {at:?}, the gust on {peak:?} at tick {gust}");
+ }
++
++// ---- Throwaway: Coz's book mocks (#4, #5). Not committed. ----
++
++const COZ_STREET: Place = Place::Stratum(StratumKind::Street);
++
++/// The morning after read, the doctor seen, the shard known, the clock on `hh:mm`: the
++/// ledger waits on Coz.
++fn coz_evening(hh: u64, mm: u64, skill: Option<&str>) -> AppState {
++    let mut st = seren_has_written();
++    st.missions.daze = None;
++    if let Some(s) = skill {
++        st.character.skills.insert(game::SkillId::new(s));
++    }
++    crate::missions::tests::open_the_package(&mut st);
++    st.missions.read.insert("ledger_shard".to_string());
++    crate::missions::tick(&mut st);
++    let doctor = st.book.missions.iter().position(|m| m.id == "doctor").unwrap();
++    st.missions.runs[doctor].state = crate::missions::RunState::Done { at: 0 };
++    let ahead = (hh * 60 + mm + 1440 - u64::from(st.minute_of_day())) % 1440;
++    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
++    world.advance(city, world.tick() + ahead * sim::TICKS_PER_MINUTE);
++    crate::missions::tick(&mut st);
++    // The day's leftovers out of the frame: its mail read, its jobs gone, its log.
++    for m in st.journal.mails.iter_mut() {
++        m.read = true;
++    }
++    st.mail_seen = st.journal.mails.len();
++    st.jobs.list.clear();
++    st.log = Default::default();
++    st
++}
++
++/// Coz on his corner, and a free street tile `d` tiles off him (beside him for 1).
++fn near_coz(st: &mut AppState, d: i32) -> (sim::PersonId, Pos) {
++    let coz = crate::missions::person_of(st, "coz").expect("coz is cast");
++    let (place, at) = crate::interiors::drawn_at(st, coz).expect("coz is drawn");
++    assert_eq!(place, COZ_STREET, "coz on his corner");
++    let spot = if d <= 1 {
++        crate::missions::marks::beside_tile(st, place, at, None)
++            .expect("a tile beside coz")
++            .1
++    } else {
++        let city = st.city.as_ref().unwrap();
++        let world = st.world.as_ref().unwrap();
++        let around = |p: Pos| {
++            citygen::Rect::new(p.x, p.y, 1, 1)
++                .grow(10)
++                .iter()
++                .filter(|&q| city.walkable(StratumKind::Street, q))
++                .count()
++        };
++        citygen::Rect::new(at.x, at.y, 1, 1)
++            .grow(d)
++            .iter()
++            .filter(|p| p.chebyshev(at) == d)
++            .filter(|&p| city.walkable(StratumKind::Street, p) && world.person_at(p).is_none())
++            .max_by_key(|&p| around(p))
++            .expect("a free tile off coz")
++    };
++    crate::missions::tests::on_street(st, spot);
++    (coz, at)
++}
++
++/// A holo ad on the street near `from`, with you a few tiles off it, seeing it.
++fn coz_by_an_ad(st: &mut AppState, from: Pos) -> Pos {
++    let city = st.city.clone().unwrap();
++    let mut ads: Vec<Pos> = citygen::Rect::new(from.x, from.y, 1, 1)
++        .grow(40)
++        .iter()
++        .filter(|&p| {
++            city.tile(StratumKind::Street, p)
++                .is_some_and(|t| t.feature == Some(citygen::Feature::HoloAd))
++        })
++        .collect();
++    ads.sort_by_key(|p| p.chebyshev(from));
++    for ad in ads {
++        for d in 3..=5 {
++            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
++                let spot = ad.offset(dx * d, dy * d);
++                let free = city.walkable(StratumKind::Street, spot)
++                    && st.world.as_ref().unwrap().person_at(spot).is_none();
++                if !free {
++                    continue;
++                }
++                crate::missions::tests::on_street(st, spot);
++                let seen = st.player.as_ref().unwrap().vis().get(ad)
++                    == Some(&crate::walker::Visibility::Visible);
++                if seen {
++                    return ad;
++                }
++            }
++        }
++    }
++    panic!("no holo ad near coz's corner");
++}
++
++fn coz_deck_on(st: &mut AppState, tab: char) -> Deck {
++    let mut deck = Deck::new(st.tick);
++    deck.update(st, &[key(KeyCode::Char(tab))]);
++    st.tick += 200;
++    while st.tick % 90 < 3 {
++        st.tick += 1;
++    }
++    deck
++}
++
++#[test]
++#[ignore]
++fn coz_mock() {
++    use crate::missions::asides::{self, Speaker};
++    use crate::missions::content::Effect;
++    use crate::screens::jobs_tab::Entry;
++    const MAGENTA: Color = Color::Rgb(255, 0, 200);
++    const RED: Color = Color::Rgb(255, 40, 40);
++    let shard = ItemId::new("ledger_shard");
++    for (w, h) in BOTH {
++        let size = (w, h);
++        let name = |what: &str| format!("coz_{what}_{w}x{h}");
++
++        // 0. The walk up: the objective with his hours, him tracked, 21:40.
++        let mut st = coz_evening(21, 40, Some("hacking"));
++        near_coz(&mut st, 6);
++        let p = st.player.as_ref().unwrap();
++        let at = game::At {
++            place: p.place,
++            pos: p.pos,
++        };
++        let _ = crate::screens::console::run(&mut st, at, "track coz");
++        let mut map = MapScreen::walking(&mut st);
++        map.settle(&mut st, size);
++        shot_stack(&name("corner"), &st, &[&map], size);
++
++        // 1. The scene, beside him: the beats that matter.
++        let (coz, at) = near_coz(&mut st, 1);
++        crate::missions::send(&mut st, crate::missions::Event::Talked(coz));
++        scene_is(&mut st, "coz");
++        let mut map = MapScreen::walking(&mut st);
++        map.settle(&mut st, size);
++        for (beat, what) in [
++            (0, "s0_open"),
++            (2, "s2_tape"),
++            (5, "s5_netrunner"),
++            (8, "s8_castellan"),
++            (13, "s13_last_page"),
++            (15, "s15_money"),
++            (17, "s17_pay"),
++            (19, "s19_hook"),
++        ] {
++            scene_at(&mut st, beat);
++            shot_stack(&name(what), &st, &[&map], size);
++        }
++
++        // 2. Paid: the shard taken, the act's last log, the three open; by an ad.
++        let after = || {
++            let mut st = coz_evening(21, 40, Some("hacking"));
++            let (coz, at) = near_coz(&mut st, 1);
++            crate::missions::send(&mut st, crate::missions::Event::Talked(coz));
++            scene_is(&mut st, "coz");
++            crate::missions::scene::skip(&mut st);
++            for _ in 0..3 {
++                crate::missions::tick(&mut st);
++            }
++            st.character.credits += 800;
++            st.jobs.fixer_mut(coz).standing = 1;
++            let base = coz_by_an_ad(&mut st, at);
++            (st, base)
++        };
++        let _ = at;
++
++        // A. Seren tears through the ad; her mail lands.
++        let (mut sa, base) = after();
++        if let Some(n) = sa.missions.news.as_mut() {
++            n.cut = Some((base, u64::MAX));
++        }
++        asides::say(
++            &mut sa,
++            Speaker::Tile(COZ_STREET, base),
++            "NEWSL▚▞▚ S".into(),
++            MAGENTA,
++            "He's gone quiet. Work for Coz. I'll find you. —S".into(),
++        );
++        crate::missions::effects::apply(
++            &mut sa,
++            0,
++            0,
++            &Effect::Mail {
++                from: "seren".into(),
++                subject: "quiet".into(),
++                body: vec![
++                    "He's gone quiet. When he goes quiet, so do we.".into(),
++                    "Work for Coz. Keep your head down. I'll find you.".into(),
++                    "— S".into(),
++                ],
++                code: None,
++            },
++        );
++        world_seconds(&mut sa, 4);
++        let mut map = MapScreen::walking(&mut sa);
++        map.settle(&mut sa, size);
++        shot_stack(&name("end_a"), &sa, &[&map], size);
++
++        // B. Castellan's call, cut short.
++        let (mut sb, _) = after();
++        crate::missions::effects::apply(
++            &mut sb,
++            0,
++            0,
++            &Effect::Call {
++                from: "castellan".into(),
++                lines: vec![
++                    "Coz pays. Coz talks. Both good habits.".into(),
++                    "I'll be away a while. Seren knows where you sleep.".into(),
++                    "Keep your head down, {you}.".into(),
++                ],
++            },
++        );
++        holo_space(&mut sb);
++        holo_space(&mut sb);
++        let mut map = MapScreen::walking(&mut sb);
++        map.settle(&mut sb, size);
++        shot_stack(&name("end_b"), &sb, &[&map], size);
++
++        // C. Static 66 jacks the ad.
++        let (mut sc, base) = after();
++        if let Some(n) = sc.missions.news.as_mut() {
++            n.cut = Some((base, u64::MAX));
++        }
++        asides::say(
++            &mut sc,
++            Speaker::Tile(COZ_STREET, base),
++            "● STATIC 66".into(),
++            RED,
++            "▸ A fixer's book walked home tonight, chooms. Ask who didn't.".into(),
++        );
++        world_seconds(&mut sc, 4);
++        let mut map = MapScreen::walking(&mut sc);
++        map.settle(&mut sc, size);
++        shot_stack(&name("end_c"), &sc, &[&map], size);
++
++        // The JOBS tab after: the ledger done, the three open.
++        let (mut sj, _) = after();
++        let map = MapScreen::walking(&mut sj);
++        for id in ["the_three", "ledger"] {
++            let m = sj.book.missions.iter().position(|x| x.id == id).unwrap();
++            let mut deck = coz_deck_on(&mut sj, '5');
++            deck.jobs.select(&sj, &Entry::Mission(m));
++            sj.tick += 200;
++            while sj.tick % 90 < 3 {
++                sj.tick += 1;
++            }
++            shot_stack(&name(&format!("jobs_{id}")), &sj, &[&map, &deck], size);
++        }
++
++        // #5: the shard's verbs in the pack, Drop held back.
++        let mut sk = coz_evening(21, 40, None);
++        let map = MapScreen::walking(&mut sk);
++        let deck = coz_deck_on(&mut sk, '3');
++        shot_stack(&name("pack"), &sk, &[&map, &deck], size);
++        let pop = crate::screens::deck::item_popup(&mut sk, &shard, (30, 10))
++            .expect("the shard's verbs");
++        sk.tick += 200;
++        while sk.tick % 90 < 3 {
++            sk.tick += 1;
++        }
++        shot_stack(&name("keep"), &sk, &[&map, &deck, &pop], size);
++    }
++}

@@ -1238,10 +1238,11 @@ mod tests {
         st.book.scenes.insert("film".into(), film);
         let out = run(&mut st, at, "story").unwrap();
         // The aside names no next; the film names the aside.
+        let aside = "scene aside · bubbles · 2 beats";
+        assert!(out.contains(aside), "{out}");
+        assert!(!out.contains(&format!("{aside} · then")), "{out}");
         assert!(
-            out.contains(
-                "scene aside · bubbles · 2 beats · scene film · film · 2 beats · then aside"
-            ),
+            out.contains("scene film · film · 2 beats · then aside"),
             "{out}"
         );
         assert!(

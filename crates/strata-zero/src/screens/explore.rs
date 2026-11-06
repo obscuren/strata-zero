@@ -3698,6 +3698,7 @@ impl Screen for MapScreen {
         // The asides run out on the clock, and all go once a scene, a rest or a fight is on.
         crate::missions::asides::prune(st);
         crate::missions::news::tick(st, self.mode == Mode::Walk);
+        crate::missions::ad::tick(st, self.mode == Mode::Walk);
         // A fixer beside you has their offer ready before you talk.
         if self.mode == Mode::Walk {
             crate::jobs::ui::prepare_offers(st, &|pl, p| self.inside_person_at(pl, p));
@@ -4338,8 +4339,10 @@ impl Screen for MapScreen {
                 }
             }
         }
-        // A holo ad cutting into the news: its glow in MAGENTA, its glyph kept.
-        if let Some(pos) = crate::missions::news::cut_in(st)
+        // A holo ad cutting into the news, or torn by a story's line: its glow in MAGENTA,
+        // its glyph kept.
+        if let Some(pos) =
+            crate::missions::news::cut_in(st).or_else(|| crate::missions::ad::cut_in(st))
             && self.place.is_street()
             && vis.is_none_or(|v| v.get(pos) == Some(&crate::render::Visibility::Visible))
             && let Some((sx, sy)) = tile_to_screen(map_area, origin, pos)
@@ -6479,6 +6482,38 @@ mod tests {
                 .any(|c| on.symbol() == c.to_string())
         );
         assert_eq!(crate::missions::news::cut_in(&st), Some(ad));
+    }
+
+    #[test]
+    fn a_story_line_torn_through_an_ad_glows_magenta() {
+        use crate::missions::{Mark, ad, marks, news};
+        let mut st = crate::jobs::testutil::state_home();
+        ad::tests::ad_then_after(&mut st);
+        // Put up in the flat; out on the street by an ad, the next update tears it through.
+        let (place, pos) = marks::resolve(&st, &Mark::HomeInside(1), None).unwrap();
+        st.player = Some(Player::at(place, pos));
+        crate::missions::begin(&mut st);
+        let ad = news::tests::by_an_ad(&mut st);
+        let mut s = MapScreen::walking(&mut st);
+        assert!(s.place.is_street());
+        crate::app::Screen::update(&mut s, &mut st, &[]);
+        assert_eq!(ad::cut_in(&st), Some(ad));
+        assert_eq!(news::cut_in(&st), None, "no news out");
+        // The cut's cell alone, the bubble over it taken away.
+        st.missions.asides.clear();
+        st.tick = 24;
+        let on = draw_buffer(&s, &st, 120, 40);
+        let cut = st.missions.ad_cut.take();
+        let off = draw_buffer(&s, &st, 120, 40);
+        st.missions.ad_cut = cut;
+        let changed: Vec<(u16, u16)> = (0..40)
+            .flat_map(|y| (0..120).map(move |x| (x, y)))
+            .filter(|p| on[*p] != off[*p])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let (on, off) = (&on[changed[0]], &off[changed[0]]);
+        assert_eq!(on.fg, crate::ui::chrome::MAGENTA);
+        assert_eq!(on.symbol(), off.symbol(), "the glyph kept");
     }
 
     #[test]

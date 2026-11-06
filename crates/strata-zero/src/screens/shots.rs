@@ -5402,3 +5402,121 @@ fn overworld_motion_shots() {
     }
     eprintln!("overworld motion shots round {at:?}, the gust on {peak:?} at tick {gust}");
 }
+
+/// A free street tile `d` tiles off Coz on his corner, the open one with the most
+/// street around it; you stand there seeing him.
+fn off_coz(st: &mut AppState, d: i32) {
+    use crate::missions::tests as t;
+    let coz = t::coz(st);
+    let (place, at) = crate::interiors::drawn_at(st, coz).expect("coz is drawn");
+    assert_eq!(
+        place,
+        Place::Stratum(StratumKind::Street),
+        "coz on his corner"
+    );
+    let city = st.city.as_ref().unwrap();
+    let world = st.world.as_ref().unwrap();
+    let around = |p: Pos| {
+        citygen::Rect::new(p.x, p.y, 1, 1)
+            .grow(10)
+            .iter()
+            .filter(|&q| city.walkable(StratumKind::Street, q))
+            .count()
+    };
+    let spot = citygen::Rect::new(at.x, at.y, 1, 1)
+        .grow(d)
+        .iter()
+        .filter(|p| p.chebyshev(at) == d)
+        .filter(|&p| city.walkable(StratumKind::Street, p) && world.person_at(p).is_none())
+        .max_by_key(|&p| around(p))
+        .expect("a free tile off coz");
+    t::on_street(st, spot);
+}
+
+/// The deck open on `tab`, its card typed out.
+fn coz_deck_on(st: &mut AppState, tab: char) -> Deck {
+    let mut deck = Deck::new(st.tick);
+    deck.update(st, &[key(KeyCode::Char(tab))]);
+    st.tick += 200;
+    while st.tick % 90 < 3 {
+        st.tick += 1;
+    }
+    deck
+}
+
+/// Coz's book through the real screens: the corner with the objective and him tracked,
+/// his scene, the line torn through an ad after the sale, The three on the JOBS tab, and
+/// the shard's verbs with Drop held back.
+#[test]
+#[ignore]
+fn coz_shots() {
+    use crate::missions::tests as t;
+    use crate::screens::jobs_tab::Entry;
+    let shard = ItemId::new("ledger_shard");
+    for (w, h) in BOTH {
+        let size = (w, h);
+        let name = |what: &str| format!("coz_{what}_{w}x{h}");
+
+        // The walk up: the objective with his hours, him tracked, 21:40.
+        let mut st = t::by_coz_at_night();
+        off_coz(&mut st, 6);
+        let p = st.player.as_ref().unwrap();
+        let at = game::At {
+            place: p.place,
+            pos: p.pos,
+        };
+        let _ = crate::screens::console::run(&mut st, at, "track coz");
+        let mut map = MapScreen::walking(&mut st);
+        map.settle(&mut st, size);
+        shot_stack(&name("corner"), &st, &[&map], size);
+
+        // The scene, beside him: first beat and last.
+        let mut st = t::by_coz_at_night();
+        let coz = t::coz(&st);
+        crate::missions::send(&mut st, crate::missions::Event::Talked(coz));
+        scene_is(&mut st, "coz");
+        let mut map = MapScreen::walking(&mut st);
+        map.settle(&mut st, size);
+        scene_at(&mut st, 0);
+        shot_stack(&name("scene_first"), &st, &[&map], size);
+        scene_at(&mut st, 19);
+        shot_stack(&name("scene_last"), &st, &[&map], size);
+
+        // Sold, walked off by an ad: Seren's line through it, by the real tick.
+        let mut st = t::by_coz_at_night();
+        t::through_coz_scene(&mut st);
+        t::the_line_tears_through(&mut st);
+        world_seconds(&mut st, 4);
+        let mut map = MapScreen::walking(&mut st);
+        map.settle(&mut st, size);
+        shot_stack(&name("ad_line"), &st, &[&map], size);
+
+        // The JOBS tab: The three open.
+        let three = st
+            .book
+            .missions
+            .iter()
+            .position(|m| m.id == "the_three")
+            .unwrap();
+        let map = MapScreen::walking(&mut st);
+        let mut deck = coz_deck_on(&mut st, '5');
+        deck.jobs.select(&st, &Entry::Mission(three));
+        st.tick += 200;
+        while st.tick % 90 < 3 {
+            st.tick += 1;
+        }
+        shot_stack(&name("jobs_three"), &st, &[&map, &deck], size);
+
+        // The shard's verbs in the pack before the sale, Drop held back.
+        let mut st = t::by_coz_at_night();
+        let map = MapScreen::walking(&mut st);
+        let deck = coz_deck_on(&mut st, '3');
+        let pop =
+            crate::screens::deck::item_popup(&mut st, &shard, (30, 10)).expect("the shard's verbs");
+        st.tick += 200;
+        while st.tick % 90 < 3 {
+            st.tick += 1;
+        }
+        shot_stack(&name("keep"), &st, &[&map, &deck, &pop], size);
+    }
+}
