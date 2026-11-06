@@ -5,11 +5,10 @@
 
 use crate::paths::walk_cost;
 use crate::people::PersonId;
-use citygen::pathing::bfs_nearest;
 use citygen::rng::hash64;
 use citygen::world::{City, StratumKind};
-use citygen::{Pos, Terrain};
-use std::collections::HashSet;
+use citygen::{Grid, Pos, Terrain};
+use std::collections::{HashSet, VecDeque};
 
 /// Tiles a walker covers in a game minute (`WALK_TICKS` a tile, `TICKS_PER_MINUTE` a
 /// minute).
@@ -57,35 +56,62 @@ fn edge(city: &City) -> impl Iterator<Item = Pos> {
     top.chain(right).chain(bottom).chain(left)
 }
 
-/// Where people come in from off the map: the cells of the map's edge a road crosses
-/// (`crosses_the_edge`) from which a walk reaches a street door. In order round the
-/// edge; none for a map no road leaves.
-pub fn ways_in(city: &City, doors: &HashSet<Pos>) -> Vec<Pos> {
-    let reach = (city.size.w + city.size.h) as usize * 2;
-    let mut ways: Vec<Pos> = Vec::new();
-    for p in edge(city) {
-        if !crosses_the_edge(city, p) || ways.contains(&p) {
-            continue;
-        }
-        // the lane beside one that leads in leads in too
-        let beside = ways.iter().any(|w| w.manhattan(p) == 1);
-        let leads_in = beside
-            || bfs_nearest(
-                city.size,
-                p,
-                |q| walk_cost(city, q, q).is_some(),
-                |q| doors.contains(&q),
-                reach,
-            )
-            .is_some();
-        if leads_in {
-            ways.push(p);
-        }
-    }
-    ways
+/// Where a walk from the ways in goes: each cell's walk, numbered in order round the
+/// edge (ways a walk joins share one), or none. One flood for each walk, made once with
+/// the city's places.
+#[derive(Default)]
+pub struct Walks {
+    walk: Option<Grid<u16>>,
 }
 
-/// The way in `who` comes and goes by, the same every day: none when the map has none.
+impl Walks {
+    fn of(&self, p: Pos) -> Option<u16> {
+        self.walk.as_ref()?.get(p).copied().filter(|w| *w != 0)
+    }
+
+    /// Whether a walk from way in `way` reaches `to`.
+    pub fn reaches(&self, way: Pos, to: Pos) -> bool {
+        self.of(way).is_some_and(|w| self.of(to) == Some(w))
+    }
+}
+
+/// Where people come in from off the map: the cells of the map's edge a road crosses
+/// (`crosses_the_edge`) from which a walk reaches a street door, in order round the edge
+/// (none for a map no road leaves); and where a walk from each goes.
+pub fn ways_in(city: &City, doors: &HashSet<Pos>) -> (Vec<Pos>, Walks) {
+    let walkable = |q: Pos| walk_cost(city, q, q).is_some();
+    let mut walk = Grid::filled(city.size, 0u16);
+    // whether walk n (from 1) reaches a door
+    let mut to_a_door = vec![false];
+    let crossings: Vec<Pos> = edge(city).filter(|p| crosses_the_edge(city, *p)).collect();
+    for &p in &crossings {
+        if walk[p] != 0 {
+            continue;
+        }
+        let n = to_a_door.len() as u16;
+        let mut door = false;
+        let mut queue = VecDeque::from([p]);
+        walk.set(p, n);
+        while let Some(q) = queue.pop_front() {
+            door |= doors.contains(&q);
+            for r in q.neighbors4() {
+                if walk.get(r) == Some(&0) && walkable(r) {
+                    walk.set(r, n);
+                    queue.push_back(r);
+                }
+            }
+        }
+        to_a_door.push(door);
+    }
+    let ways = crossings
+        .into_iter()
+        .filter(|p| to_a_door[walk[*p] as usize])
+        .collect();
+    (ways, Walks { walk: Some(walk) })
+}
+
+/// The way in `who` comes and goes by, of `ways`, the same every day: none when there's
+/// none.
 pub fn way_in_of(ways: &[Pos], who: PersonId) -> Option<Pos> {
     if ways.is_empty() {
         return None;
@@ -165,11 +191,12 @@ pub fn walk_minutes(from: Pos, to: Pos) -> u16 {
 mod tests {
     use super::*;
     use crate::content::People;
-    use crate::people::{Goal, SimParams, Whereabouts, Work};
+    use crate::people::{Dest, Goal, SimParams, Whereabouts, Work};
     use crate::places::Places;
     use crate::world::{TICKS_PER_MINUTE, World};
     use citygen::world::BuildingKind;
     use citygen::{GenParams, Generator, SizePreset};
+    use std::collections::HashMap;
 
     /// Seed 6 at five districts: most who work in it have no home in it.
     fn city() -> City {
@@ -331,11 +358,8 @@ mod tests {
             let Work::Building(b) = p.work else {
                 unreachable!()
             };
-            let way = way_in_of(&places.ways_in, p.id).unwrap();
-            let door = *places.doors[&b]
-                .iter()
-                .min_by_key(|d| d.manhattan(way))
-                .unwrap();
+            let way = w.comes_in_by(p.id).unwrap();
+            let door = places.door_from(b, way).unwrap();
             let work = p.schedule.iter().find(|s| s.goal == Goal::Work).unwrap().at;
             assert_eq!(
                 set_off[i],
@@ -524,6 +548,226 @@ mod tests {
                 assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
             }
         }
+    }
+
+    #[test]
+    fn someone_kept_in_town_while_away_comes_back() {
+        // day workers with no home, out of town at four in the morning when the story
+        // casts them: back in the next minute the sim runs (walking in, or at work), and
+        // in town from then on
+        let c = city();
+        let mut w = world(&c, 4 * 60);
+        let kept: Vec<usize> = day_workers(&w, 7 * 60, 10 * 60)
+            .into_iter()
+            .take(5)
+            .collect();
+        assert_eq!(kept.len(), 5);
+        for &i in &kept {
+            assert_eq!(w.people()[i].whereabouts, Whereabouts::Away);
+            w.keep_in_town(w.people()[i].id);
+        }
+        a_minute(&mut w, &c);
+        for &i in &kept {
+            let p = &w.people()[i];
+            let Work::Building(b) = p.work else {
+                unreachable!()
+            };
+            let back = match &p.whereabouts {
+                Whereabouts::Travelling(t) => t.dest == Dest::Building(b),
+                at => *at == Whereabouts::Inside(b),
+            };
+            assert!(back, "{} back for work: {:?}", p.name, p.whereabouts);
+        }
+        for _ in 0..24 * 60 {
+            a_minute(&mut w, &c);
+            for &i in &kept {
+                let p = &w.people()[i];
+                assert_ne!(p.whereabouts, Whereabouts::Away, "{} left town", p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn someone_whose_way_in_never_walks_to_work_stays_in_town() {
+        // half of those who work in seed 2's Porthaven with no home there have no way in
+        // that walks to their work: they don't commute, but stay at or inside their work
+        // all day, as before anyone commuted
+        let (_, params) = settlements_of(2)
+            .into_iter()
+            .find(|(n, _)| n == "Porthaven")
+            .unwrap();
+        let c = Generator::run(params).unwrap();
+        let places = Places::derive(&c);
+        let walks: Vec<(Pos, citygen::Grid<bool>)> = places
+            .ways_in
+            .iter()
+            .map(|way| (*way, walk_from(&c, *way)))
+            .collect();
+        let walks_to = |b| {
+            let doors = &places.doors[&b];
+            walks.iter().any(|(way, walk)| {
+                let into = doors.iter().min_by_key(|d| d.manhattan(*way)).unwrap();
+                walk[*into] && walk[doors[0]]
+            })
+        };
+        let mut w = world(&c, 4 * 60);
+        let stay: Vec<usize> = w
+            .people()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.home.is_none() && p.profession != "fixer")
+            .filter(|(_, p)| matches!(p.work, Work::Building(b) if !walks_to(b)))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(stay.len() >= 50, "{} stay in town", stay.len());
+        for m in 0..24 * 60 {
+            for &i in &stay {
+                let p = &w.people()[i];
+                assert_ne!(
+                    p.whereabouts,
+                    Whereabouts::Away,
+                    "{} out of town at {m}",
+                    p.name
+                );
+            }
+            a_minute(&mut w, &c);
+        }
+    }
+
+    /// The cities and towns of world `seed` as a game builds them on their sites
+    /// (`screens::build_home`, `outside::build_params`): the home city on the world's own
+    /// seed, the rest each on a seed of its own. Each named as the world names it.
+    fn settlements_of(seed: u64) -> Vec<(String, GenParams)> {
+        use citygen::overworld::{Overworld, WorldParams, WorldSize};
+        use citygen::{sited, sited_town};
+        let d = WorldParams::default();
+        let citygen::Size { w, h } = d.size.size();
+        let size = WorldSize::Custom { w, h };
+        let world = Overworld::generate(WorldParams { seed, size, ..d }).unwrap();
+        let base = GenParams {
+            size: SizePreset::Large,
+            ..Default::default()
+        };
+        let home = world.cities.iter().position(|c| c.home).unwrap_or(0) as u8;
+        let mut out = vec![(
+            world.settlement_name(home, None),
+            sited(&world, home, base.clone().with_seed(seed)),
+        )];
+        for (i, c) in world.cities.iter().enumerate() {
+            let i = i as u8;
+            let own = |t: Option<u8>| {
+                let at = (u64::from(i) << 8) | t.map_or(0, |t| u64::from(t) + 1);
+                base.clone()
+                    .with_seed(hash64(world.seed ^ 0xC17E, at) % 1_000_000_007)
+            };
+            if i != home {
+                out.push((c.name.clone(), sited(&world, i, own(None))));
+            }
+            for t in 0..c.towns.len() as u8 {
+                if let Some(p) = sited_town(&world, i, t, own(Some(t))) {
+                    out.push((format!("{}'s town {t}", c.name), p));
+                }
+            }
+        }
+        out
+    }
+
+    /// The cells of `c` a walk from `from` reaches, stepping as a walker does.
+    fn walk_from(c: &City, from: Pos) -> citygen::Grid<bool> {
+        let mut seen = citygen::Grid::filled(c.size, false);
+        let mut queue = std::collections::VecDeque::from([from]);
+        seen.set(from, true);
+        while let Some(p) = queue.pop_front() {
+            for n in p.neighbors4() {
+                if seen.get(n) == Some(&false) && walk_cost(c, n, n).is_some() {
+                    seen.set(n, true);
+                    queue.push_back(n);
+                }
+            }
+        }
+        seen
+    }
+
+    /// How many of `c`'s people come in to work a building from off the map, and those
+    /// of them whose way in doesn't walk to the door they go in by or come out of.
+    fn cut_off(c: &City) -> (usize, Vec<String>) {
+        let w = world(c, 4 * 60);
+        let places = Places::derive(c);
+        let mut walks: HashMap<Pos, citygen::Grid<bool>> = HashMap::new();
+        let (mut commuters, mut cut) = (0, Vec::new());
+        for p in w.people() {
+            let (Some(way), Work::Building(b)) = (w.comes_in_by(p.id), p.work) else {
+                continue;
+            };
+            commuters += 1;
+            let walk = walks.entry(way).or_insert_with(|| walk_from(c, way));
+            let doors = places.doors.get(&b).map_or(&[][..], |d| &d[..]);
+            let into = doors.iter().min_by_key(|d| d.manhattan(way));
+            let out_of = doors.first();
+            let (walks_in, walks_out) = (
+                into.is_some_and(|d| walk[*d]),
+                out_of.is_some_and(|d| walk[*d]),
+            );
+            if !walks_in || !walks_out {
+                let no = if walks_in { "out" } else { "in" };
+                cut.push(format!(
+                    "{} ({}) by {way:?}: no walk {no}",
+                    p.name, p.profession
+                ));
+            }
+        }
+        (commuters, cut)
+    }
+
+    #[test]
+    fn a_commuters_way_in_walks_to_work() {
+        // the cities and towns where the review found people coming in by a way that
+        // never walks to their work: every one now comes by one that does, or stays in
+        // town
+        for (seed, name) in [
+            (0, "Portgate"),
+            (2, "Porthaven"),
+            (10, "Northspire"),
+            (21, "Ironburg"),
+            (23, "Staticwick"),
+        ] {
+            let (_, params) = settlements_of(seed)
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .unwrap();
+            let c = Generator::run(params).unwrap();
+            let (commuters, cut) = cut_off(&c);
+            assert!(commuters > 0, "seed {seed} {name}: nobody commutes");
+            assert!(
+                cut.is_empty(),
+                "seed {seed} {name}: {} of {commuters} cut off: {:?}",
+                cut.len(),
+                &cut[..cut.len().min(5)]
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "every city and town of 41 worlds: minutes in the debug profile"]
+    fn every_commuters_way_in_walks_to_work() {
+        let (mut all, mut cut_all) = (0, 0);
+        for seed in 0..=40 {
+            for (name, params) in settlements_of(seed) {
+                let Ok(c) = Generator::run(params) else {
+                    continue;
+                };
+                let (commuters, cut) = cut_off(&c);
+                let out = cut.iter().filter(|s| s.ends_with("no walk out")).count();
+                println!(
+                    "seed {seed} {name}: {commuters} commuters, {} cut off ({out} only on the way out)",
+                    cut.len()
+                );
+                all += commuters;
+                cut_all += cut.len();
+            }
+        }
+        println!("{cut_all} of {all} commuters cut off");
+        assert_eq!(cut_all, 0);
     }
 
     #[test]

@@ -349,7 +349,8 @@ impl World {
     }
 
     /// Keeps a person in town: they never go off the map, home or out for anything (the
-    /// story has a part for them). Not saved: the story marks its cast again on reopening.
+    /// story has a part for them); off it now, they come back the next minute the sim
+    /// runs. Not saved: the story marks its cast again on reopening.
     pub fn keep_in_town(&mut self, id: PersonId) {
         if (id.0 as usize) < self.people.len() {
             self.in_town.insert(id);
@@ -377,6 +378,16 @@ impl World {
     pub fn work_hours(&self, id: PersonId) -> Option<(u16, u16)> {
         let p = self.people.get(id.0 as usize)?;
         (p.work != Work::Roaming).then_some(p.shift)
+    }
+
+    /// The way in someone who comes in to work from off the map comes and goes by; none
+    /// for anyone who stays in town (`commute`).
+    pub fn comes_in_by(&self, id: PersonId) -> Option<Pos> {
+        let i = id.0 as usize;
+        if i >= self.people.len() || !self.commuter(i) {
+            return None;
+        }
+        self.way_in(i)
     }
 
     /// Where this person is drawn on the street right now; none indoors.
@@ -505,8 +516,15 @@ impl World {
     }
 
     /// The way in `i` comes and goes by from off the map; none when no road leaves it.
+    /// Someone with no home in the city who works a building comes by a way whose walk
+    /// goes to its door (`Places::ways_to`); none if no way's does.
     fn way_in(&self, i: usize) -> Option<Pos> {
-        commute::way_in_of(&self.places.ways_in, self.people[i].id)
+        let p = &self.people[i];
+        let ways = match (p.home, p.work) {
+            (None, Work::Building(b)) => self.places.ways_to(b),
+            _ => &self.places.ways_in,
+        };
+        commute::way_in_of(ways, p.id)
     }
 
     /// The road `i` leaves the map by: none for someone the story keeps in town
@@ -520,7 +538,8 @@ impl World {
     }
 
     /// Whether `i` comes in to work from off the map: no home in the city, work that
-    /// isn't a spot of the street's, and a road out they may take.
+    /// isn't a spot of the street's, and a road out they may take (one that walks to
+    /// their work).
     fn commuter(&self, i: usize) -> bool {
         let p = &self.people[i];
         p.home.is_none() && !matches!(p.work, Work::Spot(_)) && self.way_out(i).is_some()
@@ -536,13 +555,7 @@ impl World {
             return None;
         }
         let way = self.way_in(i)?;
-        // the door nearest the way in, as the walk takes it
-        let at = *self
-            .places
-            .doors
-            .get(&b)?
-            .iter()
-            .min_by_key(|d| d.manhattan(way))?;
+        let at = self.places.door_from(b, way)?;
         Some(commute::walk_minutes(way, at))
     }
 
@@ -642,6 +655,37 @@ impl World {
         match goal {
             Goal::Lunch => here,
             _ => here.or(away),
+        }
+    }
+
+    /// Brings `i` back from off the map for `goal`, for they have no road out now: to
+    /// where it takes them, else home, else work; walking in by their way when its walk
+    /// goes there, else put there at once. Once: not again while that walk is asked for.
+    fn come_back(&mut self, city: &City, i: usize, goal: Goal) {
+        let who = self.people[i].id;
+        if self.pending.iter().any(|r| r.who == who) {
+            return;
+        }
+        let Some(dest) = [goal, Goal::Home, Goal::Work]
+            .into_iter()
+            .find_map(|g| self.dest_for(city, i, g))
+        else {
+            return;
+        };
+        self.people[i].goal = goal;
+        let walks = &self.places.walks;
+        let walk_in = self.way_in(i).is_some_and(|way| match dest {
+            Dest::Building(b) => self
+                .places
+                .door_from(b, way)
+                .is_some_and(|d| walks.reaches(way, d)),
+            Dest::Spot(s) => walks.reaches(way, s),
+            Dest::Away(_) => false,
+        });
+        if walk_in {
+            self.pending.push_back(TripRequest { who, dest, goal });
+        } else {
+            self.arrive(i, dest, goal);
         }
     }
 
@@ -786,13 +830,10 @@ impl World {
             let Some(from) = self.anchor(i) else { continue };
             let to = match req.dest {
                 Dest::Building(b) => {
-                    let Some(doors) = self.places.doors.get(&b) else {
+                    let Some(door) = self.places.door_from(b, from) else {
                         continue;
                     };
-                    *doors
-                        .iter()
-                        .min_by_key(|d| d.manhattan(from))
-                        .unwrap_or(&doors[0])
+                    door
                 }
                 Dest::Spot(s) | Dest::Away(s) => s,
             };
@@ -1076,6 +1117,12 @@ impl World {
                 continue;
             }
             let goal = self.due(i, mod_);
+            // off the map with no road out now (kept in town, or no way in walks to their
+            // work): back in
+            if self.people[i].whereabouts == Whereabouts::Away && self.way_out(i).is_none() {
+                self.come_back(city, i, goal);
+                continue;
+            }
             if let Some(done) = self.satisfied.get(&PersonId(i as u32)) {
                 if *done == goal {
                     continue;
