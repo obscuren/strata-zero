@@ -2569,6 +2569,62 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn a_net_self_handed_into_a_city_built_on_the_spot_stands_on_its_net() {
+            // the Net self on a cell of a city not built yet, where its Net has a
+            // construct (walked there over the stream's open Net): handed over, the city
+            // built on the spot, it stands where its Net can be stood on, off the
+            // constructs, as a drop from the overworld lands
+            let mut st = home_run();
+            let body = st.player.as_ref().unwrap().pos;
+            let (s, cell) = {
+                let o = o(&st);
+                settlements()
+                    .iter()
+                    .filter(|(s, _)| *s != o.home())
+                    .find_map(|(s, city)| {
+                        let origin = o.origin(city);
+                        let net = city.stratum(StratumKind::Net)?;
+                        net.tiles
+                            .iter()
+                            .find(|(q, t)| {
+                                matches!(
+                                    t.terrain,
+                                    citygen::Terrain::NetWall | citygen::Terrain::NetFloor
+                                ) && o.owner(tile_of(origin.offset(q.x, q.y))) == Some(*s)
+                            })
+                            .map(|(q, _)| (*s, origin.offset(q.x, q.y)))
+                    })
+                    .expect("a construct on another city's Net")
+            };
+            assert!(o(&st).held_city(s).is_none() && !o(&st).stream.asked(s));
+            let at = local(&st, cell);
+            jacked(&mut st, (Place::Stratum(StratumKind::Street), body), at);
+            hand_over(&mut st).expect("into the city, built on the spot");
+            assert_eq!(o(&st).here(), s);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!(
+                p.place,
+                Place::Stratum(StratumKind::Net),
+                "still on the Net"
+            );
+            // as the walker has it
+            let b = Beyond::of(&st).unwrap();
+            let city = st.city.as_ref().unwrap();
+            let map =
+                crate::render::map::MapRef::stratum_at(city, StratumKind::Net, NIGHT).beyond(&b);
+            let t = map.tile(p.pos).copied();
+            assert!(map.walkable(p.pos), "{t:?}");
+            assert!(
+                !matches!(
+                    t.map(|t| t.terrain),
+                    Some(citygen::Terrain::NetFloor | citygen::Terrain::NetGate)
+                ),
+                "off its constructs: {t:?}"
+            );
+            assert!(live_owns(&st, p.pos), "on its own cells");
+        }
+
+        #[test]
         fn the_masks_beat_crosses_with_you() {
             // the mask wore a beat just now: over the line into the next city and back
             // home within the beat, it wears none, in a fresh city or one kept

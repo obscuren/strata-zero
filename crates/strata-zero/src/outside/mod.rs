@@ -1014,24 +1014,51 @@ fn arrive(st: &mut AppState, was: Pos, you: Standing, mut bots: Vec<crate::bots:
     st.bots = bots;
 }
 
-/// You on the live city's own street where it can't be stood on (a city built on the
-/// spot as you stepped onto its ground may have a wall there): moved to the nearest cell
-/// of its own street that can be.
+/// You on the live city's own cells where they can't be stood on (a city built on the
+/// spot as you stepped onto its ground may have a wall there): on foot, moved to the
+/// nearest cell of its own street that can be; your Net self, to the nearest of its own
+/// Net that can, off its constructs (no floor, no gate), as a drop from the overworld
+/// lands (`moves::net_down`).
 pub(crate) fn footing(st: &mut AppState) {
+    use crate::render::map::{MapRef, TileMap};
+    use citygen::Terrain;
     let to = {
         let (Some(city), Some(o), Some(p)) =
             (st.city.as_ref(), st.outside.as_ref(), st.player.as_ref())
         else {
             return;
         };
-        if !p.place.is_street()
-            || p.jacked_in()
-            || !stream::live_owns(st, p.pos)
-            || city.walkable(StratumKind::Street, p.pos)
-        {
+        let foot = p.place.is_street() && !p.jacked_in();
+        let net = p.place == citygen::Place::Stratum(StratumKind::Net) && p.jacked_in();
+        if !(foot || net) || !stream::live_owns(st, p.pos) {
             return;
         }
-        street_near(city, p.pos, |q| o.owns(city, q))
+        if foot {
+            if city.walkable(StratumKind::Street, p.pos) {
+                return;
+            }
+            street_near(city, p.pos, |q| o.owns(city, q))
+        } else {
+            // as the walker has it (its void walked), off the constructs
+            let Some(b) = stream::Beyond::of(st) else {
+                return;
+            };
+            let map = MapRef::stratum_at(city, StratumKind::Net, st.minute_of_day()).beyond(&b);
+            let stands = |q: Pos| {
+                map.walkable(q)
+                    && !matches!(
+                        map.tile(q).map(|t| t.terrain),
+                        Some(Terrain::NetFloor | Terrain::NetGate)
+                    )
+            };
+            if stands(p.pos) {
+                return;
+            }
+            let reach = city.size.w.max(city.size.h) as i32;
+            nearest(p.pos, reach, |q| stands(q) && o.owns(city, q))
+                .or_else(|| nearest(p.pos, reach, stands))
+                .unwrap_or(p.pos)
+        }
     };
     if let Some(p) = st.player.as_mut() {
         p.pos = to;
