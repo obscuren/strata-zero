@@ -247,8 +247,17 @@ some cities' light as overblown and stitched on, and the overworld as static. So
 
 ## Constraints
 
-- Seeds: nothing generated changes. Worlds and cities come out cell for cell as before,
-  but for a sign moved or left out where it would cut a way through (above).
+- Seeds: nothing generated changes but what solid signs change. Worlds and cities come
+  out cell for cell as before, but:
+  - a sign is moved or left out where it would cut a way through (above);
+  - a sign on the ground isn't open ground to the street's dressing, so a roll it made
+    beside where one now stands isn't made and the rolls after it fall differently:
+    some stalls, trash, puddles and terminals stand elsewhere (592 cells in 44 of 550
+    settlements of 40 worlds);
+  - the dressing, clearing what seals a pocket, takes a sign down last: only where
+    nothing else seals it and the street would reach the pocket with every sign down
+    (7 cells in 5 of 1,100 settlements of 80 worlds, each a billboard's letter or cap,
+    or a world's warning past a city's outline, kept standing).
 - No stutter: cities build, and their people are seeded, off the main thread; the
   frame never waits for one except when you step into a city before its build has
   finished. Coming home after a long trip still runs the home city's people on to the
