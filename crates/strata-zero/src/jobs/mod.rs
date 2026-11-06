@@ -43,6 +43,11 @@ pub const PAY_PLANT_PER_SECURITY: u32 = 2;
 pub const FETCH_RANGE: i32 = 80;
 /// A package never crosses the street.
 pub const DELIVER_MIN_RANGE: i32 = 30;
+/// Minutes of their shift inside a Deliver's window, at least, for someone who comes in
+/// to work from out of town: once they walk out they're out of reach until their next
+/// shift (someone with a home in the city is still at home). No fewer than the walk to
+/// them at a walker's pace takes, too; an hour covers the width of the largest city.
+pub const DELIVER_ON_SHIFT: u64 = 60;
 /// The pane turns the clock red under this many minutes.
 pub const WARN_MINUTES: u64 = 60;
 
