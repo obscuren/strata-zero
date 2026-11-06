@@ -16987,6 +16987,40 @@ mod tests {
             assert!(off.is_empty(), "ridden off their lanes at {off:?}");
         }
 
+        #[test]
+        fn a_ride_stops_at_a_line_it_may_not_cross_and_says_why() {
+            // a call comes in as you ride the trunk toward the settlement nearest home:
+            // the ride stops a cell short of its line, and says why
+            let (mut st, mut s, port) = jacked_at_home();
+            let home = st.outside.as_ref().unwrap().here();
+            let (_, near) = nearest_block(&st, port);
+            let (from, d) = a_straight_trunk(&mut st, near, 6, &|st, from, d| {
+                steps_to_their_line(st, from, d).is_some_and(|i| i >= 2)
+            });
+            let at = steps_to_their_line(&st, from, d).unwrap();
+            let (dx, dy) = d.delta();
+            let short = handover::world_of(&st, from.offset((at - 1) * dx, (at - 1) * dy));
+            st.character
+                .talents
+                .insert(game::TalentId::new("data_surfer"), 1);
+            stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), from);
+            s.update(&mut st, &[key(dir_key(d))]);
+            assert!(s.riding.is_some(), "a ride from {from:?}");
+            st.missions.call = Some(ringing(&st));
+            for _ in 0..6 {
+                st.tick += crate::ride::RIDE_TICKS;
+                s.update(&mut st, &[]);
+            }
+            assert!(s.riding.is_none(), "the ride over");
+            assert_eq!(handover::world_of(&st, you(&st)), short, "held at the line");
+            assert_eq!(st.outside.as_ref().unwrap().here(), home, "not handed over");
+            assert!(
+                logged(&st, "not with a call on the line"),
+                "{:?}",
+                last(&st)
+            );
+        }
+
         /// A cell of another city's Net (held), in the live city's frame, where `want`
         /// says yes, and a cell beside it on the next city's own Net you can stand on:
         /// the cell and the step from beside it.
