@@ -191,6 +191,13 @@ grid you're over. The minimap shows the street round you across edges.
   The fixtures in `runs/fixtures/` keep opening.
 - The stream and builds in flight are not saved. Neither is sight past the edge; the
   world's seen record is.
+- The cities and towns you've been in are saved (`Outside.kept`, amending "kept for the
+  session"): what you leave in one is there after a reopen, as it is within a session.
+  Each is saved as all it holds but its map, the map's fingerprint as built and the
+  cells play has changed since; on reopening its map is built again from the world and
+  checked against the fingerprint. One a later build makes otherwise is lost, and the
+  log says so. Whole, three kept cities made seed 3's save 1.64 times as big; as
+  changes, 1.01 times.
 
 ## After the first play (2026-11-05)
 
