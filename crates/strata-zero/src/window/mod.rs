@@ -9,22 +9,21 @@ pub mod fatal;
 pub mod font;
 pub mod gpu;
 pub mod keys;
-pub mod platform;
 pub mod png;
 pub mod present;
 pub mod raster;
 pub mod shapes;
 
 use crate::app::{AppState, FRAME, MIN_H, MIN_W, Runner, Screen, ScreenFx};
+use crate::platform::Platform;
 use anyhow::{Context, Result};
 use backend::{Damage, PixelBackend};
 use crossterm::event::KeyEvent;
 use font::Fonts;
 use keys::{Input, Shortcut};
-use platform::Platform;
 use present::{Presenter, Shown};
 use ratatui::Terminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -48,27 +47,22 @@ const ZOOM_RANGE: (f32, f32) = (0.6, 2.5);
 const ZOOM_START: f32 = 1.0 / (ZOOM_STEP * ZOOM_STEP * ZOOM_STEP);
 
 /// Whether this is the desktop app (the `app` feature: the Mac `.app`, `Strata Zero.exe`,
-/// the Linux `strata-zero`): it always opens the window, and keeps its files in the
-/// player's app folder.
+/// the Linux `strata-zero`): it always opens the window, and works in the game's folder.
 pub const IS_APP: bool = cfg!(feature = "app");
 
-/// The desktop app makes its app folder (`Platform::app_dir`) the working folder, so
-/// `cities/` and `runs/` are kept there: before the game's state and its first screen are
-/// made, as the title looks in `runs/` for a run to CONTINUE. The folder, or `None`
-/// outside the app (`strata --window` keeps the folder it was started in).
-pub fn enter_app_dir() -> Result<Option<PathBuf>> {
-    if !IS_APP {
-        return Ok(None);
+/// The desktop app makes the game's folder (`dir`, `Platform::files_dir`: the player's
+/// app folder) its working folder, as one opened from the Finder, Explorer or an app
+/// menu starts wherever the desktop puts it. `cities/` and `runs/` are found from `dir`
+/// by their whole path whether or not it does (`cli::start_state`); `strata --window`
+/// stays in the folder it was started in.
+pub fn enter_app_dir(dir: &Path) -> Result<()> {
+    if IS_APP {
+        std::env::set_current_dir(dir).with_context(|| format!("opening {}", dir.display()))?;
     }
-    let dir = Platform::NATIVE
-        .app_dir(&platform::process_env)
-        .context("can't tell where to keep the game's files: set APPDATA (Windows) or HOME")?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    std::env::set_current_dir(&dir).with_context(|| format!("opening {}", dir.display()))?;
-    Ok(Some(dir))
+    Ok(())
 }
 
-/// Runs the game in a window until it quits. The desktop app is in its app folder by
+/// Runs the game in a window until it quits. The desktop app is in the game's folder by
 /// now (`enter_app_dir`).
 pub fn run(screen: Box<dyn Screen>, mut st: AppState) -> Result<()> {
     if let Some(fx) = std::env::var("STRATA_SCREEN_FX")

@@ -33,7 +33,40 @@ Other flags: `--districts 4..12` (an upper bound; slivers merge into their
 neighbours), `--water none|bay|river`, `--density 0..1`.
 
 Needs a truecolor terminal of at least 100x30 cells (iTerm2, Ghostty, kitty,
-WezTerm). Saved cities go to `./cities/*.city`.
+WezTerm). Runs and saved cities go to the game's folder (below).
+
+### Where the game keeps its files
+
+Runs (`runs/*.run`) and dev mode's saved cities (`cities/*.city`) are kept in the
+player's app folder, the same one for the terminal game, `--window` and the desktop
+apps, wherever the game is started from:
+
+| Platform | Folder |
+|---|---|
+| Mac | `~/Library/Application Support/Strata Zero/` |
+| Windows | `%APPDATA%\Strata Zero\` |
+| Linux | `$XDG_DATA_HOME/strata-zero/`, else `~/.local/share/strata-zero/` |
+
+`STRATA_DIR=<folder>` keeps them in another folder instead, and `STRATA_DIR=.` in the
+one the game is started in: a checkout's own `cities/` and `runs/`, beside the sources
+(both are in `.gitignore`):
+
+```sh
+STRATA_DIR=. cargo run --release -p strata-zero
+STRATA_DIR=. target/release/strata
+```
+
+It's a variable rather than a flag so it can be set once for a shell and reaches
+`cargo run`, `--window` and scripts alike. The game never guesses from a `runs/` or
+`cities/` it finds in the working folder: a player's own folders can be called that.
+Like `STRATA_DEV`, it reaches the desktop app only when a shell starts it.
+`platform::Platform::files_dir` picks the folder and `cli::start_state` hands it to
+`AppState.saves` and `AppState.cities`.
+
+Terminal builds before v0.2.0 kept both folders in the working folder (the desktop
+apps already used the app folder). To carry on with runs saved by one, move its `runs/`
+(and `cities/`) into the folder above, or start the game with `STRATA_DIR` naming the
+folder they're in.
 
 Overworlds, many seeds on one page in the atlas look, to open in a browser:
 
@@ -68,13 +101,11 @@ scripts/linux-app.sh   # on Linux: target/smoke/linux/strata-zero-linux-app.tar.
 ```
 
 The scripts build the `app` feature: the desktop app, which always opens the window
-and keeps cities in the player's app folder: `~/Library/Application Support/Strata
-Zero/cities/` on a Mac, `%APPDATA%\Strata Zero\cities\` on Windows,
-`~/.local/share/strata-zero/cities/` on Linux. The window carries Fira Code
-(`crates/strata-zero/fonts/`, SIL Open Font License) and takes the symbols Fira Code
-lacks from each platform's own fonts. On a Mac the window's chords are Cmd chords; on
-Windows and Linux F11 or Alt+Enter is fullscreen and Ctrl+= / Ctrl+- / Ctrl+0 set the
-text size. It draws through wgpu: Metal on a Mac, Direct3D 12 or Vulkan on Windows,
+and works in the game's folder (the player's app folder, as above). The window carries
+Fira Code (`crates/strata-zero/fonts/`, SIL Open Font License) and takes the symbols
+Fira Code lacks from each platform's own fonts. On a Mac the window's chords are Cmd
+chords; on Windows and Linux F11 or Alt+Enter is fullscreen and Ctrl+= / Ctrl+- /
+Ctrl+0 set the text size. It draws through wgpu: Metal on a Mac, Direct3D 12 or Vulkan on Windows,
 Vulkan or OpenGL on Linux.
 
 `STRATA_FONT=<file>` picks the font, `STRATA_SCREEN_FX=off|soft|crt` the screen

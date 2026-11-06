@@ -1,8 +1,8 @@
-//! Load and save screens over the `./cities` directory.
+//! Load and save screens over the cities folder (`AppState.cities`).
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::render::Rgb;
-use crate::save::{CityFileInfo, default_dir, list_cities, load_city, save_city};
+use crate::save::{CityFileInfo, list_cities, load_city, save_city};
 use crate::screens::broadcast::Broadcast;
 use crate::ui::form::{Field, Form, FormView};
 use crate::ui::panel::boxed;
@@ -60,12 +60,14 @@ pub(crate) fn fmt_unix(secs: u64) -> String {
 }
 
 impl Files {
-    pub fn load(_tick: u64) -> Self {
-        Self::load_in(default_dir(), _tick)
+    /// The cities in this game's folder (`AppState.cities`), to load one.
+    pub fn load(st: &AppState) -> Self {
+        Self::load_in(st.cities.clone(), st.tick)
     }
 
-    pub fn save(tick: u64, name: &str) -> Self {
-        Self::save_in(default_dir(), tick, name)
+    /// Saving the city as `name` in this game's folder (`AppState.cities`).
+    pub fn save(st: &AppState, name: &str) -> Self {
+        Self::save_in(st.cities.clone(), st.tick, name)
     }
 
     pub fn load_in(dir: PathBuf, _tick: u64) -> Self {
@@ -381,7 +383,7 @@ mod tests {
     #[test]
     fn load_screen_is_titled_like_the_menu() {
         let st = AppState::new();
-        let f = Files::load(0);
+        let f = Files::load(&st);
         let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
         t.draw(|fr| f.draw(&st, fr)).unwrap();
         let text = buffer_text(t.backend().buffer());

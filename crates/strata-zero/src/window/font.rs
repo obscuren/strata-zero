@@ -8,7 +8,7 @@
 //! of thousands of glyphs, which fontdue would hold as hundreds of megabytes for the
 //! sake of one katakana.
 
-use super::platform::{Env, Platform, process_env, set};
+use crate::platform::{Env, Platform, process_env, set};
 use ab_glyph::{Font as _, FontVec, ScaleFont as _};
 use fontdue::{Font, FontSettings};
 use std::collections::{HashMap, HashSet};
@@ -471,7 +471,7 @@ fn fontconfig(c: char) -> Option<(PathBuf, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::platform::env_of;
+    use crate::platform::env_of;
     use std::collections::BTreeSet;
 
     fn paths(faces: &[Face]) -> Vec<Option<&Path>> {

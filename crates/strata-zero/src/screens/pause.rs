@@ -136,7 +136,7 @@ impl Pause {
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "city".to_string());
                 ScreenCmd::Push {
-                    to: Box::new(Files::save(st.tick, &name)),
+                    to: Box::new(Files::save(st, &name)),
                     fx: TransitionKind::None,
                 }
             }

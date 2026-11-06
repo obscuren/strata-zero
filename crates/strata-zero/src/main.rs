@@ -35,6 +35,7 @@ mod missions;
 mod net;
 mod outside;
 mod owners;
+mod platform;
 mod render;
 mod rest;
 mod ride;

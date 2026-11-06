@@ -152,8 +152,9 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         rest: _,      // never Some at a save: no save is taken asleep
         drawn_you: _, // UI: where the last frame drew you
         track,
-        atlas: _, // UI: the deck's MAP view
-        saves: _, // setting: where this session saves
+        atlas: _,  // UI: the deck's MAP view
+        saves: _,  // setting: where this session saves
+        cities: _, // setting: where this session keeps cities
         run,
         save_due: _,    // the session's: a save asked for
         last_save: _,   // the session's: when it last saved
@@ -263,8 +264,9 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         rest,
         drawn_you: _, // UI
         track,
-        atlas: _, // UI: `clear_screens` below
-        saves: _, // setting
+        atlas: _,  // UI: `clear_screens` below
+        saves: _,  // setting
+        cities: _, // setting
         run,
         save_due: _,    // the session's: `clear_screens` below
         last_save: _,   // the session's: the opener sets it
