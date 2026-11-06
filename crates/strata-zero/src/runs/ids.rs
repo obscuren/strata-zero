@@ -395,6 +395,23 @@ fn drop_lost(s: &mut Snapshot, book: &Book, found: Found) -> Vec<String> {
             now,
         );
     }
+    // the other cities' and towns' kept (the story never runs there, but a mail or a
+    // track may point at it)
+    for kept in s.outside.iter_mut().flat_map(|o| o.kept_saved_mut()) {
+        let now = kept
+            .world
+            .as_ref()
+            .map_or(now * sim::TICKS_PER_MINUTE, |w| w.tick())
+            / sim::TICKS_PER_MINUTE;
+        clear_lost(
+            &mut kept.missions,
+            &mut kept.journal,
+            &mut kept.track,
+            book,
+            &fresh,
+            now,
+        );
+    }
     lost
 }
 

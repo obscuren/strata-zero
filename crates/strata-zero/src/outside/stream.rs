@@ -93,15 +93,23 @@ pub fn held_by_build(info: &std::panic::PanicHookInfo<'_>) -> bool {
 
 /// Runs `job` as a build's thread: a panic in it caught, and handed back as what it said
 /// (the hook's words, where it broke among them, else the panic's own).
-fn build_thread(job: impl FnOnce() -> Made) -> Landed {
+pub(super) fn build_thread<T>(job: impl FnOnce() -> T) -> Result<T, String> {
     BUILD.with(|b| *b.borrow_mut() = Some(None));
     let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
     let kept = BUILD.with(|b| b.borrow_mut().take().flatten());
     made.map_err(|panic| kept.unwrap_or_else(|| said(&*panic)))
 }
 
+/// The name of settlement `s`'s build's thread: `build 2`, `build 2.1` for its town 1.
+pub(super) fn build_name(s: Settlement) -> String {
+    match s.town {
+        None => format!("build {}", s.city),
+        Some(t) => format!("build {}.{t}", s.city),
+    }
+}
+
 /// What a panic's payload says.
-fn said(payload: &(dyn std::any::Any + Send)) -> String {
+pub(super) fn said(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|s| s.to_string())
@@ -190,12 +198,8 @@ impl Stream {
     /// Settlement `s` made by `job` on a thread of its own, named for it (`build 2`,
     /// `build 2.1` for its town 1).
     fn start_with(&mut self, s: Settlement, job: impl FnOnce() -> Made + Send + 'static) {
-        let name = match s.town {
-            None => format!("build {}", s.city),
-            Some(t) => format!("build {}.{t}", s.city),
-        };
         let build = std::thread::Builder::new()
-            .name(name)
+            .name(build_name(s))
             .spawn(move || build_thread(job));
         match build {
             Ok(build) => {
@@ -780,7 +784,7 @@ pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize, step: u64) ->
                 continue;
             };
             (&stay.city, stay.world.as_mut(), false)
-        } else if let Some(stay) = o.kept.0.get_mut(&s) {
+        } else if let Some(stay) = o.kept.stays.get_mut(&s) {
             (&stay.city, stay.world.as_mut(), false)
         } else {
             let Some(city) = o.built.get(&s) else {
@@ -2759,6 +2763,98 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn what_you_leave_in_other_cities_is_there_after_a_reopen() {
+            // a job taken from a city's fixer and a card to one of its doors in the
+            // pack, an item left in its town; home, saved there and reopened: walked
+            // back, the town keeps the item, the job is handed in, the cards come back
+            let mut st = home_run();
+            let home = o(&st).home();
+            let (c, town, a, d) = beside_a_town(&mut st);
+            // a delivery from a fixer of the city
+            let fixers: Vec<sim::PersonId> = st
+                .world
+                .as_ref()
+                .unwrap()
+                .people()
+                .iter()
+                .filter(|p| p.profession == "fixer")
+                .map(|p| p.id)
+                .collect();
+            let job = fixers
+                .iter()
+                .find_map(|f| {
+                    crate::jobs::generate::generate(
+                        &mut st,
+                        *f,
+                        crate::jobs::flavor::KindTag::Deliver,
+                        0,
+                    )
+                })
+                .expect("a delivery from a fixer of the city");
+            let id = st.jobs.push(job);
+            crate::jobs::take_job(&mut st, id).unwrap();
+            // a card to a door of the city, in the pack
+            let flats: Vec<citygen::BuildingId> = st
+                .city
+                .as_ref()
+                .unwrap()
+                .buildings
+                .iter()
+                .map(|b| b.id)
+                .collect();
+            let card = flats
+                .into_iter()
+                .find_map(|b| {
+                    crate::credentials::prepare(&mut st, b);
+                    crate::credentials::run_items(&st.content)
+                        .first()
+                        .map(|i| i.id.clone())
+                })
+                .expect("a building of the city with flats");
+            st.character.give(card.clone(), 1);
+            let cards = |st: &AppState| {
+                (
+                    crate::credentials::run_items(&st.content).len(),
+                    st.character.count(&card),
+                )
+            };
+            let held = cards(&st);
+            // over into the town, an item down there
+            on_foot(&mut st, a.step(d));
+            hand_over(&mut st).expect("into the town");
+            assert_eq!(o(&st).here(), town);
+            let stim = game::ItemId::new("stim_patch");
+            st.character.give_item(&st.content, stim.clone(), 1);
+            let drop = game::Action::Drop {
+                item: stim.clone(),
+                qty: 1,
+            };
+            assert!(crate::actions::perform(&mut st, drop).is_ok());
+            let left = world_of(&st, st.player.as_ref().unwrap().pos);
+            // home, and saved there
+            crate::outside::enter(&mut st, home).unwrap();
+            assert_eq!(cards(&st), (0, 0), "the city's cards stay with it");
+            let mut back = crate::outside::tests::reopen(st, "kept-cities");
+            assert!(o(&back).held_city(c).is_some(), "the city kept");
+            assert!(o(&back).held_city(town).is_some(), "the town kept");
+            // the city: the cards back, the job still in hand, and handed in
+            crate::outside::enter(&mut back, c).unwrap();
+            assert_eq!(cards(&back), held, "the cards back as within a session");
+            let taken = back.jobs.get(id).map(|j| j.state);
+            assert_eq!(taken, Some(crate::jobs::State::Taken), "the job in hand");
+            crate::jobs::ui::hand_over(&mut back, id).unwrap();
+            crate::jobs::ui::hand_in(&mut back, id).unwrap();
+            // the town: the item where it was left
+            crate::outside::enter(&mut back, town).unwrap();
+            let street = Place::Stratum(StratumKind::Street);
+            let at = local(&back, left);
+            assert!(
+                back.ground.at(street, at).iter().any(|s| s.item == stim),
+                "the town kept what you left in it"
+            );
+        }
+
+        #[test]
         fn crossing_back_and_forth_neither_copies_nor_reseeds() {
             // the city and the town each kept whole as you step between them: the same
             // map and the same people every time, never a copy, never seeded again
@@ -2882,8 +2978,8 @@ pub(crate) mod tests {
                 (Place::Stratum(StratumKind::Street), was.3, None)
             );
             // the body in the next city, the Net self walked home on the Net: the city
-            // the body stands in isn't kept over a reopen, and is made again from the
-            // world to jack out into
+            // the body stands in is kept over a reopen, its map made again from the
+            // world, to jack out into
             let mut st = home_run();
             let spawn = world_of(&st, st.player.as_ref().unwrap().pos);
             let (s, x, d) = beside_a_city(&mut st);
@@ -2902,7 +2998,11 @@ pub(crate) mod tests {
             assert_eq!(world_of(&back, p.pos), spawn, "the Net self where it stood");
             let (_, b) = p.body.expect("still jacked in");
             assert_eq!(world_of(&back, b), body_at, "the body where it stands");
-            assert!(o(&back).held_city(s).is_none(), "not kept over a reopen");
+            assert!(o(&back).held_city(s).is_some(), "kept over a reopen");
+            assert!(
+                crate::outside::body_stay(&back).is_some(),
+                "the body's city held as you left it"
+            );
             crate::net::jack_out(&mut back).unwrap();
             hand_over(&mut back).expect("into the city the body stands in");
             assert_eq!(o(&back).here(), s);

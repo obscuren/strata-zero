@@ -341,7 +341,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 }
 
 /// Rebuilds what a restored run leaves out (the world's places and labels, the home,
-/// the street's lamps cut by a lights out, the tracked walk), drops whatever the run
+/// the kept cities' maps, the street's lamps cut by a lights out, the tracked walk),
+/// drops whatever the run
 /// holds that this build's content lacks, and logs a warning for each thing gone:
 /// `lost`, from `file::read`, and those.
 pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
@@ -353,6 +354,9 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     if let Some(stay) = st.away.as_mut() {
         lost.extend(stay.reopened(&st.people, &st.content));
     }
+    // the other cities and towns kept: their maps made again from the world, what they
+    // held put back with them
+    lost.extend(crate::outside::kept::remake(st));
     // the flat is the home city's: none in another city of the world
     let away = st.outside.as_ref().is_some_and(|o| o.here.is_some());
     st.home = if away {

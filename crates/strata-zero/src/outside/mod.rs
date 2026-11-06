@@ -7,6 +7,7 @@
 mod commuters;
 pub mod ground;
 pub mod here;
+pub mod kept;
 pub mod moves;
 pub mod stream;
 
@@ -49,9 +50,11 @@ pub struct Outside {
     /// same from its world every time it's built (once walked into, one is `kept`).
     #[serde(skip)]
     pub built: BTreeMap<Settlement, City>,
-    /// The other cities and towns you've been in this session, each kept whole.
-    #[serde(skip)]
-    kept: Kept,
+    /// The other cities and towns you've been in, each kept whole: saved as all each
+    /// holds but its map, made again from the world on reopening (`kept::remake`).
+    /// The first saves have none.
+    #[serde(default)]
+    kept: kept::Kept,
     /// The other cities' and towns' blocks, from the world (`others`).
     #[serde(skip)]
     blocks: std::cell::OnceCell<Vec<(Settlement, Rect)>>,
@@ -73,27 +76,6 @@ pub struct Outside {
     pub stream: stream::Stream,
 }
 
-/// The cities and towns you've been in this session but the home city (set aside in
-/// `st.away`), each whole as you left it (its people, its ground, its foes, its Net),
-/// put back as it was when you walk in again. Not saved (a save keeps only the home city
-/// besides the one you're in); a copy starts empty.
-#[derive(Default)]
-pub struct Kept(BTreeMap<Settlement, Stay>);
-
-impl Clone for Kept {
-    fn clone(&self) -> Kept {
-        Kept::default()
-    }
-}
-
-impl std::fmt::Debug for Kept {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Kept")
-            .field(&self.0.keys().collect::<Vec<_>>())
-            .finish()
-    }
-}
-
 /// A marked place of the world: its tile and its name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mark {
@@ -108,8 +90,9 @@ pub struct Settlement {
     pub town: Option<u8>,
 }
 
-/// Everything a run holds of the city it is in: set aside, for the home city, while
-/// you're in another (and saved with the run).
+/// Everything a run holds of the city it is in: set aside while you're in another,
+/// the home city's whole (`st.away`), any other's kept (`Outside.kept`), both saved with
+/// the run (a kept one but its map, made again from the world).
 #[derive(Serialize, Deserialize)]
 pub struct Stay {
     pub city: City,
@@ -299,7 +282,7 @@ impl Outside {
             world: Some(world),
             here: None,
             built: BTreeMap::new(),
-            kept: Kept::default(),
+            kept: Default::default(),
             blocks: Default::default(),
             mark: None,
             visited: Default::default(),
@@ -422,7 +405,7 @@ impl Outside {
     /// walked into yet), if it is.
     pub fn held_city(&self, s: Settlement) -> Option<&City> {
         self.kept
-            .0
+            .stays
             .get(&s)
             .map(|k| &k.city)
             .or_else(|| self.built.get(&s))
@@ -432,17 +415,24 @@ impl Outside {
     /// set aside, each once: those kept whole, and those built and not walked into yet.
     pub fn held(&self) -> impl Iterator<Item = (Settlement, &City)> {
         self.kept
-            .0
+            .stays
             .iter()
             .map(|(s, k)| (*s, &k.city))
             .chain(self.built.iter().map(|(s, c)| (*s, c)))
+    }
+
+    /// The cities and towns kept, as a save read them, until their maps are made again
+    /// (`kept::remake`).
+    pub(crate) fn kept_saved_mut(&mut self) -> impl Iterator<Item = &mut kept::StayParts> {
+        self.kept.saved_mut()
     }
 
     /// City or town `s` no longer held (a test's way to see the stream answer for it).
     #[cfg(test)]
     pub fn let_go(&mut self, s: Settlement) {
         self.built.remove(&s);
-        self.kept.0.remove(&s);
+        self.kept.take(s);
+        self.kept.built.remove(&s);
     }
 
     /// The home city: the world's.
@@ -676,7 +666,7 @@ enum Next {
 }
 
 /// Into city or town `s`: the one you're in set aside (with the run when it's the home
-/// city, kept whole for the session when not); `s` as it was kept, or as its build in
+/// city, kept whole when not: `kept`); `s` as it was kept, or as its build in
 /// the background left it (its people seeded there run on to now), else built and its
 /// people seeded on the spot the first time this session. One that won't build leaves
 /// you where you were.
@@ -698,7 +688,7 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     o.stream.wait(s, &mut o.built);
     let next = if s == home {
         Next::Home
-    } else if let Some(stay) = o.kept.0.remove(&s) {
+    } else if let Some(stay) = o.kept.take(s) {
         Next::Kept(Box::new(stay))
     } else if let Some(c) = o.built.remove(&s) {
         // built in the background as you neared it
@@ -728,7 +718,7 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
     if here == home {
         st.away = Some(Box::new(current));
     } else if let Some(o) = st.outside.as_mut() {
-        o.kept.0.insert(here, current);
+        o.kept.keep(here, current);
     }
     match next {
         Next::Home => {
@@ -747,6 +737,11 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
                 .and_then(|o| o.stream.take_people(s))
                 .filter(|w| now.saturating_sub(w.tick()) <= RUN_ON);
             let world = people.unwrap_or_else(|| seed_people(&city, &st.people, now, minute));
+            // its map as built: what a save measures its changes against
+            let built = kept::Built::of(&city);
+            if let Some(o) = st.outside.as_mut() {
+                o.kept.built.insert(s, built);
+            }
             Stay::fresh(*city, world).put(st, false, now);
         }
     }
@@ -792,15 +787,18 @@ fn stand_in(
 }
 
 /// The cities and towns held as you left them: the home city set aside, and every other
-/// kept whole this session.
+/// kept whole.
 pub fn held_stays(st: &AppState) -> impl Iterator<Item = &Stay> {
-    let kept = st.outside.iter().flat_map(|o| o.kept.0.values());
+    let kept = st.outside.iter().flat_map(|o| o.kept.stays.values());
     st.away.as_deref().into_iter().chain(kept)
 }
 
 /// `held_stays`, to change (their clock: `holds::tick`).
 pub(crate) fn held_stays_mut(st: &mut AppState) -> impl Iterator<Item = &mut Stay> {
-    let kept = st.outside.iter_mut().flat_map(|o| o.kept.0.values_mut());
+    let kept = st
+        .outside
+        .iter_mut()
+        .flat_map(|o| o.kept.stays.values_mut());
     st.away.as_deref_mut().into_iter().chain(kept)
 }
 
@@ -825,21 +823,21 @@ pub(crate) fn body_stand_in(st: &AppState) -> Option<(citygen::Place, Pos)> {
 }
 
 /// What city or town `s` holds as you left it, if it's held: the home city set aside,
-/// or another kept whole this session.
+/// or another kept whole.
 fn stay_of(st: &AppState, s: Settlement) -> Option<&Stay> {
     let o = st.outside.as_ref()?;
     if s == o.home() {
         return st.away.as_deref().filter(|_| o.here() != s);
     }
-    o.kept.0.get(&s)
+    o.kept.stays.get(&s)
 }
 
 /// Jacked in with your body in a city or town your Net self has walked out of (handed
 /// over on the Net, the body's cell off the live city's own): what that city holds as
 /// you left it (its map, its backdoors, your body as it keeps it, inside at the rig
 /// too) and the shift from its frame to the live city's. None while the body is in the
-/// live city or on the open ground, or its city isn't kept (made again from the world
-/// after a reopen: `held_city` has its map).
+/// live city or on the open ground, or its city isn't held as you left it (one a
+/// reopen couldn't make again: `held_city` has its map once it's built).
 pub fn body_stay(st: &AppState) -> Option<(&Stay, Pos)> {
     let (place, body) = st.player.as_ref()?.body?;
     place.stratum()?;
@@ -860,7 +858,7 @@ pub(crate) fn body_stay_mut(st: &mut AppState) -> Option<&mut Stay> {
     if s == o.home() {
         return st.away.as_deref_mut();
     }
-    o.kept.0.get_mut(&s)
+    o.kept.stays.get_mut(&s)
 }
 
 /// Jacked in with your body in a city or town your Net self has walked out of: the Net
@@ -1294,7 +1292,7 @@ pub(crate) mod tests {
 
     /// Another city of the world, and the overworld tile west of its block's middle
     /// row, a step east into it.
-    fn beside_another(st: &AppState) -> (Settlement, Pos) {
+    pub(crate) fn beside_another(st: &AppState) -> (Settlement, Pos) {
         let o = st.outside.as_ref().unwrap();
         let (s, b) = o
             .others()
