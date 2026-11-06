@@ -36,8 +36,10 @@ work is in how the game holds and shows the map.
 - Two cities live at once: breaking into a node of a city other than your body's, or a
   neighbour's people moving before you walk in. That is the next job.
 - The world going on while you're away (#26).
-- Riding the open Net's trunks: rides stay on a city's own lanes.
-- Any change to what the generators make.
+- Riding the open Net's trunks: rides stay on a city's own lanes. (Changed after the
+  merge: trunks and other cities' lanes ride; see the report.)
+- Any change to what the generators make. (Changed after the merge: a sited city's
+  districts follow its overworld colours; see the report.)
 
 ## Anti-goals
 
@@ -280,7 +282,8 @@ some cities' light as overblown and stitched on, and the overworld as static. So
 3. One sight and light rule, the street's, everywhere at street level.
 4. `REACH` is two overworld tiles (16 cells) past the view.
 5. Riding a trunk isn't travel in this build; the Net overworld is the fast way across
-   the world (the second question of #27).
+   the world (the second question of #27). Changed after the merge: trunks ride as a
+   city's lanes do, with Data surfer; the Net overworld stays the fast way.
 6. A step on the Net overworld costs a tile's walk (`TILE × WALK_TICKS`); every tile in
    the world can be walked.
 7. Tracking's floor pulses lead within the live city's map; off it, the mark's way

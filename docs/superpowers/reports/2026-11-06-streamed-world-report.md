@@ -6,8 +6,8 @@ the build ledger, which is scratch.
 
 - Spec: `docs/superpowers/specs/2026-11-05-streamed-world-design.md`
 - Plan: `docs/superpowers/plans/2026-11-05-streamed-world.md`
-- Range: c4f1e12..8cce355 (54 commits). Not merged, not pushed. Main has moved on since
-  this branch was cut, so rebase onto it before merging.
+- Range: c4f1e12..8cce355 (54 commits), rebased and merged to main as 79f918a on
+  2026-11-06. The fixes from playing the merged build follow under "After the merge".
 
 ## What was built
 
@@ -239,6 +239,82 @@ Checks on 8cce355:
 
   Cost if wrong: a zoom draws more; a person at the line is hidden.
 
+## After the merge
+
+Jeff played the merged build and found five things. Each was fixed and reviewed, and the
+review's findings were fixed in turn.
+
+- **The cord across Nets.** Past 64 cells the cord ran straight over the void. It now
+  runs home along the Net at any distance: walked over the cells in view (lanes and
+  gates cost 1, grid and room floor 3, void 12), and past the view by a route over the
+  world's tiles (trunk links 1, a settlement's own tiles 2, void 12) that leaves the view
+  the way home goes. Room floor now carries the cord, so a run from a port inside a
+  room shows one.
+- **Rides on trunks.** Rides read lanes from the live city's map only. They now read the
+  walked Net past its edge, so trunks and other cities' lanes ride; a ride is held at a
+  line for whatever holds a step, carries on through a handover, and finds its way
+  again when a city builds in under it.
+- **Zooming in other cities.** The deck MAP's zoom levels were absolute scales capped
+  at the whole city, so in a small city every level was the same. Each step is now one
+  notch closer in a city of any size, down to a tile over 4 pixels. The title shows the
+  zoom's level (1 to 4) instead of tiles per pixel.
+- **Other cities' colours.** A built city's districts came from role rules that never
+  read the overworld's colours, so other cities drew core grey and combat-zone brown
+  under any neon. A sited city's districts are now its colour regions on the overworld,
+  one district per region; slivers under 600 land cells and districts left with no
+  building join a neighbour. The home city is coloured on the overworld so it always
+  has a night market, a strip and blocks for the story. Lone cities keep the role rules.
+- **Other cities' people and cars.** Other cities housed few of their workers, so most
+  commuted from off the map and nobody had a car; residents also left town for a drink
+  their city lacked. Now, in a city other than home, everyone who works there lives
+  there (`SimParams::housed`), across town, only where their job is a walk away; a
+  resident drinks in town or stays home; and a trip is driven past the smaller of 60
+  cells and half the map's short side.
+- **Housing in every city.** With districts from the overworld's colours, about 1 in 10
+  other cities was all docks, industry, core or strip and had no flat at all. Every
+  sited city and town now gets beds for at least half the jobs of each stretch of street
+  a walker can cover, in two or more buildings from 40 jobs: new flats on a square or
+  car park first, then buildings turned into homes that fit the district (workers' flats
+  on the docks and in industry, company rooms in the core). Over 90 worlds, people
+  without a home in other cities fell from 10,831 to 418.
+
+### Calls made
+- The cord is walked only as far as the view shows, plus a tile. Cost if wrong: anything
+  wanting the whole walk needs the tile route.
+- The void costs 12 a cell to the cord. Cost if wrong: long detours along lanes instead
+  of short hops over the void; one constant.
+- The tile route is an A* search each time either end changes tile, about 2.5 ms far
+  from home. Cost if wrong: a small hitch every 8 steps far out; a field per jack-in
+  would remove it.
+- A ride found again never rides a tile it has already ridden. Cost if wrong: a ride
+  whose new way crosses its trail stops at the crossing.
+- The MAP magnifies to 2 and then 4 pixels a tile, and at a whole-city scale of 2 zoom 2
+  is a tile a pixel. Cost if wrong: one arm of `Zoom::scale`.
+- The title shows the zoom's level, not tiles per pixel, departing from the tracking and
+  map spec's section 7. Cost if wrong: closer-in levels would need another label.
+- New games get a different home city, three overworld fingerprints and several
+  seed-pinned tests were re-pinned, and a kept city in an older save is dropped on
+  reopen with a log line. A home city in an older save keeps its old districts. Cost if
+  wrong: a versioned generator, which isn't needed before 1.0.
+- District edges follow tile edges; large colour regions aren't split (one name, one
+  lights-out and one trace over a big district). Cost if wrong: a split pass.
+- The home city isn't seeded `housed`: its people are the story's and its day is pinned.
+  Some new games' home cities still see half their people walk out in the evening. Cost
+  if wrong: re-pinning the home day and the cast and fixer tests.
+- Couriers who own a car drive every drop past the threshold; three of them make most
+  of the home city's driving. Cost if wrong: one rule, if couriers should walk.
+- The traffic test judges each other city on its own (a car for every ten people, a
+  trip a day for every three cars), not against the home city. Cost if wrong: a tiny
+  city passes with little moving.
+- Nobody is housed where their job isn't a walk away, the home city included (seed 8's
+  new game rehouses two shopkeepers). A trip with no path still waits for the person's
+  next goal. Cost if wrong: a search a minute for each stranded trip.
+- Housing's bound is half of each stretch's jobs at the top of their staffing, and
+  about 9% of other cities' jobs became flats. Cost if wrong: one constant; a lower
+  share packs people tighter.
+- The home city and lone cities get no housing pass. Cost if wrong: re-pinning the
+  home city.
+
 ## Left for later
 
 ### Look and the screens
@@ -249,7 +325,9 @@ Checks on 8cce355:
   area per frame, and `Beyond::of` allocates several times a frame. All within budget.
 - Wall, bridge and rail glyphs don't join across an ownership line.
 - The minimap draws the open ground in one grey, without picking out roads.
-- The cord is straight past 64 cells and doesn't cross the void inside a city.
+- A gate on the open Net has no owner, so a ride stops on it.
+- Rides ignore grid ICE: a ride starts before the foe check and passes a sentinel's
+  cell. This predates the trunk rides, which only reach more lanes.
 - A gate one step across the line says it is too far.
 - Dev light view: people and items on other areas' cells grey only on the live city.
   `relight_city` allocates per held city per tick.
@@ -291,11 +369,23 @@ Checks on 8cce355:
 - A freshly seeded city sits below its steady street count until its minutes run.
 - No fallback anchor when a reopened map has no ways in.
 - The residents' day pin hashes Debug output.
+- Commuters who remain still vanish at the map's edge or the ownership line.
+- A city with almost no housing a walk from its jobs barely houses anyone.
 
 ### Citygen
 - Two POIs' signs together could seal a verge pocket (none seen in 30 worlds).
 - NPCs walk through Pipe posts. This predates the branch.
 - Verify still strips non-sign blockers beside ground the street never reaches.
+- District names can repeat when a city has two districts of one theme.
+- Part of a sited city can reach the rest only over the world's open ground (crops,
+  sand, a rise; 1 to 8 cells). citygen counts that ground as walkable when it joins
+  streets, but the sim's walkers keep to paved ground, so to them the part is cut off.
+  Paving the shortest gap in `join_street_components`, or letting walkers cross open
+  ground at a cost, would close it.
+- Cities that are all strip house nobody (6 in 90 worlds), since nobody lives on the
+  Strip in the sim.
+- Housing's staffing and bed tables are copied from `people.ron` and the sim; only the
+  strata-zero housing test would catch them drifting apart.
 - In the trunk joins:
   - a join may run beside a laneless gate, or double a lane at the seam;
   - the case with no lane in reach is untested.
