@@ -1,8 +1,11 @@
 //! One set of rules on every map: a step into a wall, a terminal, a vending machine or
 //! anything else that stands in the way is refused, and says the same, in the home city,
-//! in another however you came into it (walked in across the line, down from the
-//! overworld onto its tile, your Net self walked in and jacked out, a run reopened
-//! there), on the open ground and in a city held but not live; on foot and on the Net.
+//! in another city or a town however you came into it (walked in across the line, down
+//! from the overworld onto its tile, your Net self walked in and jacked out, a run
+//! reopened there, walked in again once kept whole), on the open ground (reopened there,
+//! jacked in there), in a city held but not live (the home city set aside, one kept
+//! whole), on the Net with the next city handed over to your Net self; on foot and on
+//! the Net, by a key, on turns and by an aimed walk.
 
 use crate::app::{AppState, Screen, ScreenCmd};
 use crate::messages::Kind as LogKind;
@@ -86,6 +89,19 @@ enum Area {
     Held(Settlement),
 }
 
+/// City or town `s`'s map as it's held: built, kept whole, or the home city set aside.
+fn held_map(st: &AppState, s: Settlement) -> &citygen::City {
+    let o = st.outside.as_ref().unwrap();
+    o.held_city(s)
+        .or_else(|| {
+            st.away
+                .as_ref()
+                .filter(|_| s == o.home() && o.here() != s)
+                .map(|a| &a.city)
+        })
+        .expect("held")
+}
+
 fn in_area(st: &AppState, area: Area, q: Pos) -> bool {
     match area {
         Area::Live => live_owns(st, q),
@@ -95,6 +111,15 @@ fn in_area(st: &AppState, area: Area, q: Pos) -> bool {
         }
         Area::Held(s) => !live_owns(st, q) && owner_of(st, q) == Some(s),
     }
+}
+
+/// How a step is taken: by its key; by its key on turns (a fight on, a move spent); or
+/// as an aimed walk on turns (`g`, the key moving the aim, enter, and the walk's tick).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum How {
+    Key,
+    OnTurns,
+    Aimed,
 }
 
 /// What a step did: whether you moved, and the refusals it logged.
@@ -120,7 +145,7 @@ fn cells(st: &AppState, area: Area, scope: Scope) -> Vec<Pos> {
         (Scope::Near(r), _) => Rect::new(me.x - r, me.y - r, 2 * r + 1, 2 * r + 1),
         (Scope::Map, Area::Live) => Rect::new(0, 0, city.size.w as i32, city.size.h as i32),
         (Scope::Map, Area::Held(s)) => {
-            let theirs = o.held_city(s).expect("held");
+            let theirs = held_map(st, s);
             let (live, at) = (o.origin(city), o.origin(theirs));
             let (w, h) = (theirs.size.w as i32, theirs.size.h as i32);
             Rect::new(at.x - live.x, at.y - live.y, w, h)
@@ -199,7 +224,8 @@ fn stand(st: &mut AppState, m: &mut dyn Screen, place: Place, at: Pos, body: Pos
     m.update(st, &[]);
 }
 
-/// The step `d` from `from` on `place` (your body at `body` on the Net), what it did.
+/// The step `d` from `from` on `place` (your body at `body` on the Net), taken `how`,
+/// what it did. On turns each step has a fresh turn's moves.
 fn try_step(
     st: &mut AppState,
     m: &mut dyn Screen,
@@ -207,12 +233,29 @@ fn try_step(
     from: Pos,
     d: Dir,
     body: Pos,
+    how: How,
 ) -> Outcome {
     stand(st, m, place, from, body);
     let p = st.player.as_ref().unwrap();
     assert_eq!((p.place, p.pos), (place, from), "stood where put");
+    if how != How::Key {
+        st.net.engaged = None;
+        crate::net::engage(st, place, true);
+    }
     st.log = Default::default();
-    m.update(st, &[key(step_key(d))]);
+    match how {
+        How::Key | How::OnTurns => {
+            m.update(st, &[key(step_key(d))]);
+        }
+        How::Aimed => {
+            m.update(st, &[key(KeyCode::Char('g'))]);
+            m.update(st, &[key(step_key(d))]);
+            m.update(st, &[key(KeyCode::Enter)]);
+            st.tick += crate::net::WALK_TICKS;
+            m.update(st, &[]);
+        }
+    }
+    st.net.engaged = None;
     let p = st.player.as_ref().unwrap();
     Outcome {
         moved: (p.place, p.pos) != (place, from),
@@ -228,27 +271,56 @@ fn try_step(
 /// One situation tried on the street and the Net: each kind of thing in the way and an
 /// open step, then a second open step after them all (a key swallowed on the way would
 /// show there), what each did; and the kinds with nowhere beside them to stand.
-fn tried(st: &mut AppState, m: &mut dyn Screen, area: Area, scope: Scope) -> Tried {
+fn tried(st: &mut AppState, m: &mut dyn Screen, area: Area, scope: Scope, name: &str) -> Tried {
+    tried_by(st, m, area, scope, &[STREET, NET], How::Key, name)
+}
+
+/// One situation, `name`, tried as `tried` tries it, on `places` only and each step taken
+/// `how`; back where you were after (jacked in, your Net self where it stood), and Look
+/// round there (`looked_round`).
+fn tried_by(
+    st: &mut AppState,
+    m: &mut dyn Screen,
+    area: Area,
+    scope: Scope,
+    places: &[Place],
+    how: How,
+    name: &str,
+) -> Tried {
     let p = st.player.as_ref().unwrap();
-    let (at, body) = (p.pos, p.body.map_or(p.pos, |(_, b)| b));
+    let (at, body, was) = (p.pos, p.body.map_or(p.pos, |(_, b)| b), p.place);
     let (mut out, mut missed) = (Vec::new(), Vec::new());
-    for place in [STREET, NET] {
+    for &place in places {
         stand(st, m, place, at, body);
         let (tries, missing) = steps(st, area, place, scope);
         missed.extend(missing.into_iter().map(|k| (place, k)));
         let open = tries.iter().find(|(k, _, _)| *k == "open").copied();
         for (what, from, d) in tries {
-            let outcome = try_step(st, m, place, from, d, body);
+            let outcome = try_step(st, m, place, from, d, body, how);
             out.push((place, what, outcome));
         }
         if let Some((_, from, d)) = open {
-            let outcome = try_step(st, m, place, from, d, body);
+            let outcome = try_step(st, m, place, from, d, body, how);
             out.push((place, "open again", outcome));
         }
     }
-    // back where you were, on foot
-    stand(st, m, STREET, at, body);
+    // back where you were
+    stand(st, m, was, at, body);
+    looked_round(st, m, area, places, name);
     (out, missed)
+}
+
+/// Look round where you stand in a situation, on each of `places`: your own cell and a
+/// cell of each kind in sight round you in `area`, each read as it's drawn
+/// (`reads_as_drawn`); back where you were after.
+fn looked_round(st: &mut AppState, m: &mut dyn Screen, area: Area, places: &[Place], name: &str) {
+    let p = st.player.as_ref().unwrap();
+    let (at, body, was) = (p.pos, p.body.map_or(p.pos, |(_, b)| b), p.place);
+    for &place in places {
+        stand(st, m, place, at, body);
+        reads_as_drawn(st, m, area, &format!("{name} · {place:?}"));
+    }
+    stand(st, m, was, at, body);
 }
 
 fn here(st: &AppState) -> Settlement {
@@ -293,10 +365,17 @@ fn tile_of(st: &AppState, s: Settlement) -> Pos {
 /// map (in the live city's frame) with the step from there onto a cell it owns that its
 /// street lets you onto; none if it has no such edge.
 fn beside(st: &mut AppState, s: Settlement) -> Option<(Pos, Dir)> {
-    use citygen::overworld::detail;
     crate::outside::stream::tests::handover::hold(st, s);
+    edge_of(st, s)
+}
+
+/// A cell of the open ground beside held city or town `s`'s map (in the live city's
+/// frame) with the step from there onto a cell it owns that its street lets you onto;
+/// none if it has no such edge.
+fn edge_of(st: &AppState, s: Settlement) -> Option<(Pos, Dir)> {
+    use citygen::overworld::detail;
     let o = st.outside.as_ref().unwrap();
-    let (w, theirs) = (o.world(), o.held_city(s).unwrap());
+    let (w, theirs) = (o.world(), held_map(st, s));
     let (live, at) = (o.origin(st.city.as_ref().unwrap()), o.origin(theirs));
     let tile = |c: Pos| Pos::new(c.x.div_euclid(TILE), c.y.div_euclid(TILE));
     let (cw, ch) = (theirs.size.w as i32, theirs.size.h as i32);
@@ -354,6 +433,24 @@ fn richest(st: &AppState) -> Settlement {
         .3
 }
 
+/// The town of seed 3's world that can be walked into from the open ground nearest the
+/// home city.
+fn a_town(st: &AppState) -> Settlement {
+    let o = st.outside.as_ref().unwrap();
+    let home = o.block(st.city.as_ref().unwrap());
+    let mut towns: Vec<(Settlement, Rect)> = o
+        .others()
+        .into_iter()
+        .filter(|(s, _)| s.town.is_some())
+        .collect();
+    towns.sort_by_key(|(_, b)| (b.x - home.x).pow(2) + (b.y - home.y).pow(2));
+    towns
+        .into_iter()
+        .map(|(s, _)| s)
+        .find(|s| beside(&mut home_run(), *s).is_some())
+        .expect("a town to walk into")
+}
+
 /// Walked into city `s` on foot across the line from the open ground, by the arrow key.
 fn walked_in(s: Settlement) -> (AppState, Box<dyn Screen>) {
     let (mut st, mut m) = at_home();
@@ -397,10 +494,10 @@ fn came_home(s: Settlement) -> (AppState, Box<dyn Screen>) {
 }
 
 /// Jacked in on the home city's street, your Net self walked into the next city's Net
-/// by the arrow keys, then jacked out (J, and yes): back in the body, home again.
-fn net_and_back() -> (AppState, Box<dyn Screen>, Settlement) {
+/// by the arrow keys: it's live, your body in the home city held. The city, and where
+/// your body stood (home's frame).
+fn net_handed_over() -> (AppState, Box<dyn Screen>, Settlement, Pos) {
     let (mut st, mut m) = at_home();
-    let home = here(&st);
     let body = st.player.as_ref().unwrap().pos;
     let (s, x, d) = beside_a_city(&mut st);
     jacked(&mut st, (STREET, body), x);
@@ -412,6 +509,14 @@ fn net_and_back() -> (AppState, Box<dyn Screen>, Settlement) {
         "your Net self walked in: {:?}",
         st.log.latest()
     );
+    (st, m, s, body)
+}
+
+/// Jacked in on the home city's street, your Net self walked into the next city's Net
+/// by the arrow keys, then jacked out (J, and yes): back in the body, home again.
+fn net_and_back() -> (AppState, Box<dyn Screen>, Settlement) {
+    let (mut st, mut m, s, body) = net_handed_over();
+    let home = st.outside.as_ref().unwrap().home();
     let ScreenCmd::Push { to: mut ask, .. } = m.update(&mut st, &[key(KeyCode::Char('J'))]) else {
         panic!("jack out?")
     };
@@ -478,21 +583,91 @@ fn on_the_ground() -> (AppState, Box<dyn Screen>) {
 /// The home city live, city `s` held, and you in its streets held in the home city by a
 /// call on the line, so it isn't handed over: the city seen from outside.
 fn held_from_outside(s: Settlement) -> (AppState, Box<dyn Screen>) {
-    let (mut st, mut m) = at_home();
-    let home = here(&st);
+    let (mut st, m) = at_home();
     crate::outside::stream::tests::handover::hold(&mut st, s);
+    outside_of(st, m, s)
+}
+
+/// You in the streets of city or town `s` (held, not live) near its middle, held in the
+/// live city by a call on the line, so it isn't handed over: `s` seen from outside.
+fn outside_of(
+    mut st: AppState,
+    mut m: Box<dyn Screen>,
+    s: Settlement,
+) -> (AppState, Box<dyn Screen>) {
+    let live = here(&st);
     ringing(&mut st);
     let inside = {
         let o = st.outside.as_ref().unwrap();
-        let theirs = o.held_city(s).unwrap();
-        let (live, at) = (o.origin(st.city.as_ref().unwrap()), o.origin(theirs));
+        let theirs = held_map(&st, s);
+        let (at_live, at) = (o.origin(st.city.as_ref().unwrap()), o.origin(theirs));
         let q = o.street_of(theirs, tile_of(&st, s));
-        Pos::new(q.x + at.x - live.x, q.y + at.y - live.y)
+        Pos::new(q.x + at.x - at_live.x, q.y + at.y - at_live.y)
     };
     on_foot(&mut st, inside);
     m.update(&mut st, &[]);
-    assert_eq!(here(&st), home, "held in: not handed over");
+    assert_eq!(here(&st), live, "held in: not handed over");
     assert!(in_area(&st, Area::Held(s), inside));
+    (st, m)
+}
+
+/// Into city `s` and home again (`came_home`): `s` kept whole now. Then back into it on
+/// foot across the line from the open ground, by the arrow key.
+fn walked_in_again(s: Settlement) -> (AppState, Box<dyn Screen>) {
+    let (mut st, mut m) = came_home(s);
+    let o = st.outside.as_ref().unwrap();
+    assert!(
+        o.held_city(s).is_some() && !o.built.contains_key(&s),
+        "kept whole"
+    );
+    let (x, d) = edge_of(&st, s).expect("open ground beside it");
+    on_foot(&mut st, x);
+    m.update(&mut st, &[]);
+    m.update(&mut st, &[key(step_key(d))]);
+    assert_eq!(here(&st), s, "walked in again: {:?}", st.log.latest());
+    (st, m)
+}
+
+/// On the open ground by the truck stop (`on_the_ground`), the run saved there and
+/// reopened.
+fn ground_reopened() -> (AppState, Box<dyn Screen>) {
+    let (st, _) = on_the_ground();
+    let was = me(&st);
+    let mut back = reopen(st, "everywhere-ground");
+    back.rain = false;
+    let mut m = crate::screens::resume_screen(&mut back);
+    m.update(&mut back, &[]);
+    let at = me(&back);
+    assert_eq!(at, was, "reopened where it was");
+    assert!(in_area(&back, Area::Ground, at), "on the open ground");
+    crate::outside::stream::tend(&mut back, Rect::new(at.x - 48, at.y - 48, 97, 97));
+    (back, m)
+}
+
+/// On the open ground by the truck stop, jacked in at its pump (space beside it): your
+/// Net self on the open Net, your body by the pump.
+fn ground_jacked() -> (AppState, Box<dyn Screen>) {
+    let (mut st, mut m) = on_the_ground();
+    let by = {
+        let city = st.city.as_ref().unwrap();
+        let b = Beyond::of(&st).unwrap();
+        let map = MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day()).beyond(&b);
+        let pump = |q: Pos| {
+            map.tile(q)
+                .is_some_and(|t| t.feature == Some(Feature::Furniture(Furniture::Vending)))
+        };
+        cells(&st, Area::Ground, Scope::Near(16))
+            .into_iter()
+            .find(|q| map.walkable(*q) && nobody(&st, *q) && q.neighbors8().any(pump))
+            .expect("ground by the pump")
+    };
+    on_foot(&mut st, by);
+    m.update(&mut st, &[]);
+    m.update(&mut st, &[key(KeyCode::Char(' '))]);
+    let p = st.player.as_ref().unwrap();
+    assert!(p.jacked_in(), "jacked in: {:?}", st.log.latest());
+    let at = p.pos;
+    crate::outside::stream::tend(&mut st, Rect::new(at.x - 48, at.y - 48, 97, 97));
     (st, m)
 }
 
@@ -512,62 +687,121 @@ fn every_object_blocks_the_same_everywhere() {
     let (mut st, mut m) = at_home();
     let first = beside_a_city(&mut st).0;
     let rich = richest(&st);
+    let town = a_town(&st);
     let name = |s: Settlement| st.outside.as_ref().unwrap().name(s);
-    let towns = [(first, name(first)), (rich, name(rich))];
-    add(
-        "home at start".into(),
-        tried(&mut st, m.as_mut(), Area::Live, Scope::Map),
-    );
+    let towns = [(first, name(first)), (rich, name(rich)), (town, name(town))];
+    let town_name = name(town);
+    let name = String::from("home at start");
+    let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+    add(name, t);
     // into the next city on the way out of the home city, and into the one with the most
     // kinds of thing in the way, every way
     for (s, n) in &towns {
         let s = *s;
         let (mut st, mut m) = walked_in(s);
         let live = |what: &str| format!("{what} · {n}");
-        add(
-            live("walked in"),
-            tried(&mut st, m.as_mut(), Area::Live, Scope::Map),
-        );
+        let name = live("walked in");
+        let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+        add(name, t);
         // down from the overworld onto its tile, and that run saved and reopened there
         let (mut st, mut m) = came_down(s);
-        add(
-            live("down from the overworld"),
-            tried(&mut st, m.as_mut(), Area::Live, Scope::Map),
-        );
+        let name = live("down from the overworld");
+        let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+        add(name, t);
         let mut back = reopen(st, "everywhere-reopened");
         back.rain = false;
         assert_eq!(here(&back), s, "reopened there");
         let mut m = crate::screens::resume_screen(&mut back);
         m.update(&mut back, &[]);
-        add(
-            live("reopened"),
-            tried(&mut back, m.as_mut(), Area::Live, Scope::Map),
-        );
+        let name = live("reopened");
+        let t = tried(&mut back, m.as_mut(), Area::Live, Scope::Map, &name);
+        add(name, t);
         // home again by ↵ from the overworld
         let (mut st, mut m) = came_home(s);
-        add(
-            live("home again from"),
-            tried(&mut st, m.as_mut(), Area::Live, Scope::Map),
-        );
+        let name = live("home again from");
+        let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+        add(name, t);
         // held, seen from outside
         let (mut st, mut m) = held_from_outside(s);
-        add(
-            live("held, from outside"),
-            tried(&mut st, m.as_mut(), Area::Held(s), Scope::Map),
-        );
+        let name = live("held, from outside");
+        let t = tried(&mut st, m.as_mut(), Area::Held(s), Scope::Map, &name);
+        add(name, t);
     }
     // your Net self walked in, then jacked out: home again
     let (mut st, mut m, _) = net_and_back();
-    add(
-        "net and back".into(),
-        tried(&mut st, m.as_mut(), Area::Live, Scope::Map),
-    );
+    let name = String::from("net and back");
+    let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+    add(name, t);
     // the open ground
     let (mut st, mut m) = on_the_ground();
-    add(
-        "open ground".into(),
-        tried(&mut st, m.as_mut(), Area::Ground, Scope::Near(40)),
+    let name = String::from("open ground");
+    let t = tried(&mut st, m.as_mut(), Area::Ground, Scope::Near(40), &name);
+    add(name, t);
+    // the open ground, a run reopened there, and jacked in there at a pump
+    let (mut st, mut m) = ground_reopened();
+    let name = String::from("open ground, reopened");
+    let t = tried(&mut st, m.as_mut(), Area::Ground, Scope::Near(40), &name);
+    add(name, t);
+    let (mut st, mut m) = ground_jacked();
+    let name = String::from("open ground, jacked in");
+    let t = tried_by(
+        &mut st,
+        m.as_mut(),
+        Area::Ground,
+        Scope::Near(40),
+        &[NET],
+        How::Key,
+        &name,
     );
+    add(name, t);
+    // the home city set aside, seen from outside: down into the next city, and on its
+    // streets again held there by a call
+    let (st, m) = came_down(first);
+    let home = st.outside.as_ref().unwrap().home();
+    let (mut st, mut m) = outside_of(st, m, home);
+    let name = String::from("home set aside, from outside");
+    let t = tried(&mut st, m.as_mut(), Area::Held(home), Scope::Map, &name);
+    add(name, t);
+    // a city kept whole: seen from outside, and walked into again
+    let n = &towns[0].1;
+    let (st, m) = came_home(first);
+    let (mut st, mut m) = outside_of(st, m, first);
+    let name = format!("kept, from outside · {n}");
+    let t = tried(&mut st, m.as_mut(), Area::Held(first), Scope::Map, &name);
+    add(name, t);
+    let (mut st, mut m) = walked_in_again(first);
+    let name = format!("kept, walked in again · {n}");
+    let t = tried(&mut st, m.as_mut(), Area::Live, Scope::Map, &name);
+    add(name, t);
+    // your Net self in the next city, handed over to it: its Net, your body in the home
+    // city held
+    let (mut st, mut m, _, _) = net_handed_over();
+    let name = format!("net handed over · {n}");
+    let t = tried_by(
+        &mut st,
+        m.as_mut(),
+        Area::Live,
+        Scope::Map,
+        &[NET],
+        How::Key,
+        &name,
+    );
+    add(name, t);
+    // at home on turns: each step a move spent, and an aimed walk
+    for (how, what) in [(How::OnTurns, "on turns"), (How::Aimed, "aimed")] {
+        let (mut st, mut m) = at_home();
+        let name = format!("home, {what}");
+        let t = tried_by(
+            &mut st,
+            m.as_mut(),
+            Area::Live,
+            Scope::Map,
+            &[STREET, NET],
+            how,
+            &name,
+        );
+        add(name, t);
+    }
 
     let table: Vec<String> = rows
         .iter()
@@ -587,23 +821,28 @@ fn every_object_blocks_the_same_everywhere() {
         rows.iter()
             .any(|(n, p, k, _)| n == name && *p == place && *k == what)
     };
+    let on = |name: &str, place: Place| rows.iter().any(|(n, p, _, _)| n == name && *p == place);
     let mut names: Vec<&String> = rows.iter().map(|r| &r.0).collect();
     names.dedup();
     for name in names {
         let mut street = vec!["open", "open again"];
         let mut net = vec!["open", "open again"];
-        if name == "open ground" {
+        if name.starts_with("open ground") {
             street.extend(["vending machine", "sign"]);
-        } else if name.starts_with("held") {
+        } else if name.ends_with(&format!(" · {town_name}")) {
+            // a town: what its own map has, each kind stepped into (`missed` above)
+        } else if name.contains("from outside") {
             street.extend(["wall", "terminal"]);
         } else {
             street.extend(["wall", "terminal"]);
             net.push("construct wall");
         }
-        for what in street {
+        // only the places a situation was tried on (jacked in, only the Net)
+        assert!(on(name, STREET) || on(name, NET), "{name}: tried");
+        for what in street.into_iter().filter(|_| on(name, STREET)) {
             assert!(has(name, STREET, what), "{name}: no {what}\n{table}");
         }
-        for what in net {
+        for what in net.into_iter().filter(|_| on(name, NET)) {
             assert!(
                 has(name, NET, what),
                 "{name}: no {what} on the Net\n{table}"
@@ -633,6 +872,10 @@ fn every_object_blocks_the_same_everywhere() {
             !outcome.moved,
             "{name} · {place:?}: a {what} lets you through\n{table}"
         );
+        // an aim never goes onto what's in the way, so there is no step to refuse
+        if name.ends_with("aimed") {
+            continue;
+        }
         assert_eq!(
             outcome.said,
             says(what, *place),
@@ -692,12 +935,12 @@ fn a_sign_blocks_you() {
     // the city's own (a district's), not the world's ground on its map
     let (from, d) = a_ground_sign(&st, Area::Live, Scope::Map, |t| t.district.is_some())
         .expect("a billboard in the home city");
-    let street = try_step(&mut st, m.as_mut(), STREET, from, d, from);
+    let street = try_step(&mut st, m.as_mut(), STREET, from, d, from, How::Key);
     assert_eq!(street, stopped, "a billboard at {:?}", from.step(d));
     let (mut st, mut m) = on_the_ground();
     let (from, d) =
         a_ground_sign(&st, Area::Ground, Scope::Near(40), |_| true).expect("the stop's sign");
-    let ground = try_step(&mut st, m.as_mut(), STREET, from, d, from);
+    let ground = try_step(&mut st, m.as_mut(), STREET, from, d, from, How::Key);
     assert_eq!(ground, stopped, "a road sign at {:?}", from.step(d));
 }
 
@@ -1006,10 +1249,10 @@ const UNSEEN: &str = "You can't see there.";
 /// read as it's drawn, the box saying so.
 fn reads_as_drawn(st: &mut AppState, m: &mut dyn Screen, area: Area, name: &str) {
     let net = st.player.as_ref().unwrap().place == NET;
+    // your own cell: you, or what you stand on (a fixture first)
     let you = card_at(st, me(st));
-    assert_eq!(
-        you.header.as_deref(),
-        Some("You"),
+    assert!(
+        you.header.is_some() && you.body != vec![UNSEEN.to_string()],
         "{name}: your own cell {you:?}"
     );
     let (_, page) = looked(st, m, me(st));
@@ -1074,6 +1317,8 @@ fn as_once_live(st: &mut AppState, m: &mut dyn Screen, s: Settlement, name: &str
 fn look_reads_every_cell_as_drawn() {
     // on foot on the open ground by a truck stop at night
     let (mut st, mut m) = on_the_ground();
+    let you = card_at(&st, me(&st));
+    assert_eq!(you.header.as_deref(), Some("You"), "{you:?}");
     reads_as_drawn(&mut st, m.as_mut(), Area::Ground, "open ground");
     // tab: what's worth a look round you there, the stop's sign and lamps among it
     let pois = {
