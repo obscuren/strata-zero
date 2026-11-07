@@ -1,0 +1,758 @@
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index fdaee4b..a33ff37 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -5585,3 +5585,753 @@ fn manual_desk() {
+         shot_stack(&name, &st, &[&m], size);
+     }
+ }
++
++// ---- Throwaway: lock cracker mocks (#6). Not committed. ----
++
++#[derive(Clone, Copy, PartialEq)]
++enum CrackLook {
++    Slab,
++    Leech,
++    Scope,
++}
++
++#[derive(Clone, Copy, PartialEq)]
++enum CrackState {
++    Run,
++    Miss,
++    Fried,
++    Cracked,
++}
++
++struct MockCracker {
++    pad: Keypad,
++    look: CrackLook,
++    state: CrackState,
++    code: [u8; 4],
++    found: usize,
++    misses: u8,
++    marker: u16,
++}
++
++const CR_BAR: u16 = 18;
++/// Each beat's zone: its left cell and its width, narrower every hit.
++const CR_ZONES: [(u16, u16); 4] = [(6, 7), (10, 5), (3, 3), (12, 2)];
++
++fn cr_rgb(r: u8, g: u8, b: u8) -> Color {
++    Color::Rgb(r, g, b)
++}
++
++fn cr_put(buf: &mut Buffer, x: u16, y: u16, s: &str, fg: Color, bg: Color, bold: bool) {
++    let mut style = ratatui::style::Style::default().fg(fg).bg(bg);
++    if bold {
++        style = style.add_modifier(Modifier::BOLD);
++    }
++    buf.set_string(x, y, s, style);
++}
++
++fn cr_fill(buf: &mut Buffer, r: Rect, bg: Color) {
++    for y in r.y..r.bottom() {
++        for x in r.x..r.right() {
++            let c = &mut buf[(x, y)];
++            c.reset();
++            c.set_char(' ').set_bg(bg);
++        }
++    }
++}
++
++fn cr_frame(buf: &mut Buffer, r: Rect, fg: Color, bg: Color, heavy: bool) {
++    let (h, v, tl, tr, bl, br) = if heavy {
++        ("━", "┃", "┏", "┓", "┗", "┛")
++    } else {
++        ("─", "│", "┌", "┐", "└", "┘")
++    };
++    for x in r.x + 1..r.right() - 1 {
++        cr_put(buf, x, r.y, h, fg, bg, false);
++        cr_put(buf, x, r.bottom() - 1, h, fg, bg, false);
++    }
++    for y in r.y + 1..r.bottom() - 1 {
++        cr_put(buf, r.x, y, v, fg, bg, false);
++        cr_put(buf, r.right() - 1, y, v, fg, bg, false);
++    }
++    cr_put(buf, r.x, r.y, tl, fg, bg, false);
++    cr_put(buf, r.right() - 1, r.y, tr, fg, bg, false);
++    cr_put(buf, r.x, r.bottom() - 1, bl, fg, bg, false);
++    cr_put(buf, r.right() - 1, r.bottom() - 1, br, fg, bg, false);
++}
++
++impl MockCracker {
++    fn beat(&self) -> usize {
++        self.found.min(3)
++    }
++
++    /// The bar: a track, the zone, the marker; red all over on a miss.
++    #[allow(clippy::too_many_arguments)]
++    fn bar(&self, buf: &mut Buffer, x: u16, y: u16, track: Color, zone: Color, mark: Color, bg: Color) {
++        self.bar_caps(buf, x, y, track, zone, mark, bg, true);
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn bar_caps(&self, buf: &mut Buffer, x: u16, y: u16, track: Color, zone: Color, mark: Color, bg: Color, caps: bool) {
++        let (at, w) = CR_ZONES[self.beat()];
++        let miss = self.state == CrackState::Miss;
++        let x = if caps { x } else { x.saturating_sub(1) };
++        if caps {
++            cr_put(buf, x, y, "▕", track, bg, false);
++        }
++        for i in 0..CR_BAR {
++            let in_zone = i >= at && i < at + w;
++            let (ch, fg) = if i == self.marker && self.state == CrackState::Run {
++                ("█", mark)
++            } else if in_zone {
++                ("▒", if miss { cr_rgb(255, 40, 60) } else { zone })
++            } else {
++                ("─", if miss { cr_rgb(120, 20, 30) } else { track })
++            };
++            cr_put(buf, x + 1 + i, y, ch, fg, bg, false);
++        }
++        if caps {
++            cr_put(buf, x + 1 + CR_BAR, y, "▏", track, bg, false);
++        }
++    }
++
++    /// `4 7 _ _`: the digits cracked so far.
++    fn digits(&self) -> String {
++        (0..4)
++            .map(|i| {
++                if i < self.found {
++                    self.code[i].to_string()
++                } else {
++                    "_".to_string()
++                }
++            })
++            .collect::<Vec<_>>()
++            .join(" ")
++    }
++
++    fn leds(&self, buf: &mut Buffer, x: u16, y: u16, on: Color, off: Color, bg: Color) {
++        for i in 0..3u16 {
++            let lit = i < self.misses as u16;
++            cr_put(buf, x + i * 2, y, "●", if lit { on } else { off }, bg, false);
++        }
++    }
++
++    fn slab(&self, buf: &mut Buffer, pad: Rect) {
++        let body = cr_rgb(18, 16, 26);
++        let edge = cr_rgb(255, 0, 200);
++        let lcd = cr_rgb(4, 22, 12);
++        let on = cr_rgb(90, 255, 150);
++        let dim = cr_rgb(22, 90, 50);
++        let r = Rect::new(pad.right() + 3, pad.y + 2, 26, 13);
++        // The lead: clipped to the pad's edge, run to the slab.
++        for x in pad.right()..r.x {
++            cr_put(buf, x, r.y + 4, "╍", cr_rgb(170, 0, 130), cr_rgb(10, 8, 14), false);
++        }
++        cr_put(buf, pad.right() - 1, r.y + 4, "╡", edge, cr_rgb(40, 46, 54), true);
++        cr_fill(buf, r, body);
++        cr_frame(buf, r, edge, body, true);
++        cr_put(buf, r.x, r.y + 4, "┫", edge, body, true);
++        cr_put(buf, r.x + 2, r.y + 1, "▞▚ KEYJACK", edge, body, true);
++        cr_put(buf, r.x + 2, r.y + 10, "└┬┘ ╶─┴─╴ ┌┴┐ ╶┬╴ └─┘", cr_rgb(60, 30, 70), body, false);
++        cr_put(buf, r.x + 19, r.y + 2, "▚▞▚▞▚", cr_rgb(70, 20, 70), body, false);
++        cr_put(buf, r.x + 14, r.y + 1, "KJ-4", cr_rgb(150, 140, 170), body, false);
++        let led = match self.state {
++            CrackState::Cracked => cr_rgb(80, 255, 140),
++            CrackState::Fried | CrackState::Miss => cr_rgb(255, 40, 60),
++            CrackState::Run => cr_rgb(255, 180, 40),
++        };
++        cr_put(buf, r.right() - 3, r.y + 1, "●", led, body, false);
++        let glass = Rect::new(r.x + 2, r.y + 3, r.width - 4, 5);
++        cr_fill(buf, glass, lcd);
++        cr_frame(buf, glass, dim, lcd, false);
++        match self.state {
++            CrackState::Fried => {
++                cr_put(buf, glass.x + 2, glass.y + 1, "▒▒░ ▒░▒▒░▒ ░▒▒▒░", cr_rgb(40, 50, 40), lcd, false);
++                cr_put(buf, glass.x + 6, glass.y + 2, "FUSE  BLOWN", cr_rgb(255, 40, 60), lcd, true);
++                cr_put(buf, glass.x + 2, glass.y + 3, "░▒░▒▒ ░▒  ▒▒░▒░", cr_rgb(40, 50, 40), lcd, false);
++            }
++            CrackState::Cracked => {
++                self.bar(buf, glass.x + 1, glass.y + 1, dim, on, on, lcd);
++                cr_put(buf, glass.x + 3, glass.y + 3, &self.digits(), on, lcd, true);
++                cr_put(buf, glass.x + 13, glass.y + 3, "OPEN", on, lcd, true);
++            }
++            _ => {
++                self.bar(buf, glass.x + 1, glass.y + 1, dim, on, cr_rgb(230, 255, 235), lcd);
++                cr_put(buf, glass.x + 3, glass.y + 3, &self.digits(), on, lcd, true);
++                let tag = if self.state == CrackState::Miss { "ERR" } else { "   " };
++                cr_put(buf, glass.x + 15, glass.y + 3, tag, cr_rgb(255, 40, 60), lcd, true);
++            }
++        }
++        cr_put(buf, r.x + 2, r.y + 9, "FAULT", cr_rgb(150, 140, 170), body, false);
++        self.leds(buf, r.x + 8, r.y + 9, cr_rgb(255, 40, 60), cr_rgb(70, 20, 30), body);
++        cr_put(
++            buf,
++            r.x + 16,
++            r.y + 9,
++            &format!("BEAT {}/4", (self.found + 1).min(4)),
++            cr_rgb(150, 140, 170),
++            body,
++            false,
++        );
++        cr_put(buf, r.x + 2, r.y + 11, "space", edge, body, true);
++        cr_put(buf, r.x + 8, r.y + 11, "strike", cr_rgb(150, 140, 170), body, false);
++        cr_put(buf, r.x + 16, r.y + 11, "esc", edge, body, true);
++        cr_put(buf, r.x + 20, r.y + 11, "pull", cr_rgb(150, 140, 170), body, false);
++    }
++
++    fn leech(&self, buf: &mut Buffer, pad: Rect) {
++        let body = cr_rgb(24, 22, 30);
++        let edge = cr_rgb(255, 0, 200);
++        let glass_bg = cr_rgb(6, 18, 22);
++        let on = cr_rgb(255, 60, 210);
++        let dim = cr_rgb(90, 20, 75);
++        // The clamp over the pad's crown, its legs bitten into the glass.
++        let clamp = Rect::new(pad.x + 3, pad.y.saturating_sub(1), pad.width - 6, 3);
++        cr_fill(buf, clamp, body);
++        cr_frame(buf, clamp, edge, body, true);
++        cr_put(buf, clamp.x + 2, clamp.y + 1, "▟ LEECH ▙", edge, body, true);
++        let led = match self.state {
++            CrackState::Cracked => cr_rgb(80, 255, 140),
++            CrackState::Run => cr_rgb(255, 180, 40),
++            _ => cr_rgb(255, 40, 60),
++        };
++        cr_put(buf, clamp.right() - 3, clamp.y + 1, "●", led, body, false);
++        for dx in [4u16, 9, 14] {
++            cr_put(buf, clamp.x + dx, clamp.bottom(), "╽", edge, cr_rgb(40, 46, 54), false);
++        }
++        // The pad's own glass, taken over.
++        let inner = Rect::new(pad.x + 3, pad.y + 4, pad.width - 6, 2);
++        cr_fill(buf, inner, glass_bg);
++        self.bar_caps(buf, inner.x, inner.y, dim, on, cr_rgb(255, 255, 255), glass_bg, false);
++        cr_put(buf, inner.x + 1, inner.y + 1, &self.digits(), on, glass_bg, true);
++        if self.state == CrackState::Miss {
++            cr_put(buf, inner.x + 9, inner.y + 1, "ERR", cr_rgb(255, 40, 60), glass_bg, true);
++        }
++        self.leds(buf, inner.x + 14, inner.y + 1, cr_rgb(255, 40, 60), cr_rgb(70, 20, 30), glass_bg);
++    }
++
++    fn scope(&self, buf: &mut Buffer, pad: Rect) {
++        let body = cr_rgb(38, 32, 24);
++        let edge = cr_rgb(255, 170, 40);
++        let ph = cr_rgb(18, 11, 2);
++        let hot = cr_rgb(255, 196, 70);
++        let dim = cr_rgb(95, 58, 12);
++        let r = Rect::new(pad.right() + 3, pad.y + 1, 28, 15);
++        for y in [r.y + 5, r.y + 6] {
++            for x in pad.right()..r.x {
++                cr_put(buf, x, y, "─", cr_rgb(150, 100, 20), cr_rgb(10, 8, 6), false);
++            }
++        }
++        cr_put(buf, pad.right() - 1, r.y + 5, "┥", edge, cr_rgb(40, 46, 54), true);
++        cr_put(buf, pad.right() - 1, r.y + 6, "┥", edge, cr_rgb(40, 46, 54), true);
++        cr_fill(buf, r, body);
++        cr_frame(buf, r, edge, body, true);
++        cr_put(buf, r.x + 2, r.y + 1, "TUMBLER", edge, body, true);
++        cr_put(buf, r.x + 10, r.y + 1, "T9 · pin scope", cr_rgb(170, 140, 90), body, false);
++        // The trace: a hum across the pad's lines, the true pin a hot window.
++        let screen = Rect::new(r.x + 2, r.y + 3, r.width - 4, 6);
++        cr_fill(buf, screen, ph);
++        let (at, w) = CR_ZONES[self.beat()];
++        let cols = screen.width - 2;
++        let levels = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
++        for c in 0..cols {
++            let bar_i = c * CR_BAR / cols;
++            let in_zone = bar_i >= at && bar_i < at + w;
++            let t = c as f32 / cols as f32 * 12.0 + self.found as f32;
++            let base = ((t.sin() * 0.5 + 0.5) * 9.0) as i32 + 2;
++            let h = if in_zone { 22 } else { base };
++            let marker = bar_i == self.marker && self.state == CrackState::Run;
++            let miss = self.state == CrackState::Miss;
++            let fg = if marker {
++                cr_rgb(255, 255, 240)
++            } else if in_zone && miss {
++                cr_rgb(255, 40, 60)
++            } else if in_zone {
++                hot
++            } else {
++                dim
++            };
++            let bg = if marker { cr_rgb(80, 60, 20) } else { ph };
++            for row in 0..3i32 {
++                let y = screen.y + 4 - row as u16;
++                let fill = (h - row * 8).clamp(0, 8);
++                let ch = if fill == 0 { " " } else { levels[(fill - 1) as usize] };
++                cr_put(buf, screen.x + 1 + c, y, ch, fg, bg, false);
++            }
++        }
++        cr_put(buf, screen.x + 1, screen.y, "PIN", dim, ph, false);
++        cr_put(buf, screen.x + 5, screen.y, &format!("{}", (self.found + 1).min(4)), hot, ph, true);
++        if self.state == CrackState::Miss {
++            cr_put(buf, screen.right() - 6, screen.y, "SLIP", cr_rgb(255, 40, 60), ph, true);
++        }
++        cr_put(buf, r.x + 2, r.y + 10, "CODE", cr_rgb(170, 140, 90), body, false);
++        cr_put(buf, r.x + 7, r.y + 10, &self.digits(), hot, body, true);
++        cr_put(buf, r.x + 15, r.y + 10, "SLIPS", cr_rgb(170, 140, 90), body, false);
++        self.leds(buf, r.x + 21, r.y + 10, cr_rgb(255, 40, 60), cr_rgb(70, 30, 20), body);
++        cr_put(buf, r.x + 2, r.y + 12, "space", edge, body, true);
++        cr_put(buf, r.x + 8, r.y + 12, "catch the pin", cr_rgb(170, 140, 90), body, false);
++        cr_put(buf, r.x + 2, r.y + 13, "esc", edge, body, true);
++        cr_put(buf, r.x + 8, r.y + 13, "unclip", cr_rgb(170, 140, 90), body, false);
++    }
++}
++
++impl Screen for MockCracker {
++    fn update(&mut self, _: &mut AppState, _: &[crossterm::event::KeyEvent]) -> crate::app::ScreenCmd {
++        crate::app::ScreenCmd::Stay
++    }
++    fn draw(&self, st: &AppState, f: &mut ratatui::Frame) {
++        self.pad.draw(st, f);
++        let area = f.area();
++        let w = crate::ui::device::DEVICE_W.min(area.width);
++        let h = crate::ui::device::DEVICE_H.min(area.height);
++        let pad = Rect::new(
++            area.x + area.width.saturating_sub(w) / 2,
++            area.y + area.height.saturating_sub(h) / 2,
++            w,
++            h,
++        );
++        let buf = f.buffer_mut();
++        match self.look {
++            CrackLook::Slab => self.slab(buf, pad),
++            CrackLook::Leech => self.leech(buf, pad),
++            CrackLook::Scope => self.scope(buf, pad),
++        }
++    }
++}
++
++#[test]
++#[ignore]
++fn cracker_mock() {
++    let frames: [(&str, CrackLook, CrackState, usize, u8, u16, Option<bool>); 9] = [
++        ("a_beat1", CrackLook::Slab, CrackState::Run, 0, 0, 3, None),
++        ("a_beat4", CrackLook::Slab, CrackState::Run, 3, 1, 10, None),
++        ("a_miss", CrackLook::Slab, CrackState::Miss, 2, 2, 0, None),
++        ("a_fried", CrackLook::Slab, CrackState::Fried, 2, 3, 0, Some(false)),
++        ("a_cracked", CrackLook::Slab, CrackState::Cracked, 4, 1, 0, Some(true)),
++        ("b_beat3", CrackLook::Leech, CrackState::Run, 2, 1, 8, None),
++        ("b_miss", CrackLook::Leech, CrackState::Miss, 1, 2, 0, None),
++        ("c_beat2", CrackLook::Scope, CrackState::Run, 1, 0, 6, None),
++        ("c_beat4", CrackLook::Scope, CrackState::Run, 3, 2, 15, None),
++    ];
++    for (name, look, state, found, misses, marker, verdict) in frames {
++        for (w, h) in [(120u16, 40u16), (100, 30)] {
++            let mut st = state_home();
++            let map = MapScreen::walking(&mut st);
++            crate::jobs::first_favour(&mut st);
++            st.tick += 200;
++            let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
++            let seed = st.city.as_ref().unwrap().seed;
++            let code = citygen::rng::door_code(seed, b, level, number);
++            let digits = [
++                (code / 1000 % 10) as u8,
++                (code / 100 % 10) as u8,
++                (code / 10 % 10) as u8,
++                (code % 10) as u8,
++            ];
++            let mut pad = Keypad::open(&st, b, level, number);
++            for d in digits.iter().take(found) {
++                pad.show_digit(*d);
++            }
++            if let Some(open) = verdict {
++                pad.show_verdict(open, st.tick);
++            }
++            let cracker = MockCracker {
++                pad,
++                look,
++                state,
++                code: digits,
++                found,
++                misses,
++                marker,
++            };
++            shot_stack(
++                &format!("crack_{name}_{w}x{h}"),
++                &st,
++                &[&map, &cracker],
++                (w, h),
++            );
++        }
++    }
++}
++
++// ---- Throwaway: the Keyjack's drawings and the pad's clip key (#6). Not committed. ----
++
++mod kj {
++    use crate::ui::cyberdeck::Pen;
++    use crate::ui::hardware::rgb;
++    use crate::ui::pixels::Pixels;
++    use ratatui::style::Color;
++
++    pub const W: u16 = 60;
++    pub const H: u16 = 16;
++
++    pub const CASE: Color = rgb(0x1c1726);
++    const CASE_HI: Color = rgb(0x2f2742);
++    const CASE_LO: Color = rgb(0x0f0c16);
++    pub const EDGE: Color = rgb(0xff00c8);
++    const EDGE_DK: Color = rgb(0x7a0064);
++    pub const LCD: Color = rgb(0x06180e);
++    const BEZEL: Color = rgb(0x0b0a10);
++    const SCREW: Color = rgb(0x8a8a9a);
++    pub const BTN: Color = rgb(0xc8108f);
++    const BTN_HI: Color = rgb(0xff4fd2);
++    const BTN2: Color = rgb(0x3a3048);
++    const CABLE: Color = rgb(0x2a2a32);
++    const CABLE_HI: Color = rgb(0x55555f);
++    const CLIP: Color = rgb(0xc0c4cc);
++    const CLIP_DK: Color = rgb(0x6c7078);
++    const PCB: Color = rgb(0x0f3a24);
++    const PCB_HI: Color = rgb(0x18522f);
++    const GOLD: Color = rgb(0xc9a23a);
++    const SILVER: Color = rgb(0xb4bcc6);
++    const CHIP: Color = rgb(0x0a0b0d);
++    const CAP: Color = rgb(0x2b4f92);
++    const GLASS: Color = rgb(0x9ad4dc);
++    const SMOKE: Color = rgb(0x34302e);
++    pub const ON: Color = rgb(0x5aff96);
++    pub const DIM: Color = rgb(0x1e7a46);
++    pub const INK: Color = rgb(0x9a90b0);
++
++    fn shell(c: &mut Pixels) {
++        c.rect(14, 4, 54, 30, CASE);
++        c.hline(15, 53, 4, CASE_HI);
++        c.hline(15, 53, 5, EDGE);
++        c.hline(14, 54, 29, CASE_LO);
++        c.vline(53, 6, 29, CASE_LO);
++        c.vline(14, 6, 29, EDGE_DK);
++        for (x, y) in [(14, 4), (53, 4), (14, 29), (53, 29)] {
++            c.px(x, y, None);
++        }
++    }
++
++    fn lead(c: &mut Pixels) {
++        // The strain relief, the lead, and an alligator clip, jaws open to the pad.
++        c.rect(11, 11, 14, 15, CASE_LO);
++        c.hline(9, 11, 12, CABLE_HI);
++        c.hline(9, 11, 13, CABLE);
++        c.rect(7, 9, 9, 16, CLIP_DK);
++        c.hline(2, 7, 9, CLIP);
++        c.hline(0, 7, 10, CLIP);
++        c.hline(0, 7, 15, CLIP_DK);
++        c.hline(2, 7, 16, CLIP_DK);
++        for x in (0..7).step_by(2) {
++            c.px(x, 11, Some(CLIP));
++            c.px(x + 1, 14, Some(CLIP_DK));
++        }
++    }
++
++    /// The front: the slab with its LCD, fault lights, the strike key and the lead.
++    pub fn front(p: &mut Pen) {
++        let mut c = Pixels::new(W, H);
++        shell(&mut c);
++        lead(&mut c);
++        for (x, y) in [(16, 7), (51, 7), (16, 27), (51, 27)] {
++            c.px(x, y, Some(SCREW));
++        }
++        c.rect(18, 8, 47, 20, BEZEL);
++        c.rect(19, 9, 46, 19, LCD);
++        // The strike key and the pull key.
++        c.rect(36, 20, 46, 26, BTN);
++        c.hline(36, 46, 20, BTN_HI);
++        c.rect(48, 21, 52, 25, BTN2);
++        // Grip ridges on the right flank.
++        for y in (9..19).step_by(2) {
++            c.hline(48, 52, y, CASE_HI);
++        }
++        c.fold(p, 0, 0);
++        p.put(17, 3, "▞▚ KEYJACK", EDGE, Some(CASE), true);
++        p.put(29, 3, "KJ-4", INK, Some(CASE), false);
++        p.put(38, 3, "FUSE", INK, Some(CASE), false);
++        p.put(43, 3, "●", ON, Some(CASE), false);
++        p.put(20, 5, "▕─────▒▒▒▒▒▒▒──────────▏", DIM, Some(LCD), false);
++        p.put(26, 5, "▒▒▒▒▒▒▒", ON, Some(LCD), false);
++        p.put(22, 5, "█", rgb(0xe6ffeb), Some(LCD), false);
++        p.put(22, 7, "_ _ _ _", ON, Some(LCD), true);
++        p.put(37, 7, "READY", DIM, Some(LCD), false);
++        p.put(19, 11, "FAULT", INK, Some(CASE), false);
++        p.put(25, 11, "● ● ●", rgb(0x4a1420), Some(CASE), false);
++        p.put(38, 11, "STRIKE", rgb(0xffe6f6), Some(BTN), true);
++        p.put(19, 13, "street-built · no warranty", rgb(0x4a4060), Some(CASE), false);
++    }
++
++    /// The back, opened: the board, the chip, and the fuse in its holder.
++    pub fn back(p: &mut Pen, fuse: Option<bool>) {
++        let mut c = Pixels::new(W, H);
++        shell(&mut c);
++        lead(&mut c);
++        c.rect(16, 7, 52, 28, PCB);
++        // Traces.
++        c.hline(18, 50, 17, GOLD);
++        c.vline(31, 9, 17, GOLD);
++        c.vline(41, 9, 27, GOLD);
++        c.hline(18, 28, 10, PCB_HI);
++        c.hline(36, 50, 24, PCB_HI);
++        c.vline(19, 18, 27, GOLD);
++        // The chip, pins up and down.
++        c.rect(21, 9, 30, 15, CHIP);
++        for x in (22..30).step_by(2) {
++            c.px(x, 8, Some(SILVER));
++            c.px(x, 15, Some(SILVER));
++        }
++        // Capacitors.
++        for x in [34, 37] {
++            c.rect(x, 9, x + 2, 14, CAP);
++            c.hline(x, x + 2, 9, SILVER);
++        }
++        // The cell that runs it.
++        c.rect(44, 9, 51, 16, rgb(0x30303a));
++        c.hline(44, 51, 9, rgb(0x5a5a66));
++        // The fuse holder's clips, and the fuse.
++        c.rect(22, 19, 25, 26, SILVER);
++        c.rect(34, 19, 37, 26, SILVER);
++        match fuse {
++            Some(true) => {
++                c.rect(25, 20, 34, 25, GLASS);
++                c.hline(25, 34, 22, GOLD);
++                c.rect(23, 20, 26, 25, SILVER);
++                c.rect(33, 20, 36, 25, SILVER);
++            }
++            Some(false) => {
++                c.rect(25, 20, 34, 25, SMOKE);
++                c.hline(25, 28, 22, GOLD);
++                c.hline(31, 34, 22, GOLD);
++                c.rect(28, 21, 31, 24, CHIP);
++                c.rect(23, 20, 26, 25, SILVER);
++                c.rect(33, 20, 36, 25, SILVER);
++            }
++            None => {}
++        }
++        // The screws, out and lying by the case.
++        for (x, y) in [(16, 7), (51, 7), (16, 27), (51, 27)] {
++            c.px(x, y, Some(CHIP));
++        }
++        for (x, y) in [(56, 26), (58, 28), (57, 30)] {
++            c.px(x, y, Some(SCREW));
++        }
++        c.fold(p, 0, 0);
++        p.put(22, 5, "KJ4", rgb(0x8a8a9a), Some(CHIP), false);
++        p.put(43, 5, "3V", rgb(0x9a9aa6), Some(rgb(0x30303a)), false);
++        p.put(23, 13, "FUSE", rgb(0x7fbf8f), Some(PCB), false);
++        if fuse == Some(false) {
++            p.put(29, 13, "BLOWN", rgb(0xff2840), Some(PCB), true);
++        }
++    }
++}
++
++/// A blueprint window over the deck, its inside replaced with the Keyjack.
++struct MockKeyjack {
++    window: Blueprint,
++    mode: u8,
++    fuse: Option<bool>,
++    tray: Option<usize>,
++}
++
++const KJ_FUSES: [(&str, &str); 4] = [
++    ("STOCK FUSE", "no bonus"),
++    ("CERAMIC FUSE", "faults +1"),
++    ("SLOW-BLOW", "marker slower"),
++    ("WIDEBAND", "zones +1"),
++];
++
++impl Screen for MockKeyjack {
++    fn update(&mut self, _: &mut AppState, _: &[crossterm::event::KeyEvent]) -> crate::app::ScreenCmd {
++        crate::app::ScreenCmd::Stay
++    }
++    fn draw(&self, st: &AppState, f: &mut ratatui::Frame) {
++        self.window.draw(st, f);
++        let r = Blueprint::rect(f.area());
++        let buf = f.buffer_mut();
++        // The window's own frame and title style, sampled before the inside goes.
++        let title_style = buf[(r.x + 3, r.y)].style();
++        let band = buf[(r.right() - 3, r.y)].clone();
++        let hint_style = buf[(r.x + 2, r.bottom() - 2)].style();
++        let inner_bg = buf[(r.x + 2, r.y + 2)].bg;
++        for x in r.x + 1..r.right() - 1 {
++            buf[(x, r.y)] = band.clone();
++        }
++        let title = if self.mode == 0 {
++            " BLUEPRINT · KEYJACK "
++        } else {
++            " MODDING · KEYJACK "
++        };
++        buf.set_string(r.x + 2, r.y, title, title_style);
++        for y in r.y + 1..r.bottom() - 1 {
++            for x in r.x + 1..r.right() - 1 {
++                let c = &mut buf[(x, y)];
++                c.reset();
++                c.set_char(' ').set_bg(inner_bg);
++            }
++        }
++        let ox = r.x + (r.width - kj::W) / 2;
++        let oy = r.y + if r.height >= 32 { 6 } else { 3 };
++        {
++            let mut pen = crate::ui::cyberdeck::Pen {
++                clip: r,
++                buf: &mut *buf,
++                ox,
++                oy,
++            };
++            if self.mode == 0 {
++                kj::front(&mut pen);
++            } else {
++                kj::back(&mut pen, self.fuse);
++            }
++        }
++        let style = |fg: Color, bold: bool| {
++            let s = ratatui::style::Style::default().fg(fg).bg(inner_bg);
++            if bold { s.add_modifier(Modifier::BOLD) } else { s }
++        };
++        let cyan = Color::Rgb(0, 229, 255);
++        let text = Color::Rgb(205, 212, 222);
++        let dim = Color::Rgb(110, 120, 135);
++        let hint_y = r.bottom() - 2;
++        if self.mode == 0 {
++            let dy = oy + kj::H + 1;
++            buf.set_string(r.x + 4, dy, "A slab on a lead that clips onto a door's keypad and", style(text, false));
++            buf.set_string(r.x + 4, dy + 1, "works its four digits out with you, a beat at a time.", style(text, false));
++            buf.set_string(r.x + 4, dy + 3, "fuse", style(dim, false));
++            buf.set_string(r.x + 9, dy + 3, "STOCK", style(cyan, true));
++            buf.set_string(r.x + 15, dy + 3, "· faults 3 · zones as rated", style(dim, false));
++            buf.set_string(r.x + 2, hint_y, "m mod · s stickers · esc close", hint_style);
++        } else {
++            // The socket's dashed box round the fuse holder.
++            let (sx, sy, sw, sh) = (ox + 20, oy + 9, 19, 5);
++            let dash = |buf: &mut Buffer, x: u16, y: u16, ch: &str| {
++                let under = buf[(x, y)].bg;
++                buf.set_string(x, y, ch, style(cyan, false).bg(under));
++            };
++            for x in sx..sx + sw {
++                dash(buf, x, sy, "╌");
++                dash(buf, x, sy + sh - 1, "╌");
++            }
++            for y in sy..sy + sh {
++                dash(buf, sx, y, "╎");
++                dash(buf, sx + sw - 1, y, "╎");
++            }
++            let info_y = hint_y - 2;
++            if let Some(sel) = self.tray {
++                let ty = info_y - 4;
++                buf.set_string(r.x + 4, ty, "FUSES", style(dim, true));
++                let mut x = r.x + 12;
++                for (i, (name, what)) in KJ_FUSES.iter().enumerate() {
++                    let card = Color::Rgb(58, 63, 72);
++                    let w = 16u16;
++                    for dx in 0..w {
++                        buf.set_string(x + dx, ty, " ", style(text, false).bg(card));
++                        buf.set_string(x + dx, ty + 1, " ", style(text, false).bg(card));
++                    }
++                    buf.set_string(x + 1, ty, name, style(Color::Rgb(235, 240, 245), true).bg(card));
++                    buf.set_string(x + 1, ty + 1, what, style(text, false).bg(card));
++                    if i == sel {
++                        for (cx, cy, ch) in [
++                            (x - 1, ty - 1, "┏"),
++                            (x + w, ty - 1, "┓"),
++                            (x - 1, ty + 2, "┗"),
++                            (x + w, ty + 2, "┛"),
++                        ] {
++                            buf.set_string(cx, cy, ch, style(cyan, false));
++                        }
++                    }
++                    x += w + 2;
++                }
++                let (name, what) = KJ_FUSES[sel];
++                buf.set_string(r.x + 2, info_y, name, style(cyan, true));
++                let after = r.x + 3 + name.chars().count() as u16;
++                buf.set_string(after, info_y, &format!("▸ socket FUSE · {what}"), style(text, false));
++                buf.set_string(r.x + 2, hint_y, "↔ fuses · space fit · esc back", hint_style);
++            } else {
++                buf.set_string(r.x + 2, info_y, "SOCKET FUSE", style(cyan, true));
++                let line = match self.fuse {
++                    Some(true) => "▸ Stock fuse · no bonus",
++                    Some(false) => "▸ blown · the Keyjack won't run until a fuse goes in",
++                    None => "▸ empty · the Keyjack won't run",
++                };
++                buf.set_string(r.x + 14, info_y, line, style(text, false));
++                buf.set_string(r.x + 2, hint_y, "space choose · m inspect · esc close", hint_style);
++            }
++        }
++    }
++}
++
++/// The door's pad with the clip key under it.
++struct MockClip {
++    pad: Keypad,
++    fused: bool,
++}
++
++impl Screen for MockClip {
++    fn update(&mut self, _: &mut AppState, _: &[crossterm::event::KeyEvent]) -> crate::app::ScreenCmd {
++        crate::app::ScreenCmd::Stay
++    }
++    fn draw(&self, st: &AppState, f: &mut ratatui::Frame) {
++        self.pad.draw(st, f);
++        let pad = self.pad.rect(f.area());
++        let buf = f.buffer_mut();
++        let bg = Color::Rgb(18, 16, 26);
++        let y = pad.bottom();
++        let (key, text, fg) = if self.fused {
++            ("k", " clip the keyjack ", Color::Rgb(205, 212, 222))
++        } else {
++            ("k", " keyjack · no fuse ", Color::Rgb(90, 96, 110))
++        };
++        let w = 3 + text.chars().count() as u16;
++        let x = pad.x + (pad.width.saturating_sub(w)) / 2;
++        let key_fg = if self.fused {
++            Color::Rgb(255, 0, 200)
++        } else {
++            Color::Rgb(90, 60, 85)
++        };
++        buf.set_string(
++            x,
++            y,
++            format!(" {key} "),
++            ratatui::style::Style::default()
++                .fg(key_fg)
++                .bg(bg)
++                .add_modifier(Modifier::BOLD),
++        );
++        buf.set_string(x + 3, y, text, ratatui::style::Style::default().fg(fg).bg(bg));
++    }
++}
++
++#[test]
++#[ignore]
++fn keyjack_art_mock() {
++    for (w, h) in [(120u16, 40u16), (100, 30)] {
++        let size = (w, h);
++        // The clip key on the pad, fused and not.
++        for (name, fused) in [("clip", true), ("clip_nofuse", false)] {
++            let mut st = state_home();
++            let map = MapScreen::walking(&mut st);
++            crate::jobs::first_favour(&mut st);
++            st.tick += 200;
++            let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
++            let pad = Keypad::open(&st, b, level, number);
++            let clip = MockClip { pad, fused };
++            shot_stack(&format!("kj_{name}_{w}x{h}"), &st, &[&map, &clip], size);
++        }
++        // The Keyjack on its blueprint, and opened up.
++        for (name, mode, fuse, tray) in [
++            ("front", 0u8, Some(true), None),
++            ("back", 1, Some(true), None),
++            ("back_tray", 1, Some(true), Some(1usize)),
++            ("back_blown", 1, Some(false), None),
++        ] {
++            let mut st = state_home();
++            let map = MapScreen::walking(&mut st);
++            let mut deck = Deck::new(st.tick);
++            deck.update(&mut st, &[key(KeyCode::Char('3'))]);
++            st.tick += 200;
++            if st.tick % 90 < 3 {
++                st.tick += 3;
++            }
++            let window = Blueprint::open(&st, ItemId::new("copper_coil"), false, None);
++            let mock = MockKeyjack {
++                window,
++                mode,
++                fuse,
++                tray,
++            };
++            shot_stack(&format!("kj_{name}_{w}x{h}"), &st, &[&map, &deck, &mock], size);
++        }
++    }
++}
