@@ -375,13 +375,17 @@ impl DeckLook {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ItemLook {
     Ratchet,
+    /// The lock cracker: its front, and its back opened on the fuse's socket.
+    Keyjack,
 }
 
 impl ItemLook {
     /// The sockets the drawing places, by name and kind; its length is the room for them.
+    /// A drawing with a back places them on the back.
     pub fn sockets(self) -> &'static [(&'static str, SocketKind)] {
         match self {
             ItemLook::Ratchet => &[("MUZZLE", SocketKind::Muzzle), ("RAIL", SocketKind::Rail)],
+            ItemLook::Keyjack => &[("FUSE", SocketKind::Fuse)],
         }
     }
 }
@@ -398,6 +402,8 @@ pub enum SocketKind {
     Forearm,
     /// On a drone cradle: where a drone docks.
     Bay,
+    /// On a Keyjack's board: the fuse it runs on.
+    Fuse,
 }
 
 impl SocketKind {
@@ -410,6 +416,7 @@ impl SocketKind {
             SocketKind::Hand => "hand",
             SocketKind::Forearm => "forearm",
             SocketKind::Bay => "bay",
+            SocketKind::Fuse => "fuse",
         }
     }
 
@@ -422,6 +429,7 @@ impl SocketKind {
             SocketKind::Hand => "hand chrome",
             SocketKind::Forearm => "forearm chrome",
             SocketKind::Bay => "drones",
+            SocketKind::Fuse => "fuses",
         }
     }
 
@@ -434,6 +442,7 @@ impl SocketKind {
             SocketKind::Hand => "hand socket",
             SocketKind::Forearm => "forearm socket",
             SocketKind::Bay => "bay",
+            SocketKind::Fuse => "fuse socket",
         }
     }
 
@@ -489,6 +498,12 @@ pub enum Mod {
     Power(i8),
     /// Added to one of the wearer's attributes.
     Attribute(Attribute, i8),
+    /// Added to the faults a Keyjack's run allows.
+    Faults(i8),
+    /// The Keyjack's marker at this percent of its speed.
+    Sweep(u8),
+    /// Cells added to each lit zone of a Keyjack's run.
+    Zone(i8),
 }
 
 /// A number with its sign always shown; a negative takes a real minus, as the
@@ -508,6 +523,9 @@ impl Mod {
             Mod::TraceCut(n) => format!("trace per cast \u{2212}{n}%"),
             Mod::Power(n) => format!("program power {}", signed(*n)),
             Mod::Attribute(s, n) => format!("{} {}", s.label(), signed(*n)),
+            Mod::Faults(n) => format!("faults {}", signed(*n)),
+            Mod::Sweep(n) => format!("marker {}", sweep(*n)),
+            Mod::Zone(n) => format!("zones {}", signed(*n)),
         }
     }
 
@@ -517,7 +535,19 @@ impl Mod {
             Mod::TraceCut(n) => format!("TRACE \u{2212}{n}%"),
             Mod::Power(n) => format!("POWER {}", signed(*n)),
             Mod::Attribute(s, n) => format!("{} {}", s.name(), signed(*n)),
+            Mod::Faults(n) => format!("FAULTS {}", signed(*n)),
+            Mod::Sweep(n) => sweep(*n).to_uppercase(),
+            Mod::Zone(n) => format!("ZONES {}", signed(*n)),
         }
+    }
+}
+
+/// Which way a marker at `n` percent of its speed has gone.
+fn sweep(n: u8) -> &'static str {
+    match n {
+        0..100 => "slower",
+        100 => "as it was",
+        _ => "faster",
     }
 }
 
@@ -529,6 +559,11 @@ pub enum HardwareLook {
     Sidecar,
     Hushcan,
     Redeye,
+    /// The Keyjack's fuses: one drawing, tinted per tier.
+    FuseStock,
+    FuseCeramic,
+    FuseSlowBlow,
+    FuseWideband,
 }
 
 impl HardwareLook {
@@ -540,6 +575,10 @@ impl HardwareLook {
             }
             HardwareLook::Hushcan => SocketKind::Muzzle,
             HardwareLook::Redeye => SocketKind::Rail,
+            HardwareLook::FuseStock
+            | HardwareLook::FuseCeramic
+            | HardwareLook::FuseSlowBlow
+            | HardwareLook::FuseWideband => SocketKind::Fuse,
         }
     }
 }
@@ -548,8 +587,19 @@ impl HardwareLook {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Hardware {
     pub fits: SocketKind,
+    /// Empty only on a fuse, whose stock tier changes nothing.
     pub mods: Vec<Mod>,
     pub look: HardwareLook,
+}
+
+impl Hardware {
+    /// What its cards read: a line per mod, or that it has no bonus.
+    pub fn lines(&self) -> Vec<String> {
+        if self.mods.is_empty() {
+            return vec!["no bonus".to_string()];
+        }
+        self.mods.iter().map(Mod::line).collect()
+    }
 }
 
 fn bold() -> bool {

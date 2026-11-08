@@ -207,6 +207,16 @@ pub fn standing_word(standing: i32) -> &'static str {
     }
 }
 
+/// Work done in the Net, which a runner needs a deck in the slot for.
+pub fn is_net_work(kind: KindTag) -> bool {
+    matches!(kind, KindTag::Copy | KindTag::Plant)
+}
+
+/// Whether the runner has a deck in the DECK slot (one in the pack doesn't count).
+pub fn has_deck(st: &crate::app::AppState) -> bool {
+    st.character.deck(&st.content).is_some()
+}
+
 /// The standing from which a fixer offers this work.
 pub fn opens_at(kind: KindTag, vault: bool) -> i32 {
     match kind {
@@ -326,6 +336,16 @@ impl Jobs {
         }
         if standing >= PLANT_AT {
             out.push(KindTag::Plant);
+        }
+        out
+    }
+
+    /// The kinds a fixer offers a runner: Copy (vaults too) and Plant are Net work and
+    /// need a deck in the DECK slot; Fetch and Deliver are for every build.
+    pub fn allowed_for(standing: i32, deck: bool) -> Vec<KindTag> {
+        let mut out = Self::allowed(standing);
+        if !deck {
+            out.retain(|k| !is_net_work(*k));
         }
         out
     }

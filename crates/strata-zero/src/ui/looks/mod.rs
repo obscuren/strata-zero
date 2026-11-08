@@ -1,6 +1,9 @@
 //! Items drawn by a look: the drawing an item with sockets wears on its blueprint
-//! and where its sockets sit on it.
+//! and where its sockets sit on it. A look may have a back as well as a front: the
+//! item opened up, which modding works on. Its sockets, and what is fitted in them,
+//! are on the back alone.
 
+pub mod keyjack;
 pub mod ratchet;
 
 use crate::ui::art::{Art, PartPlace, SocketPlace, StickerArea};
@@ -23,30 +26,41 @@ pub struct ItemArt {
     pub stickers: Vec<Placed>,
 }
 
-/// The drawing's size for a look.
+/// The drawing's size for a look; a back is the front's size.
 fn size(look: ItemLook) -> (u16, u16) {
     match look {
         ItemLook::Ratchet => (ratchet::W, ratchet::H),
+        ItemLook::Keyjack => (keyjack::W, keyjack::H),
     }
 }
 
-/// Where each of a look's sockets sits: x, y, width and height in cells, in the
-/// order `ItemLook::sockets` names them.
+/// Whether a look has a back.
+fn has_back(look: ItemLook) -> bool {
+    match look {
+        ItemLook::Ratchet => false,
+        ItemLook::Keyjack => true,
+    }
+}
+
+/// Where each of a look's sockets sits, on its back when it has one: x, y, width and
+/// height in cells, in the order `ItemLook::sockets` names them.
 fn rects(look: ItemLook) -> &'static [(i32, i32, u16, u16)] {
     match look {
         ItemLook::Ratchet => &ratchet::PLACES,
+        ItemLook::Keyjack => &keyjack::PLACES,
     }
 }
 
-/// Where stickers may lie on a look.
-fn area(look: ItemLook) -> StickerArea {
+/// Where stickers may lie on a look; none on one that is carried, not worn.
+fn area(look: ItemLook) -> Option<StickerArea> {
     match look {
-        ItemLook::Ratchet => StickerArea::new(
+        ItemLook::Ratchet => Some(StickerArea::new(
             ratchet::W,
             ratchet::H,
             &ratchet::AREA_KEEP,
             &ratchet::AREA_DROP,
-        ),
+        )),
+        ItemLook::Keyjack => None,
     }
 }
 
@@ -89,6 +103,18 @@ fn part_places(look: ItemLook) -> Vec<PartPlace> {
                 },
             )
             .collect(),
+        ItemLook::Keyjack => Vec::new(),
+    }
+}
+
+impl ItemArt {
+    /// The pieces fitted, each in its socket's place.
+    fn draw_pieces(&self, pen: &mut Pen) {
+        for (look, place) in self.fitted.iter().zip(self.sockets()) {
+            if let Some(look) = look {
+                draw_fitted(*look, &place, pen);
+            }
+        }
     }
 }
 
@@ -97,6 +123,7 @@ impl Art for ItemArt {
         size(self.look)
     }
 
+    /// The front; its fitted pieces too, unless they sit on a back.
     fn draw(&self, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
         let mut pen = Pen {
             clip: clip.intersection(buf.area),
@@ -106,13 +133,30 @@ impl Art for ItemArt {
         };
         match self.look {
             ItemLook::Ratchet => ratchet::draw(&mut pen),
+            ItemLook::Keyjack => keyjack::front(&mut pen, self.fitted.iter().any(Option::is_some)),
         }
-        for (look, place) in self.fitted.iter().zip(self.sockets()) {
-            if let Some(look) = look {
-                draw_fitted(*look, &place, &mut pen);
-            }
+        if !has_back(self.look) {
+            self.draw_pieces(&mut pen);
         }
         stickers::draw(&self.stickers, size(self.look), &mut pen);
+    }
+
+    fn has_back(&self) -> bool {
+        has_back(self.look)
+    }
+
+    fn draw_back(&self, (ox, oy): (u16, u16), clip: Rect, buf: &mut Buffer) {
+        let mut pen = Pen {
+            clip: clip.intersection(buf.area),
+            buf,
+            ox,
+            oy,
+        };
+        match self.look {
+            ItemLook::Ratchet => return,
+            ItemLook::Keyjack => keyjack::back(&mut pen),
+        }
+        self.draw_pieces(&mut pen);
     }
 
     fn sockets(&self) -> Vec<SocketPlace> {
@@ -132,20 +176,22 @@ impl Art for ItemArt {
         };
         match self.look {
             ItemLook::Ratchet => ratchet::draw_part(&mut pen, part),
+            ItemLook::Keyjack => {}
         }
     }
 
     fn sticker_area(&self) -> Option<StickerArea> {
-        Some(area(self.look))
+        area(self.look)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screens::testutil::buffer_text;
     use unicode_width::UnicodeWidthStr;
 
-    const LOOKS: [ItemLook; 1] = [ItemLook::Ratchet];
+    const LOOKS: [ItemLook; 2] = [ItemLook::Ratchet, ItemLook::Keyjack];
     const PIECES: [HardwareLook; 2] = [HardwareLook::Hushcan, HardwareLook::Redeye];
 
     #[test]
@@ -355,6 +401,123 @@ mod tests {
                 "{}",
                 place.item
             );
+        }
+    }
+
+    fn keyjack(fitted: Option<HardwareLook>) -> ItemArt {
+        ItemArt {
+            look: ItemLook::Keyjack,
+            fitted: vec![fitted],
+            stickers: Vec::new(),
+        }
+    }
+
+    /// The face drawn alone on a buffer its size: the back, or the front.
+    fn face(art: &ItemArt, back: bool) -> Buffer {
+        let (w, h) = art.size();
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        if back {
+            art.draw_back((0, 0), area, &mut buf);
+        } else {
+            art.draw((0, 0), area, &mut buf);
+        }
+        buf
+    }
+
+    /// The cells two drawings of the same size differ in.
+    fn differ(a: &Buffer, b: &Buffer) -> Vec<(u16, u16)> {
+        let r = a.area;
+        (r.top()..r.bottom())
+            .flat_map(|y| (r.left()..r.right()).map(move |x| (x, y)))
+            .filter(|&at| a[at] != b[at])
+            .collect()
+    }
+
+    #[test]
+    fn only_the_keyjack_has_a_back() {
+        assert!(keyjack(None).has_back());
+        let ratchet = ItemArt {
+            look: ItemLook::Ratchet,
+            fitted: vec![None, None],
+            stickers: Vec::new(),
+        };
+        assert!(!ratchet.has_back());
+        // A look without a back draws nothing there.
+        let (w, h) = ratchet.size();
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        ratchet.draw_back((0, 0), area, &mut buf);
+        assert_eq!(buf, Buffer::empty(area));
+    }
+
+    #[test]
+    fn the_keyjack_fits_its_fuse_on_the_back_only() {
+        let (empty, fused) = (keyjack(None), keyjack(Some(HardwareLook::FuseStock)));
+        // The front draws no fitted piece: only the badge's fuse light tells.
+        let light = differ(&face(&empty, false), &face(&fused, false));
+        assert_eq!(light, [(43, 3)]);
+        assert_eq!(face(&fused, false)[(43, 3)].symbol(), "●");
+        // The back draws the fuse in its holder, inside the socket.
+        let fuse = differ(&face(&empty, true), &face(&fused, true));
+        assert!(!fuse.is_empty());
+        let place = fused.sockets()[0];
+        assert_eq!((place.name, place.kind), ("FUSE", game::SocketKind::Fuse));
+        let holder = Rect::new(place.x as u16, place.y as u16, place.w, place.h);
+        for at in fuse {
+            assert!(holder.contains(at.into()), "{at:?}");
+        }
+        assert_eq!(
+            face(&fused, true)[(28, 10)].bg,
+            Color::Rgb(0x9a, 0xd4, 0xdc)
+        );
+        // The back is the board, the front the case.
+        let back = buffer_text(&face(&empty, true));
+        assert!(back.contains("KJ4") && back.contains("3V") && back.contains("FUSE"));
+        let front = buffer_text(&face(&empty, false));
+        assert!(front.contains("KEYJACK") && front.contains("READY"));
+    }
+
+    #[test]
+    fn every_fuse_fits_the_keyjack() {
+        let fuses = [
+            HardwareLook::FuseStock,
+            HardwareLook::FuseCeramic,
+            HardwareLook::FuseSlowBlow,
+            HardwareLook::FuseWideband,
+        ];
+        let backs: Vec<Buffer> = fuses
+            .iter()
+            .map(|&f| face(&keyjack(Some(f)), true))
+            .collect();
+        for (i, a) in backs.iter().enumerate() {
+            for b in &backs[i + 1..] {
+                assert_ne!(a, b, "each tier is tinted its own");
+            }
+        }
+    }
+
+    #[test]
+    fn the_keyjack_takes_no_stickers() {
+        assert!(keyjack(None).sticker_area().is_none());
+        assert!(keyjack(None).parts().is_empty());
+    }
+
+    #[test]
+    fn the_keyjack_draws_single_width_glyphs_in_exact_colours() {
+        for fitted in [
+            None,
+            Some(HardwareLook::FuseStock),
+            Some(HardwareLook::FuseSlowBlow),
+        ] {
+            let art = keyjack(fitted);
+            for back in [false, true] {
+                for c in &face(&art, back).content {
+                    assert_eq!(c.symbol().width(), 1, "{:?}", c.symbol());
+                    assert!(matches!(c.fg, Color::Rgb(..) | Color::Reset));
+                    assert!(matches!(c.bg, Color::Rgb(..) | Color::Reset));
+                }
+            }
         }
     }
 

@@ -8,7 +8,7 @@ Fixers stand on their street corners from six in the evening until four in the m
 
 - `t Talk` passes the time.
 - `w Work` hears out a job. The offer says what it pays, how long you have and what kind of job it is: `y` takes it, `n` turns it down.
-- `h Hand in` finishes a job you've done. If you can't hand it in yet, the line says why.
+- `h Hand in` finishes a job you've done. If you can't hand it in yet, the line says why. A finished Fetch pays a stock fuse along with the credits, a spare for your Keyjack.
 - `d Drop` gives a job back. It asks first.
 
 ## Kinds of job
@@ -19,6 +19,8 @@ Fixers stand on their street corners from six in the evening until four in the m
 | Deliver | carry a sealed package to someone, and hand it over |
 | Copy | copy a server or a data vault in the Net |
 | Plant | leave a backdoor on a server; it must still stand when you hand in |
+
+Copy and Plant are Net work, and a fixer only offers them (vaults too) to a runner with a deck in the DECK slot; a deck left in your pack doesn't count. Fetch and Deliver are for every build. A job already offered or taken stays yours. Until one is in the DECK slot, the fixer's card says so in amber under its standing ladder: `copy, plant and vault: needs a deck in the slot`.
 
 Every job ends the same way: back to the fixer's corner, while they're on it, to hand it in. When you take a job its brief arrives as mail on your rig, with its deadline.
 

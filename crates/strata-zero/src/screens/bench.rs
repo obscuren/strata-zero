@@ -1,4 +1,5 @@
-//! The blueprint window's modding mode: the item in grey but for its sockets, the
+//! The blueprint window's modding mode: the item in grey but for its sockets (or,
+//! for an item with a back, the back as it is with its sockets boxed), the
 //! pointer on the sockets alone, a line on what the pointed one holds, and the
 //! HARDWARE tray at the drawing's foot to fit, swap and take out pieces from. It
 //! knows the item only through its `Art`, so any item with sockets and a drawing
@@ -11,7 +12,7 @@ use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
 
 use crate::ui::hardware::{EMPTY_TILE, Tile, tile};
 use crossterm::event::KeyCode;
-use game::{Action, CopyId, Host, ItemId, Mod, Stack};
+use game::{Action, CopyId, Hardware, Host, ItemId, Stack};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -194,10 +195,18 @@ impl Bench {
         buf: &mut Buffer,
     ) {
         let origin = art.origin(body);
-        art.draw(origin, body, buf);
         let places = art.sockets();
         let rects: Vec<Rect> = places.iter().map(|s| on_screen(origin, s)).collect();
-        grey_area(buf, body, &rects, PANEL_BG);
+        if art.has_back() {
+            // Opened up it shows as it is, every socket boxed.
+            art.draw_back(origin, body, buf);
+            for r in &rects {
+                outline(buf, *r, body);
+            }
+        } else {
+            art.draw(origin, body, buf);
+            grey_area(buf, body, &rects, PANEL_BG);
+        }
         // The tray's band spans only the drawing's own columns, so the cables out
         // either side still show.
         let top = body.bottom().saturating_sub(BAND);
@@ -249,14 +258,10 @@ fn name(st: &AppState, item: &ItemId) -> String {
         .map_or_else(|| item.to_string(), |i| i.name.clone())
 }
 
-/// What a piece of hardware does, a line per mod.
+/// What a piece of hardware does, a line per mod, or that it has no bonus.
 fn mods(st: &AppState, item: &ItemId) -> Vec<String> {
     let hardware = st.content.item(item).and_then(|i| i.hardware.as_ref());
-    hardware
-        .iter()
-        .flat_map(|h| &h.mods)
-        .map(Mod::line)
-        .collect()
+    hardware.map(Hardware::lines).unwrap_or_default()
 }
 
 /// The piece in a socket of the host, if any.
@@ -294,7 +299,7 @@ fn tray(
         if !fits {
             return None;
         }
-        let mods: Vec<String> = hardware.mods.iter().map(Mod::line).collect();
+        let mods = hardware.lines();
         Some(Offer {
             piece: Some(piece),
             name: item.name.to_uppercase(),

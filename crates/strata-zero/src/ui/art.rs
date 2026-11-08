@@ -37,6 +37,16 @@ pub trait Art {
     /// pointer or readout.
     fn draw(&self, origin: (u16, u16), clip: Rect, buf: &mut Buffer);
 
+    /// Whether the item has a back: itself opened up, which modding works on in place
+    /// of the front. Its sockets sit on the back alone, and so do the pieces fitted.
+    fn has_back(&self) -> bool {
+        false
+    }
+
+    /// The back, the front's size, from `origin`, nothing written outside `clip`, with
+    /// the pieces fitted in its sockets. Nothing for an item without one.
+    fn draw_back(&self, _origin: (u16, u16), _clip: Rect, _buf: &mut Buffer) {}
+
     /// The item's sockets in their order, in drawing coordinates.
     fn sockets(&self) -> Vec<SocketPlace>;
 

@@ -183,10 +183,13 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
     )];
     if let Some(j) = st.jobs.taken(fixer) {
         match st.jobs.ready(j.id, &stands(st), &carries(st)) {
-            Ok(()) => out.push(
-                Choice::on('h', "Hand in", j.title.clone(), CYAN, Pick::HandIn(j.id))
-                    .tail(format!(" · ¤{}", j.pay)),
-            ),
+            Ok(()) => {
+                let tail = format!(" · ¤{}{}", j.pay, bonus(&j.kind).map_or("", |b| b.1));
+                out.push(
+                    Choice::on('h', "Hand in", j.title.clone(), CYAN, Pick::HandIn(j.id))
+                        .tail(tail),
+                )
+            }
             Err(why) => out.push(Choice {
                 enabled: false,
                 ..Choice::on('h', "Hand in", j.title.clone(), CYAN, Pick::Close)
@@ -311,6 +314,13 @@ pub fn drop_confirm(id: JobId, title: &str, tick: u64) -> Popup {
     )
 }
 
+/// What a job pays on top of its credits, and the words the hand-in row and line
+/// carry after the pay: a fetch pays a stock fuse for the Keyjack.
+fn bonus(kind: &Kind) -> Option<(ItemId, &'static str)> {
+    matches!(kind, Kind::Fetch { .. })
+        .then(|| (ItemId::new(crate::keyjack::STOCK_FUSE), " · a stock fuse"))
+}
+
 /// Ends the job at its fixer: the item out of the pack, the pay in, the line logged.
 pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     let j = st.jobs.get(id).cloned().ok_or("no such job")?;
@@ -321,10 +331,16 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     let now = st.net.now(st);
     let pay = st.jobs.hand_in(id, now).ok_or("not in hand")?;
     st.character.credits = st.character.credits.saturating_add(pay);
+    let bonus = bonus(&j.kind);
+    if let Some((item, _)) = &bonus {
+        // A copy of its own, as hardware is held, so it can be fitted.
+        st.character.give_item(&st.content, item.clone(), 1);
+    }
+    let fuse = bonus.map_or("", |b| b.1);
     let fixer = fixer_name(st, j.fixer);
     let said = st.flavor.line(Say::Handed, id.0 as u64).to_string();
     let line = format!(
-        "`{}` · handed in · ¤{pay} · {fixer}: \u{201c}{said}\u{201d}",
+        "`{}` · handed in · ¤{pay}{fuse} · {fixer}: \u{201c}{said}\u{201d}",
         j.title
     );
     st.story(line.clone());
@@ -657,5 +673,55 @@ mod tests {
             st.jobs.offered(fx).is_some(),
             "the fixer at the bar has work too"
         );
+    }
+
+    #[test]
+    fn a_fetch_pays_a_fuse() {
+        let mut st = state_home();
+        let id = st.jobs.active().unwrap().id;
+        assert!(matches!(st.jobs.get(id).unwrap().kind, Kind::Fetch { .. }));
+        st.character.give(ItemId::new("paydata"), 1);
+        let (b, level, _, tile) = first_fetch(&st).unwrap();
+        crate::jobs::send(
+            &mut st,
+            Event::Taken {
+                place: Place::Floor { building: b, level },
+                pos: tile,
+            },
+        );
+        let fuse = ItemId::new(crate::keyjack::STOCK_FUSE);
+        let copies = |st: &AppState| -> Vec<Option<game::CopyId>> {
+            let pack = st.character.inventory.iter();
+            pack.filter(|s| s.item == fuse)
+                .map(|s| s.copy_id())
+                .collect()
+        };
+        let (fuses, before) = (st.character.count(&fuse), copies(&st));
+        let line = hand_in(&mut st, id).unwrap();
+        assert!(line.contains("¤200 · a stock fuse"), "{line}");
+        assert_eq!(st.character.count(&fuse), fuses + 1);
+        // The fuse is its own copy, as hardware is, so it goes in a Keyjack's socket.
+        let after = copies(&st);
+        let new: Vec<_> = after.iter().filter(|k| !before.contains(k)).collect();
+        assert!(
+            matches!(new[..], [Some(_)]),
+            "one new copy: {before:?} -> {after:?}"
+        );
+        let paid = new[0].unwrap();
+        let keyjack = ItemId::new(crate::keyjack::ITEM);
+        st.character.give_item(&st.content, keyjack.clone(), 1);
+        let empty = st.character.inventory.iter().rev();
+        let host = empty
+            .filter(|s| s.item == keyjack)
+            .find_map(|s| s.copy_id())
+            .map(game::Host::Pack)
+            .unwrap();
+        let fit = game::Action::Fit {
+            host,
+            socket: 0,
+            piece: paid,
+        };
+        crate::actions::perform(&mut st, fit).unwrap();
+        assert_eq!(st.character.count(&fuse), fuses, "the fuse left the pack");
     }
 }

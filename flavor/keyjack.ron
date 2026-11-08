@@ -1,0 +1,23 @@
+// The Keyjack's numbers: the bar, the zones and speeds of its four beats, the faults a
+// run allows, what the skills add, and how well each lock maker's pads are built.
+// Zones are in cells, a rating's four beats left to right; speeds are cells per second,
+// the same for every rating. A fuse's own bonus is on the fuse, in content.ron.
+// A maker is a device theme of style.ron; one not listed here rates 1.
+Numbers(
+    bar: 18,
+    zones: [
+        (8, 6, 5, 4),
+        (7, 5, 3, 3),
+        (6, 4, 3, 2),
+    ],
+    speeds: (9.0, 11.0, 13.0, 15.0),
+    faults: 3,
+    lockpick_zone: 1,
+    skeleton_key_fault: 1,
+    makers: [
+        ("street", 1),
+        ("municipal", 2),
+        ("neon", 2),
+        ("megacorp", 3),
+    ],
+)

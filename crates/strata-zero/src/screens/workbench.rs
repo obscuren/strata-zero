@@ -1259,6 +1259,11 @@ mod tests {
                 "hardhat_visor",
                 "optics_tune",
                 "servo_rebuild",
+                "keyjack_build",
+                "fuse_stock_build",
+                "fuse_ceramic_build",
+                "fuse_slowblow_build",
+                "fuse_wideband_build",
                 "caps_fence",
                 "stim_batch",
                 "ratchet_build"
@@ -1315,12 +1320,12 @@ mod tests {
         let mut st = dshawn();
         st.character.give(ItemId::new("copper_coil"), 1);
         let mut d = bench(&mut st);
-        press(&mut d, &mut st, KeyCode::Right, 5);
+        press(&mut d, &mut st, KeyCode::Right, 10);
         assert_eq!(recipe_id(&st, &d), "stim_batch");
         let b = render(&d, &st, 100, 30);
         let title = area(&b, 62, 97, 21, 26);
         assert_eq!(cells(&b, 63, 21, 10), "STIM BATCH", "{title}");
-        assert_eq!(cells(&b, 87, 21, 7), "◂ 6/7 ▸", "{title}");
+        assert_eq!(cells(&b, 85, 21, 9), "◂ 11/12 ▸", "{title}");
         assert_eq!(
             cells(&b, 63, 22, 32),
             "makes 2× Stim patch · consumable",
@@ -1331,8 +1336,8 @@ mod tests {
         assert_eq!(cells(&b, 63, 24, 18), "every part on hand", "{title}");
         assert_eq!(b[(63, 24)].fg, Color::Rgb(0x5a, 0xc8, 0x8c));
         assert_eq!(
-            cells(&b, 63, 25, 33),
-            "DWG 6/7 · process · drawn D'SHAWN",
+            cells(&b, 63, 25, 34),
+            "DWG 11/12 · process · drawn D'SHA…",
             "{title}"
         );
 
@@ -1420,7 +1425,7 @@ mod tests {
             }
             press(&mut d, &mut st, KeyCode::Right, 1);
         }
-        assert_eq!(seen, 6);
+        assert_eq!(seen, 11);
     }
 
     #[test]
@@ -1463,14 +1468,18 @@ mod tests {
         let mut st = dshawn();
         let mut d = bench(&mut st);
         assert_eq!(recipe_id(&st, &d), "wire_shiv");
-        press(&mut d, &mut st, KeyCode::Right, 7);
-        assert_eq!(recipe_id(&st, &d), "wire_shiv", "→ wraps through all seven");
+        press(&mut d, &mut st, KeyCode::Right, 12);
+        assert_eq!(
+            recipe_id(&st, &d),
+            "wire_shiv",
+            "→ wraps through all twelve"
+        );
         press(&mut d, &mut st, KeyCode::Left, 1);
         assert_eq!(recipe_id(&st, &d), "ratchet_build", "← wraps to the last");
         let b = render(&d, &st, 100, 30);
         assert_eq!(cells(&b, 63, 21, 11), "RATCHET SMG");
-        assert_eq!(cells(&b, 87, 21, 7), "◂ 7/7 ▸");
-        press(&mut d, &mut st, KeyCode::Left, 6);
+        assert_eq!(cells(&b, 85, 21, 9), "◂ 12/12 ▸");
+        press(&mut d, &mut st, KeyCode::Left, 11);
         assert_eq!(recipe_id(&st, &d), "wire_shiv");
 
         // Two inputs: ↓ and ↑ wrap through them.
@@ -1531,7 +1540,7 @@ mod tests {
         assert_eq!(
             clamped.workbench,
             Workbench {
-                drawing: 6,
+                drawing: 11,
                 part: 0,
                 anim: None
             }
@@ -1605,7 +1614,7 @@ mod tests {
             "makes 3× oddity",
             "{title}"
         );
-        assert!(title.contains("DWG 8/8 · process"), "{title}");
+        assert!(title.contains("DWG 13/13 · process"), "{title}");
         let field = area(&b, 3, 97, 6, 20);
         assert!(field.contains("no_such_part"), "{field}");
         assert!(field.contains("? 3× oddity"), "{field}");
@@ -1617,7 +1626,7 @@ mod tests {
         let mut st = dshawn();
         st.character.handle = "ABCDEFGHIJKLMNOP".into();
         let d = bench(&mut st);
-        let dwg = "DWG 1/7 · process · drawn ABCDEFGHIJKLMNOP";
+        let dwg = "DWG 1/12 · process · drawn ABCDEFGHIJKLMNOP";
 
         // The drawing number is cut with `…`, ending one column inside the edge.
         let shown: String = dwg.chars().take(33).chain(['…']).collect();
@@ -1794,7 +1803,7 @@ mod tests {
         let b = render(&d, &st, 100, 30);
         let title = area(&b, 62, 97, 21, 26);
         assert_eq!(cells(&b, 63, 21, 11), "RATCHET SMG", "{title}");
-        assert_eq!(cells(&b, 87, 21, 7), "◂ 7/7 ▸", "{title}");
+        assert_eq!(cells(&b, 85, 21, 9), "◂ 12/12 ▸", "{title}");
         assert_eq!(
             cells(&b, 63, 22, 34).trim_end(),
             "weapon · primary · 3.2 kg",
@@ -1812,7 +1821,7 @@ mod tests {
         );
         assert_eq!(
             cells(&b, 63, 25, 34),
-            "DWG 7/7 · assembly · drawn D'SHAWN",
+            "DWG 12/12 · assembly · drawn D'SH…",
             "{title}"
         );
         assert_eq!(
@@ -2246,7 +2255,7 @@ mod tests {
         st.character.give(coils.clone(), 1);
         st.tick = 100;
         let mut d = bench(&mut st);
-        press(&mut d, &mut st, KeyCode::Right, 5);
+        press(&mut d, &mut st, KeyCode::Right, 10);
         assert_eq!(recipe_id(&st, &d), "stim_batch");
         press(&mut d, &mut st, KeyCode::Char(' '), 1);
         assert_eq!(st.character.count(&coils), 0);
@@ -2324,7 +2333,7 @@ mod tests {
         st.character.give(ItemId::new("copper_coil"), 1);
         st.tick = 100;
         let mut d = bench(&mut st);
-        press(&mut d, &mut st, KeyCode::Right, 5);
+        press(&mut d, &mut st, KeyCode::Right, 10);
         assert_eq!(recipe_id(&st, &d), "stim_batch");
         let stims = ItemId::new("stim_patch");
         let had = st.character.count(&stims);

@@ -28,6 +28,7 @@ mod home;
 mod interact;
 mod interiors;
 mod jobs;
+mod keyjack;
 mod look;
 mod mail_mark;
 mod manual;

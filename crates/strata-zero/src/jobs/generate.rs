@@ -472,7 +472,7 @@ pub fn offer(st: &mut AppState, fixer: PersonId) -> Option<JobId> {
     if st.jobs.taken(fixer).is_some() {
         return None;
     }
-    let allowed = Jobs::allowed(st.jobs.standing(fixer));
+    let allowed = Jobs::allowed_for(st.jobs.standing(fixer), crate::jobs::has_deck(st));
     if allowed.is_empty() {
         return None;
     }
@@ -972,5 +972,38 @@ mod tests {
             let j = generate(&mut st, fx, KindTag::Fetch, 0);
             assert!(j.is_some(), "fixer {fx:?} rolls no fetch");
         }
+    }
+
+    #[test]
+    fn no_net_jobs_without_a_deck() {
+        let mut st = state_home();
+        let fx = a_fixer(&st);
+        st.jobs.fixer_mut(fx).standing = crate::jobs::VAULT_AT;
+        st.character.equipment.remove(&game::Slot::Deck);
+        assert!(!crate::jobs::has_deck(&st));
+        assert_eq!(
+            Jobs::allowed_for(crate::jobs::VAULT_AT, false),
+            vec![KindTag::Fetch, KindTag::Deliver]
+        );
+        for _ in 0..12 {
+            let welcome: Vec<_> = st.jobs.list.iter().map(|j| j.id).collect();
+            for id in welcome {
+                st.jobs.drop_job(id, 0);
+            }
+            st.jobs.list.retain(|j| j.state != State::Offered);
+            if let Some(id) = offer(&mut st, fx) {
+                let k = st.jobs.get(id).unwrap().kind.tag();
+                assert!(matches!(k, KindTag::Fetch | KindTag::Deliver), "{k:?}");
+            }
+        }
+        st.character
+            .equipment
+            .insert(game::Slot::Deck, ItemId::new("pawnshop_deck"));
+        assert!(crate::jobs::has_deck(&st));
+        assert_eq!(
+            Jobs::allowed_for(crate::jobs::VAULT_AT, true),
+            Jobs::allowed(crate::jobs::VAULT_AT)
+        );
+        assert!(Jobs::allowed_for(crate::jobs::VAULT_AT, true).contains(&KindTag::Plant));
     }
 }
