@@ -544,6 +544,14 @@ pub struct Held<'a> {
     pub people: Option<&'a sim::World>,
 }
 
+impl Held<'_> {
+    /// Its map in the frame of the live city whose `(0, 0)` is world cell `live`.
+    pub fn map_in(&self, live: Pos) -> Rect {
+        let (w, h) = (self.city.size.w as i32, self.city.size.h as i32);
+        Rect::new(self.origin.x - live.x, self.origin.y - live.y, w, h)
+    }
+}
+
 /// Who answers for a cell of the live city's frame that the live city doesn't own.
 pub enum Owner<'a> {
     /// Another city or town held this session: its map, at its own cell.
@@ -770,8 +778,7 @@ pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize, step: u64) ->
         let wide = view.grow(ALIVE);
         b.held()
             .filter_map(|h| {
-                let (w, hh) = (h.city.size.w as i32, h.city.size.h as i32);
-                let map = Rect::new(h.origin.x - live.x, h.origin.y - live.y, w, hh);
+                let map = h.map_in(live);
                 h.people?;
                 wide.intersects(map)
                     .then_some((h.settlement, view.intersects(map)))
@@ -802,6 +809,43 @@ pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize, step: u64) ->
         }
     }
     ran
+}
+
+/// Cells round where you land that a held city's or town's map must come within to be
+/// caught up as you land: wider than any view a terminal or the window shows.
+pub const LANDING: i32 = 256;
+
+/// Every city and town held but the live one whose map comes within `LANDING` cells of
+/// where you stand (your Net self, jacked in) caught up whole to the clock. Landing on
+/// the map from the overworld or the Net over it switches to a screen that draws before
+/// it first runs, so the cities round you are caught up on the way in, never seen behind.
+pub fn catch_up_round(st: &mut AppState) {
+    let now = st.clock_tick();
+    let Some(at) = st.player.as_ref().map(|p| p.pos) else {
+        return;
+    };
+    let round = Rect::new(
+        at.x - LANDING,
+        at.y - LANDING,
+        2 * LANDING + 1,
+        2 * LANDING + 1,
+    );
+    let near: Vec<Settlement> = {
+        let Some(b) = Beyond::of(st) else {
+            return;
+        };
+        let live = b.origin();
+        b.held()
+            .filter(|h| h.people.is_some() && round.intersects(h.map_in(live)))
+            .map(|h| h.settlement)
+            .collect()
+    };
+    for s in near {
+        with_held(st, s, |city, world| {
+            world.set_blocker(None);
+            world.catch_up(city, now);
+        });
+    }
 }
 
 /// Runs `f` on held city or town `s`'s map and people: the home city set aside, one kept
@@ -2875,6 +2919,21 @@ pub(crate) mod tests {
             assert!(crate::outside::people_of(&st, s).is_none());
             let all = Rect::new(-100_000, -100_000, 200_000, 200_000);
             assert_eq!(run_neighbours(&mut st, all, 4, 1), 0);
+        }
+
+        #[test]
+        fn coming_down_beside_a_city_finds_it_caught_up() {
+            let mut st = home_run();
+            let (s, x, _) = beside_a_city(&mut st);
+            seed_its_people(&mut st, s);
+            crate::clock::run(
+                &mut st,
+                Some(40 * sim::TICKS_PER_MINUTE),
+                crate::clock::PATHS_PER_FRAME,
+            );
+            crate::outside::moves::into_city(&mut st, x);
+            let w = crate::outside::people_of(&st, s).unwrap();
+            assert_eq!((w.tick(), w.pending()), (st.clock_tick(), 0));
         }
 
         #[test]
