@@ -247,3 +247,15 @@ story waits.
   the new screen's first frame before it draws.
 - How the minute-by-minute path finding is shared between the replay, `clock::run` and
   rest.
+
+## Built
+
+Built as `docs/superpowers/plans/2026-11-08-world-while-away.md` lays out. The calls it
+made:
+
+- `run_neighbours` keeps no turns: each near city runs every frame, since a placement is
+  one pass and a replay frame is at most `REPLAY_PER_FRAME` (15) game minutes.
+- `LANDING` is 256 cells round where you land.
+- A run of the live city's clock over a minute is caught up as a held city's is, so one
+  over an hour (only tests take one) is placed.
+- The map screen runs its neighbours after the camera has followed a move the story made.

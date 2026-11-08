@@ -76,7 +76,7 @@ Walk off the edge of the Street and you are out on open ground, with the next to
 
 `W` on the open street or open ground lifts you up to the overworld: the whole country in one map, with its cities, towns, roads and hills. Walk a tile at a time with the movement keys, and press `enter` to go down onto the tile you stand on. Step onto a city or a town and you are in it.
 
-Out here every step takes time: a tile of flat ground is most of a minute, hills twice that, mountains four times, and a river with no road crossing it twice. Peaks, lakes and the sea stop you. The world holds nine cities. Your home city's story waits for you while you're away, and a call that couldn't reach you rings again when you come back.
+Out here every step takes time: a tile of flat ground is most of a minute, hills twice that, mountains four times, and a river with no road crossing it twice. Peaks, lakes and the sea stop you. The world holds nine cities. Your home city's story waits for you while you're away, and a call that couldn't reach you rings again when you come back. Cities you've left carry on with their day without you: come back and their people are where the hour has taken them.
 
 | Mark | What it is |
 |---|---|
