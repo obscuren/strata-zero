@@ -539,6 +539,11 @@ impl World {
         self.blocker = pos;
     }
 
+    /// The tile no walker is placed on: the player's, as the frame last set it.
+    pub fn blocker(&self) -> Option<Pos> {
+        self.blocker
+    }
+
     /// The player steps from `player_from` onto someone standing on `player_to`:
     /// they take the player's old tile until the player moves on. Returns false for
     /// someone inside a building.

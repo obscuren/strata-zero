@@ -1946,7 +1946,7 @@ pub(crate) mod tests {
         use super::*;
         use crate::app::AppState;
         use crate::outside::tests::home_run;
-        use crate::outside::{RUN_ON, build_params, enter, seed_people};
+        use crate::outside::{build_params, enter, seed_people};
 
         fn o(st: &AppState) -> &Outside {
             st.outside.as_ref().unwrap()
@@ -2085,11 +2085,13 @@ pub(crate) mod tests {
             assert!(o(&st).stream.people(s).is_none(), "taken in with you");
             let w = st.world.as_ref().unwrap();
             assert_eq!(w.tick(), now);
-            // the people seeded for the hour the build was asked for, run on to now
+            // the people seeded for the hour the build was asked for, caught up to now
             let mut want = seed_people(&city, &st.people, asked, minute);
             want.rebuild(&city, &st.people);
-            want.advance(&city, now);
+            want.set_blocker(None);
+            want.catch_up(&city, now);
             assert!(w.people() == want.people(), "run on from when it was asked");
+            assert_eq!(w.pending(), 0, "every trip asked for found");
             // not seeded again
             let again = seed_people(&city, &st.people, now, st.minute_of_day());
             assert!(w.people() != again.people(), "seeded again on the frame");
@@ -2138,9 +2140,9 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn a_streamed_city_entered_a_day_on_is_seeded_afresh() {
-            // people frozen at the ask for more than a day aren't run on across it on
-            // the frame: they're seeded for now, as on the spot
+        fn a_streamed_city_entered_hours_on_is_placed() {
+            // people frozen at the ask for hours aren't stepped across them on the frame:
+            // they're put where their day says, in one pass
             let mut st = home_run();
             let (s, map) = a_city(&st);
             let (asked, then) = (st.clock_tick(), st.minute_of_day());
@@ -2148,22 +2150,21 @@ pub(crate) mod tests {
             finish(&mut st);
             crate::clock::run(
                 &mut st,
-                Some(RUN_ON + 60 * sim::TICKS_PER_MINUTE),
+                Some(3 * 60 * sim::TICKS_PER_MINUTE),
                 crate::clock::PATHS_PER_FRAME,
             );
-            let (now, minute) = (st.clock_tick(), st.minute_of_day());
-            assert!(now - asked > RUN_ON);
+            let now = st.clock_tick();
+            assert!(now - asked > sim::SHORT_GAP);
             let city = o(&st).built[&s].clone();
             enter(&mut st, s).unwrap();
-            assert!(o(&st).stream.people(s).is_none(), "dropped");
+            assert!(o(&st).stream.people(s).is_none(), "taken in with you");
             let w = st.world.as_ref().unwrap();
-            assert_eq!(w.tick(), now);
-            let fresh = seed_people(&city, &st.people, now, minute);
-            assert!(w.people() == fresh.people(), "seeded for now");
+            assert_eq!((w.tick(), w.pending()), (now, 0));
             let mut old = seed_people(&city, &st.people, asked, then);
             old.rebuild(&city, &st.people);
-            old.advance(&city, now);
-            assert!(w.people() != old.people(), "not run on across the day");
+            old.set_blocker(None);
+            old.place_at(&city, now);
+            assert!(w.people() == old.people(), "placed by their day");
         }
 
         #[test]
