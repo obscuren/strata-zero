@@ -601,6 +601,12 @@ impl Content {
                         why: "a round has one flight shape at most".into(),
                     });
                 }
+                if w.fx.iter().any(|f| matches!(f, Fx::Lock | Fx::Upload)) {
+                    return Err(ContentError::FxInvalid {
+                        where_: format!("item {}", i.id),
+                        why: "a round plays no Lock or Upload".into(),
+                    });
+                }
             }
             if let Some((range, _, b)) = i.throw() {
                 let bad = |why: &str| ContentError::ItemInvalid {
@@ -630,6 +636,9 @@ impl Content {
                 }
                 if i.fx.iter().filter(|f| f.is_blast()).count() > 1 {
                     return Err(bad("a blast has one blast shape at most"));
+                }
+                if i.fx.iter().any(|f| matches!(f, Fx::Lock | Fx::Upload)) {
+                    return Err(bad("a throw plays no Lock or Upload"));
                 }
             }
             // Perks and grants count while worn, installed or docked.
@@ -784,17 +793,30 @@ impl Content {
                     why: "only a strike plays shot shapes".into(),
                 });
             }
+            let is_mark = matches!(a.kind, AbilityKind::Active(Active::Mark { .. }));
+            if a.fx.iter().any(|f| matches!(f, Fx::Upload))
+                || (!is_mark && a.fx.iter().any(|f| matches!(f, Fx::Lock)))
+            {
+                return Err(ContentError::FxInvalid {
+                    where_: format!("ability {}", a.id),
+                    why: "only a mark plays Lock, and Upload is a level's".into(),
+                });
+            }
             if let AbilityKind::Active(Active::Boost { .. } | Active::Mark { .. }) = &a.kind
                 && a.fx.iter().any(|f| {
                     !matches!(
                         f,
-                        Fx::Kick(_) | Fx::Pulse { .. } | Fx::Number { .. } | Fx::Mark { .. }
+                        Fx::Kick(_)
+                            | Fx::Pulse { .. }
+                            | Fx::Number { .. }
+                            | Fx::Mark { .. }
+                            | Fx::Lock
                     )
                 })
             {
                 return Err(ContentError::FxInvalid {
                     where_: format!("ability {}", a.id),
-                    why: "a boost or mark plays only Kick, Pulse, Number and Mark".into(),
+                    why: "a boost or mark plays only Kick, Pulse, Number, Mark and Lock".into(),
                 });
             }
             if let AbilityKind::Active(Active::Strike {
@@ -2745,8 +2767,32 @@ mod tests {
         )
         .unwrap();
         mark.fx.push(Fx::Trail);
+        c.abilities.push(mark.clone());
+        assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+        // A lock-on on a mark is fine; on a strike, or an upload on anything, is not.
+        let mut c = good.clone();
+        mark.fx = vec![Fx::Lock];
+        c.abilities.push(mark.clone());
+        assert!(c.validate().is_ok());
+        let mut c = good.clone();
+        mark.fx = vec![Fx::Upload];
         c.abilities.push(mark);
         assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+        for fx in [Fx::Lock, Fx::Upload] {
+            let mut c = good.clone();
+            let i = c.abilities.iter().position(|a| a.id.0 == "static").unwrap();
+            c.abilities[i].fx.push(fx.clone());
+            assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+            // nor on a gun's round or a throw
+            let mut c = good.clone();
+            let gun = c.items.iter().position(|i| i.weapon.is_some()).unwrap();
+            c.items[gun].weapon.as_mut().unwrap().fx.push(fx.clone());
+            assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+            let mut c = good.clone();
+            let throw = c.items.iter().position(|i| i.throw().is_some()).unwrap();
+            c.items[throw].fx.push(fx);
+            assert!(matches!(c.validate(), Err(ContentError::FxInvalid { .. })));
+        }
     }
 
     #[test]

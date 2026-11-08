@@ -65,4 +65,4 @@ From the sheet, `enter` builds the city and plays its broadcast. `space` shows t
 
 ## Growing
 
-Your runner earns XP. Each level brings 100 SP for skills and a talent point, and every third level an attribute point too. You spend them all on the deck (The deck covers its SKILLS, ATTRIBUTES and TALENTS tabs). Nothing you buy can be sold back, so choose with care.
+Your runner earns XP from the story's jobs: act one takes you to level 3. A level lands with a beam of data falling on you, the new level beside you. Each level brings 100 SP for skills and a talent point, and every third level an attribute point too. You spend them all on the deck (The deck covers its SKILLS, ATTRIBUTES and TALENTS tabs). Nothing you buy can be sold back, so choose with care.

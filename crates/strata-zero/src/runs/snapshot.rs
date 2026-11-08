@@ -103,8 +103,9 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         // UI: the deck's, Some only while it is open in the doc's chair; a reopened run
         // starts the deck over, up out of the chair (`restore`).
         chair: _,
-        look_at: _, // UI: a popup's request, taken on the map's next frame
-        jump_to: _, // UI: the console's request, taken on the map's next frame
+        look_at: _,  // UI: a popup's request, taken on the map's next frame
+        jump_to: _,  // UI: the console's request, taken on the map's next frame
+        levelled: _, // UI: a level's upload, played on the map's next frame
         content,
         character,
         people: _, // content: the city's professions and lines
@@ -217,6 +218,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         chair,           // UI: the deck's; up out of it below
         look_at: _,      // UI: `clear_screens` below
         jump_to: _,      // UI: `clear_screens` below
+        levelled: _,     // UI: `clear_screens` below
         content,
         character,
         people: _, // content

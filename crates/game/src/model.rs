@@ -1036,6 +1036,12 @@ pub enum Fx {
     Trail,
     /// A ring of `·` pulsing out from the firer to three tiles.
     Pulse { colour: (u8, u8, u8) },
+    /// A lock-on: four brackets close in on the target from the edges of the view and
+    /// lock round it, and its readout types out beside them.
+    Lock,
+    /// A level: a beam of data falls on you, a scanline runs out along your row, and
+    /// the level types out beside you. The app plays it; no ability names it.
+    Upload,
 }
 
 impl Fx {
