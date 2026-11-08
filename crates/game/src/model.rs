@@ -587,7 +587,7 @@ impl HardwareLook {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Hardware {
     pub fits: SocketKind,
-    /// None only on a fuse, whose stock tier changes nothing.
+    /// Empty only on a fuse, whose stock tier changes nothing.
     pub mods: Vec<Mod>,
     pub look: HardwareLook,
 }

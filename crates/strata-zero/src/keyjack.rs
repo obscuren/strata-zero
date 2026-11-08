@@ -267,6 +267,22 @@ mod tests {
         assert!(rating(&AppState::new(), BuildingId(0)) >= 1);
     }
 
+    /// A maker is a pad's look by name: one the looks never give rates nothing, and a
+    /// renamed theme would quietly rate every pad of it 1.
+    #[test]
+    fn every_maker_is_a_theme_a_pad_wears() {
+        let themes: Vec<&str> = citygen::Theme::ALL
+            .iter()
+            .map(|t| crate::ui::device::theme_name(*t))
+            .collect();
+        for (maker, _) in &Numbers::shipped().makers {
+            assert!(
+                themes.contains(&maker.as_str()),
+                "{maker} not in {themes:?}"
+            );
+        }
+    }
+
     #[test]
     fn zones_by_rating_and_bonuses() {
         let mut st = state();
