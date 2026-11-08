@@ -64,8 +64,10 @@ pub fn rect(pad: Rect, bar: u16) -> Rect {
     Rect::new(pad.right() + 3, pad.y + 2, (bar + 8).max(26), 13)
 }
 
+/// Writes `s` in its own colours and nothing else: from a reset style, so no modifier of
+/// what lay under it (the map's fog is DIM) stays on.
 fn put(buf: &mut Buffer, x: u16, y: u16, s: &str, fg: Color, bg: Color, bold: bool) {
-    let mut style = Style::default().fg(fg).bg(bg);
+    let mut style = Style::reset().fg(fg).bg(bg);
     if bold {
         style = style.add_modifier(Modifier::BOLD);
     }
@@ -265,4 +267,66 @@ pub fn draw(buf: &mut Buffer, pad: Rect, pad_body: Color, p: &Panel) {
     put(buf, r.x + 8, r.y + 11, "strike", INK, BODY, false);
     put(buf, r.x + 16, r.y + 11, "esc", EDGE, BODY, true);
     put(buf, r.x + 20, r.y + 11, "pull", INK, BODY, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A screen of fogged map: every cell dim and italic, as the map draws a tile out of
+    /// sight.
+    fn fogged() -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 40));
+        let fog = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        buf.set_style(buf.area, fog);
+        buf
+    }
+
+    /// The symbol and the modifiers of each of `cells`.
+    fn worn(buf: &Buffer, cells: impl Iterator<Item = (u16, u16)>) -> Vec<(String, Modifier)> {
+        cells
+            .map(|(x, y)| (buf[(x, y)].symbol().to_string(), buf[(x, y)].modifier))
+            .collect()
+    }
+
+    #[test]
+    fn the_clip_line_keeps_nothing_of_the_map_under_it() {
+        let pad = Rect::new(10, 2, 30, 20);
+        for fused in [true, false] {
+            let mut buf = fogged();
+            clip_line(&mut buf, pad, fused);
+            let y = pad.bottom();
+            let on_case = (0..120).filter(|&x| buf[(x, y)].bg == BODY);
+            let line = worn(&buf, on_case.map(|x| (x, y)));
+            assert!(line.len() > 15, "{line:?}");
+            assert_eq!(line[1], ("k".to_string(), Modifier::BOLD), "{line:?}");
+            assert!(line[3..].iter().all(|(_, m)| m.is_empty()), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_lead_keeps_nothing_of_the_map_under_it() {
+        let pad = Rect::new(10, 2, 30, 20);
+        let p = Panel {
+            shows: Shows::Sweep,
+            bar: 18,
+            zone: (4, 6),
+            marker: 0,
+            digits: Vec::new(),
+            faults: 0,
+            allowed: 3,
+            beat: 0,
+            rating: 1,
+        };
+        let mut buf = fogged();
+        draw(&mut buf, pad, Color::Rgb(200, 190, 160), &p);
+        let r = rect(pad, p.bar);
+        let lead = worn(&buf, (pad.right() - 1..r.x).map(|x| (x, r.y + 4)));
+        assert_eq!(lead.len(), 4, "{lead:?}");
+        assert_eq!(lead[0], ("╡".to_string(), Modifier::BOLD), "{lead:?}");
+        assert!(
+            lead[1..].iter().all(|(s, m)| s == "╍" && m.is_empty()),
+            "{lead:?}"
+        );
+    }
 }
