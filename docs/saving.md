@@ -88,8 +88,13 @@ A city or town held but not live whose map is in view runs its
 people's day on the clock (`outside::stream::run_neighbours`: the home city set aside,
 those kept, and those built in the background with the people their build seeded), so
 the home city set aside is saved with its people as they've run; nothing about it is
-saved besides. One behind by no more than a frame catches up (an hour) runs every
-frame; of those further behind, only the one furthest behind catches up in a frame. Someone who works in
+saved besides. Such a city is never seen behind the clock (`sim::World::catch_up`,
+`2026-11-08-world-while-away-design.md`): near the view it keeps time within the frame's
+step; on screen it's caught up whole; off screen it's placed by day when more than
+`sim::SHORT_GAP` (an hour) behind, else replays `REPLAY_PER_FRAME` minutes a frame. A city
+walked into, or landed beside from the overworld, is caught up whole. A catch-up never
+spans a save: each city keeps its own tick and catches up after a reopen like any other,
+and nothing new is saved for it. Someone who works in
 a city with no home in it lives off the map (`sim::Whereabouts::Away`), coming in and
 going out by a road across the map's edge (`sim::commute`; which road is theirs is made
 again from the map, not saved), and so do they when a trip of theirs has no place in the

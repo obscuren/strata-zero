@@ -4,7 +4,7 @@
 //! `2026-11-08-world-while-away-design.md`.
 
 use super::{TICKS_PER_MINUTE, World};
-use crate::people::{Activity, Goal, PersonId, Whereabouts};
+use crate::people::{Activity, Dest, Goal, PersonId, Whereabouts};
 use citygen::City;
 
 /// The longest gap, in ticks, a world replays: a game hour. Longer, it's placed by day.
@@ -86,15 +86,24 @@ impl World {
                 }
             };
             self.people[i].goal = goal;
-            // the story's cast off the map, with no road out now: back in at once
-            if self.people[i].whereabouts == Whereabouts::Away && self.way_out(i).is_none() {
+            // the story's cast off the map or on their way off it, with no road out now:
+            // back in at once, never placed off the map
+            let leaving = match &self.people[i].whereabouts {
+                Whereabouts::Away => true,
+                Whereabouts::Travelling(t) => matches!(t.dest, Dest::Away(_)),
+                _ => false,
+            };
+            if leaving && self.way_out(i).is_none() {
                 if let Some(dest) = [goal, Goal::Home, Goal::Work]
                     .into_iter()
                     .find_map(|g| self.dest_for(city, i, g))
                 {
                     self.arrive(i, dest, goal);
+                    continue;
                 }
-                continue;
+                if self.people[i].whereabouts == Whereabouts::Away {
+                    continue;
+                }
             }
             match self.dest_for(city, i, goal) {
                 Some(dest) => self.arrive(i, dest, goal),
@@ -128,7 +137,7 @@ impl World {
 mod tests {
     use super::*;
     use crate::content::People;
-    use crate::people::{Activity, Goal, Person, SimParams, Whereabouts, Work};
+    use crate::people::{Activity, Dest, Goal, Leg, Person, SimParams, Trip, Whereabouts, Work};
     use citygen::{GenParams, Generator, SizePreset};
 
     fn city() -> City {
@@ -354,6 +363,50 @@ mod tests {
         assert!(
             w.pending.iter().any(|r| r.who == walker),
             "sent on once released"
+        );
+    }
+
+    #[test]
+    fn the_cast_walking_out_of_town_is_never_placed_off_the_map() {
+        // cast while on their way off the map, with nowhere in town for the night's goal
+        // (no home here): placed in town all the same
+        let c = city();
+        let mut w = morning(&c);
+        let i = w
+            .people()
+            .iter()
+            .position(|p| matches!(p.work, Work::Building(_)))
+            .unwrap();
+        let id = w.people()[i].id;
+        let at = match w.people()[i].whereabouts {
+            Whereabouts::At { pos, .. } => pos,
+            _ => w.anchor(i).unwrap(),
+        };
+        w.people[i].home = None;
+        w.people[i].whereabouts = Whereabouts::Travelling(Trip {
+            from: at,
+            depart: w.tick(),
+            legs: vec![Leg {
+                path: vec![at],
+                car: None,
+            }],
+            goal: Goal::Home,
+            dest: Dest::Away(at),
+        });
+        w.keep_in_town(id);
+        // three in the morning, twenty hours on from seven
+        let night = 20 * 60 * TICKS_PER_MINUTE;
+        assert_eq!(w.due(i, 3 * 60), Goal::Home, "home is due");
+        w.place_at(&c, night);
+        assert_eq!(w.minute_of_day(), 3 * 60);
+        let p = &w.people()[i];
+        assert!(
+            !matches!(
+                p.whereabouts,
+                Whereabouts::Away | Whereabouts::Travelling(_)
+            ),
+            "{:?}",
+            p.whereabouts
         );
     }
 
