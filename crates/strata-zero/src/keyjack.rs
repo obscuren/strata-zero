@@ -1,16 +1,16 @@
 //! The Keyjack's run: the game's numbers in `flavor/keyjack.ron`, and what a door, a
 //! Keyjack copy with its fuse and the runner's skills make of them.
 
-// The keypad run (the next step of the Keyjack) is what calls all of this.
-#![allow(dead_code)]
-
 use crate::app::AppState;
 use citygen::BuildingId;
-use game::{ItemCopy, Mod, SkillId};
+use game::{CopyId, ItemCopy, Mod, SkillId};
 use serde::Deserialize;
 use std::sync::OnceLock;
 
 const DEFAULT: &str = include_str!("../../../flavor/keyjack.ron");
+
+/// The Keyjack's item id.
+pub const ITEM: &str = "keyjack";
 
 /// The skill whose rank widens every zone.
 const LOCKPICK: &str = "lockpick";
@@ -146,6 +146,55 @@ pub fn run_for(st: &AppState, building: BuildingId, keyjack: &ItemCopy) -> Run {
         rating,
         bar: n.bar,
     }
+}
+
+/// The Keyjacks a runner carries in the pack, as a pad sees them.
+#[derive(Clone, Copy, Debug)]
+pub enum Carried<'a> {
+    None,
+    /// Every one has an empty socket.
+    NoFuse,
+    /// The first with a fuse in: the one that runs.
+    Fused(&'a ItemCopy),
+}
+
+/// The Keyjacks in the pack (it has no slot to be worn in).
+pub fn carried(st: &AppState) -> Carried<'_> {
+    let mut jacks = st
+        .character
+        .inventory
+        .iter()
+        .filter(|s| s.item.0 == ITEM)
+        .peekable();
+    if jacks.peek().is_none() {
+        return Carried::None;
+    }
+    jacks
+        .filter_map(|s| s.copy.as_ref())
+        .find(|c| c.fitted.first().is_some_and(Option::is_some))
+        .map_or(Carried::NoFuse, Carried::Fused)
+}
+
+/// The last fault: the fuse in that Keyjack's socket burns out and is gone.
+pub fn blow_fuse(st: &mut AppState, copy: CopyId) {
+    let jack = st
+        .character
+        .inventory
+        .iter_mut()
+        .filter_map(|s| s.copy.as_mut())
+        .find(|c| c.id == copy);
+    if let Some(slot) = jack.and_then(|c| c.fitted.first_mut()) {
+        *slot = None;
+    }
+}
+
+/// A flat's door, as a seed for where its zones sit.
+pub fn door_seed(st: &AppState, building: BuildingId, level: i32, number: u16) -> u64 {
+    let city = st.city.as_ref().map_or(0, |c| c.seed);
+    citygen::rng::hash64(
+        citygen::rng::hash64(city, 0x4B1A_C000 + building.index() as u64),
+        ((level as i64 as u64) << 16) ^ number as u64,
+    )
 }
 
 /// Where a beat's zone starts (its left cell): fixed by the door and the beat, and

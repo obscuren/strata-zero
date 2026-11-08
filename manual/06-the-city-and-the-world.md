@@ -30,6 +30,24 @@ Inside, floors are named as a lift would: `B1` under the street, `L` at street l
 
 Doors to flats and offices are often locked. A keycard, or a code you've learned, opens them; your journal keeps every code you know. Your own door always opens for you.
 
+### Keypads
+
+A locked flat has a keypad on its door: `space` next to it and `i Interact: Keypad` brings it up. Type the four digits and press `V`; `X` clears them, and `V` with nothing typed keys in the code your journal holds. A right code reads `OPEN` and goes into your journal. Three wrong codes lock the pad for half an hour, and it counts down `LOCKED` on its glass.
+
+### The Keyjack
+
+Every runner carries a **Keyjack**, a lock cracker on a lead. While you carry one, the pad shows `k  clip the keyjack` under itself: press `k` and it clips on to the pad's right, then works the code out with you a digit at a time. A locked pad won't take it.
+
+A marker sweeps the bar on its screen. Press `space` while the marker sits in the lit zone. A hit keys that digit into the pad, and the next beat starts with a narrower zone. The fourth hit opens the door, and the code goes into your journal. `esc` pulls the Keyjack off; the pad stays up, with nothing typed.
+
+A miss is a **fault**: the bar flashes `ERR`, a fault light comes on and the beat starts again somewhere else on the bar. Faults stay on the door. Pulling the Keyjack off and clipping it on again starts the beats over, not the faults; they clear when the door opens or when its lockout ends. The last fault, the third with a stock fuse, locks the pad for half an hour, the same as three wrong codes, and blows the Keyjack's fuse. The screen reads `FUSE  BLOWN` and the fuse is gone.
+
+The Keyjack runs on the fuse in its socket. When none you carry has a fuse in, the line under the pad greys to `keyjack · no fuse` and `k` only tells you so. Fit a spare from the Keyjack's blueprint (The deck covers inspecting and modding). Better fuses help: a ceramic fuse sits through one more fault, a slow-blow fuse slows the marker, and a wideband fuse makes every zone a cell wider. With the WRENCH category you can build Keyjacks and fuses at the workbench.
+
+A lock's maker sets its rating, shown on the Keyjack's screen beside the beat. Street locks are `R1`, municipal and neon ones `R2`, megacorp ones `R3`. The higher the rating, the narrower the zones.
+
+What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone a cell wider, and the **Skeleton key** talent allows one more fault. Both add to what the fuse does.
+
 ## Reading the map
 
 | Mark | What it is |

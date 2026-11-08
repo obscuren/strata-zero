@@ -261,7 +261,6 @@ fn open(
 /// The pad opens for a way that is not a typed code (the Keyjack's run): the journal
 /// learns the door's code from `source`, and the pad's misses and faults clear. The
 /// lockout, if one holds, is the caller's to check first.
-#[allow(dead_code)] // the Keyjack's run calls it
 pub fn open_with(
     st: &mut AppState,
     b: BuildingId,
@@ -279,13 +278,22 @@ pub fn open_with(
 
 /// The pad locks for `LOCKOUT_MINUTES` as if the third wrong code had been keyed. Its
 /// faults stay on it until the lockout ends.
-#[allow(dead_code)] // the Keyjack's run calls it
 pub fn lock_out(st: &mut AppState, b: BuildingId, level: i32, number: u16) {
     let now = st.net.now(st);
     let mut state = st.journal.keypad_now(b, level, number, now);
     state.wrong = MISSES;
     state.locked_until = Some(now + LOCKOUT_MINUTES);
     st.journal.keypads.insert((b, level, number), state);
+}
+
+/// A Keyjack's miss at a flat's pad: one more fault on the door, kept until it opens or
+/// a lockout ends. The door's faults now.
+pub fn fault(st: &mut AppState, b: BuildingId, level: i32, number: u16) -> u8 {
+    let now = st.net.now(st);
+    let mut state = st.journal.keypad_now(b, level, number, now);
+    state.faults = state.faults.saturating_add(1);
+    st.journal.keypads.insert((b, level, number), state);
+    state.faults
 }
 
 /// How a locked door opened.
