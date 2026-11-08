@@ -196,6 +196,26 @@ impl Keypad {
         &self.typed
     }
 
+    /// Moves the clock to a tick at which a strike hits (or misses) the zone, for a test
+    /// or a shot to aim with.
+    #[cfg(test)]
+    pub(crate) fn aim(&self, st: &mut AppState, hit: bool) {
+        let c = self.clip.as_ref().expect("clipped on");
+        let start = st.tick.max(c.from);
+        st.tick = (start..start + 3_000)
+            .find(|t| c.hits(c.marker(*t)) == hit)
+            .expect("the marker gets there");
+    }
+
+    /// Whether the run is over (blown or cracked), for a shot to stop on.
+    #[cfg(test)]
+    pub(crate) fn clip_ended(&self) -> Option<bool> {
+        self.clip
+            .as_ref()
+            .and_then(|c| c.ended)
+            .map(|e| e == Ended::Cracked)
+    }
+
     /// In the middle of the screen, always inside the area.
     pub(crate) fn rect(&self, area: Rect) -> Rect {
         let w = DEVICE_W.min(area.width);

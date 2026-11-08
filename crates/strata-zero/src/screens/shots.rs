@@ -479,6 +479,130 @@ fn keypad_over_the_home_floor() {
     shot("keypad", &st, &map, &pad);
 }
 
+/// A pad on the first favour's door over the washed map, the player carrying the kit's
+/// fused Keyjack.
+fn keyjack_pad() -> (AppState, MapScreen, Keypad) {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    crate::jobs::first_favour(&mut st);
+    st.tick += 200;
+    let (b, level, number, _) = crate::jobs::first_fetch(&st).expect("the favour");
+    let pad = Keypad::open(&st, b, level, number);
+    (st, map, pad)
+}
+
+/// A strike on the zone (`hit`) or off it.
+fn keyjack_strike(st: &mut AppState, pad: &mut Keypad, hit: bool) {
+    pad.aim(st, hit);
+    pad.update(st, &[key(KeyCode::Char(' '))]);
+}
+
+/// The Keyjack in the pack: its copy.
+fn keyjack_copy(st: &AppState) -> game::CopyId {
+    st.character
+        .inventory
+        .iter()
+        .find(|s| s.item.0 == crate::keyjack::ITEM)
+        .and_then(|s| s.copy_id())
+        .expect("a Keyjack in the pack")
+}
+
+/// The Keyjack through the real screens: the clip line, a run on the keypad (a beat, a
+/// miss, the fuse blown, the door cracked), and the item on its blueprint, modded, and
+/// its fuse inspected.
+#[test]
+#[ignore]
+fn keyjack_shots() {
+    let sizes = [(120, 40), (100, 30)];
+    let pad_shots = |name: &str, st: &AppState, map: &MapScreen, pad: &Keypad| {
+        for (w, h) in sizes {
+            shot_stack(&format!("keyjack_{name}_{w}x{h}"), st, &[map, pad], (w, h));
+        }
+    };
+    // The clip line with a fuse in, a beat in, a miss, then the fuse blowing.
+    let (mut st, map, mut pad) = keyjack_pad();
+    pad_shots("clip", &st, &map, &pad);
+    pad.update(&mut st, &[key(KeyCode::Char('k'))]);
+    keyjack_strike(&mut st, &mut pad, true);
+    pad.aim(&mut st, true);
+    st.tick += 2;
+    pad_shots("beat", &st, &map, &pad);
+    keyjack_strike(&mut st, &mut pad, false);
+    pad_shots("miss", &st, &map, &pad);
+    st.tick += 30;
+    for _ in 0..3 {
+        if pad.clip_ended().is_some() {
+            break;
+        }
+        keyjack_strike(&mut st, &mut pad, false);
+    }
+    pad_shots("blown", &st, &map, &pad);
+    // The back of the Keyjack after the burn: the holder empty.
+    let copy = keyjack_copy(&st);
+    let deck = Deck::new(st.tick);
+    let mut bp = Blueprint::open(&st, ItemId::new(crate::keyjack::ITEM), false, Some(copy));
+    st.tick += 200;
+    bp.update(&mut st, &[key(KeyCode::Char('m'))]);
+    for (w, h) in sizes {
+        let name = format!("keyjack_back_blown_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &bp], (w, h));
+    }
+
+    // The door cracked.
+    let (mut st, map, mut pad) = keyjack_pad();
+    pad.update(&mut st, &[key(KeyCode::Char('k'))]);
+    for _ in 0..4 {
+        keyjack_strike(&mut st, &mut pad, true);
+    }
+    pad_shots("cracked", &st, &map, &pad);
+
+    // The clip line with no fuse in.
+    let (mut st, map, pad) = keyjack_pad();
+    let copy = keyjack_copy(&st);
+    let out = game::Action::Unfit {
+        host: game::Host::Pack(copy),
+        socket: 0,
+    };
+    crate::actions::perform(&mut st, out).unwrap();
+    pad_shots("clip_nofuse", &st, &map, &pad);
+
+    // The blueprint, modding with the tray open, and a fuse inspected.
+    let (mut st, map, _) = keyjack_pad();
+    let deck = {
+        let mut d = Deck::new(st.tick);
+        d.update(&mut st, &[key(KeyCode::Char('3'))]);
+        d
+    };
+    let copy = keyjack_copy(&st);
+    let mut bp = Blueprint::open(&st, ItemId::new(crate::keyjack::ITEM), false, Some(copy));
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in sizes {
+        let name = format!("keyjack_blueprint_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &bp], (w, h));
+    }
+    bp.update(&mut st, &[key(KeyCode::Char('m')), key(KeyCode::Char(' '))]);
+    for (w, h) in sizes {
+        let name = format!("keyjack_modding_tray_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &bp], (w, h));
+    }
+    let fuse = ItemId::new("fuse_ceramic");
+    st.character.give_item(&st.content, fuse.clone(), 1);
+    let copy = st
+        .character
+        .inventory
+        .iter()
+        .find(|s| s.item == fuse)
+        .and_then(|s| s.copy_id());
+    let bp = Blueprint::open(&st, fuse, false, copy);
+    for (w, h) in sizes {
+        let name = format!("keyjack_fuse_inspect_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck, &bp], (w, h));
+    }
+}
+
 /// Types each line into the terminal, letting the one before settle first.
 fn type_lines(st: &mut AppState, term: &mut Terminal, lines: &[&str]) {
     for line in lines {
