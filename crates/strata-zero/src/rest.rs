@@ -51,9 +51,6 @@ pub const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// Minutes of sleep that heal in full.
 pub const NIGHT: u64 = 360;
 
-/// Path requests a minute asleep turns into trips: what a minute awake allows.
-const PATHS_PER_MINUTE: usize = crate::clock::PATHS_PER_FRAME * sim::TICKS_PER_MINUTE as usize;
-
 /// The game minute now.
 pub fn now(st: &AppState) -> u64 {
     st.net.now(st)
@@ -122,7 +119,12 @@ pub fn frame_within(st: &mut AppState, budget: Duration) {
         if st.rest.is_none() {
             return;
         }
-        crate::clock::run(st, Some(sim::TICKS_PER_MINUTE), PATHS_PER_MINUTE);
+        // a minute asleep finds the paths a minute awake does
+        crate::clock::run(
+            st,
+            Some(sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
         if let Some(why) = cause(st, true) {
             wake(st, why);
             return;

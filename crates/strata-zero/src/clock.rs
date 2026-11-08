@@ -4,16 +4,24 @@
 use crate::app::AppState;
 use citygen::Place;
 
-/// How many requested paths turn into trips in one step.
+/// How many requested paths turn into trips per tick of the clock run: a frame's worth on
+/// the street, and 360 a game minute however the clock runs.
 pub const PATHS_PER_FRAME: usize = 4;
 
 /// One step of the city's clock. With `Some(n)` the world advances `n` ticks and turns up
-/// to `paths` requests into trips; with `None` it holds (the free camera). Either way the
-/// bots, the Net's minute, the backdoors, the jobs and the story take their step.
+/// to `paths` requests a tick into trips; a step over a minute (an overworld step over
+/// rough ground) is caught up as a city you come back to is (`sim::World::catch_up`), so
+/// every trip leaves on its minute and nothing is left queued. With `None` it holds (the
+/// free camera). Either way the bots, the Net's minute, the backdoors, the jobs and the
+/// story take their step.
 pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     if let (Some(n), Some(city), Some(world)) = (world_ticks, st.city.as_ref(), st.world.as_mut()) {
-        world.advance(city, world.tick() + n);
-        world.path_some(city, paths);
+        if n > sim::TICKS_PER_MINUTE {
+            world.catch_up(city, world.tick() + n);
+        } else {
+            world.advance(city, world.tick() + n);
+            world.path_some(city, paths.saturating_mul(n as usize));
+        }
     }
     // The bots out with you move on the same clock.
     crate::bots::tick(st);
@@ -76,6 +84,26 @@ mod tests {
         );
         crate::missions::begin(&mut st);
         st
+    }
+
+    #[test]
+    fn an_hour_of_overworld_steps_leaves_the_city_nothing_queued() {
+        // a flat tile's walk at a time (72 ticks), the live city run on as the overworld
+        // runs it
+        let mut st = crate::outside::tests::home_run();
+        // seven in the morning, the commute starting, nothing queued
+        let ahead = (7 * 60 + 1440 - st.minute_of_day() as u64) % 1440;
+        let (city, w) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        w.place_at(city, w.tick() + ahead * sim::TICKS_PER_MINUTE);
+        for _ in 0..50 {
+            run(&mut st, Some(72), PATHS_PER_FRAME);
+        }
+        assert_eq!(st.world.as_ref().unwrap().pending(), 0);
+        // and a mountain river's walk (576 ticks) at a time
+        for _ in 0..7 {
+            run(&mut st, Some(576), PATHS_PER_FRAME);
+        }
+        assert_eq!(st.world.as_ref().unwrap().pending(), 0);
     }
 
     #[test]
