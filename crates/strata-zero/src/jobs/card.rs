@@ -860,6 +860,14 @@ fn offer_card(st: &AppState, job: &Job, width: usize, way: &Way) -> Vec<Line<'st
         fixer_name(st, job.fixer)
     );
     let short = format!("{work} work from standing {from} · you are at {standing}");
+    let (long, short) = if super::is_net_work(job.kind.tag()) && !super::has_deck(st) {
+        (
+            format!("{long} · needs a deck"),
+            format!("{short} · needs a deck"),
+        )
+    } else {
+        (long, short)
+    };
     out.push(plain(
         if long.chars().count() <= width {
             long
@@ -880,7 +888,7 @@ fn offer_card(st: &AppState, job: &Job, width: usize, way: &Way) -> Vec<Line<'st
 
 /// The standing ladder from REFUSE_AT to 8: the thresholds marked and named, you on
 /// it, and what moves it. "refuses" goes left of the bar when it would run into "fetch".
-fn ladder(standing: i32, width: usize) -> Vec<Line<'static>> {
+fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
     const HI: i32 = 8;
     let steps = (HI - REFUSE_AT) as usize;
     let marks = [
@@ -930,7 +938,7 @@ fn ladder(standing: i32, width: usize) -> Vec<Line<'static>> {
     }
     let mut you = vec![' '; len];
     you[lead + (standing.clamp(REFUSE_AT, HI) - REFUSE_AT) as usize * step] = '▲';
-    vec![
+    let mut out = vec![
         row(bar, Vec::new(), width),
         plain(labels.iter().collect::<String>().trim_end(), FAINT, width),
         plain(you.iter().collect::<String>().trim_end(), WHITE, width),
@@ -939,7 +947,15 @@ fn ladder(standing: i32, width: usize) -> Vec<Line<'static>> {
             FAINTER,
             width,
         ),
-    ]
+    ];
+    if !deck {
+        out.push(plain(
+            "  copy, plant and vault: needs a deck in the slot",
+            AMBER,
+            width,
+        ));
+    }
+    out
 }
 
 /// The last thing a fixer said to you: the line for the latest take or ending of their
@@ -1027,7 +1043,7 @@ pub fn fixer_card(st: &AppState, fixer: PersonId, width: usize, way: &Way) -> Ve
         Vec::new(),
         width,
     ));
-    out.extend(ladder(standing, width));
+    out.extend(ladder(standing, super::has_deck(st), width));
     out.push(blank());
     let mine: Vec<&Job> = st.jobs.list.iter().filter(|j| j.fixer == fixer).collect();
     let count = |s: State| mine.iter().filter(|j| j.state == s).count();
@@ -1223,7 +1239,7 @@ mod tests {
     #[test]
     fn the_ladder_names_each_threshold_once_and_marks_you() {
         for width in [56, 68] {
-            let t = text(&ladder(7, width));
+            let t = text(&ladder(7, true, width));
             for name in ["refuses", "fetch", "copy", "plant", "vault"] {
                 assert_eq!(
                     t.iter().map(|l| l.matches(name).count()).sum::<usize>(),
@@ -1554,5 +1570,23 @@ mod tests {
                 "the band is lit end to end"
             );
         }
+    }
+
+    #[test]
+    fn the_ladder_says_needs_a_deck() {
+        for width in [56, 68] {
+            let without = text(&ladder(7, false, width));
+            assert!(
+                without.iter().any(|l| l.contains("needs a deck")),
+                "{without:?}"
+            );
+            assert!(without.iter().all(|l| l.chars().count() <= width));
+            let with = text(&ladder(7, true, width));
+            assert!(with.iter().all(|l| !l.contains("needs a deck")));
+        }
+        let mut st = state_home();
+        let id = offered(&mut st, KindTag::Copy);
+        st.character.equipment.remove(&game::Slot::Deck);
+        assert!(has(&card(&st, id, 68), "needs a deck"));
     }
 }

@@ -184,8 +184,17 @@ pub fn rows(st: &AppState, fixer: PersonId) -> Vec<Choice> {
     if let Some(j) = st.jobs.taken(fixer) {
         match st.jobs.ready(j.id, &stands(st), &carries(st)) {
             Ok(()) => out.push(
-                Choice::on('h', "Hand in", j.title.clone(), CYAN, Pick::HandIn(j.id))
-                    .tail(format!(" · ¤{}", j.pay)),
+                Choice::on('h', "Hand in", j.title.clone(), CYAN, Pick::HandIn(j.id)).tail(
+                    format!(
+                        " · ¤{}{}",
+                        j.pay,
+                        if matches!(j.kind, Kind::Fetch { .. }) {
+                            " · a stock fuse"
+                        } else {
+                            ""
+                        }
+                    ),
+                ),
             ),
             Err(why) => out.push(Choice {
                 enabled: false,
@@ -321,10 +330,16 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     let now = st.net.now(st);
     let pay = st.jobs.hand_in(id, now).ok_or("not in hand")?;
     st.character.credits = st.character.credits.saturating_add(pay);
+    // A fetch pays a stock fuse for the Keyjack on top of the credits.
+    let fuse = matches!(j.kind, Kind::Fetch { .. });
+    if fuse {
+        st.character.give(ItemId::new("fuse_stock"), 1);
+    }
+    let fuse = if fuse { " · a stock fuse" } else { "" };
     let fixer = fixer_name(st, j.fixer);
     let said = st.flavor.line(Say::Handed, id.0 as u64).to_string();
     let line = format!(
-        "`{}` · handed in · ¤{pay} · {fixer}: \u{201c}{said}\u{201d}",
+        "`{}` · handed in · ¤{pay}{fuse} · {fixer}: \u{201c}{said}\u{201d}",
         j.title
     );
     st.story(line.clone());
@@ -657,5 +672,25 @@ mod tests {
             st.jobs.offered(fx).is_some(),
             "the fixer at the bar has work too"
         );
+    }
+
+    #[test]
+    fn a_fetch_pays_a_fuse() {
+        let mut st = state_home();
+        let id = st.jobs.active().unwrap().id;
+        assert!(matches!(st.jobs.get(id).unwrap().kind, Kind::Fetch { .. }));
+        st.character.give(ItemId::new("paydata"), 1);
+        let (b, level, _, tile) = first_fetch(&st).unwrap();
+        crate::jobs::send(
+            &mut st,
+            Event::Taken {
+                place: Place::Floor { building: b, level },
+                pos: tile,
+            },
+        );
+        let fuses = st.character.count(&ItemId::new("fuse_stock"));
+        let line = hand_in(&mut st, id).unwrap();
+        assert!(line.contains("¤200 · a stock fuse"), "{line}");
+        assert_eq!(st.character.count(&ItemId::new("fuse_stock")), fuses + 1);
     }
 }
