@@ -16,6 +16,9 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
+mod away;
+pub use away::{CatchUp, SHORT_GAP};
+
 /// Ticks in a game minute, as the HUD's clock keeps it.
 pub const TICKS_PER_MINUTE: u64 = 90;
 /// Ticks a walker spends per tile: ten tiles a game minute, so a commute keeps
