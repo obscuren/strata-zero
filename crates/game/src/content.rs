@@ -535,7 +535,10 @@ impl Content {
                         why: "no hardware numbers".into(),
                     });
                 }
-                (ItemKind::Hardware, Some(h)) if h.mods.is_empty() => {
+                // A fuse is what the Keyjack runs on, so a stock one may do nothing more.
+                (ItemKind::Hardware, Some(h))
+                    if h.mods.is_empty() && h.fits != SocketKind::Fuse =>
+                {
                     return Err(ContentError::HardwareInvalid {
                         id: i.id.0.clone(),
                         why: "hardware does at least one thing".into(),
@@ -2237,6 +2240,124 @@ mod tests {
                 "{id}"
             );
             assert_eq!(look.kind(), fits);
+        }
+    }
+
+    #[test]
+    fn the_keyjack_and_its_fuses_load() {
+        let c = Content::load().unwrap();
+        let get = |id: &str| c.item(&ItemId::new(id)).unwrap();
+        let kj = get("keyjack");
+        assert_eq!(kj.look, Some(ItemLook::Keyjack));
+        assert_eq!(kj.sockets, vec![SocketKind::Fuse]);
+        assert_eq!(kj.drawn_sockets(), [("FUSE", SocketKind::Fuse)]);
+        assert_eq!((kj.weight, kj.value, kj.slot), (0.3, 400, None));
+        assert!(kj.per_copy() && !kj.takes_stickers(), "carried, not worn");
+        for (id, name, value, mods, look) in [
+            (
+                "fuse_stock",
+                "Stock fuse",
+                40,
+                vec![],
+                HardwareLook::FuseStock,
+            ),
+            (
+                "fuse_ceramic",
+                "Ceramic fuse",
+                150,
+                vec![Mod::Faults(1)],
+                HardwareLook::FuseCeramic,
+            ),
+            (
+                "fuse_slowblow",
+                "Slow-blow fuse",
+                150,
+                vec![Mod::Sweep(75)],
+                HardwareLook::FuseSlowBlow,
+            ),
+            (
+                "fuse_wideband",
+                "Wideband fuse",
+                150,
+                vec![Mod::Zone(1)],
+                HardwareLook::FuseWideband,
+            ),
+        ] {
+            let i = get(id);
+            assert_eq!(
+                (i.kind, i.name.as_str(), i.weight, i.value),
+                (ItemKind::Hardware, name, 0.05, value)
+            );
+            assert_eq!(
+                i.hardware,
+                Some(Hardware {
+                    fits: SocketKind::Fuse,
+                    mods,
+                    look
+                }),
+                "{id}"
+            );
+            assert_eq!(look.kind(), SocketKind::Fuse);
+        }
+    }
+
+    #[test]
+    fn mods_read_as_drawn() {
+        assert_eq!(Mod::Faults(1).line(), "faults +1");
+        assert_eq!(Mod::Sweep(75).line(), "marker slower");
+        assert_eq!(Mod::Zone(1).line(), "zones +1");
+        assert_eq!(Mod::Faults(-1).line(), "faults \u{2212}1");
+        assert_eq!(Mod::Zone(-2).line(), "zones \u{2212}2");
+        assert_eq!(Mod::Sweep(130).line(), "marker faster");
+        assert_eq!(Mod::Faults(1).sticker(), "FAULTS +1");
+        assert_eq!(Mod::Sweep(75).sticker(), "SLOWER");
+        assert_eq!(Mod::Sweep(130).sticker(), "FASTER");
+        assert_eq!(Mod::Zone(1).sticker(), "ZONES +1");
+        // A card reads a line per mod, or that the piece has no bonus.
+        let c = Content::load().unwrap();
+        let lines = |id: &str| {
+            let item = c.item(&ItemId::new(id)).unwrap();
+            item.hardware.as_ref().unwrap().lines()
+        };
+        assert_eq!(lines("fuse_stock"), ["no bonus"]);
+        assert_eq!(lines("fuse_ceramic"), ["faults +1"]);
+        assert_eq!(lines("fuse_slowblow"), ["marker slower"]);
+        assert_eq!(lines("fuse_wideband"), ["zones +1"]);
+        assert_eq!(lines("coldfin_1"), ["trace per cast \u{2212}10%"]);
+        assert_eq!(SocketKind::Fuse.label(), "fuse");
+        assert_eq!(SocketKind::Fuse.takes(), "fuses");
+        assert_eq!(SocketKind::Fuse.fits(), "fuse socket");
+        assert!(!SocketKind::Fuse.needs_a_doc());
+    }
+
+    #[test]
+    fn a_fuse_may_have_no_mods() {
+        let c = Content::load().unwrap();
+        assert!(c.validate().is_ok());
+        let stock = c.item(&ItemId::new("fuse_stock")).unwrap();
+        assert!(stock.hardware.as_ref().unwrap().mods.is_empty());
+        let mut bare = c.clone();
+        let i = bare.items.iter().position(|i| i.id.0 == "fuse_ceramic");
+        bare.items[i.unwrap()]
+            .hardware
+            .as_mut()
+            .unwrap()
+            .mods
+            .clear();
+        assert!(bare.validate().is_ok());
+    }
+
+    #[test]
+    fn other_hardware_still_needs_mods() {
+        let c = Content::load().unwrap();
+        for id in ["coldfin_1", "coldfin_2", "sidecar", "hushcan", "redeye"] {
+            let mut bad = c.clone();
+            let i = bad.items.iter().position(|i| i.id.0 == id).unwrap();
+            bad.items[i].hardware.as_mut().unwrap().mods.clear();
+            assert!(
+                matches!(bad.validate(), Err(ContentError::HardwareInvalid { .. })),
+                "{id}"
+            );
         }
     }
 

@@ -2,7 +2,8 @@
 //! screen. Every item opens the same window, in one of three modes: inspect, the
 //! item's own view; modding, where any item with sockets and a drawing has them
 //! worked on; and stickers, where anything worn with a drawing has stickers stuck on. Decks, hardware and items with a look have drawings so far; anything else reads
-//! MISSING BLUEPRINT.
+//! MISSING BLUEPRINT. A drawing with a back (the Keyjack's) shows its back in modding,
+//! opened up on its sockets, and its front in the other modes.
 
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::screens::bench::Bench;
@@ -1859,6 +1860,101 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert!(!modding(&bp));
+    }
+
+    /// The Keyjack's drawing origin in the window on a terminal of `w` by `h`.
+    fn keyjack_origin(w: u16, h: u16) -> (u16, u16) {
+        let art = ItemArt {
+            stickers: Vec::new(),
+            look: ItemLook::Keyjack,
+            fitted: Vec::new(),
+        };
+        art.origin(body_of(w, h))
+    }
+
+    const KJ_LCD: Color = Color::Rgb(0x06, 0x18, 0x0e);
+    const KJ_PCB: Color = Color::Rgb(0x0f, 0x3a, 0x24);
+    const KJ_GLASS: Color = Color::Rgb(0x9a, 0xd4, 0xdc);
+    const KJ_LIT: Color = Color::Rgb(0x5a, 0xff, 0x96);
+
+    #[test]
+    fn modding_the_keyjack_draws_its_back() {
+        let mut st = state();
+        let copy = pack_copy(&st, "keyjack");
+        let mut bp = Blueprint::open(&st, id("keyjack"), false, Some(copy));
+        let (w, h) = (100, 30);
+        let (title, readout, hint) = rows_of(w, h);
+        let (ox, oy) = keyjack_origin(w, h);
+        let at = |buf: &Buffer, dx: u16, dy: u16| buf[(ox + dx, oy + dy)].clone();
+        // Inspect draws the front: the LCD, its strike key, the fuse light lit.
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, title).contains(" BLUEPRINT · KEYJACK "));
+        assert_eq!(inside(&buf, w, h, hint), "m mod · esc close", "no stickers");
+        let text = buffer_text(&buf);
+        assert!(text.contains("KEYJACK") && text.contains("READY"), "{text}");
+        assert!(text.contains("STRIKE") && !text.contains("KJ4"), "{text}");
+        assert_eq!(at(&buf, 30, 6).bg, KJ_LCD);
+        assert_eq!(at(&buf, 43, 3).fg, KJ_LIT);
+        let front = buf;
+        // Modding draws the back, opened and in its own colours, the fuse in its holder
+        // and the holder boxed.
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        assert!(modding(&bp));
+        let buf = screen(&bp, &st, w, h);
+        assert!(inside(&buf, w, h, title).contains(" MODDING · KEYJACK "));
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET FUSE ▸ Stock fuse · no bonus"
+        );
+        let text = buffer_text(&buf);
+        assert!(text.contains("KJ4") && text.contains("3V"), "{text}");
+        assert!(!text.contains("READY"), "{text}");
+        assert!(
+            text.contains("STOCK FUSE"),
+            "the spares in the tray: {text}"
+        );
+        assert_eq!(at(&buf, 17, 4).bg, KJ_PCB, "the board is not greyed");
+        assert_eq!(at(&buf, 28, 10).bg, KJ_GLASS, "the fuse in its holder");
+        assert_eq!(at(&buf, 28, 9).symbol(), "╌");
+        assert_eq!(at(&buf, 20, 11).symbol(), "╎");
+        // The front never draws the fitted fuse: where it sits on the back, the front
+        // has its own drawing.
+        assert_ne!(at(&front, 28, 10).bg, KJ_GLASS);
+        // Out comes the fuse: the holder draws empty and the fuse light goes dark.
+        let out = Action::Unfit {
+            host: Host::Pack(copy),
+            socket: 0,
+        };
+        perform(&mut st, out).unwrap();
+        let buf = screen(&bp, &st, w, h);
+        assert_eq!(at(&buf, 28, 10).bg, KJ_PCB);
+        assert_eq!(
+            inside(&buf, w, h, readout),
+            "SOCKET FUSE ▸ empty · takes fuses"
+        );
+        press(&mut bp, &mut st, &[KeyCode::Char('m')]);
+        let buf = screen(&bp, &st, w, h);
+        assert!(buffer_text(&buf).contains("READY"));
+        assert_ne!(at(&buf, 43, 3).fg, KJ_LIT);
+    }
+
+    #[test]
+    fn the_fuse_has_a_drawing() {
+        let mut st = state();
+        for (fuse, name) in [
+            ("fuse_stock", "STOCK FUSE"),
+            ("fuse_ceramic", "CERAMIC FUSE"),
+            ("fuse_slowblow", "SLOW-BLOW FUSE"),
+            ("fuse_wideband", "WIDEBAND FUSE"),
+        ] {
+            st.character.give_item(&st.content, id(fuse), 1);
+            let copy = pack_copy(&st, fuse);
+            let bp = Blueprint::open(&st, id(fuse), false, Some(copy));
+            let buf = screen(&bp, &st, 100, 30);
+            let line = inside(&buf, 100, 30, 0);
+            assert!(line.contains(&format!(" BLUEPRINT · {name} ")), "{line}");
+            assert!(!buffer_text(&buf).contains(MISSING), "{fuse}");
+        }
     }
 
     /// The names on the tray's tiles, left to right.

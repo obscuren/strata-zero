@@ -385,9 +385,16 @@ impl Character {
         kit.extend(b.kit.iter().cloned());
         // The first item that fits a free slot is worn, and chrome goes in at each free
         // site of its kind while the load allows, as a new copy when it is held per
-        // copy; everything else is packed.
+        // copy; everything else is packed. Hardware waits for the rest, then goes in
+        // the first kit item with a free socket of its kind.
+        let mut hosts = Vec::new();
+        let mut hardware = Vec::new();
         for (id, qty) in kit {
             let Some(item) = c.item(&id) else { continue };
+            if item.hardware.is_some() {
+                hardware.push((id, qty));
+                continue;
+            }
             let mut qty = qty;
             if let Some(slot) = item.slot
                 && qty > 0
@@ -395,6 +402,7 @@ impl Character {
             {
                 let copy = item.per_copy().then(|| ch.new_copy(c, &id));
                 ch.wear(slot, id.clone(), copy);
+                hosts.push(Host::Worn(slot));
                 qty -= 1;
             }
             while qty > 0
@@ -402,6 +410,27 @@ impl Character {
             {
                 let copy = item.per_copy().then(|| ch.new_copy(c, &id));
                 ch.install(site, id.clone(), copy);
+                hosts.push(Host::Site(site));
+                qty -= 1;
+            }
+            // Each copy packed is a new one, numbered on from here.
+            let first = ch.next_copy;
+            ch.give_item(c, id, qty);
+            hosts.extend((first..ch.next_copy).map(|n| Host::Pack(CopyId(n))));
+        }
+        for (id, qty) in hardware {
+            let mut qty = qty;
+            while qty > 0
+                && let Some((host, socket)) = ch.free_socket(c, &hosts, &id)
+            {
+                let piece = Stack {
+                    item: id.clone(),
+                    qty: 1,
+                    copy: Some(ch.new_copy(c, &id)),
+                };
+                if let Some(copy) = ch.host_copy_mut(c, host) {
+                    copy.fitted[socket] = Some(piece);
+                }
                 qty -= 1;
             }
             ch.give_item(c, id, qty);
@@ -694,6 +723,18 @@ impl Character {
         Site::ALL
             .into_iter()
             .find(|s| s.fits() == implant.fits && !self.chrome.contains_key(s))
+    }
+
+    /// The first of `hosts` with an empty socket a piece fits, and that socket.
+    fn free_socket(&self, c: &Content, hosts: &[Host], piece: &ItemId) -> Option<(Host, usize)> {
+        let kind = c.item(piece)?.fits_socket()?;
+        hosts.iter().find_map(|&host| {
+            let sockets = &c.item(self.host_item(host)?)?.sockets;
+            let copy = self.host_copy(host)?;
+            let mut free = sockets.iter().zip(&copy.fitted);
+            let socket = free.position(|(k, s)| *k == kind && s.is_none())?;
+            Some((host, socket))
+        })
     }
 
     pub fn has_skill(&self, id: &SkillId) -> bool {
@@ -1712,6 +1753,77 @@ mod tests {
         );
         assert_eq!(ch.credits, 300);
         assert_eq!(ch.handle, "Nix");
+    }
+
+    /// What each socket of a copy holds, by item id.
+    fn held(copy: &ItemCopy) -> Vec<Option<&str>> {
+        let held = copy.fitted.iter().map(|s| s.as_ref());
+        held.map(|s| s.map(|s| s.item.0.as_str())).collect()
+    }
+
+    #[test]
+    fn kit_fits_hardware_into_a_socket() {
+        let c = Content::load().unwrap();
+        // The Ratchet comes first in Kessler's kit: the first Hushcan goes in its
+        // muzzle and the Redeye on its rail; the second Hushcan finds the muzzle full.
+        let mut b = Build::from_template(&c, c.template(&TemplateId::new("kessler")).unwrap());
+        let (can, sight) = (ItemId::new("hushcan"), ItemId::new("redeye"));
+        b.kit.extend([(can.clone(), 2), (sight.clone(), 1)]);
+        let ch = Character::from_build(&c, &b);
+        let gun = ch.worn_copy(Slot::Primary).unwrap();
+        assert_eq!(held(gun), [Some("hushcan"), Some("redeye")]);
+        assert!(
+            gun.fitted
+                .iter()
+                .flatten()
+                .all(|s| s.qty == 1 && s.copy.is_some()),
+            "a fitted piece is a copy of its own"
+        );
+        assert_eq!((ch.count(&can), ch.count(&sight)), (1, 0));
+        let packed = ch.inventory.iter().find(|s| s.item == can).unwrap();
+        assert!(packed.copy.is_some(), "a packed piece is a copy");
+        // A kit with nothing that takes it packs every piece.
+        let mut bare = Build::blank(&c);
+        bare.kit = vec![(can.clone(), 2), (ItemId::new("salvage_jacket"), 1)];
+        let ch = Character::from_build(&c, &bare);
+        assert_eq!(ch.count(&can), 2);
+        assert_eq!(
+            ch.equipped(Slot::Torso),
+            Some(&ItemId::new("salvage_jacket"))
+        );
+    }
+
+    #[test]
+    fn every_build_starts_with_a_fused_keyjack() {
+        let c = Content::load().unwrap();
+        let (keyjack, fuse) = (ItemId::new("keyjack"), ItemId::new("fuse_stock"));
+        let mut builds: Vec<Build> = c
+            .professions
+            .iter()
+            .map(|p| {
+                let mut b = Build::blank(&c);
+                b.profession = Some(p.id.clone());
+                b
+            })
+            .collect();
+        builds.extend(c.templates.iter().map(|t| Build::from_template(&c, t)));
+        assert!(builds.len() >= 6);
+        for b in &builds {
+            let ch = Character::from_build(&c, b);
+            let who = b.profession.as_ref().unwrap();
+            let jacks: Vec<&Stack> = ch.inventory.iter().filter(|s| s.item == keyjack).collect();
+            assert_eq!(jacks.len(), 1, "{who}");
+            let copy = jacks[0].copy.as_ref().expect("a copy");
+            assert_eq!(held(copy), [Some("fuse_stock")], "{who}");
+            assert_eq!(ch.count(&fuse), 2, "{who}: two spares");
+            assert!(
+                ch.inventory
+                    .iter()
+                    .filter(|s| s.item == fuse)
+                    .all(|s| s.copy.is_some()),
+                "{who}"
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The hardware drawn: large for the blueprint window, small in a deck's socket,
-//! fitted in a gun's muzzle or rail socket, and as a swatch for the tray. All shapes are half blocks in exact colours.
+//! fitted in a gun's muzzle or rail socket or a Keyjack's fuse holder, and as a
+//! swatch for the tray. All shapes are half blocks in exact colours.
 
 use super::art::{Art, SocketPlace};
 use super::cyberdeck::Pen;
@@ -8,6 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
+mod fuse;
 mod weapon;
 
 /// A piece's large drawing: its width and height in cells.
@@ -17,7 +19,11 @@ pub fn large_size(look: HardwareLook) -> (u16, u16) {
         HardwareLook::ColdfinI
         | HardwareLook::ColdfinII
         | HardwareLook::Sidecar
-        | HardwareLook::Redeye => (52, 18),
+        | HardwareLook::Redeye
+        | HardwareLook::FuseStock
+        | HardwareLook::FuseCeramic
+        | HardwareLook::FuseSlowBlow
+        | HardwareLook::FuseWideband => (52, 18),
     }
 }
 
@@ -113,6 +119,10 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
         HardwareLook::Sidecar => sidecar(p, mods),
         HardwareLook::Hushcan => weapon::hushcan_large(p, mods),
         HardwareLook::Redeye => weapon::redeye_large(p, mods),
+        HardwareLook::FuseStock
+        | HardwareLook::FuseCeramic
+        | HardwareLook::FuseSlowBlow
+        | HardwareLook::FuseWideband => fuse::large(p, look, mods),
     }
 }
 
@@ -121,10 +131,13 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
 /// no hardware drawing places a chrome arm's sockets.
 /// A footprint's cells belong to the piece alone: the host's drawing puts neither
 /// pixels nor text there, because pieces are folded over the finished host drawing.
+/// The fuse is the one piece that sits over its host: the holder's clips run under
+/// its caps, and the holder shows through the lower half of its bottom row.
 pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
     match kind {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
         SocketKind::Rail => Some((0, 0, 24, 3)),
+        SocketKind::Fuse => Some((2, 0, 13, 3)),
         SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm | SocketKind::Bay => None,
     }
 }
@@ -149,6 +162,10 @@ pub fn draw_fitted(look: HardwareLook, place: &SocketPlace, p: &mut Pen) {
     match look {
         HardwareLook::Hushcan => weapon::hushcan(&mut at),
         HardwareLook::Redeye => weapon::redeye(&mut at),
+        HardwareLook::FuseStock
+        | HardwareLook::FuseCeramic
+        | HardwareLook::FuseSlowBlow
+        | HardwareLook::FuseWideband => fuse::fitted(&mut at, look),
         HardwareLook::ColdfinI | HardwareLook::ColdfinII | HardwareLook::Sidecar => {}
     }
 }
@@ -322,7 +339,7 @@ type Cell = (char, Color, Color);
 
 /// The side drawing as drawn, rows 7-11, left to right, and the side it is drawn for.
 /// The Coldfins read from the outer end in; the Sidecar from the inner end out.
-/// Weapon pieces have no side drawing.
+/// Weapon pieces and fuses have no side drawing.
 fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
     let blank: Cell = (' ', PCB, PCB);
     match look {
@@ -380,7 +397,12 @@ fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
             g[4][4] = ('●', LED, PCB);
             Some((g, Side::Right))
         }
-        HardwareLook::Hushcan | HardwareLook::Redeye => None,
+        HardwareLook::Hushcan
+        | HardwareLook::Redeye
+        | HardwareLook::FuseStock
+        | HardwareLook::FuseCeramic
+        | HardwareLook::FuseSlowBlow
+        | HardwareLook::FuseWideband => None,
     }
 }
 
@@ -446,6 +468,10 @@ pub fn tile(look: HardwareLook) -> Tile {
             ink: rgb(0xffd8dc),
             swatch: (rgb(0xff2a3c), rgb(0x15171b)),
         },
+        HardwareLook::FuseStock
+        | HardwareLook::FuseCeramic
+        | HardwareLook::FuseSlowBlow
+        | HardwareLook::FuseWideband => fuse::tile(look),
     }
 }
 
@@ -609,6 +635,77 @@ mod tests {
         assert_eq!(b[(7, 8)].fg, BLADE_HI);
     }
 
+    const FUSES: [HardwareLook; 4] = [
+        HardwareLook::FuseStock,
+        HardwareLook::FuseCeramic,
+        HardwareLook::FuseSlowBlow,
+        HardwareLook::FuseWideband,
+    ];
+
+    #[test]
+    fn a_fuse_draws_in_its_footprint() {
+        // A fuse place at (21, 10): the footprint starts 2 cells in, 13 by 3.
+        let holder = place(21, 10, 17, 3, SocketKind::Fuse);
+        for look in FUSES {
+            let b = drawn(60, 0, |p| draw_fitted(look, &holder, p));
+            let foot = Rect::new(23, 10, 13, 3);
+            for y in 0..20 {
+                for x in 0..60 {
+                    let blank = b[(x, y)] == ratatui::buffer::Cell::EMPTY;
+                    assert!(blank || foot.contains((x, y).into()), "{look:?} ({x},{y})");
+                }
+            }
+            // The caps are silver and the middle is the tier's body.
+            assert_eq!(b[(23, 10)].bg, rgb(0xb4bcc6), "{look:?}");
+        }
+        let fitted = |look| drawn(60, 0, |p| draw_fitted(look, &holder, p));
+        let body = |look| fitted(look)[(28, 10)].bg;
+        assert_eq!(body(HardwareLook::FuseStock), rgb(0x9ad4dc), "clear glass");
+        assert_eq!(
+            body(HardwareLook::FuseSlowBlow),
+            rgb(0x9ad4dc),
+            "clear glass"
+        );
+        assert_eq!(
+            body(HardwareLook::FuseCeramic),
+            rgb(0xe6e1d6),
+            "a white body"
+        );
+        assert_eq!(
+            body(HardwareLook::FuseWideband),
+            rgb(0x3fd8f0),
+            "cyan glass"
+        );
+        // The slow-blow's filament is a coil of amber.
+        let coil = fitted(HardwareLook::FuseSlowBlow);
+        let amber = |c: &ratatui::buffer::Cell| c.fg == rgb(0xffa83a) || c.bg == rgb(0xffa83a);
+        assert!((26..33).all(|x| amber(&coil[(x, 10)]) || amber(&coil[(x, 11)])));
+        let all: Vec<Buffer> = FUSES.iter().map(|&f| fitted(f)).collect();
+        for (i, a) in all.iter().enumerate() {
+            assert!(!all[i + 1..].contains(a), "each tier is tinted its own");
+        }
+    }
+
+    #[test]
+    fn a_fuse_large_carries_its_mod() {
+        let b = large(HardwareLook::FuseCeramic, &[Mod::Faults(1)]);
+        assert!(buffer_text(&b).contains(" FAULTS +1 "));
+        assert!(buffer_text(&b).contains("CERAMIC"));
+        let b = large(HardwareLook::FuseStock, &[]);
+        let text = buffer_text(&b);
+        assert!(text.contains("STOCK") && !text.contains('+'), "{text}");
+        assert_eq!(large_size(HardwareLook::FuseWideband), (52, 18));
+        let tiles: Vec<Tile> = FUSES.iter().map(|&f| tile(f)).collect();
+        for (i, a) in tiles.iter().enumerate() {
+            assert!(!tiles[i + 1..].contains(a), "{tiles:?}");
+        }
+        assert!(native(HardwareLook::FuseStock).is_none(), "no deck side");
+    }
+
+    fn buffer_text(b: &Buffer) -> String {
+        crate::screens::testutil::buffer_text(b)
+    }
+
     #[test]
     fn tiles() {
         assert_eq!(
@@ -631,10 +728,18 @@ mod tests {
             HardwareLook::Sidecar,
             HardwareLook::Hushcan,
             HardwareLook::Redeye,
+            HardwareLook::FuseStock,
+            HardwareLook::FuseCeramic,
+            HardwareLook::FuseSlowBlow,
+            HardwareLook::FuseWideband,
         ] {
-            let mut bufs = vec![large(look, &[Mod::TraceCut(10)])];
+            let mut bufs = vec![large(look, &[Mod::TraceCut(10)]), large(look, &[])];
             bufs.push(drawn(30, 10, |p| draw_side(look, Side::Left, p, -4, 7)));
-            for (kind, at) in [(SocketKind::Muzzle, 66), (SocketKind::Rail, 34)] {
+            for (kind, at) in [
+                (SocketKind::Muzzle, 66),
+                (SocketKind::Rail, 34),
+                (SocketKind::Fuse, 21),
+            ] {
                 let place = place(at, 0, 24, 5, kind);
                 bufs.push(drawn(100, 0, |p| draw_fitted(look, &place, p)));
             }

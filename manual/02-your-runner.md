@@ -41,6 +41,8 @@ Your profession sets the money and the kit you start with, and makes one attribu
 - **SOLO**: `¤250`, an SMG, body armour, a monowire shiv and two stim patches.
 - **TECHIE**: `¤300`, a tool roll, spare servos and coils, and a schematic.
 
+Whichever you pick, you also carry a **Keyjack**, a lock cracker that clips onto a door's keypad, with a stock fuse in it and two spares. With the WRENCH category you can build more of both at the workbench.
+
 ### Attributes
 
 There are five: **BODY**, **REFLEX**, **TECH**, **COOL** and **NET**. Each starts at 3 and you have 20 points to raise them, up to 8. A point costs 2, or 1 when your origin or profession makes the attribute cheap, or 3 when it makes it dear. Press `→` to buy a point and `←` to take it back.

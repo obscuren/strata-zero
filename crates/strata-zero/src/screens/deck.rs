@@ -28,8 +28,8 @@ use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{
-    AbilityId, AbilityKind, Action, Active, Attribute, Build, CategoryId, CopyId, Item, ItemCopy,
-    ItemId, Mod, Perk, SkillId, Slot, Source,
+    AbilityId, AbilityKind, Action, Active, Attribute, Build, CategoryId, CopyId, Hardware, Item,
+    ItemCopy, ItemId, Perk, SkillId, Slot, Source,
 };
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -1084,7 +1084,7 @@ impl Deck {
         )));
         out.extend(Self::perk_lines(st, item));
         if let Some(h) = &item.hardware {
-            out.extend(h.mods.iter().map(|m| cyan(m.line())));
+            out.extend(h.lines().into_iter().map(cyan));
         }
         out.extend(Self::socket_lines(st, item, copy));
         let worn = match copy {
@@ -1120,7 +1120,7 @@ impl Deck {
                     .and_then(|s| st.content.item(&s.item));
                 match piece {
                     Some(p) => {
-                        let mods = p.hardware.iter().flat_map(|h| h.mods.iter().map(Mod::line));
+                        let mods = p.hardware.iter().flat_map(Hardware::lines);
                         let parts: Vec<String> =
                             std::iter::once(p.name.clone()).chain(mods).collect();
                         Line::from(Span::styled(
@@ -2629,7 +2629,7 @@ mod tests {
         st.tick = 60;
         let text = draw(&d, &st, 120, 35);
         assert!(
-            text.contains("hp 45/45") && text.contains("11.4/16.0 kg"),
+            text.contains("hp 45/45") && text.contains("11.9/16.0 kg"),
             "{text}"
         );
         st.say("equipped Hardhat with visor");
@@ -2654,7 +2654,7 @@ mod tests {
             .inventory
             .push(game::Stack::new(ItemId::new("scrap_servo"), 40));
         let text = draw(&d, &st, 120, 35);
-        assert!(text.contains("35.4/16.0 kg"), "{text}");
+        assert!(text.contains("35.8/16.0 kg"), "{text}");
     }
 
     #[test]
@@ -2851,12 +2851,14 @@ mod tests {
         let mut st = state();
         walking(&mut st);
         let mut d = Deck::new(0);
-        let last = d
-            .kit
-            .pack_rows(&st)
+        // A row no other row reads like, so it is gone once dropped: not one of two
+        // spare fuses.
+        let rows = d.kit.pack_rows(&st);
+        let alone = |text: &str| rows.iter().filter(|r| r.text == text).count() == 1;
+        let last = rows
             .iter()
             .rev()
-            .find(|r| r.text.contains("1×"))
+            .find(|r| r.text.contains("1×") && alone(&r.text))
             .expect("a single item somewhere in the pack")
             .text
             .clone();
@@ -3960,9 +3962,12 @@ mod tests {
             .iter()
             .position(|t| *t == "── hardware ──")
             .expect("a hardware header");
+        // The kit's two spare fuses, then what D'SHAWN was given.
         assert_eq!(
-            texts[h + 1..h + 6],
+            texts[h + 1..h + 8],
             [
+                "≡  1× Stock fuse",
+                "≡  1× Stock fuse",
                 "≡  1× Coldfin vI",
                 "≡  1× Coldfin vII",
                 "≡  1× Sidecar co-processor",
@@ -3972,11 +3977,11 @@ mod tests {
             "after programs"
         );
         // Then his stickers, last: plain stacks, not copies.
-        assert_eq!(texts[h + 6], "── sticker ──");
-        assert_eq!(texts[h + 7], "◪  2× No Future");
+        assert_eq!(texts[h + 8], "── sticker ──");
+        assert_eq!(texts[h + 9], "◪  2× No Future");
         assert!(texts.iter().position(|t| *t == "── program ──").unwrap() < h);
         assert!(
-            rows[h + 1..h + 6]
+            rows[h + 1..h + 8]
                 .iter()
                 .all(|r| matches!(r.detail, Some(Detail::Copy(_))))
         );

@@ -957,7 +957,7 @@ mod tests {
         assert!(chips.starts_with(" ALL "), "{chips:?}");
         assert!(chips.contains("▌≡ HARDWARE▐"), "{chips:?}");
         let first = from(&buf, 50, 6);
-        assert!(first.contains("▸ ≡  1× Coldfin vI"), "{first:?}");
+        assert!(first.contains("▸ ≡  1× Stock fuse"), "{first:?}");
         assert_eq!(buf[(51, 6)].bg, BAR_BG);
     }
 

@@ -824,6 +824,42 @@ mod tests {
     }
 
     #[test]
+    fn the_keyjack_recipes_build() {
+        let (c, mut ch, _, _) = setup();
+        let jacks = |ch: &Character| -> Vec<ItemCopy> {
+            let kj = id("keyjack");
+            let copies = ch.inventory.iter().filter(|s| s.item == kj);
+            copies.filter_map(|s| s.copy.clone()).collect()
+        };
+        let before = jacks(&ch).len();
+        ch.give(id("dead_phone"), 2);
+        ch.give(id("copper_coil"), 8);
+        ch.give(id("scrap_servo"), 2);
+        let out = build(&c, &mut ch, "keyjack_build").unwrap();
+        assert_eq!(out.message, "built `Keyjack`");
+        let built = jacks(&ch);
+        assert_eq!(built.len(), before + 1);
+        assert_eq!(
+            built.last().unwrap().fitted,
+            vec![None],
+            "it comes with no fuse"
+        );
+        for (recipe, fuse, made) in [
+            ("fuse_stock_build", "fuse_stock", 2),
+            ("fuse_ceramic_build", "fuse_ceramic", 1),
+            ("fuse_slowblow_build", "fuse_slowblow", 1),
+            ("fuse_wideband_build", "fuse_wideband", 1),
+        ] {
+            let had = ch.count(&id(fuse));
+            build(&c, &mut ch, recipe).unwrap();
+            assert_eq!(ch.count(&id(fuse)), had + made, "{recipe}");
+            let r = c.recipe(&RecipeId::new(recipe)).unwrap();
+            assert_eq!(r.skill, SkillId::new("electronics"), "{recipe}");
+            assert_eq!(r.steps.len(), 2, "{recipe}");
+        }
+    }
+
+    #[test]
     fn equip_wears_and_unequip_returns() {
         let (c, mut ch, mut g, at) = setup();
         assert!(
