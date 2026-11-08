@@ -524,8 +524,9 @@ fn keyjack_shots() {
     pad_shots("clip", &st, &map, &pad);
     pad.update(&mut st, &[key(KeyCode::Char('k'))]);
     keyjack_strike(&mut st, &mut pad, true);
+    // A frame into the zone: `aim` stops on the frame after the first in it.
     pad.aim(&mut st, true);
-    st.tick += 2;
+    st.tick += 1;
     pad_shots("beat", &st, &map, &pad);
     keyjack_strike(&mut st, &mut pad, false);
     pad_shots("miss", &st, &map, &pad);
@@ -536,6 +537,7 @@ fn keyjack_shots() {
         }
         keyjack_strike(&mut st, &mut pad, false);
     }
+    assert_eq!(pad.clip_ended(), Some(false), "the run ended blown");
     pad_shots("blown", &st, &map, &pad);
     // The back of the Keyjack after the burn: the holder empty.
     let copy = keyjack_copy(&st);
@@ -554,6 +556,7 @@ fn keyjack_shots() {
     for _ in 0..4 {
         keyjack_strike(&mut st, &mut pad, true);
     }
+    assert_eq!(pad.clip_ended(), Some(true), "the run ended cracked");
     pad_shots("cracked", &st, &map, &pad);
 
     // The clip line with no fuse in.

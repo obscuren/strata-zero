@@ -4,10 +4,9 @@
 //! keys that digit in, a miss is a fault on the door, and the last fault locks the pad and
 //! burns the Keyjack's fuse.
 
-use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
+use crate::app::{AppState, FPS, Screen, ScreenCmd, TransitionKind};
 use crate::credentials::{self, Source, Verdict};
 use crate::keyjack::{self, Carried};
-use crate::missions::call::TICKS_PER_SECOND;
 use crate::ui::device::{self, DEVICE_H, DEVICE_W, Device, KeyLit, Led, Look};
 use crate::ui::slab::{self, Panel, Shows};
 use citygen::BuildingId;
@@ -73,11 +72,11 @@ impl Clip {
     }
 
     /// The marker's cell at `tick`: off from the left end at the beat's speed, end to end
-    /// and back, a cell's time at each end.
+    /// and back, a cell's time at each end. A tick is a frame.
     fn marker(&self, tick: u64) -> u16 {
         let bar = self.run.bar.max(1);
         let speed = self.run.speed[self.beat.min(3)] as f64;
-        let cells = tick.saturating_sub(self.from) as f64 * speed / TICKS_PER_SECOND as f64;
+        let cells = tick.saturating_sub(self.from) as f64 * speed / FPS as f64;
         let p = (cells % (2 * bar) as f64) as u16;
         if p < bar { p } else { 2 * bar - 1 - p }
     }
@@ -196,15 +195,16 @@ impl Keypad {
         &self.typed
     }
 
-    /// Moves the clock to a tick at which a strike hits (or misses) the zone, for a test
-    /// or a shot to aim with.
+    /// Moves the clock on to the frame after one that shows the marker in the zone (or
+    /// out of it), so a strike now hits (or misses), for a test or a shot to aim with.
     #[cfg(test)]
     pub(crate) fn aim(&self, st: &mut AppState, hit: bool) {
         let c = self.clip.as_ref().expect("clipped on");
         let start = st.tick.max(c.from);
-        st.tick = (start..start + 3_000)
+        let shown = (start..start + 3_000)
             .find(|t| c.hits(c.marker(*t)) == hit)
             .expect("the marker gets there");
+        st.tick = shown + 1;
     }
 
     /// Whether the run is over (blown or cracked), for a shot to stop on.
@@ -301,15 +301,21 @@ impl Keypad {
     /// Space: a hit keys the beat's digit in and starts the next beat, the fourth opens
     /// the door; a miss is a fault and starts the beat over, the last burns the fuse and
     /// locks the pad. Nothing while ERR shows or once the run is over.
+    ///
+    /// The frame moves the tick on before the keys come in, so the space was pressed on
+    /// the frame before: that is where it is judged, on the marker the player saw. A beat
+    /// starts on this tick, so a second space in the same keys, pressed before its first
+    /// frame showed, strikes nothing.
     fn strike(&mut self, st: &mut AppState) {
         let (b, level, number) = (self.building, self.level, self.number);
         let Some(c) = self.clip.as_mut() else {
             return;
         };
-        if c.ended.is_some() || st.tick < c.from {
+        let shown = st.tick.saturating_sub(1);
+        if c.ended.is_some() || shown < c.from {
             return;
         }
-        if c.hits(c.marker(st.tick)) {
+        if c.hits(c.marker(shown)) {
             let digit = (self.code / 10u16.pow(3 - c.beat as u32) % 10) as u8;
             self.typed.push(digit);
             c.beat += 1;
@@ -398,7 +404,7 @@ impl Screen for Keypad {
                 KeyCode::Char('0'..='9') => self.flash = Flash::Refused(st.tick),
                 KeyCode::Char('x' | 'X') | KeyCode::Backspace => self.typed.clear(),
                 KeyCode::Char('v' | 'V') | KeyCode::Enter => self.verify(st),
-                KeyCode::Char('k') => self.clip_on(st),
+                KeyCode::Char('k' | 'K') => self.clip_on(st),
                 _ => {}
             }
             if matches!(self.flash, Flash::Open(_)) {
@@ -743,13 +749,10 @@ mod tests {
         format!("{code:04}").bytes().map(|b| b - b'0').collect()
     }
 
-    /// Waits for the marker to sit in the zone (or out of it), then strikes.
+    /// Waits for a frame that shows the marker in the zone (or out of it), then strikes
+    /// on the next, as `Runner::frame` hands over a key pressed while it showed.
     fn strike(k: &mut Keypad, st: &mut AppState, hit: bool) {
-        let c = k.clip.as_ref().expect("clipped on");
-        let start = st.tick.max(c.from);
-        st.tick = (start..start + 3_000)
-            .find(|t| c.hits(c.marker(*t)) == hit)
-            .expect("the marker gets there");
+        k.aim(st, hit);
         k.update(st, &[key(KeyCode::Char(' '))]);
     }
 
@@ -789,6 +792,14 @@ mod tests {
         k.update(&mut st, &[key(KeyCode::Char('k'))]);
         assert!(k.clip.is_none());
         assert_eq!(st.log.len(), log);
+    }
+
+    #[test]
+    fn a_capital_k_clips_it_on_too() {
+        let (mut st, b, level, number, _) = state();
+        let mut k = Keypad::open(&st, b, level, number);
+        k.update(&mut st, &[key(KeyCode::Char('K'))]);
+        assert!(k.clip.is_some(), "as V and X take their capitals");
     }
 
     #[test]
@@ -834,6 +845,45 @@ mod tests {
             k.update(&mut st, &[key(KeyCode::Char(' '))]),
             ScreenCmd::Pop { .. }
         ));
+    }
+
+    /// `Runner::frame` moves the tick on before the screen reads the keys, so a space
+    /// pressed while frame `t` showed arrives at `t + 1`: the strike is judged where the
+    /// player saw the marker.
+    #[test]
+    fn a_strike_is_judged_on_the_frame_shown() {
+        let (mut st, b, level, number, code) = state();
+        let mut k = Keypad::open(&st, b, level, number);
+        k.update(&mut st, &[key(KeyCode::Char('k'))]);
+        let c = k.clip.as_ref().unwrap();
+        // The last frame that shows the marker in the zone before it leaves.
+        let shown = (c.from..c.from + 3_000)
+            .find(|t| c.hits(c.marker(*t)) && !c.hits(c.marker(t + 1)))
+            .expect("the marker leaves the zone");
+        st.tick = shown + 1;
+        k.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.journal.keypad(b, level, number).faults, 0, "a hit");
+        assert_eq!(k.typed(), &code_digits(code)[..1]);
+    }
+
+    /// Two spaces in one frame's keys: the first hits and starts the next beat, the
+    /// second came before the player saw that beat and strikes nothing.
+    #[test]
+    fn a_second_space_in_the_frame_of_a_hit_strikes_nothing() {
+        let (mut st, b, level, number, code) = state();
+        let mut k = Keypad::open(&st, b, level, number);
+        k.update(&mut st, &[key(KeyCode::Char('k'))]);
+        let c = k.clip.as_ref().unwrap();
+        // Well inside the zone, so the first strike hits on either frame.
+        let shown = (c.from..c.from + 3_000)
+            .find(|t| c.hits(c.marker(*t)) && c.hits(c.marker(t + 1)))
+            .expect("the marker crosses the zone");
+        st.tick = shown + 1;
+        let space = key(KeyCode::Char(' '));
+        k.update(&mut st, &[space, space]);
+        assert_eq!(st.journal.keypad(b, level, number).faults, 0, "no fault");
+        assert_eq!(k.typed(), &code_digits(code)[..1], "one digit");
+        assert_eq!(k.clip.as_ref().unwrap().beat, 1);
     }
 
     #[test]
@@ -1007,8 +1057,8 @@ mod tests {
         k.update(&mut st, &[key(KeyCode::Char('k'))]);
         let c = k.clip.as_ref().unwrap();
         let (from, bar, speed) = (c.from, c.run.bar, c.run.speed[0]);
-        // Ticks for the marker to travel `cells`, at TICKS_PER_SECOND.
-        let ticks = |cells: u16| (cells as f32 * 30.0 / speed).ceil() as u64;
+        // Ticks for the marker to travel `cells`, a tick a frame.
+        let ticks = |cells: u16| (cells as f32 * FPS as f32 / speed).ceil() as u64;
         assert_eq!(c.marker(from), 0);
         assert_eq!(c.marker(from + ticks(bar - 1)), bar - 1, "the right end");
         assert_eq!(c.marker(from + ticks(bar)), bar - 1, "and back");
