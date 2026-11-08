@@ -1114,7 +1114,7 @@ pub(crate) mod tests {
         st.player = Some(Player::at(place, pos));
         tick(&mut st);
         assert!(matches!(st.missions.runs[0].state, RunState::Done { .. }));
-        assert!(st.log.iter().any(|e| e.text == "The drop · home"));
+        assert!(st.log.iter().any(|e| e.text == "The drop · home · +100 xp"));
         // The mail waits for the house call.
         assert!(st.journal.mails.iter().all(|m| m.subject != "lay low"));
         assert_eq!(st.character.count(&ItemId::new("taped_package")), 1);
@@ -2786,7 +2786,7 @@ pub(crate) mod tests {
         assert!(
             st.log
                 .iter()
-                .any(|e| e.text == "Doctor's in by ten · on Castellan's tab")
+                .any(|e| e.text == "Doctor's in by ten · on Castellan's tab · +200 xp")
         );
         // Let go once you are out, never past you.
         tick(st);
@@ -2931,7 +2931,7 @@ pub(crate) mod tests {
             assert!(
                 st.log
                     .iter()
-                    .any(|e| e.text == "The morning after · a ledger shard, in your pack")
+                    .any(|e| e.text == "The morning after · a ledger shard, in your pack · +100 xp")
             );
             assert_eq!(st.missions.runs[ledger].state, RunState::Open);
             let whose = fill(&st, &format!("Find out whose shard this is · {how}"));
@@ -3429,12 +3429,14 @@ pub(crate) mod tests {
         assert!(
             st.log
                 .iter()
-                .any(|e| e.text == "Coz · ¤800 · for bringing it home")
+                .any(|e| e.text == "Coz · ¤800 · for bringing it home · +200 xp")
         );
         assert!(matches!(
             st.missions.runs[ledger].state,
             RunState::Done { .. }
         ));
+        // Played from the drop: the act's last job ends on level 3.
+        assert_eq!((st.character.level, st.character.xp), (3, 0));
         // The act is over: The three open, Seren's line waiting for an ad.
         assert_eq!(st.missions.runs[three].state, RunState::Open);
         assert_eq!(st.missions.runs[three].objectives, [ASK]);

@@ -122,6 +122,9 @@ pub fn apply(st: &mut AppState, mission: usize, step: usize, e: &Effect) {
             }
         }
         Effect::Pay(n) => st.character.credits = st.character.credits.saturating_add(*n),
+        Effect::Xp(n) => {
+            st.gain_xp(*n);
+        }
         Effect::Standing { role, by } => {
             if let Some(id) = person_of(st, role) {
                 st.jobs.fixer_mut(id).standing += by;
@@ -496,6 +499,31 @@ mod tests {
         apply(&mut st, 0, 0, &Effect::Release("nobody".into()));
         crate::missions::tick(&mut st);
         assert!(st.missions.releasing.is_empty());
+    }
+
+    #[test]
+    fn xp_levels_you_up_with_a_line() {
+        let mut st = state_home();
+        assert_eq!((st.character.level, st.character.xp), (1, 0));
+        let points = st.character.talent_points;
+        apply(&mut st, 0, 0, &Effect::Xp(100));
+        assert_eq!((st.character.level, st.character.xp), (1, 100));
+        let levels = |st: &AppState| {
+            st.log
+                .iter()
+                .filter(|e| e.text.starts_with("level "))
+                .count()
+        };
+        assert_eq!(levels(&st), 0, "silent short of a level");
+        apply(&mut st, 0, 0, &Effect::Xp(100));
+        assert_eq!((st.character.level, st.character.xp), (2, 0));
+        assert_eq!(st.character.talent_points, points + 1);
+        let last = st.log.latest().unwrap();
+        assert!(
+            last.text.starts_with("level 2 · a talent point"),
+            "{}",
+            last.text
+        );
     }
 
     #[test]

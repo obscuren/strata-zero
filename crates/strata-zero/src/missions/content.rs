@@ -516,6 +516,8 @@ pub enum Effect {
     Stay(String),
     /// Adds credits, silently.
     Pay(u32),
+    /// Gives experience: silent but for a line for each level it brings.
+    Xp(u32),
     /// Adds `by` to your standing with the role's person, a fixer.
     Standing {
         role: String,
@@ -592,6 +594,7 @@ impl Effect {
             | Effect::Release(_)
             | Effect::Stay(_)
             | Effect::Pay(_)
+            | Effect::Xp(_)
             | Effect::Standing { .. } => vec![],
         }
     }
@@ -1440,6 +1443,28 @@ mod tests {
 
     fn book() -> Book {
         Book::load().unwrap()
+    }
+
+    #[test]
+    fn act_one_ends_on_level_three() {
+        // Every mission before the three, whichever of the doctor and the ledger ends
+        // last, adds up to level 3 from a new run's level 1; the morning after to level 2.
+        let b = book();
+        let xp = |id: &str| -> u32 {
+            let m = b.missions.iter().find(|m| m.id == id).unwrap();
+            let all = m.steps.iter().flat_map(|s| &s.then);
+            all.map(|e| if let Effect::Xp(n) = e { *n } else { 0 })
+                .sum()
+        };
+        let to = |level: u8| -> u32 { (1..level).map(game::Character::xp_to_next).sum() };
+        assert_eq!(xp("the_drop") + xp("morning_after"), to(2));
+        let act: u32 = b.missions.iter().map(|m| xp(&m.id)).sum();
+        assert_eq!(xp("the_three"), 0, "the act is over by then");
+        assert_eq!(act, to(3));
+        assert!(
+            xp("doctor") > 0 && xp("ledger") > 0,
+            "each of the last two pays"
+        );
     }
 
     fn step_mut<'a>(b: &'a mut Book, id: &str) -> &'a mut Step {

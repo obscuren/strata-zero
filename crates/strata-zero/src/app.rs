@@ -554,6 +554,27 @@ impl AppState {
         self.log
             .push(Kind::Story, msg, self.clock_tick(), self.tick);
     }
+
+    /// Gives `points` of experience, with a story line for each level it brings and what
+    /// came with it; the levels gained.
+    pub fn gain_xp(&mut self, points: u32) -> u8 {
+        let gained = self.character.gain_xp(points);
+        let level = self.character.level;
+        for i in (0..gained).rev() {
+            let at = level - i;
+            // A line a level, so at most one point a line.
+            let attribute = if game::Character::attribute_points_for(at - 1, at) > 0 {
+                " · an attribute point"
+            } else {
+                ""
+            };
+            self.story(format!(
+                "level {at} · a talent point · {} SP{attribute}",
+                game::SP_PER_LEVEL
+            ));
+        }
+        gained
+    }
 }
 
 pub use crate::ui::transition::{Transition, TransitionKind};

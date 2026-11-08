@@ -38,6 +38,9 @@
 // solo, techie); `Done(mission)` holds once that mission is done. Both name something
 // real: a `Done` must name a mission here, a `Build` a profession in content.ron.
 // More effects: `Pay(n)` adds n credits, silently (the step's `Log` says what it means).
+// `Xp(n)` gives n experience, silent but for a line for each level it brings (the step's
+// `Log` says how much). Act one's add up to level 3 as its last job ends: the drop and the
+// morning after 100 each (level 2), the doctor and the ledger 200 each.
 // `Standing(role: r, by: n)` adds n to your standing with the role's person, a fixer. `Stay(role)`
 // keeps the role's person where they are now, against their hours, until `Release(role)`
 // lets them go (as `Hold` keeps them at work). `Standing` and `Stay` need the role cast.
@@ -153,7 +156,8 @@ Story(
                 Objective("Get home · keep the package"),
             ]),
             Step(id: "home", when: At(HomeDoor), then: [
-                Log("`The drop` · home"),
+                Log("`The drop` · home · +100 xp"),
+                Xp(100),
             ]),
         ]),
         Mission(id: "house_call", title: "House call", from: "castellan", steps: [
@@ -203,7 +207,8 @@ Story(
                 Objective("Open the package · it's in your pack"),
             ]),
             Step(id: "open", when: Holds(Carries("ledger_shard")), then: [
-                Log("`The morning after` · a ledger shard, in your pack"),
+                Log("`The morning after` · a ledger shard, in your pack · +100 xp"),
+                Xp(100),
             ]),
         ]),
         Mission(id: "doctor", title: "Doctor's in by ten", from: "castellan", steps: [
@@ -238,7 +243,8 @@ Story(
             Step(id: "out", when: Chromed("odile"), then: [Scene("odile_out")]),
             Step(id: "free", when: Ended("out"), then: [
                 Release("odile"),
-                Log("`Doctor's in by ten` · on {castellan}'s tab"),
+                Log("`Doctor's in by ten` · on {castellan}'s tab · +200 xp"),
+                Xp(200),
             ]),
         ]),
         // The hook, its own mission so a city with one fixer (Mezz) still plays the doctor.
@@ -270,7 +276,8 @@ Story(
                 Take(item: "ledger_shard", count: 1),
                 Pay(800),
                 Standing(role: "coz", by: 1),
-                Log("`{coz}` · ¤800 · for bringing it home"),
+                Log("`{coz}` · ¤800 · for bringing it home · +200 xp"),
+                Xp(200),
             ]),
         ]),
         // Where the story stands: the act over once the ledger and the doctor are both

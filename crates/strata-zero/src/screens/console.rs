@@ -109,21 +109,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .first()
                 .and_then(|a| a.parse().ok())
                 .ok_or_else(|| "xp <points>".to_string())?;
-            let gained = st.character.gain_xp(n);
-            let level = st.character.level;
-            for i in (0..gained).rev() {
-                let at = level - i;
-                // A line a level, so at most one point a line.
-                let attribute = if game::Character::attribute_points_for(at - 1, at) > 0 {
-                    " · an attribute point"
-                } else {
-                    ""
-                };
-                st.story(format!(
-                    "level {at} · a talent point · {} SP{attribute}",
-                    game::SP_PER_LEVEL
-                ));
-            }
+            st.gain_xp(n);
             Ok(format!("+{n} xp"))
         }
         "focus" => {
