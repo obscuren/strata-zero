@@ -120,10 +120,9 @@ overworld, a tile, or a city, as you left it.
 ## The world while you're away
 
 Only the place you're in runs. When you come back to a city after time away, its people
-must not look frozen. Jeffrey: maybe a super high speed-up so the world appears not to
-have stood still. The direction agreed: a short absence replays the missed time fast; a
-long one puts everyone where their day says they'd be now. **This gets its own spec
-later; nothing is built for it here.**
+must not look frozen. The direction agreed: a short absence replays the missed time; a
+long one puts everyone where their day says they'd be now. **Specified in
+`2026-11-08-world-while-away-design.md`; nothing is built for it here.**
 
 ## Constraints
 

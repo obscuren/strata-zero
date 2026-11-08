@@ -123,20 +123,24 @@ impl OutsideScreen {
     /// tile's Net (over the tile you're over, where you were), W back down where you
     /// were, J jacks out.
     fn net_up_key(&mut self, st: &mut AppState, k: &KeyEvent) -> ScreenCmd {
-        let down = ScreenCmd::Pop {
-            fx: TransitionKind::Glitch,
+        // back to the map, which draws before it runs: the cities round you caught up first
+        let down = |st: &mut AppState| {
+            crate::outside::stream::catch_up_round(st);
+            ScreenCmd::Pop {
+                fx: TransitionKind::Glitch,
+            }
         };
         let Some(up) = self.net_up.as_mut() else {
             return ScreenCmd::Stay;
         };
         match k.code {
-            KeyCode::Char('W') => down,
+            KeyCode::Char('W') => down(st),
             KeyCode::Esc | KeyCode::Char('q') => ScreenCmd::Push {
                 to: Box::new(Pause::new(st, st.tick)),
                 fx: TransitionKind::None,
             },
             KeyCode::Enter => match moves::net_down(st, up.tile) {
-                Ok(()) => down,
+                Ok(()) => down(st),
                 Err(why) => {
                     st.warn(why);
                     ScreenCmd::Stay
@@ -147,7 +151,7 @@ impl OutsideScreen {
                     Ok(()) => st.say("jacked out"),
                     Err(why) => st.warn(why),
                 }
-                down
+                down(st)
             }
             KeyCode::Char('?') => {
                 self.help = true;
@@ -1928,6 +1932,29 @@ mod tests {
         m.update(&mut st, &[]);
         let p = st.player.as_ref().unwrap();
         assert_eq!((p.place, p.pos, p.body), (STREET, body, None));
+    }
+
+    #[test]
+    fn back_down_from_the_net_overworld_finds_neighbours_caught_up() {
+        // seed 3's run, whose world the helpers know, your Net self over the world beside
+        // a city held with its people, then left behind the clock
+        use crate::outside::stream::tests::handover::{beside_a_city, seed_its_people};
+        let mut st = crate::outside::tests::home_run();
+        let (s, x, _) = beside_a_city(&mut st);
+        st.player.as_mut().unwrap().pos = x;
+        let mut up = OutsideScreen::net_from_city(&mut st);
+        seed_its_people(&mut st, s);
+        crate::clock::run(
+            &mut st,
+            Some(40 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        assert!(matches!(
+            up.update(&mut st, &[key(KeyCode::Char('W'))]),
+            ScreenCmd::Pop { .. }
+        ));
+        let w = crate::outside::people_of(&st, s).unwrap();
+        assert_eq!(w.tick(), st.clock_tick());
     }
 
     #[test]

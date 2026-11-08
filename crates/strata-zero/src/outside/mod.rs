@@ -188,9 +188,10 @@ impl Stay {
         }
     }
 
-    /// Puts this city in place as the one the run is in at clock tick `now` (its people
-    /// run on to it, as asleep), its people's places rebuilt and its home (the flat, in
-    /// the home city only) found again.
+    /// Puts this city in place as the one the run is in at clock tick `now`, its people
+    /// caught up to it unseen (`sim::World::catch_up`: an hour or less replayed, longer
+    /// placed by day), their places rebuilt, and its home (the flat, in the home city
+    /// only) found again.
     fn put(self, st: &mut AppState, home: bool, now: u64) {
         let Stay {
             city,
@@ -216,9 +217,9 @@ impl Stay {
         } = self;
         if let Some(w) = world.as_mut() {
             w.rebuild(&city, &st.people);
-            if w.tick() < now {
-                w.advance(&city, now);
-            }
+            // you weren't there: nobody is held back off the tile you stood on
+            w.set_blocker(None);
+            w.catch_up(&city, now);
         }
         st.home = if home {
             crate::home::HomeRig::find(&city)
@@ -638,11 +639,6 @@ pub fn build_params(
     }
 }
 
-/// The longest a city's people seeded by its build in the background are run on to the
-/// hour you walk in (a day): older, they're seeded again for the hour, cheaper than
-/// stepping every minute between on the frame.
-pub const RUN_ON: u64 = 24 * 60 * sim::TICKS_PER_MINUTE;
-
 /// What a city's people are seeded with: in a city of the world other than home,
 /// everyone who works in it lives in it, anywhere in town (`SimParams::housed`), so its
 /// people live their day in town; the home city's (the story's people) keep their
@@ -680,7 +676,7 @@ enum Next {
 
 /// Into city or town `s`: the one you're in set aside (with the run when it's the home
 /// city, kept whole when not: `kept`); `s` as it was kept, or as its build in
-/// the background left it (its people seeded there run on to now), else built and its
+/// the background left it (its people seeded there caught up to now), else built and its
 /// people seeded on the spot the first time this session. One that won't build leaves
 /// you where you were.
 pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
@@ -747,13 +743,9 @@ pub fn enter(st: &mut AppState, s: Settlement) -> Result<(), String> {
         // as you left it, its people run on to now
         Next::Kept(stay) => stay.put(st, false, now),
         Next::Fresh(city) => {
-            // its people as its build seeded them (run on to now as it's put in place)
-            // if that was no more than `RUN_ON` ago, else seeded now
-            let people = st
-                .outside
-                .as_mut()
-                .and_then(|o| o.stream.take_people(s))
-                .filter(|w| now.saturating_sub(w.tick()) <= RUN_ON);
+            // its people as its build seeded them (caught up to now as it's put in
+            // place), else seeded now
+            let people = st.outside.as_mut().and_then(|o| o.stream.take_people(s));
             let world = people.unwrap_or_else(|| seed_people(&city, &st.people, now, minute));
             // its map as built: what a save measures its changes against
             let built = kept::Built::of(&city);
@@ -1602,6 +1594,75 @@ pub(crate) mod tests {
         enter(&mut st, home).unwrap();
         assert_eq!(st.clock_tick(), later, "home has gone on too");
         assert_eq!(st.minute_of_day(), at);
+    }
+
+    /// Home walked back into after `minutes` of the clock in another city.
+    fn home_after(minutes: u64) -> AppState {
+        let mut st = home_run();
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        crate::clock::run(
+            &mut st,
+            Some(minutes * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        st
+    }
+
+    #[test]
+    fn home_after_half_an_hour_has_replayed_it() {
+        let st = home_after(30);
+        let w = st.world.as_ref().unwrap();
+        assert_eq!(w.tick(), st.clock_tick());
+        assert_eq!(w.pending(), 0, "every trip asked for found");
+    }
+
+    #[test]
+    fn home_after_six_hours_is_placed() {
+        let st = home_after(6 * 60);
+        let w = st.world.as_ref().unwrap();
+        assert_eq!((w.tick(), w.pending()), (st.clock_tick(), 0));
+        assert!(
+            w.people()
+                .iter()
+                .all(|p| !matches!(p.whereabouts, sim::Whereabouts::Travelling(_)))
+        );
+    }
+
+    #[test]
+    fn a_city_walked_back_into_has_no_blocker_from_when_you_left() {
+        let mut st = home_run();
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        let home = st.outside.as_ref().unwrap().home();
+        let left = st.away.as_mut().unwrap().world.as_mut().unwrap();
+        left.set_blocker(Some(Pos::new(3, 3)));
+        crate::clock::run(
+            &mut st,
+            Some(10 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        enter(&mut st, home).unwrap();
+        assert_eq!(st.world.as_ref().unwrap().blocker(), None);
+    }
+
+    #[test]
+    fn home_after_a_reopen_is_placed() {
+        let mut st = home_run();
+        let (s, _) = beside_another(&st);
+        enter(&mut st, s).unwrap();
+        crate::clock::run(
+            &mut st,
+            Some(3 * 60 * sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+        let mut st = reopen(st, "home-after-a-reopen");
+        let home = st.outside.as_ref().unwrap().home();
+        enter(&mut st, home).unwrap();
+        let w = st.world.as_ref().unwrap();
+        assert_eq!((w.tick(), w.pending()), (st.clock_tick(), 0));
     }
 
     /// A run written and read back, after_restore and all.

@@ -3658,7 +3658,8 @@ impl Screen for MapScreen {
             _ => None,
         };
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
-        if st.rest.is_some() {
+        let resting = st.rest.is_some();
+        if resting {
             crate::rest::frame(st);
         } else {
             crate::clock::run(
@@ -3666,17 +3667,6 @@ impl Screen for MapScreen {
                 (self.mode == Mode::Walk).then_some(elapsed),
                 crate::clock::PATHS_PER_FRAME,
             );
-            // The cities and towns next door in view live on the same clock.
-            if self.mode == Mode::Walk && carries_on(st, self.place) {
-                let origin = self.cam.origin(map.width, map.height);
-                let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
-                crate::outside::stream::run_neighbours(
-                    st,
-                    view,
-                    crate::clock::PATHS_PER_FRAME,
-                    elapsed,
-                );
-            }
         }
         // The mails landed since the map's last frame, here or under a screen on top.
         crate::mail_mark::notice(st);
@@ -3690,6 +3680,18 @@ impl Screen for MapScreen {
             {
                 self.follow_player(st);
             }
+        }
+        // The cities and towns next door in view live on the same clock, run once the map
+        // has followed you, so none is drawn behind it in the view this frame shows.
+        if !resting && self.mode == Mode::Walk && carries_on(st, self.place) {
+            let origin = self.cam.origin(map.width, map.height);
+            let view = TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32);
+            crate::outside::stream::run_neighbours(
+                st,
+                view,
+                crate::clock::PATHS_PER_FRAME,
+                elapsed,
+            );
         }
         // A scene playing or a rest under way: no aimed walk goes on under it, and
         // nothing of the map's stays open to keep its keys after.

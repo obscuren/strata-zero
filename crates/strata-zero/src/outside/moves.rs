@@ -260,6 +260,8 @@ pub fn into_city(st: &mut AppState, cell: Pos) {
         st.atlas.zoom = crate::screens::atlas::Zoom::Fit;
     }
     crate::outside::reached_mark(st);
+    // the map draws before it runs: the cities round where you land caught up first
+    crate::outside::stream::catch_up_round(st);
 }
 
 #[cfg(test)]

@@ -16,6 +16,9 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
+mod away;
+pub use away::{CatchUp, SHORT_GAP};
+
 /// Ticks in a game minute, as the HUD's clock keeps it.
 pub const TICKS_PER_MINUTE: u64 = 90;
 /// Ticks a walker spends per tile: ten tiles a game minute, so a commute keeps
@@ -400,6 +403,38 @@ impl World {
         }
     }
 
+    /// A date run its time: the worker back on the beat, the client out of the hotel's
+    /// door and asking for the walk home.
+    fn date_over(&mut self, city: &City, d: Date) {
+        if !self.dead.contains(&d.worker) {
+            self.people[d.worker.0 as usize].whereabouts = Whereabouts::At {
+                pos: d.beat,
+                activity: Activity::Working,
+            };
+        }
+        if self.dead.contains(&d.client) {
+            return;
+        }
+        let door = self.places.doors[&d.hotel][0];
+        let ci = d.client.0 as usize;
+        self.people[ci].whereabouts = Whereabouts::At {
+            pos: door,
+            activity: Activity::Loitering,
+        };
+        // Done for the night: home, and the schedule's Strip does not pull them
+        // back out.
+        self.people[ci].goal = Goal::Home;
+        self.satisfied
+            .insert(d.client, Goal::Leisure(Leisure::Strip));
+        if let Some(dest) = self.dest_for(city, ci, Goal::Home) {
+            self.pending.push_back(TripRequest {
+                who: d.client,
+                dest,
+                goal: Goal::Home,
+            });
+        }
+    }
+
     /// Lets a held person follow their schedule again: one `keep_where` stopped mid-trip
     /// sets off the next minute for whatever is due then.
     pub fn release(&mut self, id: PersonId) {
@@ -502,6 +537,11 @@ impl World {
     /// The tile the player stands on; no walker is placed there.
     pub fn set_blocker(&mut self, pos: Option<Pos>) {
         self.blocker = pos;
+    }
+
+    /// The tile no walker is placed on: the player's, as the frame last set it.
+    pub fn blocker(&self) -> Option<Pos> {
+        self.blocker
     }
 
     /// The player steps from `player_from` onto someone standing on `player_to`:
@@ -1141,33 +1181,7 @@ impl World {
             }
         });
         for d in ended {
-            if !self.dead.contains(&d.worker) {
-                self.people[d.worker.0 as usize].whereabouts = Whereabouts::At {
-                    pos: d.beat,
-                    activity: Activity::Working,
-                };
-            }
-            if self.dead.contains(&d.client) {
-                continue;
-            }
-            let door = self.places.doors[&d.hotel][0];
-            let ci = d.client.0 as usize;
-            self.people[ci].whereabouts = Whereabouts::At {
-                pos: door,
-                activity: Activity::Loitering,
-            };
-            // Done for the night: home, and the schedule's Strip does not pull them
-            // back out.
-            self.people[ci].goal = Goal::Home;
-            self.satisfied
-                .insert(d.client, Goal::Leisure(Leisure::Strip));
-            if let Some(dest) = self.dest_for(city, ci, Goal::Home) {
-                self.pending.push_back(TripRequest {
-                    who: d.client,
-                    dest,
-                    goal: Goal::Home,
-                });
-            }
+            self.date_over(city, d);
         }
         // Departures: the schedule changed its mind, and the person is free to go.
         for i in 0..self.people.len() {
