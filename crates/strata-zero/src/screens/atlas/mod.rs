@@ -342,6 +342,31 @@ fn title(st: &AppState, l: &MapLayout, body: Rect, buf: &mut Buffer) {
     pane::put(buf, x, body.y, &head, bold, right);
     let x = x.saturating_add(head.chars().count() as u16);
     pane::put(buf, x, body.y, &rest, Style::default().fg(FAINTER), right);
+    let x = x.saturating_add(rest.chars().count() as u16);
+    selves_key(st, buf, (x, body.y), right);
+}
+
+/// Jacked in, the key to your two `@`s on a title row from `(x, y)`, cut at `right`:
+/// your Net self, then your body.
+fn selves_key(st: &AppState, buf: &mut Buffer, (x, y): (u16, u16), right: u16) {
+    if map::net_self(st).is_none() {
+        return;
+    }
+    let faint = Style::default().fg(FAINTER);
+    let at = |c| Style::default().fg(c).add_modifier(Modifier::BOLD);
+    let parts = [
+        (" · ", faint),
+        ("@", at(map::NET_SELF)),
+        (" you", faint),
+        (" · ", faint),
+        ("@", at(map::BODY)),
+        (" body", faint),
+    ];
+    let mut x = x;
+    for (text, style) in parts {
+        pane::put(buf, x, y, text, style, right);
+        x = x.saturating_add(text.chars().count() as u16);
+    }
 }
 
 /// The hint row: the keys, and `f fold` or `f unfold`.
@@ -470,6 +495,24 @@ pub(crate) mod tests {
         st.player.as_ref().unwrap().pos
     }
 
+    /// `st` jacked in where you stand: your body there, your Net self on a walkable tile
+    /// of the Net 20 to 40 tiles off it (the Net lies over the city tile for tile).
+    /// Your body's tile and your Net self's.
+    pub(super) fn jacked_in(st: &mut AppState) -> (Pos, Pos) {
+        let body = you(st);
+        let city = st.city.as_ref().unwrap();
+        let net = (20..40)
+            .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d)])
+            .map(|(dx, dy)| body.offset(dx, dy))
+            .find(|p| city.walkable(StratumKind::Net, *p))
+            .expect("the Net near you");
+        let p = st.player.as_mut().unwrap();
+        p.body = Some((p.place, p.pos));
+        p.place = Place::Stratum(StratumKind::Net);
+        p.pos = net;
+        (body, net)
+    }
+
     /// The deck's body at 120 × 40 and at 100 × 30.
     pub(super) const BODY_120: Rect = Rect::new(1, 10, 118, 27);
     pub(super) const BODY_100: Rect = Rect::new(1, 5, 98, 22);
@@ -554,6 +597,24 @@ pub(crate) mod tests {
         let l = laid(&st);
         assert!(text(&buf, 5, 1..l.area.right()).contains(&head));
         assert_eq!(buf[(l.area.right(), 5)].symbol(), " ");
+    }
+
+    #[test]
+    fn jacked_in_the_title_keys_your_two_ats() {
+        let mut st = outside();
+        let row = |st: &mut AppState| {
+            let buf = frame(st, BODY_120);
+            (text(&buf, BODY_120.y, 2..BODY_120.right()), buf)
+        };
+        assert!(!row(&mut st).0.contains("body"), "on foot, one @");
+        jacked_in(&mut st);
+        st.atlas.leave();
+        let (text, buf) = row(&mut st);
+        let key = "zoom 2 · @ you · @ body";
+        let at = text.find(key).unwrap_or_else(|| panic!("{text}"));
+        let x = 2 + text[..at].chars().count() as u16 + "zoom 2 · ".chars().count() as u16;
+        assert_eq!(buf[(x, BODY_120.y)].fg, map::NET_SELF);
+        assert_eq!(buf[(x + 8, BODY_120.y)].fg, map::BODY);
     }
 
     #[test]

@@ -2200,6 +2200,47 @@ fn atlas_from_the_flat() {
     atlas_shot_from("atlas_from_the_flat", &[], false, tracked_from_the_flat);
 }
 
+/// `tracked_city` jacked in where you stand: your body on the street, your Net self on
+/// the Net a block or two off.
+fn tracked_city_jacked_in() -> (AppState, MapScreen) {
+    let (mut st, _) = tracked_city();
+    let p = st.player.as_ref().unwrap();
+    let (body, city) = (p.pos, st.city.as_ref().unwrap());
+    let net = (20..40)
+        .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d)])
+        .map(|(dx, dy)| body.offset(dx, dy))
+        .find(|q| city.walkable(StratumKind::Net, *q))
+        .expect("the Net near you");
+    let p = st.player.as_mut().unwrap();
+    p.body = Some((p.place, p.pos));
+    p.place = Place::Stratum(StratumKind::Net);
+    p.pos = net;
+    st.atlas.cursor = None;
+    st.atlas.picked = None;
+    let map = MapScreen::walking(&mut st);
+    (st, map)
+}
+
+/// Jacked in: your Net self in the Net's blue, the cursor on it, your body in grey.
+#[test]
+#[ignore]
+fn atlas_jacked_in() {
+    atlas_shot_from("atlas_jacked_in", &[], false, tracked_city_jacked_in);
+}
+
+/// Jacked in, the world zoom: your Net self and your body, the cursor on your Net self.
+#[test]
+#[ignore]
+fn atlas_jacked_in_world() {
+    fn start() -> (AppState, MapScreen) {
+        let (mut st, map) = tracked_city_jacked_in();
+        crate::outside::ensure(&mut st);
+        (st, map)
+    }
+    let keys = [KeyCode::Char('-'), KeyCode::Char('-')];
+    atlas_shot_from("atlas_jacked_in_world", &keys, false, start);
+}
+
 /// Frame 1: every kind, the cursor on the tracked clinic.
 #[test]
 #[ignore]

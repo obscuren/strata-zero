@@ -2,7 +2,7 @@
 //! a mark on one of them. Spec `2026-11-04-overworld-screen-design.md`, "The deck MAP's
 //! world zoom".
 
-use super::map::MapLayout;
+use super::map::{self, MapLayout};
 use super::pane::put;
 use crate::app::AppState;
 use crate::render::overworld::chart_cell;
@@ -60,6 +60,12 @@ pub fn available(st: &AppState) -> bool {
 }
 
 pub use crate::outside::your_tile;
+
+/// Jacked in, the world tile your Net self is on; the cursor starts there.
+fn net_tile(st: &AppState) -> Option<Pos> {
+    let (city, o) = (st.city.as_ref()?, st.outside.as_ref()?);
+    super::map::net_self(st).map(|p| o.tile_of(city, p))
+}
 
 fn region_label(k: RegionKind) -> &'static str {
     match k {
@@ -154,7 +160,8 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
     };
     let w = o.world();
     let you = your_tile(st).unwrap_or(Pos::new(0, 0));
-    let cursor = st.atlas.world.cursor.unwrap_or(you);
+    let net = net_tile(st);
+    let cursor = st.atlas.world.cursor.or(net).unwrap_or(you);
     let pane_w = if st.atlas.folded || body.width < 70 {
         0
     } else {
@@ -242,9 +249,15 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
             true,
         );
     }
-    // you, the mark, the cursor
-    if let Some((x, y)) = cell_of(you) {
-        buf[(x, y)].set_char('@').set_style(white);
+    // you (jacked in, your body and your Net self over it), the mark, the cursor
+    let selves = match net {
+        Some(net) => vec![(you, map::BODY), (net, map::NET_SELF)],
+        None => vec![(you, Color::Rgb(230, 240, 245))],
+    };
+    for (p, c) in selves {
+        if let Some((x, y)) = cell_of(p) {
+            buf[(x, y)].set_char('@').set_style(white.fg(c));
+        }
     }
     if let Some(m) = o.mark.as_ref()
         && let Some((x, y)) = cell_of(m.tile)
@@ -268,14 +281,11 @@ pub fn draw(st: &AppState, body: Rect, buf: &mut Buffer) -> MapLayout {
         .bg(PANEL_BG)
         .add_modifier(Modifier::BOLD);
     put(buf, body.x + 1, body.y, "THE WORLD", title, right);
-    put(
-        buf,
-        body.x + 10,
-        body.y,
-        &format!(" · zoom 4{here}"),
-        Style::default().fg(FAINTER).bg(PANEL_BG),
-        right,
-    );
+    let zoom = format!(" · zoom 4{here}");
+    let faint = Style::default().fg(FAINTER).bg(PANEL_BG);
+    put(buf, body.x + 10, body.y, &zoom, faint, right);
+    let x = (body.x + 10).saturating_add(zoom.chars().count() as u16);
+    super::selves_key(st, buf, (x, body.y), right);
     if pane_w > 0 {
         pane(st, Rect::new(map.right(), body.y, pane_w, body.height), buf);
     }
@@ -438,7 +448,7 @@ fn pane(st: &AppState, r: Rect, buf: &mut Buffer) {
 pub fn key(st: &mut AppState, code: KeyCode) -> bool {
     let you = your_tile(st).unwrap_or(Pos::new(0, 0));
     let size = st.outside.as_ref().map(|o| o.world().size);
-    let cursor = st.atlas.world.cursor.unwrap_or(you);
+    let cursor = st.atlas.world.cursor.or(net_tile(st)).unwrap_or(you);
     let moved = |dx: i32, dy: i32| {
         let (w, h) = size.map_or((1, 1), |s| (s.w as i32, s.h as i32));
         Pos::new(
@@ -549,6 +559,32 @@ mod tests {
         assert!(text.contains("THE WORLD"), "{text}");
         crate::screens::atlas::key(&mut st, KeyCode::Char('+'));
         assert_eq!(st.atlas.zoom, Zoom::Fit, "back to the whole city");
+    }
+
+    #[test]
+    fn jacked_in_the_world_opens_on_your_net_self() {
+        let mut st = run();
+        let body = your_tile(&st).unwrap();
+        super::super::tests::jacked_in(&mut st);
+        let net = net_tile(&st).expect("your Net self's tile");
+        assert_ne!(net, body, "the Net self a few tiles off");
+        assert_eq!(
+            your_tile(&st),
+            Some(body),
+            "your body stays where it stands"
+        );
+        st.atlas.zoom = Zoom::World;
+        let area = Rect::new(0, 0, 120, 36);
+        let mut buf = Buffer::empty(area);
+        let l = crate::screens::atlas::draw(&st, area, &mut buf);
+        let cell = |p: Pos| {
+            let (x, y) = (p.x - l.origin.x, p.y - l.origin.y);
+            buf[(l.area.x + x as u16, l.area.y + y as u16)].clone()
+        };
+        // the cursor on your Net self, your body in grey
+        assert_eq!((cell(net).symbol(), cell(net).bg), ("@", CYAN));
+        assert_eq!((cell(body).symbol(), cell(body).fg), ("@", map::BODY));
+        assert!(buffer_text(&buf).contains("@ you · @ body"));
     }
 
     #[test]

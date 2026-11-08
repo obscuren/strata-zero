@@ -61,6 +61,8 @@ What you've learned, building by building: door codes and how you came by them, 
 
 The city, or the whole world when you zoom out past the city. Move around with the arrows, and hold shift to go eight at a time. `[ ]` steps through places near you, `< >` through kinds of place (fixers, ripperdocs and the rest). `t` or `space` tracks the place under the cursor. `+` and `-` zoom; `f` folds the list of places away.
 
+Jacked in, the map shows two of you. Your self on the Net is the blue `@`, and the cursor starts on it. Your body, where you left it, is the grey `@`.
+
 ## TALENTS
 
 Five trees, one for each attribute: MEAT, EDGE, WRENCH, STREET and ICE. You get a talent point at each level. A tree's later rows open as you put more points into it, and a talent may need the one before it at its best. Move with the arrows, `[ ]` change tree, and `space` puts a point into the talent under the cursor. Points can't be taken back.

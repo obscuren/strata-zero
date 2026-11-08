@@ -15,6 +15,10 @@ use ratatui::style::{Color, Modifier, Style};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const YOU: Color = Color::Rgb(255, 255, 255);
+/// Jacked in, your Net self: the blue it wears on the Net (`netlook::YOU`).
+pub(super) const NET_SELF: Color = Color::Rgb(70, 140, 255);
+/// Jacked in, your body where you left it.
+pub(super) const BODY: Color = Color::Rgb(160, 168, 184);
 /// How many cells the cursor keeps from the map's edges.
 const MARGIN: i32 = 4;
 
@@ -100,9 +104,32 @@ pub struct Marker {
     pub listing: Option<usize>,
 }
 
-/// Where your `@` shows on stratum `k`'s map.
+/// Where your `@` shows on stratum `k`'s map: you, or jacked in, your body.
 fn you_on(st: &AppState, k: StratumKind) -> Option<Pos> {
     listings::standing(st, k).map(|s| s.door)
+}
+
+/// Jacked in, where your Net self shows on the city's maps: its tile on the Net, which
+/// lies over the city tile for tile, or the gate of the construct it's in.
+pub fn net_self(st: &AppState) -> Option<Pos> {
+    let p = st.player.as_ref()?;
+    match p.place {
+        Place::Stratum(StratumKind::Net) => Some(p.pos),
+        Place::Construct(b) => crate::constructs::city_gate(st.city.as_ref()?, b),
+        _ => None,
+    }
+}
+
+/// Your `@`s on stratum `k`'s map, the one on top first: you in white; jacked in, your
+/// Net self in the Net's blue over your body in grey.
+fn selves(st: &AppState, k: StratumKind) -> Vec<(Pos, Color)> {
+    let you = you_on(st, k);
+    match net_self(st) {
+        Some(net) => std::iter::once((net, NET_SELF))
+            .chain(you.map(|b| (b, BODY)))
+            .collect(),
+        None => you.map(|p| (p, YOU)).into_iter().collect(),
+    }
 }
 
 /// The walk to draw on stratum `k`'s map and the pulses on it: the leg and its pulses
@@ -239,15 +266,17 @@ pub fn markers(st: &AppState, layout: &MapLayout, listings: &[Listing]) -> Vec<M
         };
         offer(rank(st, l), m);
     }
-    let you = layout.stratum.and_then(|k| you_on(st, k));
-    if let Some(cell) = you.and_then(|p| layout.cell_of(p)) {
-        let m = Marker {
-            cell,
-            glyph: '@',
-            colour: YOU,
-            listing: None,
-        };
-        offer(0, m);
+    let selves = layout.stratum.map(|k| selves(st, k)).unwrap_or_default();
+    for (p, colour) in selves {
+        if let Some(cell) = layout.cell_of(p) {
+            let m = Marker {
+                cell,
+                glyph: '@',
+                colour,
+                listing: None,
+            };
+            offer(0, m);
+        }
     }
     best.into_values().map(|(_, m)| m).collect()
 }
@@ -363,9 +392,9 @@ fn pan_by(prev: i32, c: i32, len: i32, cells: i32, (num, den): (i32, i32), resta
 }
 
 /// Where the map in `area` looks and where its cursor stands (spec 7): the cursor
-/// starts on the tracked target, else on you, when the map's stratum is new to it or it
-/// has none; the view pans to keep it four cells inside, or centres on it when it
-/// starts or after a zoom.
+/// starts on your Net self while you're jacked in, else on the tracked target, else on
+/// you, when the map's stratum is new to it or it has none; the view pans to keep it
+/// four cells inside, or centres on it when it starts or after a zoom.
 pub fn layout(st: &AppState, area: Rect) -> MapLayout {
     let mut layout = MapLayout {
         area,
@@ -392,8 +421,8 @@ pub fn layout(st: &AppState, area: Rect) -> MapLayout {
         .scale(fit_scale(size, area.width, area.height));
     let restart = st.atlas.stratum != Some(k) || st.atlas.cursor.is_none();
     let start = || {
-        target_now(st)
-            .and_then(|t| listings::target_tile(st, k, t))
+        net_self(st)
+            .or_else(|| target_now(st).and_then(|t| listings::target_tile(st, k, t)))
             .or_else(|| you_on(st, k))
             .unwrap_or(size.center())
     };
@@ -466,7 +495,7 @@ pub(super) fn draw_at(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{ON_STREET, STREET, outside, put, you};
+    use super::super::tests::{ON_STREET, STREET, jacked_in, outside, put, you};
     use super::super::{Zoom, cached};
     use super::*;
     use crate::render::Visibility;
@@ -664,6 +693,42 @@ mod tests {
         st.atlas.stratum = Some(StratumKind::Skyways);
         let (_, l) = draw(&st, area);
         assert_eq!(l.cursor, Some(you(&st)));
+    }
+
+    #[test]
+    fn jacked_in_your_net_self_shows_over_your_body() {
+        let mut st = outside();
+        // a track set before you jacked in doesn't take the first look: you do, on the Net
+        let doc = clinic(&st);
+        crate::track::set(&mut st, Source::Listing(doc.id)).unwrap();
+        let (body, net) = jacked_in(&mut st);
+        let area = Rect::new(1, 1, 81, 26);
+        let (buf, l) = draw(&st, area);
+        assert_eq!(l.stratum, Some(STREET), "your body's map");
+        assert_eq!(l.cursor, Some(net));
+        let at = |p: Pos| {
+            let c = &buf[l.cell_of(p).expect("in view")];
+            (c.symbol().to_string(), c.fg)
+        };
+        assert_eq!(at(net), ("@".to_string(), NET_SELF));
+        assert_eq!(at(body), ("@".to_string(), BODY));
+
+        // Into a construct: your Net self at its building's gate.
+        let city = st.city.as_ref().unwrap();
+        let (b, gate) = city
+            .buildings
+            .iter()
+            .find_map(|b| Some((b.id, crate::constructs::city_gate(city, b.id)?)))
+            .expect("a gate");
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos) = (Place::Construct(b), Pos::new(1, 1));
+        assert_eq!(net_self(&st), Some(gate));
+
+        // Back in your body: one @, white.
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos) = p.body.take().unwrap();
+        assert_eq!(net_self(&st), None);
+        assert_eq!(selves(&st, STREET), vec![(body, YOU)]);
     }
 
     #[test]
