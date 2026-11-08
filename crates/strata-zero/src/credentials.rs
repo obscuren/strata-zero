@@ -34,6 +34,8 @@ pub enum Source {
     Mail,
     /// Read in someone's notes in a shell.
     Shell,
+    /// Cracked at the pad with a Keyjack.
+    Keyjack,
 }
 
 /// A message in the rig's inbox.
@@ -71,11 +73,14 @@ pub const LOCKOUT_MINUTES: u64 = 30;
 /// Misses in a row that lock a keypad.
 pub const MISSES: u8 = 3;
 
-/// A flat's keypad: misses so far, and the minute a lockout ends.
+/// A flat's keypad: misses so far, the minute a lockout ends, and the faults a
+/// Keyjack has run up on it (they stay until the door opens or a lockout ends).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KeypadState {
     pub wrong: u8,
     pub locked_until: Option<u64>,
+    #[serde(default)]
+    pub faults: u8,
 }
 
 /// What a keypad says to a code.
@@ -156,6 +161,16 @@ impl Journal {
             .unwrap_or_default()
     }
 
+    /// A keypad as it stands at minute `now`: one whose lockout has ended starts over,
+    /// misses and faults both.
+    pub fn keypad_now(&self, b: BuildingId, level: i32, number: u16, now: u64) -> KeypadState {
+        let state = self.keypad(b, level, number);
+        match state.locked_until {
+            Some(u) if u <= now => KeypadState::default(),
+            _ => state,
+        }
+    }
+
     /// The minute a keypad's lockout ends, while it still holds.
     pub fn keypad_locked_until(
         &self,
@@ -188,35 +203,11 @@ pub fn try_code(st: &mut AppState, b: BuildingId, level: i32, number: u16, typed
     let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
         return Verdict::Denied { left: MISSES };
     };
-    let key = (b, level, number);
     if typed == citygen::rng::door_code(seed, b, level, number) {
-        st.journal.keypads.remove(&key);
-        let household = st
-            .interiors
-            .homes_of(b)
-            .and_then(|h| h.household_of(level, number));
-        st.journal.learn(Code {
-            building: b,
-            level,
-            number,
-            household,
-            code: typed,
-            source: Source::Keypad,
-            noted_by: None,
-            at: now,
-        });
-        let label = match owner_name(st, b, level, number) {
-            Some(n) => format!("`{n}`'s flat {number}"),
-            None => format!("flat {number}"),
-        };
-        st.say(format!("{label} · the keypad reads OPEN"));
-        return Verdict::Open;
+        return open(st, b, level, number, typed, Source::Keypad, now);
     }
-    let mut state = st.journal.keypad(b, level, number);
     // A lockout that has passed starts the count over.
-    if state.locked_until.is_some() {
-        state = KeypadState::default();
-    }
+    let mut state = st.journal.keypad_now(b, level, number, now);
     state.wrong += 1;
     st.say("the keypad buzzes");
     let verdict = if state.wrong >= MISSES {
@@ -229,8 +220,72 @@ pub fn try_code(st: &mut AppState, b: BuildingId, level: i32, number: u16, typed
             left: MISSES - state.wrong,
         }
     };
-    st.journal.keypads.insert(key, state);
+    st.journal.keypads.insert((b, level, number), state);
     verdict
+}
+
+/// What a right code does at a flat's pad: the journal learns it from `source`, the pad
+/// forgets its misses and faults, and the log says OPEN.
+fn open(
+    st: &mut AppState,
+    b: BuildingId,
+    level: i32,
+    number: u16,
+    code: u16,
+    source: Source,
+    now: u64,
+) -> Verdict {
+    st.journal.keypads.remove(&(b, level, number));
+    let household = st
+        .interiors
+        .homes_of(b)
+        .and_then(|h| h.household_of(level, number));
+    st.journal.learn(Code {
+        building: b,
+        level,
+        number,
+        household,
+        code,
+        source,
+        noted_by: None,
+        at: now,
+    });
+    let label = match owner_name(st, b, level, number) {
+        Some(n) => format!("`{n}`'s flat {number}"),
+        None => format!("flat {number}"),
+    };
+    st.say(format!("{label} · the keypad reads OPEN"));
+    Verdict::Open
+}
+
+/// The pad opens for a way that is not a typed code (the Keyjack's run): the journal
+/// learns the door's code from `source`, and the pad's misses and faults clear. The
+/// lockout, if one holds, is the caller's to check first.
+#[allow(dead_code)] // the Keyjack's run calls it
+pub fn open_with(
+    st: &mut AppState,
+    b: BuildingId,
+    level: i32,
+    number: u16,
+    source: Source,
+) -> Verdict {
+    let now = st.net.now(st);
+    let Some(seed) = st.city.as_ref().map(|c| c.seed) else {
+        return Verdict::Denied { left: MISSES };
+    };
+    let code = citygen::rng::door_code(seed, b, level, number);
+    open(st, b, level, number, code, source, now)
+}
+
+/// The pad locks for `LOCKOUT_MINUTES` as if the third wrong code had been keyed. Its
+/// faults stay on it until the lockout ends.
+#[allow(dead_code)] // the Keyjack's run calls it
+pub fn lock_out(st: &mut AppState, b: BuildingId, level: i32, number: u16) {
+    let now = st.net.now(st);
+    let mut state = st.journal.keypad_now(b, level, number, now);
+    state.wrong = MISSES;
+    state.locked_until = Some(now + LOCKOUT_MINUTES);
+    st.journal.keypads.insert((b, level, number), state);
 }
 
 /// How a locked door opened.
@@ -575,7 +630,7 @@ fn door_of(st: &AppState, c: &Code) -> String {
     }
     let whose = match c.source {
         Source::Home => "your flat".to_string(),
-        Source::ServerCopy | Source::Keypad | Source::Mail | Source::Shell => {
+        Source::ServerCopy | Source::Keypad | Source::Keyjack | Source::Mail | Source::Shell => {
             whose_flat(st, c.building, c.level, c.number)
         }
     };
@@ -592,6 +647,7 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
         let from = match c.source {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
+            Source::Keyjack => format!("cracked with the Keyjack, {}", stamp(c.at)),
             Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
             Source::Shell => match &c.noted_by {
                 Some(n) => format!("read in `{n}`'s notes, {}", stamp(c.at)),
@@ -1212,6 +1268,7 @@ mod tests {
             KeypadState {
                 wrong: 3,
                 locked_until: Some(now),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -1354,5 +1411,143 @@ mod tests {
             lines.iter().any(|l| l == "fixers quiet until day 2 02:00"),
             "{lines:?}"
         );
+    }
+
+    /// A flat of the test city, its level, number and right code.
+    fn a_flat(st: &mut crate::app::AppState, b: BuildingId) -> (i32, u16, u16) {
+        prepare(st, b);
+        let (level, number) = st.interiors.homes_of(b).unwrap().flats().next().unwrap();
+        let seed = st.city.as_ref().unwrap().seed;
+        (
+            level,
+            number,
+            citygen::rng::door_code(seed, b, level, number),
+        )
+    }
+
+    #[test]
+    fn open_with_learns_with_its_source_and_clears_faults() {
+        let (mut st, b) = state();
+        let (level, number, code) = a_flat(&mut st, b);
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 2,
+                locked_until: None,
+                faults: 2,
+            },
+        );
+        assert_eq!(
+            open_with(&mut st, b, level, number, Source::Keyjack),
+            Verdict::Open
+        );
+        let learned = st.journal.code_for(b, level, number).unwrap();
+        assert_eq!((learned.source, learned.code), (Source::Keyjack, code));
+        assert_eq!(st.journal.keypad(b, level, number), KeypadState::default());
+        assert!(matches!(opens(&st, b, level, number), Some(How::Code(_))));
+        let (_, _, es) = &entries(&st)[0];
+        assert!(
+            es.iter()
+                .any(|e| e.text.contains("cracked with the Keyjack")),
+            "{es:?}"
+        );
+    }
+
+    #[test]
+    fn lock_out_locks_for_the_lockout() {
+        let (mut st, b) = state();
+        let (level, number, _) = a_flat(&mut st, b);
+        let now = st.net.now(&st);
+        lock_out(&mut st, b, level, number);
+        assert_eq!(
+            st.journal.keypad_locked_until(b, level, number, now),
+            Some(now + LOCKOUT_MINUTES)
+        );
+        assert_eq!(
+            try_code(&mut st, b, level, number, 1),
+            Verdict::Locked {
+                until: now + LOCKOUT_MINUTES
+            }
+        );
+    }
+
+    #[test]
+    fn faults_clear_when_a_lockout_has_ended() {
+        let (mut st, b) = state();
+        let (level, number, code) = a_flat(&mut st, b);
+        let now = st.net.now(&st);
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 3,
+                locked_until: Some(now),
+                faults: 3,
+            },
+        );
+        assert_eq!(st.journal.keypad_now(b, level, number, now).faults, 0);
+        let wrong = (code + 1) % 10_000;
+        assert_eq!(
+            try_code(&mut st, b, level, number, wrong),
+            Verdict::Denied { left: 2 }
+        );
+        assert_eq!(st.journal.keypad(b, level, number).faults, 0);
+        // A lockout still running keeps them.
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 0,
+                locked_until: Some(now + 5),
+                faults: 3,
+            },
+        );
+        assert_eq!(st.journal.keypad_now(b, level, number, now).faults, 3);
+    }
+
+    #[test]
+    fn a_wrong_code_keeps_the_doors_faults() {
+        let (mut st, b) = state();
+        let (level, number, code) = a_flat(&mut st, b);
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 0,
+                locked_until: None,
+                faults: 2,
+            },
+        );
+        try_code(&mut st, b, level, number, (code + 1) % 10_000);
+        let k = st.journal.keypad(b, level, number);
+        assert_eq!((k.wrong, k.faults), (1, 2));
+    }
+
+    #[test]
+    fn a_pad_with_faults_reopens_with_them() {
+        use crate::runs::testutil::{round, same};
+        let (mut st, b) = state();
+        let (level, number, _) = a_flat(&mut st, b);
+        st.journal.keypads.insert(
+            (b, level, number),
+            KeypadState {
+                wrong: 1,
+                locked_until: None,
+                faults: 2,
+            },
+        );
+        let back = round(&st.journal);
+        assert!(same(&st.journal, &back));
+        assert_eq!(back.keypad(b, level, number).faults, 2);
+        // An old save's pad has no faults field.
+        #[derive(serde::Serialize)]
+        struct Old {
+            wrong: u8,
+            locked_until: Option<u64>,
+        }
+        let old = rmp_serde::to_vec_named(&Old {
+            wrong: 1,
+            locked_until: None,
+        })
+        .unwrap();
+        let read: KeypadState = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!((read.wrong, read.faults), (1, 0));
     }
 }
