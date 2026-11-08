@@ -1,0 +1,326 @@
+diff --git a/crates/strata-zero/src/screens/explore.rs b/crates/strata-zero/src/screens/explore.rs
+index 7d4180c..0ec0b18 100644
+--- a/crates/strata-zero/src/screens/explore.rs
++++ b/crates/strata-zero/src/screens/explore.rs
+@@ -189,7 +189,7 @@ pub struct MapScreen {
+     program_flash: Option<(usize, u64)>,
+     cam_ready: bool,
+     /// The map area of the last frame, so `update` knows the view size.
+-    last_map: Cell<Rect>,
++    pub(crate) last_map: Cell<Rect>,
+     /// The cord's walk, kept while neither end nor the view moves.
+     cord_walk: RefCell<crate::net::CordWalk>,
+     /// Where your Net self stood as the Net over the world opened over the map: back
+diff --git a/crates/strata-zero/src/screens/shots.rs b/crates/strata-zero/src/screens/shots.rs
+index a339ad9..1329532 100644
+--- a/crates/strata-zero/src/screens/shots.rs
++++ b/crates/strata-zero/src/screens/shots.rs
+@@ -5753,3 +5753,308 @@ fn manual_desk() {
+         shot_stack(&name, &st, &[&m], size);
+     }
+ }
++
++// ---- throwaway: the level-up mock (four looks round your @) ----
++mod levelup_mock {
++    use super::*;
++    use crate::track::overlay::mix;
++    use ratatui::buffer::Cell;
++    use ratatui::style::Modifier;
++
++    const CY: Color = Color::Rgb(0, 229, 255);
++    const MG: Color = Color::Rgb(255, 0, 200);
++    const AM: Color = Color::Rgb(255, 190, 60);
++    const WH: Color = Color::Rgb(255, 255, 255);
++    const INK: Color = Color::Rgb(4, 6, 10);
++    pub const FRAMES: usize = 18;
++
++    fn at(buf: &mut Buffer, a: Rect, x: i32, y: i32) -> Option<&mut Cell> {
++        let inside = x >= a.x as i32
++            && x < a.right() as i32
++            && y >= a.y as i32
++            && y < a.bottom() as i32;
++        inside.then(|| &mut buf[(x as u16, y as u16)])
++    }
++
++    fn tint(buf: &mut Buffer, a: Rect, x: i32, y: i32, c: Color, f: f32) {
++        if let Some(cell) = at(buf, a, x, y) {
++            let bg = cell.bg;
++            cell.set_bg(mix(bg, c, f.clamp(0.0, 1.0)));
++        }
++    }
++
++    fn brighten(buf: &mut Buffer, a: Rect, x: i32, y: i32, f: f32) {
++        if let Some(cell) = at(buf, a, x, y) {
++            let fg = cell.fg;
++            cell.set_fg(mix(fg, WH, f.clamp(0.0, 1.0)));
++        }
++    }
++
++    fn put(buf: &mut Buffer, a: Rect, x: i32, y: i32, ch: char, fg: Color, bold: bool) {
++        if let Some(cell) = at(buf, a, x, y) {
++            cell.set_char(ch).set_fg(fg);
++            if bold {
++                cell.modifier.insert(Modifier::BOLD);
++            } else {
++                cell.modifier.remove(Modifier::BOLD);
++            }
++        }
++    }
++
++    /// `s` from `x`, on backgrounds pressed dark so it reads over the street.
++    fn text(buf: &mut Buffer, a: Rect, x: i32, y: i32, s: &str, fg: Color, bold: bool) {
++        for (i, ch) in s.chars().enumerate() {
++            tint(buf, a, x + i as i32, y, INK, 0.7);
++            put(buf, a, x + i as i32, y, ch, fg, bold);
++        }
++    }
++
++    /// The flash on you and the eight cells round you, fading over `n` frames.
++    fn flash(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize, n: usize, c: Color) {
++        if t >= n {
++            return;
++        }
++        let f = 1.0 - t as f32 / n as f32;
++        for dy in -1..=1 {
++            for dx in -1..=1 {
++                let k = if dx == 0 && dy == 0 { 0.9 } else { 0.45 };
++                tint(buf, a, cx + dx, cy + dy, c, f * k);
++            }
++        }
++    }
++
++    /// "LEVEL 2" typed out over you from frame `from`, rising a row as it types.
++    fn label(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize, from: usize, c: Color) {
++        if t < from {
++            return;
++        }
++        let s = "LEVEL 2";
++        let k = t - from;
++        let shown: String = s.chars().take(k * 2 + 1).collect();
++        let y = cy - 2 - (k >= 2) as i32;
++        text(buf, a, cx - 3, y, &shown, c, true);
++    }
++
++    /// A: two rings, cyan then magenta, washing out across the street from you.
++    pub fn shock(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize) {
++        let tf = t as f32;
++        for (lag, col) in [(0.0, CY), (4.0, MG)] {
++            let f = tf - lag;
++            if f < 0.0 {
++                continue;
++            }
++            let r = 1.0 + f * 1.4;
++            let fade = (1.0 - f / 14.0).max(0.0);
++            for y in (cy - 14)..=(cy + 14) {
++                for x in (cx - 30)..=(cx + 30) {
++                    let (dx, dy) = ((x - cx) as f32, (y - cy) as f32 * 2.0);
++                    let d = (dx * dx + dy * dy).sqrt();
++                    let w = (1.0 - (d - r).abs() / 1.4).max(0.0);
++                    if w > 0.0 {
++                        tint(buf, a, x, y, col, w * fade * 0.85);
++                        brighten(buf, a, x, y, w * fade * 0.6);
++                    }
++                }
++            }
++        }
++        flash(buf, a, (cx, cy), t, 4, WH);
++        label(buf, a, (cx, cy), t, 6, MG);
++    }
++
++    /// B: a beam of data falls on you from the top of the view, a scanline runs out
++    /// along your row, and the beam drains away.
++    pub fn beam(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize) {
++        let top = a.y as i32;
++        let fall = 6usize;
++        let span = (cy - top) as f32;
++        let head = if t < fall {
++            top + (span * (t as f32 + 1.0) / fall as f32) as i32
++        } else {
++            cy
++        };
++        let drain = 10usize;
++        let tail = if t >= drain {
++            top + (span * ((t - drain) as f32 / 6.0)).min(span) as i32
++        } else {
++            top
++        };
++        for y in tail..head.min(cy) {
++            let near = (head - y) as f32;
++            let glow = (1.0 - near / 12.0).max(0.3);
++            let bits = ['0', '1', '┃', '┃', '┃'];
++            let ch = bits[(y as usize * 7 + t * 3) % bits.len()];
++            put(buf, a, cx, y, ch, mix(CY, WH, glow * 0.7), near < 2.0);
++            tint(buf, a, cx, y, CY, 0.45 * glow);
++            tint(buf, a, cx - 1, y, CY, 0.18 * glow);
++            tint(buf, a, cx + 1, y, CY, 0.18 * glow);
++        }
++        if t + 1 >= fall {
++            let k = (t + 1 - fall) as i32;
++            let fade = (1.0 - k as f32 / 10.0).max(0.0);
++            let reach = k * 4;
++            for x in (cx - reach)..=(cx + reach) {
++                let off = (x - cx).abs();
++                let w = fade * (1.0 - off as f32 / 40.0).max(0.0);
++                tint(buf, a, x, cy, CY, 0.5 * w);
++                if off > 0 && off >= reach - 1 {
++                    put(buf, a, x, cy, '━', mix(CY, WH, 0.5), true);
++                }
++            }
++            flash(buf, a, (cx, cy), k as usize, 5, CY);
++        }
++        if t >= 8 {
++            let s = "▲ LEVEL 2";
++            let shown: String = s.chars().take((t - 8) * 2 + 1).collect();
++            text(buf, a, cx + 2, cy - 1, &shown, CY, true);
++        }
++    }
++
++    /// C: four brackets close in from the edges of the view and lock round you; the
++    /// level and what it brings type out beside them.
++    pub fn reticle(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize) {
++        let lock = 8usize;
++        let ease = |t: usize| {
++            let p = (t as f32 / lock as f32).min(1.0);
++            let e = 1.0 - (1.0 - p).powi(3);
++            (
++                (18.0 + (2.0 - 18.0) * e).round() as i32,
++                (8.0 + (1.0 - 8.0) * e).round() as i32,
++            )
++        };
++        let corners = |(dx, dy): (i32, i32)| {
++            [
++                (cx - dx, cy - dy, '┏', 1, 1),
++                (cx + dx, cy - dy, '┓', -1, 1),
++                (cx - dx, cy + dy, '┗', 1, -1),
++                (cx + dx, cy + dy, '┛', -1, -1),
++            ]
++        };
++        if t > 0 && t <= lock {
++            for (x, y, ch, _, _) in corners(ease(t - 1)) {
++                put(buf, a, x, y, ch, mix(CY, INK, 0.55), false);
++            }
++        }
++        let col = if (lock..lock + 2).contains(&t) {
++            WH
++        } else if t > lock {
++            MG
++        } else {
++            CY
++        };
++        for (x, y, ch, sx, sy) in corners(ease(t)) {
++            put(buf, a, x, y, ch, col, true);
++            if t >= lock {
++                put(buf, a, x + sx, y, '━', col, true);
++                let _ = sy;
++            }
++        }
++        if t >= lock {
++            let k = t - lock;
++            let f = (0.7 - k as f32 * 0.08).max(0.15);
++            for dx in -1..=1 {
++                tint(buf, a, cx + dx, cy, MG, f);
++            }
++            let x = cx + 5;
++            let lvl: String = "LVL 2".chars().take(k * 2 + 1).collect();
++            text(buf, a, x, cy - 1, &lvl, MG, true);
++            if k >= 2 {
++                let more: String = "+1 talent · +100 SP".chars().take((k - 2) * 4).collect();
++                text(buf, a, x, cy, &more, AM, false);
++            }
++        }
++    }
++
++    /// D: circuit traces race out from you on eight lines, nodes at their heads, and
++    /// draw back in from the middle.
++    pub fn traces(buf: &mut Buffer, a: Rect, (cx, cy): (i32, i32), t: usize) {
++        let dirs = [
++            ((1, 0), '─', 14),
++            ((-1, 0), '─', 14),
++            ((0, 1), '│', 6),
++            ((0, -1), '│', 6),
++            ((1, 1), '╲', 6),
++            ((-1, -1), '╲', 6),
++            ((1, -1), '╱', 6),
++            ((-1, 1), '╱', 6),
++        ];
++        let grow = 7.0;
++        for ((sx, sy), ch, max) in dirs {
++            let len = (((t as f32 + 1.0) / grow) * max as f32).min(max as f32) as i32;
++            let tail = if t > 9 {
++                (((t - 9) as f32 / 7.0) * max as f32) as i32
++            } else {
++                0
++            };
++            for i in tail.max(1)..=len {
++                let (x, y) = (cx + sx * i, cy + sy * i);
++                let f = i as f32 / max as f32;
++                put(buf, a, x, y, ch, mix(CY, MG, f), false);
++                tint(buf, a, x, y, CY, 0.3 * (1.0 - f));
++            }
++            if len >= 1 && tail < len {
++                let (x, y) = (cx + sx * len, cy + sy * len);
++                put(buf, a, x, y, '◆', mix(WH, MG, len as f32 / max as f32), true);
++            }
++        }
++        flash(buf, a, (cx, cy), t, 4, MG);
++        label(buf, a, (cx, cy), t, 8, CY);
++    }
++
++    #[test]
++    #[ignore]
++    fn levelup_mock() {
++        let Ok(dir) = std::env::var("SHOT_DIR") else {
++            return;
++        };
++        let (mut st, _) = walked_city();
++        st.character.level = 2;
++        let size = (120u16, 40u16);
++        // a stretch of street with nobody else's @ within a few cells of yours
++        let home = st.player.as_ref().unwrap().pos;
++        let spots: Vec<Pos> = (0..14)
++            .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d), (d, d), (-d, d)])
++            .map(|(dx, dy)| home.offset(dx, dy))
++            .filter(|p| st.city.as_ref().unwrap().walkable(StratumKind::Street, *p))
++            .collect();
++        let mut picked = None;
++        for p in spots {
++            stand_on(&mut st, p);
++            let map = MapScreen::walking(&mut st);
++            let base = draw_stack(&st, &[&map], size);
++            let area = map.last_map.get();
++            let origin = map.cam.origin(area.width, area.height);
++            let c = (area.x as i32 + p.x - origin.x, area.y as i32 + p.y - origin.y);
++            let crowd = (-14..=14)
++                .flat_map(|dx| (-4..=4).map(move |dy| (dx, dy)))
++                .filter(|&(dx, dy)| (dx, dy) != (0, 0))
++                .filter(|&(dx, dy)| {
++                    let (x, y) = (c.0 + dx, c.1 + dy);
++                    area.contains(ratatui::layout::Position::new(x as u16, y as u16))
++                        && base[(x as u16, y as u16)].symbol() == "@"
++                })
++                .count();
++            if crowd == 0 {
++                picked = Some((map, base, area, c));
++                break;
++            }
++        }
++        let (map, base, area, c) = picked.expect("a quiet stretch");
++        let _ = &map;
++        assert_eq!(base[(c.0 as u16, c.1 as u16)].symbol(), "@", "you at {c:?}");
++        std::fs::write(format!("{dir}/lvl_centre.txt"), format!("{} {}", c.0, c.1)).unwrap();
++        write_svg(&dir, "lvl_base_120x40", &st, &base, true);
++        let looks: [(&str, fn(&mut Buffer, Rect, (i32, i32), usize)); 4] = [
++            ("shock", shock),
++            ("beam", beam),
++            ("reticle", reticle),
++            ("traces", traces),
++        ];
++        for (name, fx) in looks {
++            for t in 0..FRAMES {
++                let mut buf = base.clone();
++                fx(&mut buf, area, c, t);
++                write_svg(&dir, &format!("lvl_{name}_{t:02}_120x40"), &st, &buf, true);
++            }
++        }
++    }
++}
