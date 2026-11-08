@@ -21,7 +21,7 @@ While it isn't your turn, other keys wait; the game says `not your turn`. You ca
 
 Abilities come from your skills, your gear, your chrome and your talents. The first five sit on `1` to `5`, and `a` lists them all with whether each is ready or cooling down. Cooldowns run in real time.
 
-On the act half of a turn, `1` to `9` and `0` pick from everything you can do this turn: strikes, boosts and marks first, then anything you can throw. A strike needs a target in range; a boost or a mark you use on yourself or on whoever the cursor is on.
+On the act half of a turn, `1` to `9` and `0` pick from everything you can do this turn: strikes, boosts and marks first, then anything you can throw. A strike needs a target in range; a boost or a mark you use on yourself or on whoever the cursor is on. Deadeye locks on: brackets close in round the foe, `MARKED` and what it adds to your chance to hit read out beside them, and it keeps a `⌖` over it for the rest of the fight.
 
 ## Your gun
 

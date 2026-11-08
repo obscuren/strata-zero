@@ -118,7 +118,7 @@ pub fn mark(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), String>
         .character
         .ability(&st.content, id)
         .ok_or_else(|| format!("unknown ability {id}"))?;
-    let AbilityKind::Active(Active::Mark { range, ap, .. }) = ability.kind else {
+    let AbilityKind::Active(Active::Mark { range, bonus, ap }) = ability.kind else {
         return Err(format!("{} is not a mark", ability.name));
     };
     if in_construct(st) {
@@ -134,14 +134,36 @@ pub fn mark(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), String>
         f.marked = i == foe;
     }
     let at = st.foes[foe].pos;
+    let name = st.foes[foe].name.clone();
     for f in &ability.fx {
-        if let Fx::Mark { colour, ticks } = f {
-            net::mark(st, at, *colour, *ticks);
+        match f {
+            Fx::Mark { colour, ticks } => net::mark(st, at, *colour, *ticks),
+            Fx::Lock => lock_on(st, at, format!("MARKED\n{name} · +{bonus}% to hit")),
+            _ => {}
         }
     }
-    let name = st.foes[foe].name.clone();
     st.say(format!("{} · {name} marked", ability.name.to_lowercase()));
     Ok(())
+}
+
+/// The lock-on on tile `at` of the player's map, its readout `label` (two lines).
+fn lock_on(st: &mut AppState, at: Pos, label: String) {
+    let Some(place) = st.player.as_ref().map(|p| p.place) else {
+        return;
+    };
+    st.fx.push(FxInstance {
+        fx: Fx::Lock,
+        place,
+        origin: at,
+        radius: 0,
+        started: st.tick,
+        revealed: Vec::new(),
+        targets: vec![at],
+        label,
+        hit: false,
+        tint: None,
+        arc: None,
+    });
 }
 
 /// The shot of a strike at a piece: the ability's shapes less the muzzle flash, in
@@ -539,7 +561,16 @@ mod tests {
         assert!(st.foes[0].marked && !st.foes[1].marked);
         assert_eq!(ap(&st), 1);
         assert!(logged(&st, "deadeye · goon marked"));
-        assert!(st.fx.iter().any(|i| matches!(i.fx, Fx::Mark { .. })));
+        // the lock-on on the foe, its readout naming it and the bonus
+        let lock = st
+            .fx
+            .iter()
+            .find(|i| matches!(i.fx, Fx::Lock))
+            .expect("a lock-on");
+        assert_eq!(lock.origin, st.foes[0].pos);
+        assert_eq!(lock.started, st.tick);
+        assert_eq!(lock.label, "MARKED\ngoon · +20% to hit");
+        assert!(!st.fx.iter().any(|i| matches!(i.fx, Fx::Mark { .. })));
         assert_eq!(your_chance(&st, 0).unwrap(), (before + 20).min(95));
         assert_eq!(your_chance(&st, 1).unwrap(), other, "unmarked is untouched");
         // Marking another clears the first.

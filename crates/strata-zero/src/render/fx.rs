@@ -1,6 +1,9 @@
 //! Ability effects over the map: glitch kicks, expanding wavefronts and glowing markers.
 
+mod flourish;
 mod shapes;
+
+pub use flourish::FLOURISH_TICKS;
 
 use crate::anim::effects::{glitch_cells, pulse};
 use crate::app::FxInstance;
@@ -89,6 +92,8 @@ pub struct FxOverlay<'a> {
     pub fx: &'a [FxInstance],
     /// Sight on the drawn stratum: glow markers show on connectors out of sight.
     pub vis: Option<&'a Grid<Visibility>>,
+    /// Columns at the view's right that words keep out of: the turn column's, on turns.
+    pub clear_right: u16,
 }
 
 /// The stains blasts leave where they hurt, on the ground: drawn before the people,
@@ -232,6 +237,8 @@ impl Overlay for FxOverlay<'_> {
                     tick,
                     buf,
                 ),
+                Fx::Lock => flourish::lock(inst, elapsed, origin, area, self.clear_right, buf),
+                Fx::Upload => flourish::upload(inst, elapsed, origin, area, self.clear_right, buf),
             }
         }
     }
@@ -993,6 +1000,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(inst),
             vis: None,
+            clear_right: 0,
         };
         let plain = render(c, s, StratumKind::Street, tick, None, &[], (120, 60));
         let with = render(
@@ -1426,6 +1434,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            clear_right: 0,
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         let half = render(
@@ -1483,6 +1492,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            clear_right: 0,
         };
         let buf = render(
             &c,
@@ -1505,6 +1515,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&bolt),
             vis: None,
+            clear_right: 0,
         };
         for tick in [100u64, 106, 111] {
             render(
@@ -1538,6 +1549,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&none),
             vis: None,
+            clear_right: 0,
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         assert_eq!(
@@ -1591,6 +1603,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            clear_right: 0,
         };
         let buf = render(
             &c,
@@ -1659,6 +1672,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            clear_right: 0,
         };
         let plain = render(&c, &s, StratumKind::Street, 100, None, &[], (120, 60));
         let kicked = render(
@@ -1711,6 +1725,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: Some(p.vis()),
+            clear_right: 0,
         };
         let buf = render(
             &c,
@@ -1762,6 +1777,7 @@ mod tests {
             let alone = FxOverlay {
                 fx: std::slice::from_ref(inst),
                 vis: None,
+                clear_right: 0,
             };
             let on_net = render(&c, &s, StratumKind::Net, 106, None, &[&alone], (120, 60));
             assert_ne!(
@@ -1772,6 +1788,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: &all,
             vis: None,
+            clear_right: 0,
         };
         let plain = render(&c, &s, StratumKind::Street, 106, None, &[], (120, 60));
         let drawn = render(
@@ -1805,6 +1822,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            clear_right: 0,
         };
         for tick in [100u64, 105, 112, 120] {
             render(
@@ -1882,6 +1900,7 @@ mod tests {
         let overlay = FxOverlay {
             fx: std::slice::from_ref(&inst),
             vis: None,
+            clear_right: 0,
         };
         let plain = render(&c, &s, StratumKind::Street, 111, None, &[], (120, 60));
         let full = render(
@@ -1958,7 +1977,11 @@ mod tests {
         let tick = inst.started + e;
         let fx = std::slice::from_ref(inst);
         let scorch = ScorchOverlay { fx, vis };
-        let overlay = FxOverlay { fx, vis };
+        let overlay = FxOverlay {
+            fx,
+            vis,
+            clear_right: 0,
+        };
         let plain = render(&c, &s, StratumKind::Street, tick, vis, &[], (120, 60));
         let with = render(
             &c,

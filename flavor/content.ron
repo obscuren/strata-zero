@@ -802,7 +802,7 @@ Content(
                 desc: "The drone goes up, the drone comes back, the floor is on your map."),
         Ability(id: "deadeye", name: "Deadeye", cooldown: 120,
                 kind: Active(Mark(range: 12, bonus: 20, ap: 1)),
-                fx: [Mark(colour: (255, 0, 200), ticks: 12)],
+                fx: [Lock],
                 desc: "You read them, and after that every round knows the way."),
         Ability(id: "lowlight", name: "Low-light", cooldown: 0, kind: Passive,
                 desc: "The dark is just another colour."),

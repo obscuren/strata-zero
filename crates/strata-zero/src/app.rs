@@ -99,6 +99,9 @@ pub struct AppState {
     pub look_at: Option<citygen::Pos>,
     /// The console's `target`: a Street tile the free camera should jump to.
     pub jump_to: Option<citygen::Pos>,
+    /// A level gained and not yet played: the map plays its upload on you the first
+    /// frame it is on top (`gain_xp`).
+    pub levelled: Option<u8>,
     pub content: game::Content,
     pub character: game::Character,
     /// The professions and lines of the city's people.
@@ -286,6 +289,7 @@ impl FxInstance {
             game::Fx::Bloom => self.started + BLOOM_TICKS + self.scorch(),
             game::Fx::Whiteout => self.started + WHITEOUT_TICKS + self.scorch(),
             game::Fx::Shock => self.started + SHOCK_TICKS,
+            game::Fx::Lock | game::Fx::Upload => self.started + crate::render::fx::FLOURISH_TICKS,
             game::Fx::Haze => self.started + HAZE_TICKS,
             game::Fx::Trail => self.started + TRAIL_TICKS,
             game::Fx::Pulse { .. } => self.started + PULSE_TICKS,
@@ -332,6 +336,7 @@ impl AppState {
             chair: None,
             look_at: None,
             jump_to: None,
+            levelled: None,
             content,
             character,
             people,
@@ -525,6 +530,7 @@ impl AppState {
     pub fn clear_screens(&mut self) {
         self.look_at = None;
         self.jump_to = None;
+        self.levelled = None;
         self.save_due = false;
         self.save_failed = None;
         self.atlas = Default::default();
@@ -556,7 +562,7 @@ impl AppState {
     }
 
     /// Gives `points` of experience, with a story line for each level it brings and what
-    /// came with it; the levels gained.
+    /// came with it, and the last level's upload waiting for the map; the levels gained.
     pub fn gain_xp(&mut self, points: u32) -> u8 {
         let gained = self.character.gain_xp(points);
         let level = self.character.level;
@@ -572,6 +578,9 @@ impl AppState {
                 "level {at} · a talent point · {} SP{attribute}",
                 game::SP_PER_LEVEL
             ));
+        }
+        if gained > 0 {
+            self.levelled = Some(level);
         }
         gained
     }

@@ -3460,6 +3460,30 @@ impl Screen for MapScreen {
                 place: self.place,
             });
         }
+        // A level plays its upload on you once you're walking with nothing over the
+        // map: no scene, no rest's timeline, no console. Until then it waits.
+        let clear = crate::missions::scene::running(st).is_none()
+            && st.rest.is_none()
+            && self.console.is_none()
+            && self.mode == Mode::Walk;
+        if clear
+            && let Some((place, origin)) = st.player.as_ref().map(|p| (p.place, p.pos))
+            && let Some(level) = st.levelled.take()
+        {
+            st.fx.push(crate::app::FxInstance {
+                fx: game::Fx::Upload,
+                place,
+                origin,
+                radius: 0,
+                started: st.tick,
+                revealed: Vec::new(),
+                targets: Vec::new(),
+                label: format!("LEVEL {level}"),
+                hit: false,
+                tint: None,
+                arc: None,
+            });
+        }
         if st.tick > self.last_tick + 1 {
             self.fps.resume(Instant::now());
         }
@@ -4254,7 +4278,12 @@ impl Screen for MapScreen {
         }
         // The live shapes draw over everything on the map; their scorch is on the
         // ground layer above.
-        let fx = FxOverlay { fx: &st.fx, vis };
+        let clear_right = turns.as_ref().map_or(0, |_| crate::render::turns::WIDTH);
+        let fx = FxOverlay {
+            fx: &st.fx,
+            vis,
+            clear_right,
+        };
         overlays.push(&fx);
         let light = crate::render::lighting::LightOverlay { vis, keep };
         if st.show_light {
@@ -6398,6 +6427,44 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(last(&st), Some("no active abilities"));
+    }
+
+    #[test]
+    fn a_level_plays_its_upload_when_the_map_is_back() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let uploads = |st: &AppState| {
+            st.fx
+                .iter()
+                .filter(|f| matches!(f.fx, game::Fx::Upload))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // two levels at once, gained off the map: one upload waits, the last level's
+        assert_eq!(st.gain_xp(200 + 400), 2);
+        assert_eq!(st.levelled, Some(3));
+        assert!(uploads(&st).is_empty(), "it waits for the map");
+        // the map on top but not walking (the free camera): it waits still
+        s.mode = Mode::Explore;
+        st.tick += 1;
+        s.update(&mut st, &[]);
+        assert!(
+            uploads(&st).is_empty() && st.levelled == Some(3),
+            "not walking"
+        );
+        s.mode = Mode::Walk;
+        st.tick += 1;
+        s.update(&mut st, &[]);
+        let played = uploads(&st);
+        assert_eq!(played.len(), 1);
+        let me = st.player.as_ref().unwrap();
+        assert_eq!((played[0].place, played[0].origin), (me.place, me.pos));
+        assert_eq!(played[0].label, "LEVEL 3");
+        assert_eq!(played[0].started, st.tick);
+        assert_eq!(st.levelled, None);
+        // short of a level, nothing waits
+        st.gain_xp(10);
+        assert_eq!(st.levelled, None);
     }
 
     /// Seed 8 moved in with the news out (the welcome put by), you standing `(dx, dy)`

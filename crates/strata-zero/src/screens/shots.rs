@@ -2267,6 +2267,53 @@ fn atlas_folded() {
     atlas_shot("atlas_folded", &[KeyCode::Char('f')], false);
 }
 
+/// The two flourishes on the street by your megablock: a level's upload landing and its
+/// words held; Deadeye's lock-on biting a goon a few tiles off and its readout held.
+#[test]
+#[ignore]
+fn flourish_shots() {
+    let (mut st, _) = walked_city();
+    st.tick = 1000;
+    st.character.level = 2;
+    let (place, me) = {
+        let p = st.player.as_ref().unwrap();
+        (p.place, p.pos)
+    };
+    let play = |fx: game::Fx, origin: Pos, label: &str, e: u64| crate::app::FxInstance {
+        fx,
+        place,
+        origin,
+        radius: 0,
+        started: 1000 - e,
+        revealed: Vec::new(),
+        targets: vec![origin],
+        label: label.to_string(),
+        hit: false,
+        tint: None,
+        arc: None,
+    };
+    let map = MapScreen::walking(&mut st);
+    let size = (120, 40);
+    let held = crate::render::fx::FLOURISH_TICKS - 1;
+    for (name, e) in [("upload_land", 12), ("upload_words", held)] {
+        st.fx = vec![play(game::Fx::Upload, me, "LEVEL 2", e)];
+        shot_stack(&format!("flourish_{name}"), &st, &[&map], size);
+    }
+    let city = st.city.as_ref().unwrap();
+    let at = (5..14)
+        .map(|d| me.offset(d, 0))
+        .find(|p| city.walkable(StratumKind::Street, *p))
+        .expect("street east of you");
+    let mut goon = crate::foes::Foe::goon(place, at);
+    goon.marked = true;
+    st.foes.push(goon);
+    let words = "MARKED\ngoon · +20% to hit";
+    for (name, e) in [("lock_bite", 16), ("lock_words", held)] {
+        st.fx = vec![play(game::Fx::Lock, at, words, e)];
+        shot_stack(&format!("flourish_{name}"), &st, &[&map], size);
+    }
+}
+
 /// The minimap on the street, Miracorp Tattoo tracked: the close up, the walk, the
 /// clinic's `+`, its distance and bearing.
 #[test]

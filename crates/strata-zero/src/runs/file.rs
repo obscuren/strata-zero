@@ -778,14 +778,15 @@ mod tests {
         b.rain = false;
         b.look_at = Some(citygen::Pos::new(3, 4));
         b.jump_to = Some(citygen::Pos::new(5, 6));
+        b.levelled = Some(2);
         b.save_due = true;
         let (_, s, _) = read(&path, book()).unwrap();
         restore(&mut b, s);
         assert_eq!(b.deck_part, 0, "the deck starts over, as in a new city");
         assert_eq!(b.deck_jobs_sel, None);
         assert_eq!(
-            (b.look_at, b.jump_to),
-            (None, None),
+            (b.look_at, b.jump_to, b.levelled),
+            (None, None, None),
             "no map request carries over"
         );
         assert!(!b.save_due, "nor a save the last run asked for");
