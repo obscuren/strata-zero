@@ -11,6 +11,8 @@ const DEFAULT: &str = include_str!("../../../flavor/keyjack.ron");
 
 /// The Keyjack's item id.
 pub const ITEM: &str = "keyjack";
+/// The stock fuse's item id: what a fixer pays on top of a fetch.
+pub const STOCK_FUSE: &str = "fuse_stock";
 
 /// The skill whose rank widens every zone.
 const LOCKPICK: &str = "lockpick";
