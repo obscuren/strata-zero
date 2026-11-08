@@ -745,32 +745,24 @@ fn tend_builds(st: &mut AppState, area: Rect) -> bool {
 /// the people overlay's bubble.
 pub const ALIVE: i32 = crate::render::people::MARGIN;
 
-/// The most game minutes a held city's or town's people catch up on in a frame, come
-/// back into view after a while out of it: a day spread over 24 frames.
-pub const CATCH_UP: u64 = 60;
-
-/// Further behind the clock than a frame catches up (`CATCH_UP` game minutes), or than
-/// the frame's own step if that's longer, a held city's or town's people take frames to
-/// catch up (or are seeded afresh): a frame pays for one of those at most.
-const BEHIND: u64 = CATCH_UP * sim::TICKS_PER_MINUTE;
+/// Game minutes a held city or town off screen replays in a frame, as it nears the view.
+pub const REPLAY_PER_FRAME: u64 = 15;
 
 /// Every city and town held but the live one whose map comes within `ALIVE` cells of
-/// `view` (cells of the live city's frame): its people's day run on to the live city's
-/// clock and up to `paths` of the walks they've asked for found, as the live city's
-/// are, nobody held back for you (their day only: no story, no cameras, no foes). Back
-/// in view after a while, one catches up `CATCH_UP` minutes a frame; one built here and
-/// not walked into whose people are more than `RUN_ON` behind has them seeded afresh,
-/// as walking in would. One no further behind than a frame catches up runs every frame
-/// (it's caught up in one), so it keeps time while another catches up. Of those further
-/// behind (than `BEHIND`, and `step`, the ticks this frame's clock ran), only the one
-/// furthest behind catches up (or is seeded) in a frame and the rest wait their turn,
-/// so the long catch-ups never add up across neighbours. Those out of view hold still.
-/// How many ran. (The map screen's clock runs a game minute a frame at most, so `step`
-/// never passes `BEHIND` today: a step that did would leave every neighbour behind by
-/// more than a frame catches up.)
+/// `view` (cells of the live city's frame: the camera this frame draws) runs on to the
+/// live city's clock, nobody held back for you (their day only: no story, no cameras, no
+/// foes), and is never seen behind it (`2026-11-08-world-while-away-design.md`):
+/// - no further behind than `step` (the ticks this frame's clock ran), it keeps time:
+///   up to `paths` a tick of the walks its people asked for found, as the live city's;
+/// - further behind with any of its map on screen, it's caught up whole this frame
+///   (`sim::World::catch_up`: an hour or less replayed, longer placed by day);
+/// - off screen and more than `sim::SHORT_GAP` behind, it's placed by day, in one pass;
+/// - off screen and less, it replays `REPLAY_PER_FRAME` minutes a frame as you near it.
+///
+/// Those further out hold still. How many ran.
 pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize, step: u64) -> usize {
     let now = st.clock_tick();
-    let near: Vec<(Settlement, u64)> = {
+    let near: Vec<(Settlement, bool)> = {
         let Some(b) = Beyond::of(st) else {
             return 0;
         };
@@ -780,61 +772,58 @@ pub fn run_neighbours(st: &mut AppState, view: Rect, paths: usize, step: u64) ->
             .filter_map(|h| {
                 let (w, hh) = (h.city.size.w as i32, h.city.size.h as i32);
                 let map = Rect::new(h.origin.x - live.x, h.origin.y - live.y, w, hh);
-                let people = h.people.filter(|_| wide.intersects(map))?;
-                Some((h.settlement, now.saturating_sub(people.tick())))
+                h.people?;
+                wide.intersects(map)
+                    .then_some((h.settlement, view.intersects(map)))
             })
             .collect()
     };
-    if near.is_empty() {
-        return 0;
-    }
-    // whose turn it is to catch up over frames: the furthest behind, the first of a tie
-    let slack = step.max(BEHIND);
-    let turn = near
-        .iter()
-        .filter(|(_, behind)| *behind > slack)
-        .max_by_key(|(s, behind)| (*behind, std::cmp::Reverse(*s)))
-        .map(|(s, _)| *s);
-    let minute = st.minute_of_day();
-    let people = &st.people;
-    let mut away = st.away.as_deref_mut();
-    let Some(o) = st.outside.as_mut() else {
-        return 0;
-    };
-    let home = o.home();
     let mut ran = 0;
-    for (s, behind) in near {
-        if behind > slack && Some(s) != turn {
-            continue;
+    for (s, on_screen) in near {
+        let run = with_held(st, s, |city, world| {
+            world.set_blocker(None);
+            let behind = now.saturating_sub(world.tick());
+            if behind <= step {
+                if behind > 0 {
+                    world.advance(city, now);
+                }
+                world.path_some(city, paths.saturating_mul(step as usize));
+            } else if on_screen {
+                world.catch_up(city, now);
+            } else if behind > sim::SHORT_GAP {
+                world.place_at(city, now);
+            } else {
+                let most = world.tick() + REPLAY_PER_FRAME * sim::TICKS_PER_MINUTE;
+                world.replay_to(city, now.min(most));
+            }
+        });
+        if run.is_some() {
+            ran += 1;
         }
-        let (city, world, built) = if s == home {
-            let Some(stay) = away.as_deref_mut() else {
-                continue;
-            };
-            (&stay.city, stay.world.as_mut(), false)
-        } else if let Some(stay) = o.kept.stays.get_mut(&s) {
-            (&stay.city, stay.world.as_mut(), false)
-        } else {
-            let Some(city) = o.built.get(&s) else {
-                continue;
-            };
-            (city, o.stream.people_mut(s), true)
-        };
-        let Some(world) = world else {
-            continue;
-        };
-        if built && behind > super::RUN_ON {
-            *world = super::seed_people(city, people, now, minute);
-        }
-        world.set_blocker(None);
-        if world.tick() < now {
-            let most = world.tick() + CATCH_UP * sim::TICKS_PER_MINUTE;
-            world.advance(city, now.min(most));
-        }
-        world.path_some(city, paths);
-        ran += 1;
     }
     ran
+}
+
+/// Runs `f` on held city or town `s`'s map and people: the home city set aside, one kept
+/// whole, or one built and not walked into. None for the live city or one with no people.
+fn with_held<R>(
+    st: &mut AppState,
+    s: Settlement,
+    f: impl FnOnce(&City, &mut sim::World) -> R,
+) -> Option<R> {
+    let o = st.outside.as_mut()?;
+    if s == o.here() {
+        return None;
+    }
+    let (city, world) = if s == o.home() {
+        let stay = st.away.as_deref_mut()?;
+        (&stay.city, stay.world.as_mut()?)
+    } else if let Some(stay) = o.kept.stays.get_mut(&s) {
+        (&stay.city, stay.world.as_mut()?)
+    } else {
+        (o.built.get(&s)?, o.stream.people_mut(s)?)
+    };
+    Some(f(city, world))
 }
 
 /// The builds finished collected, wherever you are: indoors too, so one that broke
@@ -2744,33 +2733,44 @@ pub(crate) mod tests {
         }
 
         /// Seed 3's home run, the next city held with its people seeded now, the clock
-        /// then run `minutes` on with it out of view: the city, and a 200x60 view (the
-        /// live city's frame) beside it.
-        fn back_beside_it(minutes: u64) -> (AppState, Settlement, Rect) {
+        /// then run `minutes` on with it out of view: the city, a 200x60 view (the live
+        /// city's frame) centred beside it, showing some of its map, and a 10x10 view
+        /// further back, off its map but within `ALIVE` of it.
+        fn back_beside_it(minutes: u64) -> (AppState, Settlement, Rect, Rect) {
             let mut st = home_run();
-            let (s, x, _) = beside_a_city(&mut st);
+            let (s, x, d) = beside_a_city(&mut st);
             seed_its_people(&mut st, s);
             crate::clock::run(
                 &mut st,
                 Some(minutes * sim::TICKS_PER_MINUTE),
                 crate::clock::PATHS_PER_FRAME,
             );
-            (st, s, Rect::new(x.x - 100, x.y - 30, 200, 60))
+            let back = (0..15).fold(x, |c, _| c.step(d.opposite()));
+            (
+                st,
+                s,
+                Rect::new(x.x - 100, x.y - 30, 200, 60),
+                Rect::new(back.x - 5, back.y - 5, 10, 10),
+            )
         }
 
         #[test]
-        fn a_neighbour_back_in_view_catches_up_a_while_a_frame() {
-            let (mut st, s, view) = back_beside_it(150);
+        fn a_neighbour_off_screen_replays_a_while_a_frame() {
+            let (mut st, s, _, view) = back_beside_it(40);
             let t0 = crate::outside::people_of(&st, s).unwrap().tick();
             let now = st.clock_tick();
-            assert_eq!(now - t0, 150 * sim::TICKS_PER_MINUTE);
+            assert_eq!(now - t0, 40 * sim::TICKS_PER_MINUTE);
             let ticks = |st: &AppState| crate::outside::people_of(st, s).unwrap().tick();
             assert_eq!(run_neighbours(&mut st, view, 4, 1), 1);
-            assert_eq!(ticks(&st), t0 + CATCH_UP * sim::TICKS_PER_MINUTE);
+            assert_eq!(ticks(&st), t0 + REPLAY_PER_FRAME * sim::TICKS_PER_MINUTE);
             run_neighbours(&mut st, view, 4, 1);
-            assert_eq!(ticks(&st), t0 + 2 * CATCH_UP * sim::TICKS_PER_MINUTE);
+            assert_eq!(
+                ticks(&st),
+                t0 + 2 * REPLAY_PER_FRAME * sim::TICKS_PER_MINUTE
+            );
             run_neighbours(&mut st, view, 4, 1);
             assert_eq!(ticks(&st), now, "caught up");
+            assert_eq!(crate::outside::people_of(&st, s).unwrap().pending(), 0);
             // out of view it holds still
             let far = Rect::new(view.x - 2000, view.y, 200, 60);
             crate::clock::run(&mut st, Some(90), crate::clock::PATHS_PER_FRAME);
@@ -2779,26 +2779,28 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn a_neighbours_people_a_day_behind_are_seeded_afresh() {
-            let (mut st, s, view) = back_beside_it(25 * 60);
+        fn a_neighbour_on_screen_is_caught_up_before_it_draws() {
+            let (mut st, s, view, _) = back_beside_it(40);
+            run_neighbours(&mut st, view, 4, 1);
+            let w = crate::outside::people_of(&st, s).unwrap();
+            assert_eq!((w.tick(), w.pending()), (st.clock_tick(), 0));
+        }
+
+        #[test]
+        fn a_neighbour_hours_behind_is_placed_in_a_frame() {
+            let (mut st, s, _, view) = back_beside_it(150);
             let count = crate::outside::people_of(&st, s).unwrap().people().len();
             run_neighbours(&mut st, view, 4, 1);
             let w = crate::outside::people_of(&st, s).unwrap();
-            assert_eq!(
-                w.tick(),
-                st.clock_tick(),
-                "seeded for now, as walking in would"
-            );
+            assert_eq!((w.tick(), w.pending()), (st.clock_tick(), 0));
             assert_eq!(w.minute_of_day(), st.minute_of_day());
             assert_eq!(w.people().len(), count);
         }
 
         #[test]
-        fn neighbours_behind_catch_up_one_a_frame() {
-            // two held cities in view, both further behind than a frame catches up: a
-            // frame pays for one catch-up, the one furthest behind, and the other waits
-            // its turn; once one is no further behind than a frame catches up, it runs
-            // every frame
+        fn neighbours_on_screen_all_catch_up_in_a_frame() {
+            // two held cities in view, both hours behind: each is placed that frame, so
+            // neither is ever drawn behind
             let mut st = home_run();
             let (a, _, _) = beside_a_city(&mut st);
             let home = o(&st).home();
@@ -2827,41 +2829,14 @@ pub(crate) mod tests {
             assert_eq!((behind(&st, a), behind(&st, b)), (250, 200));
             // the whole world in view
             let all = Rect::new(-100_000, -100_000, 200_000, 200_000);
-            let frames: Vec<(u64, u64)> = (0..8)
-                .map(|_| {
-                    run_neighbours(&mut st, all, 4, 1);
-                    (behind(&st, a), behind(&st, b))
-                })
-                .collect();
-            assert_eq!(
-                frames,
-                [
-                    // one a frame
-                    (190, 200),
-                    (190, 140),
-                    (130, 140),
-                    (130, 80),
-                    (70, 80),
-                    (70, 20),
-                    // b within a frame's catch-up: its own frame, beside a's turn
-                    (10, 0),
-                    (0, 0)
-                ]
-            );
-            // caught up, both run every frame
-            crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
             assert_eq!(run_neighbours(&mut st, all, 4, 1), 2);
-            for s in [a, b] {
-                let w = crate::outside::people_of(&st, s).unwrap();
-                assert_eq!(w.tick(), st.clock_tick());
-            }
+            assert_eq!((behind(&st, a), behind(&st, b)), (0, 0));
         }
 
         #[test]
-        fn a_neighbour_a_little_behind_keeps_time_while_another_catches_up() {
-            // a city kept five days behind the clock catches up an hour a frame; one held
-            // a couple of minutes behind needs one frame, and keeps time every frame
-            // while the other catches up
+        fn a_neighbour_days_behind_is_placed_beside_one_keeping_time() {
+            // a city kept five days behind the clock and one held a couple of minutes
+            // behind: both caught up in a frame, and both keep time after
             let mut st = home_run();
             let home = o(&st).home();
             let (a, _, _) = beside_a_city(&mut st);
@@ -2883,12 +2858,23 @@ pub(crate) mod tests {
             };
             assert_eq!((behind(&st, a), behind(&st, b)), (days, two));
             let all = Rect::new(-100_000, -100_000, 200_000, 200_000);
+            assert_eq!(run_neighbours(&mut st, all, 4, 1), 2);
+            assert_eq!((behind(&st, a), behind(&st, b)), (0, 0));
             for frame in 0..3 {
-                run_neighbours(&mut st, all, 4, 1);
-                assert_eq!(behind(&st, b), 0, "frame {frame}: the near one keeps time");
-                assert!(behind(&st, a) > 0, "frame {frame}: the far one catching up");
                 crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
+                assert_eq!(run_neighbours(&mut st, all, 4, 1), 2, "frame {frame}");
+                assert_eq!((behind(&st, a), behind(&st, b)), (0, 0), "frame {frame}");
             }
+        }
+
+        #[test]
+        fn a_neighbour_with_no_people_is_passed_by() {
+            let mut st = home_run();
+            let (s, _, _) = beside_a_city(&mut st);
+            // built, its people never seeded
+            assert!(crate::outside::people_of(&st, s).is_none());
+            let all = Rect::new(-100_000, -100_000, 200_000, 200_000);
+            assert_eq!(run_neighbours(&mut st, all, 4, 1), 0);
         }
 
         #[test]

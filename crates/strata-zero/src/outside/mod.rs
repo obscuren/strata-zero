@@ -639,11 +639,6 @@ pub fn build_params(
     }
 }
 
-/// The longest a city's people seeded by its build in the background are run on to the
-/// hour you walk in (a day): older, they're seeded again for the hour, cheaper than
-/// stepping every minute between on the frame.
-pub const RUN_ON: u64 = 24 * 60 * sim::TICKS_PER_MINUTE;
-
 /// What a city's people are seeded with: in a city of the world other than home,
 /// everyone who works in it lives in it, anywhere in town (`SimParams::housed`), so its
 /// people live their day in town; the home city's (the story's people) keep their
