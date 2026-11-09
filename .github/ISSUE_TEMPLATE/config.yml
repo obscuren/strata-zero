@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: The manual
+    url: https://stratazero.io/manual
+    about: Keys, screens and rules, for when something may be working as it should.
