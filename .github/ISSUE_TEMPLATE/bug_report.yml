@@ -1,0 +1,102 @@
+name: Bug report
+description: Something in Strata Zero broke, crashed or didn't do what it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The more of this you fill in, the sooner it gets fixed.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw. A screenshot helps, above all for anything drawn wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      description: The steps that lead to it, if you know them. Say if it happens every time or only sometimes.
+      placeholder: |
+        1. Start a new game as a SOLO
+        2. Walk to the fixer's corner after 18:00
+        3. Press space on the fixer
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release you play, from the name of the download or the Releases page. Built from source, the commit (`git rev-parse --short HEAD`).
+      placeholder: v0.2.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How you play it
+      options:
+        - The app (Strata Zero.app, Strata Zero.exe or strata-zero)
+        - The terminal game, in a terminal
+        - The terminal game, in its window (strata --window)
+        - Built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: machine
+    attributes:
+      label: System version, machine and terminal
+      description: The version of your system and what it runs on. For the terminal game, which terminal too.
+      placeholder: macOS 26 on Apple Silicon, iTerm2
+    validations:
+      required: false
+
+  - type: dropdown
+    id: runner
+    attributes:
+      label: Your runner's build
+      options:
+        - NETRUNNER
+        - SOLO
+        - TECHIE
+        - FIXER
+        - Not in a run
+    validations:
+      required: false
+
+  - type: textarea
+    id: save
+    attributes:
+      label: Your save
+      description: |
+        If it happened in a run, its save lets it be replayed exactly. Each run is one `.run` file in the `runs` folder; the newest is usually the one you were playing. GitHub won't take a `.run` file, so zip it and drag the zip here.
+
+        - macOS: `~/Library/Application Support/Strata Zero/runs/`
+        - Windows: `%APPDATA%\Strata Zero\runs\`
+        - Linux: `~/.local/share/strata-zero/runs/`
+    validations:
+      required: false
