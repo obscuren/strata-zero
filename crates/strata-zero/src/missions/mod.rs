@@ -302,13 +302,35 @@ pub fn begin(st: &mut AppState) {
     send(st, Event::NewGame);
 }
 
+/// The missions a story begun here would leave `Uncast`, by id, their roles cast as
+/// `begin` casts them: none in a city that plays the whole book. None at all in a city
+/// with no home, where the story never begins. Casts onto `st` as `begin` does (who
+/// plays a role takes its name), so it is for a state thrown away or about to begin.
+pub fn uncast_missions(st: &mut AppState) -> Option<Vec<String>> {
+    if st.home.is_none() || st.world.is_none() {
+        return None;
+    }
+    cast::cast(st);
+    let book = &st.book;
+    let uncast = book
+        .missions
+        .iter()
+        .filter(|m| !is_cast(book, &st.missions.cast, m));
+    Some(uncast.map(|m| m.id.clone()).collect())
+}
+
+/// Whether every role mission `m` needs has somebody in `cast`.
+fn is_cast(book: &Book, cast: &BTreeMap<String, PersonId>, m: &Mission) -> bool {
+    book.needs_cast(m).iter().all(|r| cast.contains_key(r))
+}
+
 /// Mission `m`'s run as the story begins at game minute `now`: waiting on its first
 /// step, or `Uncast` when a role it needs has nobody in `cast`.
 pub fn fresh_run(book: &Book, cast: &BTreeMap<String, PersonId>, m: &Mission, now: u64) -> Run {
     Run {
         at: 0,
         since: now,
-        state: if book.needs_cast(m).iter().all(|r| cast.contains_key(r)) {
+        state: if is_cast(book, cast, m) {
             RunState::Waiting
         } else {
             RunState::Uncast

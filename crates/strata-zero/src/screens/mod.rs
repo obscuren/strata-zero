@@ -45,16 +45,26 @@ pub fn build_city(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
 
 /// The home city of the world made from `params`' seed, built on its place in that
 /// world: its block of the overworld is its map, the world's water and roads in it. A
-/// world whose home city doesn't build, or has no flat for the runner, gives way to the
-/// next in the seed's line, so a new game always starts somewhere with its story.
+/// world whose home city doesn't build, or can't play the whole story, gives way to the
+/// next in the seed's line, so a new game always starts somewhere its story plays to
+/// the end. Only a new game comes through here: a run reopens on the city it saved.
 pub fn build_home(params: citygen::GenParams) -> anyhow::Result<citygen::City> {
-    build_home_where(params, |city| crate::home::HomeRig::find(city).is_some())
+    let mut scratch = crate::app::AppState::new();
+    build_home_where(params, |city| plays_the_story(&mut scratch, city))
+}
+
+/// Whether a new game in `city` plays the whole story: a flat for the runner, and from
+/// it somebody for every role the missions need (the second fixer, the doctor), cast
+/// on `scratch` as the story's start casts them.
+fn plays_the_story(scratch: &mut crate::app::AppState, city: &citygen::City) -> bool {
+    scratch.enter_city(city.clone());
+    crate::missions::uncast_missions(scratch).is_some_and(|uncast| uncast.is_empty())
 }
 
 /// `build_home`, taking the first world in the seed's line whose home city `fits`.
 fn build_home_where(
     params: citygen::GenParams,
-    fits: impl Fn(&citygen::City) -> bool,
+    mut fits: impl FnMut(&citygen::City) -> bool,
 ) -> anyhow::Result<citygen::City> {
     const TRIES: u64 = 8;
     let mut last = None;
@@ -68,7 +78,11 @@ fn build_home_where(
         let built = build_city(citygen::sited(&world, home, params.clone().with_seed(seed)));
         match built {
             Ok(city) if fits(&city) => return Ok(city),
-            Ok(_) => last = Some(anyhow::anyhow!("seed {seed}'s home city has no flat")),
+            Ok(_) => {
+                last = Some(anyhow::anyhow!(
+                    "seed {seed}'s home city can't play the story"
+                ))
+            }
             Err(e) => last = Some(e),
         }
     }
@@ -233,6 +247,83 @@ mod tests {
         assert_eq!(again.seed, city.seed, "the same line every time");
         let home = super::build_home(st.params.clone().with_seed(60)).unwrap();
         assert!(crate::home::HomeRig::find(&home).is_some());
+    }
+
+    #[test]
+    fn a_new_game_passes_over_a_home_that_cant_cast_the_story() {
+        use crate::missions::{Pick, uncast_missions};
+        let params = AppState::new().params;
+        // a city with one fixer has a flat but nobody for Coz: the ledger stays uncast
+        // and the act never ends, so it is no new game's home
+        let one_fixer = citygen::Generator::run(citygen::GenParams {
+            seed: 1,
+            size: citygen::SizePreset::Medium,
+            districts: 6,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut scratch = AppState::new();
+        scratch.enter_city(one_fixer.clone());
+        assert!(scratch.home.is_some(), "a flat");
+        assert_eq!(uncast_missions(&mut scratch), Some(vec!["ledger".into()]));
+        assert!(!super::plays_the_story(&mut scratch, &one_fixer));
+        // seed 7's home plays the story (one ripperdoc, three fixers) ...
+        let seven = super::build_home(params.clone().with_seed(7)).unwrap();
+        assert_eq!(seven.seed, 7);
+        // ... but not with no doctor to cast
+        let mut no_doctor = AppState::new();
+        no_doctor.book.cast.get_mut("odile").unwrap().pick = Pick::Nearest("astronaut".into());
+        no_doctor.enter_city(seven.clone());
+        let uncast = uncast_missions(&mut no_doctor);
+        assert_eq!(uncast, Some(vec!["doctor".into(), "ledger".into()]));
+        assert!(!super::plays_the_story(&mut no_doctor, &seven));
+        // every home city has the strip's fixers now, so the line is shown with Coz a
+        // second ripperdoc: seed 7's home, with one, gives way to the next in its line
+        let mut two_doctors = AppState::new();
+        two_doctors.book.cast.get_mut("coz").unwrap().pick = Pick::Worker {
+            professions: vec!["ripperdoc".into()],
+            at: vec![],
+            range: (40, 200),
+        };
+        let line = params.clone().with_seed(7);
+        let fits = |c: &citygen::City| super::plays_the_story(&mut two_doctors, c);
+        let city = super::build_home_where(line, fits).unwrap();
+        assert_ne!(city.seed, 7);
+        two_doctors.enter_city(city);
+        assert_eq!(uncast_missions(&mut two_doctors), Some(vec![]));
+    }
+
+    #[test]
+    fn every_new_games_home_casts_act_one() {
+        // seeds spread as a new game's are (up to a billion): each home city casts every
+        // role act one's missions need, Coz and the doctor among them, so the act ends
+        let params = AppState::new().params;
+        for i in 0..16 {
+            let seed = citygen::rng::hash64(0xAC7, i) % 1_000_000_007;
+            let mut st = AppState::new();
+            st.enter_city(super::build_home(params.clone().with_seed(seed)).unwrap());
+            crate::missions::begin(&mut st);
+            let book = &st.book;
+            let needed: std::collections::BTreeSet<String> = book
+                .missions
+                .iter()
+                .flat_map(|m| book.needs_cast(m))
+                .collect();
+            assert!(
+                needed.contains("coz") && needed.contains("odile"),
+                "{needed:?}"
+            );
+            let missing: Vec<&String> = needed
+                .iter()
+                .filter(|r| !st.missions.cast.contains_key(*r))
+                .collect();
+            assert!(missing.is_empty(), "seed {seed}: no {missing:?}");
+            let uncast: Vec<&str> = (book.missions.iter().zip(&st.missions.runs))
+                .filter(|(_, r)| r.state == crate::missions::RunState::Uncast)
+                .map(|(m, _)| m.id.as_str())
+                .collect();
+            assert!(uncast.is_empty(), "seed {seed}: uncast {uncast:?}");
+        }
     }
 
     #[test]
