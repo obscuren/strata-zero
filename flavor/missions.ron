@@ -248,6 +248,9 @@ Story(
             ]),
         ]),
         // The hook, its own mission so a city with one fixer (Mezz) still plays the doctor.
+        // A new game's home always casts both Coz and the doctor (`screens::build_home`
+        // passes over one that can't); only a city reached another way, a dev start or a
+        // city loaded from its file, can be short of either.
         // It opens with the package; its last fit places the doctor, so a city without
         // one leaves it uncast. Known, the shard goes back to Coz wherever you catch him:
         // he stays put through his scene, and its end sells it: the shard taken, ¤800
