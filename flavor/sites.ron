@@ -11,12 +11,13 @@
 // for a mission, `one_way` when it opens without a key from the inner side, and the `ways`
 // past it (`Card`, `Code`, `Keyjack`, `Net`, `Force`, `Talk`), two or more. A card lock takes
 // `Card` and neither `Code` nor `Keyjack`; a keypad takes `Code`.
-// A level's `bands` are strips across it, front (the first street door's side) to back, each
-// in one zone: its `share` is percent of the depth (a level's shares sum to 100), its `rooms`
-// are laid in order, then its `fill` room until the band is used, and `doors` is how many
-// doors cross its border with the band in front. `scale` is percent of the frame's width and
-// height, over 100 (up to 200) only below -1; `spine` is how the corridor runs (`Straight`,
-// `Bent`, `Ring`, `Hall`, or `Any` for the level's seed to pick). `pieces` names set pieces.
+// A level's `name` is its role's, which no other role of the type has. Its `bands` are strips
+// across it, front (the first street door's side) to back, each in one zone: its `share` is
+// percent of the depth (a level's shares sum to 100), its `rooms` are laid in order, then its
+// `fill` room until the band is used, and `doors` is how many doors cross its border with the
+// band in front. `scale` is percent of the frame's width and height, over 100 (up to 200)
+// only below -1; `spine` is how the corridor runs (`Straight`, `Bent`, `Ring`, `Hall`, or
+// `Any` for the level's seed to pick). `pieces` names set pieces.
 // `rooms` are the type's rooms by name: a generic `kind`, a size range ((least width, least
 // height), (most width, most height)), `private` for a locked room, its furniture and the
 // stations people work at. `pieces` are set pieces of fixed shape: a `Ramp`, a `Track` along
@@ -187,10 +188,10 @@ Sites(
                         Band(zone: "public", share: 35, rooms: ["ticket hall"]),
                         Band(zone: "paid", share: 40, rooms: ["paid side"]),
                         Band(zone: "staff", share: 25, rooms: ["staff room", "cash room"])]),
-                    Level(name: "platform", pieces: ["track"], bands: [
+                    Level(name: "upper platform", pieces: ["track"], bands: [
                         Band(zone: "staff", share: 20, rooms: ["equipment room"]),
                         Band(zone: "paid", share: 80, rooms: ["platform landing"])]),
-                    Level(name: "platform", pieces: ["track"], bands: [
+                    Level(name: "lower platform", pieces: ["track"], bands: [
                         Band(zone: "staff", share: 20, rooms: ["equipment room"]),
                         Band(zone: "paid", share: 80, rooms: ["platform landing"])]),
                     Level(name: "service", bands: [
@@ -222,13 +223,13 @@ Sites(
             links: [
                 Link(name: "street stairs", kind: Stair, zone: "public", serves: Roles(["hall", "concourse"])),
                 Link(name: "hall escalators", kind: Escalator, zone: "public", serves: Roles(["hall", "concourse"])),
-                Link(name: "platform escalators", kind: Escalator, zone: "paid", serves: Roles(["concourse", "platform"])),
-                Link(name: "platform lift", kind: Lift, zone: "paid", serves: Roles(["concourse", "platform"])),
+                Link(name: "platform escalators", kind: Escalator, zone: "paid", serves: Roles(["concourse", "upper platform", "lower platform"])),
+                Link(name: "platform lift", kind: Lift, zone: "paid", serves: Roles(["concourse", "upper platform", "lower platform"])),
                 Link(name: "freight lift", kind: Lift, zone: "staff", serves: Roles(["hall", "concourse", "service"]),
                      cards: [("service", "staff")]),
-                Link(name: "emergency stair", kind: Stair, zone: "staff", serves: Roles(["hall", "concourse", "platform", "service"]),
+                Link(name: "emergency stair", kind: Stair, zone: "staff", serves: Roles(["hall", "concourse", "upper platform", "lower platform", "service"]),
                      alight: Ends),
-                Link(name: "ventilation shaft", kind: Crawl, zone: "staff", serves: Roles(["hall", "concourse", "platform", "service"])),
+                Link(name: "ventilation shaft", kind: Crawl, zone: "staff", serves: Roles(["hall", "concourse", "upper platform", "lower platform", "service"])),
                 Link(name: "old shaft", kind: Ladder, zone: "staff", serves: Roles(["service", "drainage"])),
             ],
             crawls_in: [Crawl(stratum: Undercity, zone: "staff")],

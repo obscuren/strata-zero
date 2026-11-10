@@ -7,7 +7,7 @@ use crate::ids::BuildingId;
 use crate::rng::hash64;
 use crate::tile::Terrain;
 use crate::world::Theme;
-use crate::world::{BuildingKind, City, StratumKind};
+use crate::world::{Building, BuildingKind, City, StratumKind};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -333,11 +333,55 @@ fn rings_an_atrium(kind: BuildingKind, size: Size) -> bool {
     kind == BuildingKind::Megablock && size.w as i32 >= ATRIUM_W && size.h as i32 >= ATRIUM_H
 }
 
-fn floor_size(fp: Rect) -> Size {
+/// A floor over footprint `fp`: the footprint x 3, at least `MIN_W` x `MIN_H`.
+pub(in crate::interior) fn floor_size(fp: Rect) -> Size {
     Size {
         w: (fp.w * SCALE).max(MIN_W) as u32,
         h: (fp.h * SCALE).max(MIN_H) as u32,
     }
+}
+
+/// The floor a building's Skyways doors open from: the third, or the top when it is
+/// lower, never the ground.
+pub(in crate::interior) fn bridge_level(top: i32) -> i32 {
+    3.min(top).max(1)
+}
+
+/// A building's plan rng: today's builder draws its floor count from it first.
+fn plan_rng(city: &City, id: BuildingId) -> ChaCha8Rng {
+    ChaCha8Rng::seed_from_u64(hash64(city.seed, 0x1F00 ^ id.index() as u64))
+}
+
+/// A closed building's lowest and top level, as today's builder makes them: the top
+/// from the floor count its plan's rng draws first, the lowest -1 when the building
+/// reaches the Undercity or is a clinic with a cellar.
+pub(crate) fn storeys(city: &City, id: BuildingId) -> (i32, i32) {
+    let b = city.building(id);
+    let cellar = clinic_plan(city, id, b.footprint).is_some_and(|c| c.front.floors() == 2);
+    draw_storeys(b, cellar, &mut plan_rng(city, id))
+}
+
+/// `storeys` from a plan rng that has drawn nothing yet.
+fn draw_storeys(b: &Building, cellar: bool, rng: &mut ChaCha8Rng) -> (i32, i32) {
+    let floors: i32 = match (b.span.hi, b.kind) {
+        (StratumKind::Street, BuildingKind::Club) => 2,
+        (StratumKind::Street, BuildingKind::Office | BuildingKind::Apartment) => {
+            rng.random_range(2..=3)
+        }
+        (StratumKind::Street, _) => 1,
+        (StratumKind::Skyways, _) => rng.random_range(4..=9),
+        (_, BuildingKind::CorpTower) => rng.random_range(18..=48),
+        (_, BuildingKind::Office) => rng.random_range(12..=24),
+        (_, BuildingKind::Megablock) => rng.random_range(14..=30),
+        (_, BuildingKind::Hotel) => rng.random_range(10..=24),
+        _ => rng.random_range(8..=14),
+    };
+    let lowest = if b.span.lo == StratumKind::Undercity || cellar {
+        -1
+    } else {
+        0
+    };
+    (lowest, floors - 1)
 }
 
 impl FloorPlan {
@@ -352,7 +396,7 @@ impl FloorPlan {
         if !b.kind.is_closed() {
             return None;
         }
-        let mut rng = ChaCha8Rng::seed_from_u64(hash64(city.seed, 0x1F00 ^ id.index() as u64));
+        let mut rng = plan_rng(city, id);
         let fp = b.footprint;
         let clinic = clinic_plan(city, id, fp);
         // A clinic's floor is its grid, turned.
@@ -368,31 +412,13 @@ impl FloorPlan {
             }
             None => floor_size(fp),
         };
-        let floors: i32 = match (b.span.hi, b.kind) {
-            (StratumKind::Street, BuildingKind::Club) => 2,
-            (StratumKind::Street, BuildingKind::Office | BuildingKind::Apartment) => {
-                rng.random_range(2..=3)
-            }
-            (StratumKind::Street, _) => 1,
-            (StratumKind::Skyways, _) => rng.random_range(4..=9),
-            (_, BuildingKind::CorpTower) => rng.random_range(18..=48),
-            (_, BuildingKind::Office) => rng.random_range(12..=24),
-            (_, BuildingKind::Megablock) => rng.random_range(14..=30),
-            (_, BuildingKind::Hotel) => rng.random_range(10..=24),
-            _ => rng.random_range(8..=14),
-        };
-        let top = floors - 1;
         let cellar = clinic.is_some_and(|c| c.front.floors() == 2);
-        let lowest = if b.span.lo == StratumKind::Undercity || cellar {
-            -1
-        } else {
-            0
-        };
+        let (lowest, top) = draw_storeys(b, cellar, &mut rng);
         let has_bridge = city
             .portals(id)
             .iter()
             .any(|(k, _)| *k == StratumKind::Skyways);
-        let bridge = has_bridge.then(|| 3.min(top).max(1));
+        let bridge = has_bridge.then(|| bridge_level(top));
         let roof = (b.span.hi == StratumKind::Heights).then_some(top);
         let total = top - lowest + 1;
         let (w, h) = (size.w as i32, size.h as i32);

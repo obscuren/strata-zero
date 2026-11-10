@@ -8,6 +8,7 @@ use crate::interior::{LinkKind, Role, RoomKind};
 use crate::tile::Furniture;
 use crate::world::{BuildingKind, StratumKind};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 const BUILTIN: &str = include_str!("../../../../../flavor/sites.ron");
@@ -343,18 +344,34 @@ pub struct SecurityDef {
 }
 
 impl VenuePack {
-    /// Parses a pack and checks its size table and every type.
+    /// Parses a pack and checks it.
     pub fn parse(text: &str) -> Result<VenuePack, String> {
         let pack: VenuePack = ron::from_str(text).map_err(|e| format!("sites: {e}"))?;
+        pack.check()?;
+        Ok(pack)
+    }
+
+    /// Whether the pack is whole: a size rule for every size, every type whole, no id
+    /// on two types and no building kind laid out by two types.
+    pub fn check(&self) -> Result<(), String> {
         for size in [MissionSize::Small, MissionSize::Medium, MissionSize::Large] {
-            if !pack.sizes.iter().any(|r| r.size == size) {
+            if !self.sizes.iter().any(|r| r.size == size) {
                 return Err(format!("sites: no size rule for {size:?}"));
             }
         }
-        for t in &pack.types {
-            t.check(&pack.sizes)?;
+        for (i, t) in self.types.iter().enumerate() {
+            t.check(&self.sizes)?;
+            let earlier = &self.types[..i];
+            if earlier.iter().any(|u| u.id == t.id) {
+                return Err(format!("sites: two types have the id `{}`", t.id));
+            }
+            for k in &t.builds {
+                if let Some(u) = earlier.iter().find(|u| u.builds.contains(k)) {
+                    return Err(format!("sites: `{}` and `{}` both build {k:?}", u.id, t.id));
+                }
+            }
         }
-        Ok(pack)
+        Ok(())
     }
 
     /// `flavor/sites.ron`, parsed once.
@@ -404,6 +421,11 @@ impl VenueType {
             .find(|b| self.zone(&b.zones.0) == Some(outer) && self.zone(&b.zones.1) == Some(inner))
     }
 
+    /// The level role named `name`.
+    pub fn role(&self, name: &str) -> Option<&LevelDef> {
+        self.roles().find(|d| d.name == name)
+    }
+
     /// Every role, lowest first.
     fn roles(&self) -> impl Iterator<Item = &LevelDef> {
         let l = &self.levels;
@@ -415,38 +437,11 @@ impl VenueType {
             .chain(l.top.iter())
     }
 
-    /// The levels of the type's own frame, lowest first, with their roles: the below
-    /// roles from -1 down, the ground at 0, the top roles on the highest floors (the
-    /// topmost of them when there are too few floors) and the middle role between.
-    fn own_levels(&self) -> Vec<(i32, &LevelDef)> {
-        let l = &self.levels;
-        let mut v: Vec<(i32, &LevelDef)> = l
-            .below
-            .iter()
-            .enumerate()
-            .rev()
-            .map(|(i, d)| (-1 - i as i32, d))
-            .collect();
-        v.push((0, &l.ground));
-        let top = self.frame.top.max(0);
-        let tops = l.top.len().min(top as usize);
-        let first_top = top - tops as i32 + 1;
-        if let Some(m) = &l.middle {
-            v.extend((1..first_top).map(|n| (n, m)));
-        }
-        v.extend(
-            l.top[l.top.len() - tops..]
-                .iter()
-                .enumerate()
-                .map(|(i, d)| (first_top + i as i32, d)),
-        );
-        v
-    }
-
     /// Whether the type is whole: everything it names exists, every border can be got
-    /// past more than one way by ways that fit its lock, every link joins two levels or
-    /// more, every objective has a room, the levels' shares and scales hold, and every
-    /// size has its security.
+    /// past more than one way by ways that fit its lock, its frame's doors stand on a
+    /// side between its corners, no two level roles share a name, every link joins two
+    /// levels or more, every objective has a room, the levels' shares and scales hold,
+    /// and every size has its security.
     pub fn check(&self, sizes: &[SizeRule]) -> Result<(), String> {
         let id = &self.id;
         let zone = |z: &str, what: &str| -> Result<u8, String> {
@@ -458,11 +453,9 @@ impl VenueType {
                 .ok_or_else(|| format!("{id}: {what} names no room `{r}`"))
         };
         let role = |r: &str, what: &str| -> Result<(), String> {
-            if self.roles().any(|d| d.name == r) {
-                Ok(())
-            } else {
-                Err(format!("{id}: {what} names no level `{r}`"))
-            }
+            self.role(r)
+                .map(|_| ())
+                .ok_or_else(|| format!("{id}: {what} names no level `{r}`"))
         };
 
         if self.zones.len() < 2 {
@@ -506,6 +499,26 @@ impl VenueType {
             }
         }
 
+        let (fw, fh) = self.frame.footprint;
+        for d in &self.frame.doors {
+            let len = match d.side {
+                Dir::N | Dir::S => fw,
+                Dir::E | Dir::W => fh,
+                _ => 0,
+            };
+            if !(1..len - 1).contains(&d.at) {
+                return Err(format!(
+                    "{id}: the frame's {:?} door at {} on {:?} is not on a side between its corners",
+                    d.stratum, d.at, d.side
+                ));
+            }
+        }
+
+        let mut names = BTreeSet::new();
+        if let Some(d) = self.roles().find(|d| !names.insert(d.name.as_str())) {
+            return Err(format!("{id}: two levels are named `{}`", d.name));
+        }
+
         // Each role, and whether it lies below -1.
         let l = &self.levels;
         let deep = l.below.iter().skip(1).map(|d| (d, true));
@@ -546,7 +559,7 @@ impl VenueType {
             }
         }
 
-        let own = self.own_levels();
+        let own = super::levels::roles(self, self.frame.top);
         for link in &self.links {
             let what = format!("the {}", link.name);
             zone(&link.zone, &what)?;
@@ -682,6 +695,32 @@ mod tests {
         assert!(bad(&|t| t.objectives[0].room = "nowhere".into()).contains("nowhere"));
         assert!(bad(&|t| t.levels.ground.scale = (150, 100)).contains("scale"));
         assert!(bad(&|t| t.security.truncate(1)).contains("security"));
+        assert!(bad(&|t| t.frame.doors[0].at = 0).contains("between its corners"));
+        assert!(bad(&|t| t.frame.doors[0].side = Dir::NE).contains("between its corners"));
+        let ground = test_type().levels.ground.name;
+        assert!(bad(&|t| t.levels.top[0].name = ground.clone()).contains("two levels are named"));
+
+        let bad_pack = |f: &dyn Fn(&mut VenuePack)| {
+            let mut p = VenuePack::builtin().clone();
+            f(&mut p);
+            p.check().unwrap_err()
+        };
+        assert!(
+            bad_pack(&|p| p.types.extend([test_type(), test_type()]))
+                .contains("two types have the id")
+        );
+        assert!(
+            bad_pack(&|p| {
+                let kind = p.types.iter().find_map(|t| t.builds.first().copied());
+                let mut t = test_type();
+                t.builds.extend(kind);
+                p.types.push(t);
+            })
+            .contains("both build")
+        );
+        let mut p = VenuePack::builtin().clone();
+        p.types.push(test_type());
+        p.check().unwrap();
     }
 
     #[test]

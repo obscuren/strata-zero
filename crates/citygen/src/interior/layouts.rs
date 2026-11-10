@@ -2,7 +2,7 @@
 
 use super::floor::{Exit, Floor, Role, Room, RoomKind, Station};
 use super::plan::{FloorPlan, FloorType, SCALE};
-use crate::geom::{Pos, Rect};
+use crate::geom::{Pos, Rect, Size};
 use crate::lighting;
 use crate::pathing::{bfs_nearest, components};
 use crate::rng::hash64;
@@ -42,8 +42,8 @@ pub(super) struct Builder<'a> {
     ambient: crate::geom::Grid<[f32; 3]>,
 }
 
-/// Which edge of a rect a border tile sits on.
-pub(super) fn edge(r: Rect, p: Pos) -> u8 {
+/// Which edge of a rect a border tile sits on: 0 west, 1 east, 2 north, 3 south.
+pub(in crate::interior) fn edge(r: Rect, p: Pos) -> u8 {
     if p.x == r.x {
         0
     } else if p.x == r.right() - 1 {
@@ -55,7 +55,7 @@ pub(super) fn edge(r: Rect, p: Pos) -> u8 {
     }
 }
 
-fn is_corner(r: Rect, p: Pos) -> bool {
+pub(in crate::interior) fn is_corner(r: Rect, p: Pos) -> bool {
     (p.x == r.x || p.x == r.right() - 1) && (p.y == r.y || p.y == r.bottom() - 1)
 }
 
@@ -82,7 +82,7 @@ fn walled(r: &Room) -> bool {
 }
 
 /// The neighbour of a footprint border tile that lies outside it.
-pub(super) fn outward(r: Rect, p: Pos) -> Pos {
+pub(in crate::interior) fn outward(r: Rect, p: Pos) -> Pos {
     if p.x == r.x {
         p.offset(-1, 0)
     } else if p.x == r.right() - 1 {
@@ -95,23 +95,50 @@ pub(super) fn outward(r: Rect, p: Pos) -> Pos {
 }
 
 /// Where a city-map door on the footprint border lands on the floor's border.
-pub(super) fn exit_tile(plan: &FloorPlan, door: Pos) -> Pos {
+pub(in crate::interior) fn exit_tile(plan: &FloorPlan, door: Pos) -> Pos {
     // A clinic's main door is its grid's front door.
     if let Some(c) = plan.clinic
         && c.door == door
     {
         return c.entrance;
     }
-    let fp = plan.footprint;
-    let (w, h) = (plan.size.w as i32, plan.size.h as i32);
-    let sx = ((door.x - fp.x) * SCALE + 1).clamp(1, w - 2);
-    let sy = ((door.y - fp.y) * SCALE + 1).clamp(1, h - 2);
+    exit_tile_on(plan.footprint, plan.size, door)
+}
+
+/// Where a door on the border of footprint `fp` lands on the border of a floor of
+/// `size`: the frame tile beside the door's floor tile.
+pub(in crate::interior) fn exit_tile_on(fp: Rect, size: Size, door: Pos) -> Pos {
+    let (w, h) = (size.w as i32, size.h as i32);
+    let s = floor_tile(fp, size, door);
     match edge(fp, door) {
-        0 => Pos::new(0, sy),
-        1 => Pos::new(w - 1, sy),
-        2 => Pos::new(sx, 0),
-        _ => Pos::new(sx, h - 1),
+        0 => Pos::new(0, s.y),
+        1 => Pos::new(w - 1, s.y),
+        2 => Pos::new(s.x, 0),
+        _ => Pos::new(s.x, h - 1),
     }
+}
+
+/// The floor tile under footprint tile `p`: the middle of its 3 x 3 block, kept off
+/// the frame wall of a floor of `size`.
+pub(in crate::interior) fn floor_tile(fp: Rect, size: Size, p: Pos) -> Pos {
+    let (w, h) = (size.w as i32, size.h as i32);
+    Pos::new(
+        ((p.x - fp.x) * SCALE + 1).clamp(1, w - 2),
+        ((p.y - fp.y) * SCALE + 1).clamp(1, h - 2),
+    )
+}
+
+/// The edges of footprint `fp` (as `edge` numbers them) that face open ground on the
+/// street, once for each tile off the corners that does: the sides a floor glazes.
+pub(in crate::interior) fn glazed_edges(city: &City, fp: Rect) -> Vec<u8> {
+    fp.border()
+        .filter(|p| !is_corner(fp, *p))
+        .filter(|p| {
+            city.tile(StratumKind::Street, outward(fp, *p))
+                .is_some_and(|t| t.is_outdoor_ground())
+        })
+        .map(|p| edge(fp, p))
+        .collect()
 }
 
 impl<'a> Builder<'a> {
@@ -185,18 +212,7 @@ impl<'a> Builder<'a> {
 
     /// Windows every other tile on the sides that face the street outside.
     fn windows(&mut self) {
-        let fp = self.plan.footprint;
-        let street = StratumKind::Street;
-        let facing: Vec<u8> = fp
-            .border()
-            .filter(|p| !is_corner(fp, *p))
-            .filter(|p| {
-                self.city
-                    .tile(street, outward(fp, *p))
-                    .is_some_and(|t| t.is_outdoor_ground())
-            })
-            .map(|p| edge(fp, p))
-            .collect();
+        let facing = glazed_edges(self.city, self.plan.footprint);
         let frame = self.frame();
         for p in frame.border() {
             if is_corner(frame, p) || !facing.contains(&edge(frame, p)) {
