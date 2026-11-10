@@ -282,9 +282,25 @@ fn end(st: &mut AppState, line: impl FnOnce(&str) -> String) -> Option<String> {
 /// its pulses fired and dropped.
 pub fn tick(st: &mut AppState) {
     follow(st);
+    keep_plan(st);
     let now = st.tick;
     if let Some(t) = st.track.as_mut() {
         t.pulse(now);
+    }
+}
+
+/// Keeps the plan of the building whose floor the target is on, so the next beat's
+/// `locate` borrows it instead of making it again: a venue's plan is a whole layout.
+fn keep_plan(st: &mut AppState) {
+    let Some(Target::Spot {
+        place: Place::Floor { building, .. },
+        ..
+    }) = st.track.as_ref().map(|t| t.walk.target)
+    else {
+        return;
+    };
+    if let Some(city) = st.city.as_ref() {
+        st.interiors.plan(city, building);
     }
 }
 
@@ -1431,6 +1447,43 @@ pub(crate) mod tests {
             }
         }
         panic!("a drone at work upstairs");
+    }
+
+    /// Laying out a venue is no small thing: tracking someone at work in an office nobody
+    /// has walked into keeps its plan on the first beat, and the beats after borrow it.
+    #[test]
+    fn tracking_someone_in_an_unplanned_office_keeps_its_plan() {
+        let mut st = outside();
+        let city = st.city.clone().unwrap();
+        let drones: Vec<(PersonId, BuildingId)> = (st.world.as_ref().unwrap().people().iter())
+            .filter(|p| p.profession == "corp_drone")
+            .filter_map(|p| match p.work {
+                sim::Work::Building(b)
+                    if city.building(b).kind == citygen::BuildingKind::Office =>
+                {
+                    Some((p.id, b))
+                }
+                _ => None,
+            })
+            .collect();
+        let (who, b) = drones
+            .into_iter()
+            .find(|&(who, _)| {
+                st.world.as_mut().unwrap().keep_at_work(who);
+                matches!(
+                    crate::interiors::drawn_at(&st, who),
+                    Some((Place::Floor { .. }, _))
+                )
+            })
+            .expect("a drone at work in an office");
+        assert!(st.interiors.plan_of(b).is_none(), "nobody has been in");
+        set(&mut st, Source::Listing(ListingId::Person(who))).unwrap();
+        tick(&mut st);
+        let plan = st.interiors.plan_of(b).expect("kept on the first beat");
+        assert!(plan.venue.is_some());
+        let kept: *const citygen::FloorPlan = plan;
+        tick(&mut st);
+        assert!(std::ptr::eq(st.interiors.plan_of(b).unwrap(), kept));
     }
 
     #[test]

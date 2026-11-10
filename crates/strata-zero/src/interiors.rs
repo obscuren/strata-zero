@@ -1,5 +1,8 @@
-//! The interiors this session has walked into: plans and floors, generated on the
-//! first visit and kept for the session. Never saved; the seed brings them back.
+//! The interiors of the city's closed buildings: a plan made the first time a building
+//! is needed and a floor the first time it is visited, both kept. They are saved with the
+//! run whole, not remade from the seed, so a building keeps the plan it was first given:
+//! a hotel an old save holds keeps today's builder, and one it never saw is laid out as a
+//! venue.
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
@@ -468,12 +471,15 @@ pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
     };
     let occupants = world.inside(b);
     let o = occupants.iter().find(|o| o.id == id)?;
-    let plan = plan_now(st, b)?;
+    // Residents and guests are behind their doors: no plan is made for them.
+    let plan = match o.role {
+        OccupantRole::Living | OccupantRole::Guest => return None,
+        OccupantRole::Working | OccupantRole::Visiting => plan_now(st, b)?,
+    };
     let level = match o.role {
         OccupantRole::Working if receptionist(world, &occupants) == Some(id) => 0,
         OccupantRole::Working => work_floor(&plan.work_floors(), id),
-        OccupantRole::Visiting => 0,
-        OccupantRole::Living | OccupantRole::Guest => return None,
+        _ => 0,
     };
     let floor = floor_now(st, &plan, level)?;
     let none = Homes::default();

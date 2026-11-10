@@ -622,13 +622,17 @@ pub fn next_text(st: &AppState, leg: &Leg, target: Target) -> Option<String> {
                 _ => None,
             };
             let k = leg.place.stratum()?;
-            let door = match st.interiors.plan_of(b) {
-                Some(plan) => plan.door_level(k),
-                None => FloorPlan::new(city, b).and_then(|plan| plan.door_level(k)),
-            };
-            Some(match up {
-                Some(l) if Some(l) != door => format!("building, then {}", FloorPlan::label(l)),
-                _ => "building".to_string(),
+            // The door's level is looked up only for a target upstairs of it.
+            let then = up.filter(|l| {
+                let door = match st.interiors.plan_of(b) {
+                    Some(plan) => plan.door_level(k),
+                    None => FloorPlan::new(city, b).and_then(|plan| plan.door_level(k)),
+                };
+                Some(*l) != door
+            });
+            Some(match then {
+                Some(l) => format!("building, then {}", FloorPlan::label(l)),
+                None => "building".to_string(),
             })
         }
         Through::Lift(l) => Some(format!("lift to {}", FloorPlan::label(l))),
