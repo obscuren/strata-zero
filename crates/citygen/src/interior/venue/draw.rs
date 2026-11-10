@@ -1,7 +1,8 @@
 //! A venue's level drawn as a floor: wall wherever no room stands, round each walled room
 //! and over a ring's core, its doors, landings, ways in and set pieces, then each room
-//! furnished and the floor lit. There is no pass that cuts doors to join it up: the layout
-//! is joined by construction, and the checker proves it.
+//! furnished as its def lists (bare when it lists nothing) and the floor lit. There is no
+//! pass that cuts doors to join it up: the layout is joined by construction, and the
+//! checker proves it.
 
 use super::{LevelLayout, PieceKind, PlacedPiece, PlannedRoom, VenueLayout, WayInKind};
 use crate::geom::{Dir, Pos, Rect};
@@ -37,15 +38,9 @@ pub fn draw_level(layout: &VenueLayout, level: i32) -> Option<Floor> {
     for piece in &x.pieces {
         lay_piece(&mut b, x, piece);
     }
-    for (i, r) in x.rooms.iter().enumerate() {
-        if r.furniture.is_empty() && r.stations.is_empty() {
-            let Room {
-                rect, kind, door, ..
-            } = b.rooms[i];
-            b.furnish_room(rect, kind, door);
-        } else {
-            furnish(&mut b, r);
-        }
+    // A room whose def lists nothing stands bare: its floor, its doors and its light.
+    for r in (x.rooms.iter()).filter(|r| !r.furniture.is_empty() || !r.stations.is_empty()) {
+        furnish(&mut b, r);
     }
     b.light();
     Some(b.finish())
@@ -320,7 +315,9 @@ fn round(rect: Rect) -> Vec<Pos> {
 mod tests {
     use super::*;
     use crate::interior::venue::testutil::{city, test_type};
-    use crate::interior::venue::{PieceKind, VenueFrame, VenueLayout, WayInKind, lay_out};
+    use crate::interior::venue::{
+        PieceKind, VenueFrame, VenueLayout, VenuePack, WayInKind, lay_out,
+    };
     use crate::interior::{FloorPlan, LinkKind, RoomKind, generate_floor, validate_floor};
     use crate::tile::{Feature, Terrain};
     use crate::world::StratumKind;
@@ -498,6 +495,46 @@ mod tests {
             }
         }
         assert!(ramps > 0, "no ramp laid");
+    }
+
+    #[test]
+    fn a_room_holds_what_its_def_lists_and_nothing_else() {
+        let types = (VenuePack::builtin().types.iter().cloned()).chain([test_type()]);
+        let mut rooms = 0;
+        for t in types {
+            for seed in 0..3 {
+                let layout = lay_out(&t, VenueFrame::own(&t), seed)
+                    .unwrap_or_else(|e| panic!("{} seed {seed}: {e}", t.id));
+                for l in &layout.levels {
+                    let f = draw_level(&layout, l.level).unwrap();
+                    for (r, planned) in f.rooms.iter().zip(&l.rooms) {
+                        let what =
+                            format!("{} seed {seed} level {}: {}", t.id, l.level, planned.name);
+                        let pieces: Vec<Furniture> = (r.rect.iter())
+                            .filter_map(|p| match f.tiles[p].feature {
+                                Some(Feature::Furniture(x)) => Some(x),
+                                _ => None,
+                            })
+                            .collect();
+                        let stations = f.stations.iter().filter(|s| r.rect.contains(s.pos));
+                        if planned.furniture.is_empty() && planned.stations.is_empty() {
+                            assert!(pieces.is_empty(), "{what}: {pieces:?}");
+                            assert_eq!(stations.count(), 0, "{what}");
+                        }
+                        if !planned.furniture.is_empty() {
+                            rooms += 1;
+                            assert!(
+                                pieces.iter().any(|x| planned.furniture.contains(x)),
+                                "{what} at {:?} has none of {:?}",
+                                r.rect,
+                                planned.furniture
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(rooms > 0);
     }
 
     #[test]

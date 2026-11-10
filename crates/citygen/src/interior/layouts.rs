@@ -644,12 +644,7 @@ impl<'a> Builder<'a> {
     }
 
     /// What a room of a kind holds, and the stations beside it.
-    pub(in crate::interior) fn furnish_room(
-        &mut self,
-        rect: Rect,
-        kind: RoomKind,
-        door: Option<Pos>,
-    ) {
+    fn furnish_room(&mut self, rect: Rect, kind: RoomKind, door: Option<Pos>) {
         if let Some(d) = door {
             for n in d.neighbors4() {
                 if rect.contains(n) {
