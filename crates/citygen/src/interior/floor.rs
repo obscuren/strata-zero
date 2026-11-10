@@ -29,6 +29,12 @@ pub enum RoomKind {
     Bays,
     Home,
     Shop,
+    Platform,
+    Track,
+    Plant,
+    Server,
+    Kitchen,
+    CarPark,
 }
 
 impl RoomKind {
@@ -56,6 +62,12 @@ impl RoomKind {
             RoomKind::Bays => "bays",
             RoomKind::Home => "home",
             RoomKind::Shop => "shop",
+            RoomKind::Platform => "platform",
+            RoomKind::Track => "track",
+            RoomKind::Plant => "plant room",
+            RoomKind::Server => "server room",
+            RoomKind::Kitchen => "kitchen",
+            RoomKind::CarPark => "car park",
         }
     }
 }

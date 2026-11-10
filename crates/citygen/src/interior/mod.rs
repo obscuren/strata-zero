@@ -5,6 +5,7 @@ mod floor;
 mod home;
 mod layouts;
 mod plan;
+pub mod venue;
 
 pub use floor::*;
 pub use home::{Home, home};

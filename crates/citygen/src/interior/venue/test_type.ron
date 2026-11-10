@@ -1,0 +1,83 @@
+// The test-only type: one of every piece of the schema, for the venue tests. Its own frame
+// is large enough for a ring corridor on the top level.
+Type(
+    id: "test",
+    name: "test site",
+    builds: [],
+    frame: Frame(kind: Office, footprint: (12, 8), top: 4, undercity: true, roof: true, bridge: Some(2),
+        doors: [Door(stratum: Street, side: S, at: 4), Door(stratum: Street, side: E, at: 3),
+                Door(stratum: Skyways, side: N, at: 6)]),
+    zones: ["public", "staff", "secure"],
+    borders: [
+        Border(zones: ("public", "staff"), lock: Card, one_way: true, ways: [Card, Net, Talk, Force]),
+        Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+    ],
+    levels: Levels(
+        below: [
+            Level(name: "basement", pieces: ["ramp"], bands: [
+                Band(zone: "public", share: 20, rooms: ["lift lobby"]),
+                Band(zone: "staff", share: 50, rooms: ["car park"]),
+                Band(zone: "secure", share: 30, rooms: ["server room"]),
+            ]),
+            Level(name: "deep", scale: (150, 120), spine: Straight, pieces: ["track"], bands: [
+                Band(zone: "secure", share: 30, rooms: ["vault"]),
+                Band(zone: "staff", share: 70, rooms: ["plant room", "store"]),
+            ]),
+        ],
+        ground: Level(name: "ground", pieces: ["gate line"], bands: [
+            Band(zone: "public", share: 50, rooms: ["entrance"], fill: Some("waiting room")),
+            Band(zone: "staff", share: 50, rooms: ["kitchen", "store"]),
+        ]),
+        middle: Some(Level(name: "floor", spine: Any, bands: [
+            Band(zone: "public", share: 20, rooms: ["lift lobby"]),
+            Band(zone: "staff", share: 60, rooms: ["open floor"], fill: Some("office"), doors: 2),
+            Band(zone: "secure", share: 20, rooms: ["store"]),
+        ])),
+        top: [
+            Level(name: "top", spine: Ring, bands: [
+                Band(zone: "staff", share: 40, rooms: ["store"]),
+                Band(zone: "secure", share: 60, rooms: ["lounge"], fill: Some("office")),
+            ]),
+        ],
+    ),
+    rooms: [
+        Room(name: "entrance", kind: Lobby, size: ((6, 4), (12, 8)), furniture: [Counter], stations: [Reception]),
+        Room(name: "waiting room", kind: Waiting, size: ((4, 4), (8, 6)), furniture: [Bench]),
+        Room(name: "lift lobby", kind: Lobby, size: ((4, 3), (8, 6))),
+        Room(name: "kitchen", kind: Kitchen, size: ((4, 4), (8, 6)), furniture: [Counter, Machine], stations: [Machine]),
+        Room(name: "store", kind: Storage, size: ((3, 3), (5, 5)), furniture: [Shelf], stations: [Shelf]),
+        Room(name: "car park", kind: CarPark, size: ((10, 6), (24, 12))),
+        Room(name: "server room", kind: Server, size: ((4, 4), (6, 6)), private: true, furniture: [Machine]),
+        Room(name: "plant room", kind: Plant, size: ((4, 4), (8, 6)), furniture: [Machine], stations: [Machine]),
+        Room(name: "vault", kind: Storage, size: ((4, 3), (6, 5)), private: true, furniture: [Locker]),
+        Room(name: "open floor", kind: OpenPlan, size: ((8, 5), (14, 8)), furniture: [Desk, Desk, Desk], stations: [Desk, Desk]),
+        Room(name: "office", kind: Office, size: ((4, 4), (6, 5)), private: true, furniture: [Desk], stations: [Desk]),
+        Room(name: "lounge", kind: Suite, size: ((6, 5), (10, 8)), furniture: [Couch, Table]),
+    ],
+    pieces: [
+        Piece(name: "ramp", kind: Ramp),
+        Piece(name: "track", kind: Track),
+        Piece(name: "gate line", kind: GateLine),
+    ],
+    links: [
+        Link(name: "lift", kind: Lift, zone: "public", serves: Roles(["basement", "ground", "floor", "top"]),
+             cards: [("top", "secure")]),
+        Link(name: "fire stair", kind: Stair, zone: "staff", serves: All, alight: Ends),
+        Link(name: "escalator", kind: Escalator, zone: "public", serves: Levels([0, 1]), dir: Up),
+        Link(name: "ladder", kind: Ladder, zone: "staff", serves: Roles(["basement", "deep"])),
+        Link(name: "duct", kind: Crawl, zone: "staff", serves: All),
+    ],
+    crawls_in: [Crawl(stratum: Heights, zone: "staff"), Crawl(stratum: Undercity, zone: "staff")],
+    objectives: [
+        Objective(id: "vault", name: "the vault", room: "vault", level: Some("deep")),
+        Objective(id: "files", name: "the files", room: "office", level: Some("top")),
+    ],
+    security: [
+        Security(size: Small, guards: [("staff", 1), ("secure", 2)], cameras: (2, 4), turrets: (0, 0),
+                 containers: (1, 2)),
+        Security(size: Medium, guards: [("public", 1), ("staff", 2), ("secure", 2)], cameras: (4, 8),
+                 turrets: (0, 1), turret_zones: ["secure"], containers: (2, 4)),
+        Security(size: Large, guards: [("public", 1), ("staff", 3), ("secure", 3)], cameras: (8, 14),
+                 turrets: (2, 4), turret_zones: ["secure"], containers: (3, 6)),
+    ],
+)
