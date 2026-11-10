@@ -114,12 +114,19 @@ impl Interiors {
         self.plans.get(&b)
     }
 
+    /// Replaces a building's plan and drops the floors made from the old one.
+    #[cfg(test)]
+    pub fn put_plan(&mut self, plan: FloorPlan) {
+        self.floors.retain(|(b, _), _| *b != plan.building);
+        self.plans.insert(plan.building, plan);
+    }
+
     /// A floor, generated if this is its first visit. `None` for an open building or
     /// a level the plan does not have. An atrium floor brings the plaza below with it,
     /// for the look-down.
     pub fn ensure(&mut self, city: &City, b: BuildingId, level: i32) -> Option<&Floor> {
         let plan = self.plan(city, b)?.clone();
-        if level < plan.lowest || level > plan.top {
+        if !plan.has_level(level) {
             return None;
         }
         if plan.atrium.is_some() && level >= 1 {
@@ -233,8 +240,8 @@ pub(crate) fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
     match stratum {
         StratumKind::Street => Some(0),
         StratumKind::Skyways => plan.bridge,
-        StratumKind::Heights => plan.roof.then_some(plan.top),
-        StratumKind::Undercity => (plan.lowest < 0).then_some(-1),
+        StratumKind::Heights => plan.roof.then_some(plan.top()),
+        StratumKind::Undercity => plan.has_level(-1).then_some(-1),
         StratumKind::Net => None,
     }
 }
@@ -321,7 +328,7 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
         .ok_or("that building has no inside")?
         .clone();
     let lift = plan.lift.ok_or("no lift here")?;
-    if level < plan.lowest || level > plan.top {
+    if !plan.has_level(level) {
         return Err("no such floor".to_string());
     }
     let now = st.net.now(st);
@@ -360,14 +367,13 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
             "nothing leads down from here".to_string()
         });
     }
-    let next = if up { level + 1 } else { level - 1 };
-    if next < plan.lowest || next > plan.top {
+    let Some(next) = plan.next_level(level, up) else {
         return Err(if up {
             "nothing leads up from here".to_string()
         } else {
             "nothing leads down from here".to_string()
         });
-    }
+    };
     st.interiors
         .ensure(city, b, next)
         .ok_or("that floor is missing")?;
@@ -395,7 +401,7 @@ pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
             if plan.bridge == Some(level) {
                 marks.push("bridge");
             }
-            if plan.roof && level == plan.top {
+            if plan.roof && level == plan.top() {
                 marks.push("roof");
             }
             if !marks.is_empty() {
@@ -417,7 +423,7 @@ pub fn plan_now(st: &AppState, b: BuildingId) -> Option<Cow<'_, FloorPlan>> {
 /// A floor as the session has it once walked onto, else made fresh from the seed: the
 /// same floor, not kept. So the story can see a floor nobody has looked at.
 pub fn floor_now<'a>(st: &'a AppState, plan: &FloorPlan, level: i32) -> Option<Cow<'a, Floor>> {
-    if !plan.levels().any(|l| l == level) {
+    if !plan.has_level(level) {
         return None;
     }
     match st.interiors.floor(plan.building, level) {
@@ -777,7 +783,7 @@ mod tests {
         let mut i = Interiors::default();
         assert!(i.plan(&c, shop.id).is_none());
         assert!(i.ensure(&c, shop.id, 0).is_none());
-        let top = i.plan(&c, tower.id).unwrap().top;
+        let top = i.plan(&c, tower.id).unwrap().top();
         assert!(i.ensure(&c, tower.id, 0).is_some());
         assert!(i.ensure(&c, tower.id, 0).is_some());
         assert_eq!(i.generated(), 1);
@@ -786,6 +792,42 @@ mod tests {
         assert_eq!(i.generated(), 2);
         assert!(i.floor(tower.id, 1).is_none());
         assert!(i.floor(tower.id, top).is_some());
+    }
+
+    #[test]
+    fn levels_with_a_gap_climb_and_ride_over_it() {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let mut plan = st.interiors.plan(&city, b).unwrap().clone();
+        plan.levels.retain(|l| ![2, 3].contains(l));
+        st.interiors.put_plan(plan.clone());
+        st.interiors.ensure(&city, b, 1).unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos) = (
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            plan.stair,
+        );
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `4F`");
+        assert_eq!(climb(&mut st, false).unwrap(), "Entering `1F`");
+        assert!(ride(&mut st, b, 3).is_err());
+        assert_eq!(ride(&mut st, b, 4).unwrap(), "Entering `4F`");
+        assert!(st.interiors.ensure(&city, b, 2).is_none());
+        assert!(
+            floor_rows(st.interiors.plan_of(b).unwrap(), 0)
+                .iter()
+                .all(|(l, _)| ![2, 3].contains(l))
+        );
     }
 
     #[test]
@@ -942,7 +984,7 @@ mod tests {
         // No shops in a tower: a shopkeeper there would take any station as before.
         assert!(!has_shops(lobby));
         // And that drone sits at no desk upstairs.
-        let top = plan.top;
+        let top = plan.top();
         i.ensure(&c, tower.id, top).unwrap();
         let (plan, floor) = i.floor(tower.id, top).unwrap();
         let upstairs = Placement::new(plan, floor, &w, &Homes::default());

@@ -222,8 +222,8 @@ fn fixture_at(
                 Terrain::Stair => Some(Fixture {
                     name: "Stairwell".into(),
                     second: leads(
-                        (level < plan.top).then(|| FloorPlan::label(level + 1)),
-                        (level > plan.lowest).then(|| FloorPlan::label(level - 1)),
+                        plan.next_level(level, true).map(FloorPlan::label),
+                        plan.next_level(level, false).map(FloorPlan::label),
                     ),
                     key: "stairwell",
                 }),
@@ -231,8 +231,8 @@ fn fixture_at(
                     name: "Lift".into(),
                     second: Some(format!(
                         "{} to {}",
-                        FloorPlan::label(plan.lowest),
-                        FloorPlan::label(plan.top)
+                        FloorPlan::label(plan.lowest()),
+                        FloorPlan::label(plan.top())
                     )),
                     key: "lift",
                 }),

@@ -2351,10 +2351,7 @@ fn minimap_one_floor() {
             .filter(|b| b.kind.is_closed())
             .find(|b| {
                 st.interiors.ensure(&city, b.id, 0).is_some()
-                    && st
-                        .interiors
-                        .plan_of(b.id)
-                        .is_some_and(|p| p.lowest == p.top)
+                    && st.interiors.plan_of(b.id).is_some_and(|p| p.floors() == 1)
             })
             .expect("a one-floor building")
             .id;

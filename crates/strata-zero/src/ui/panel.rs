@@ -94,8 +94,8 @@ pub fn inspector_lines(
                 "floors",
                 format!(
                     "{} → {}",
-                    FloorPlan::label(plan.lowest),
-                    FloorPlan::label(plan.top)
+                    FloorPlan::label(plan.lowest()),
+                    FloorPlan::label(plan.top())
                 ),
             ));
         }

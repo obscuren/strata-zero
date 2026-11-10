@@ -44,15 +44,15 @@ pub enum FloorType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "FloorPlanRead")]
 pub struct FloorPlan {
     pub building: BuildingId,
     pub kind: BuildingKind,
     pub theme: Theme,
     pub footprint: Rect,
     pub size: Size,
-    /// -1 with a basement, else 0.
-    pub lowest: i32,
-    pub top: i32,
+    /// The building's floors, the lowest first: from -1 with a basement, else from 0.
+    pub levels: Vec<i32>,
     /// The floor the bridge door opens from.
     pub bridge: Option<i32>,
     /// A roof door on the top floor.
@@ -69,6 +69,56 @@ pub struct FloorPlan {
     /// A ripperdoc's clinic: its front and how its grid is turned; `None` for every
     /// other building.
     pub clinic: Option<ClinicPlan>,
+}
+
+/// A `FloorPlan` as a save holds it. Saves written before a building's levels were a
+/// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead.
+#[derive(serde::Deserialize)]
+struct FloorPlanRead {
+    building: BuildingId,
+    kind: BuildingKind,
+    theme: Theme,
+    footprint: Rect,
+    size: Size,
+    #[serde(default)]
+    levels: Vec<i32>,
+    #[serde(default)]
+    lowest: Option<i32>,
+    #[serde(default)]
+    top: Option<i32>,
+    bridge: Option<i32>,
+    roof: bool,
+    lift: Option<Pos>,
+    stair: Pos,
+    atrium: Option<Rect>,
+    home_level: Option<i32>,
+    clinic: Option<ClinicPlan>,
+}
+
+impl From<FloorPlanRead> for FloorPlan {
+    fn from(r: FloorPlanRead) -> FloorPlan {
+        let levels = if r.levels.is_empty() {
+            let lowest = r.lowest.unwrap_or(0);
+            (lowest..=r.top.unwrap_or(lowest)).collect()
+        } else {
+            r.levels
+        };
+        FloorPlan {
+            building: r.building,
+            kind: r.kind,
+            theme: r.theme,
+            footprint: r.footprint,
+            size: r.size,
+            levels,
+            bridge: r.bridge,
+            roof: r.roof,
+            lift: r.lift,
+            stair: r.stair,
+            atrium: r.atrium,
+            home_level: r.home_level,
+            clinic: r.clinic,
+        }
+    }
 }
 
 /// How a grid is laid on a floor: mirrored left to right first, then turned clockwise
@@ -159,6 +209,11 @@ fn floor_size(fp: Rect) -> Size {
 impl FloorPlan {
     /// The plan of a closed building; `None` for an open one.
     pub fn new(city: &City, id: BuildingId) -> Option<FloorPlan> {
+        FloorPlan::classic(city, id)
+    }
+
+    /// Today's builder's plan. `new` calls it until Task 12 dispatches to venues.
+    pub fn classic(city: &City, id: BuildingId) -> Option<FloorPlan> {
         let b = city.building_opt(id)?;
         if !b.kind.is_closed() {
             return None;
@@ -248,8 +303,7 @@ impl FloorPlan {
             theme: city.district(b.district).theme,
             footprint: fp,
             size,
-            lowest,
-            top,
+            levels: (lowest..=top).collect(),
             bridge,
             roof,
             lift,
@@ -260,12 +314,35 @@ impl FloorPlan {
         })
     }
 
-    pub fn levels(&self) -> impl Iterator<Item = i32> {
-        self.lowest..=self.top
+    /// The building's floors, the lowest first.
+    pub fn levels(&self) -> impl Iterator<Item = i32> + '_ {
+        self.levels.iter().copied()
+    }
+
+    pub fn lowest(&self) -> i32 {
+        self.levels.first().copied().unwrap_or(0)
+    }
+
+    pub fn top(&self) -> i32 {
+        self.levels.last().copied().unwrap_or(0)
+    }
+
+    pub fn has_level(&self, level: i32) -> bool {
+        self.levels.contains(&level)
     }
 
     pub fn floors(&self) -> i32 {
-        self.top - self.lowest + 1
+        self.levels.len() as i32
+    }
+
+    /// The next level in the list above (`up`) or below `level`.
+    pub fn next_level(&self, level: i32, up: bool) -> Option<i32> {
+        let mut levels = self.levels.iter().copied();
+        if up {
+            levels.find(|l| *l > level)
+        } else {
+            levels.rev().find(|l| *l < level)
+        }
     }
 
     /// What the lift panel and the HUD call a floor.
@@ -301,7 +378,7 @@ impl FloorPlan {
                 if level == 0 {
                     FloorType::Lobby
                 } else if self.roof
-                    && level == self.top
+                    && level == self.top()
                     && matches!(self.kind, BuildingKind::CorpTower | BuildingKind::Office)
                 {
                     FloorType::Suite
@@ -360,7 +437,7 @@ impl FloorPlan {
             Some(StratumKind::Street)
         } else if self.bridge == Some(level) {
             Some(StratumKind::Skyways)
-        } else if self.roof && level == self.top {
+        } else if self.roof && level == self.top() {
             Some(StratumKind::Heights)
         } else {
             None

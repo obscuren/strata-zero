@@ -435,8 +435,8 @@ impl TileMap for FloorMap<'_> {
         };
         Some(ConnDir {
             kind,
-            up: self.floor.level < self.plan.top,
-            down: self.floor.level > self.plan.lowest,
+            up: self.plan.next_level(self.floor.level, true).is_some(),
+            down: self.plan.next_level(self.floor.level, false).is_some(),
         })
     }
 }
@@ -641,7 +641,7 @@ mod tests {
             map.connector(lift)
                 .is_some_and(|d| d.kind == ConnectorKind::Lift
                     && d.up
-                    && d.down == (plan.lowest < 0))
+                    && d.down == (plan.lowest() < 0))
         );
         assert_eq!(
             map.place(),

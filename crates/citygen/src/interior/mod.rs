@@ -210,8 +210,8 @@ mod tests {
         for (i, c) in [city(), medium(8)].iter().enumerate() {
             let mut h = 0;
             for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
-                let plan = FloorPlan::new(c, b.id).unwrap();
-                let mut levels = vec![plan.lowest, 0, plan.top, plan.bridge.unwrap_or(0)];
+                let plan = FloorPlan::classic(c, b.id).unwrap();
+                let mut levels = vec![plan.lowest(), 0, plan.top(), plan.bridge.unwrap_or(0)];
                 levels.sort();
                 levels.dedup();
                 for l in levels {
@@ -220,6 +220,77 @@ mod tests {
             }
             assert_eq!(h, PINNED[i], "city {i}");
         }
+    }
+
+    /// A plan as saves wrote it before a building's levels were a list.
+    #[derive(serde::Serialize)]
+    struct OldPlan {
+        building: crate::ids::BuildingId,
+        kind: BuildingKind,
+        theme: crate::world::Theme,
+        footprint: crate::geom::Rect,
+        size: crate::geom::Size,
+        lowest: i32,
+        top: i32,
+        bridge: Option<i32>,
+        roof: bool,
+        lift: Option<crate::geom::Pos>,
+        stair: crate::geom::Pos,
+        atrium: Option<crate::geom::Rect>,
+        home_level: Option<i32>,
+        clinic: Option<ClinicPlan>,
+    }
+
+    impl OldPlan {
+        fn of(p: &FloorPlan) -> OldPlan {
+            OldPlan {
+                building: p.building,
+                kind: p.kind,
+                theme: p.theme,
+                footprint: p.footprint,
+                size: p.size,
+                lowest: p.lowest(),
+                top: p.top(),
+                bridge: p.bridge,
+                roof: p.roof,
+                lift: p.lift,
+                stair: p.stair,
+                atrium: p.atrium,
+                home_level: p.home_level,
+                clinic: p.clinic,
+            }
+        }
+    }
+
+    #[test]
+    fn an_old_plan_reads_back_the_same() {
+        let c = city();
+        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            let bytes = rmp_serde::to_vec_named(&OldPlan::of(&plan)).unwrap();
+            let back: FloorPlan = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(back, plan, "{:?}", b.id);
+            let again: FloorPlan =
+                rmp_serde::from_slice(&rmp_serde::to_vec_named(&plan).unwrap()).unwrap();
+            assert_eq!(again, plan);
+        }
+    }
+
+    #[test]
+    fn a_level_list_steps_over_its_gaps() {
+        let c = city();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap();
+        let mut plan = FloorPlan::classic(&c, b.id).unwrap();
+        plan.levels.retain(|l| ![2, 3].contains(l));
+        assert_eq!(plan.next_level(1, true), Some(4));
+        assert_eq!(plan.next_level(4, false), Some(1));
+        assert_eq!(plan.next_level(plan.top(), true), None);
+        assert!(!plan.has_level(2) && plan.has_level(4));
+        assert_eq!(plan.floors(), plan.levels.len() as i32);
     }
 
     #[test]
@@ -297,7 +368,7 @@ mod tests {
             assert_eq!(plan.size.w as i32, (b.footprint.w * 3).max(12));
             assert_eq!(plan.size.h as i32, (b.footprint.h * 3).max(9));
             assert_eq!(
-                plan.lowest,
+                plan.lowest(),
                 if b.span.contains(StratumKind::Undercity) {
                     -1
                 } else {
@@ -305,10 +376,10 @@ mod tests {
                 }
             );
             match b.span.hi {
-                StratumKind::Street => assert!(plan.top <= 2),
-                StratumKind::Skyways => assert!((3..=8).contains(&plan.top)),
+                StratumKind::Street => assert!(plan.top() <= 2),
+                StratumKind::Skyways => assert!((3..=8).contains(&plan.top())),
                 StratumKind::Heights => {
-                    assert!(plan.top >= 7);
+                    assert!(plan.top() >= 7);
                     assert!(plan.roof);
                     seen_tall = true;
                 }
@@ -320,7 +391,7 @@ mod tests {
                 .any(|(k, _)| *k == StratumKind::Skyways);
             assert_eq!(plan.bridge.is_some(), has_bridge_door);
             if let Some(f) = plan.bridge {
-                assert!(f >= 1 && f <= plan.top);
+                assert!(f >= 1 && f <= plan.top());
             }
             assert_eq!(plan.lift.is_some(), plan.floors() >= 3);
             assert_eq!(plan.levels().count() as i32, plan.floors());
@@ -435,7 +506,7 @@ mod tests {
             })
             .expect("a tower with a basement");
         let plan = FloorPlan::new(&c, b.id).unwrap();
-        let top = generate_floor(&c, &plan, plan.top);
+        let top = generate_floor(&c, &plan, plan.top());
         validate_floor(&plan, &top).unwrap();
         let roof = top
             .exits
@@ -469,7 +540,7 @@ mod tests {
         let c = city();
         for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
             let plan = FloorPlan::new(&c, b.id).unwrap();
-            for level in [plan.lowest, 0, plan.top, plan.bridge.unwrap_or(0)] {
+            for level in [plan.lowest(), 0, plan.top(), plan.bridge.unwrap_or(0)] {
                 let a = generate_floor(&c, &plan, level);
                 validate_floor(&plan, &a).unwrap_or_else(|e| panic!("{:?} {level}: {e}", b.id));
                 let again = generate_floor(&c, &plan, level);
@@ -555,7 +626,7 @@ mod tests {
             &[RoomKind::Bar, RoomKind::Stage],
             &[Role::Bar, Role::Table],
         );
-        assert_eq!(plan.top, 1);
+        assert_eq!(plan.top(), 1);
         let (city, _) = find(BuildingKind::Club);
         let vip = generate_floor(city, &plan, 1);
         validate_floor(&plan, &vip).unwrap();
@@ -609,9 +680,9 @@ mod tests {
         for c in &cities {
             for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
                 let plan = FloorPlan::new(c, b.id).unwrap();
-                let mut levels = vec![plan.lowest, 0, plan.top];
+                let mut levels = vec![plan.lowest(), 0, plan.top()];
                 levels.extend(plan.bridge);
-                levels.push(1.min(plan.top));
+                levels.push(1.min(plan.top()));
                 levels.sort();
                 levels.dedup();
                 for level in levels {
@@ -750,9 +821,9 @@ mod tests {
                 plan.lift,
                 plan.stair.x,
                 plan.stair.y,
-                plan.top,
-                plan.lowest,
-                plan.top,
+                plan.top(),
+                plan.lowest(),
+                plan.top(),
                 plan.bridge,
                 plan.roof
             );
@@ -809,7 +880,7 @@ mod tests {
         ] {
             let b = c.buildings.iter().find(|b| b.kind == kind).unwrap();
             let plan = FloorPlan::new(&c, b.id).unwrap();
-            for level in [plan.lowest, 0, 2.min(plan.top), plan.top] {
+            for level in [plan.lowest(), 0, 2.min(plan.top()), plan.top()] {
                 dump(&plan, &generate_floor(&c, &plan, level));
             }
         }
@@ -844,7 +915,7 @@ mod tests {
                 continue;
             };
             let plan = FloorPlan::new(city, b.id).unwrap();
-            for level in 0..=plan.top {
+            for level in 0..=plan.top() {
                 dump(&plan, &generate_floor(city, &plan, level));
             }
         }
@@ -877,7 +948,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("seed {seed}: {:?}", b.id));
                 fronts.insert(cp.front);
                 turns.insert(cp.turn.quarters);
-                assert_eq!(plan.lowest, -(cp.front.floors() as i32 - 1));
+                assert_eq!(plan.lowest(), -(cp.front.floors() as i32 - 1));
                 let chair_level = if cp.front == Front::Laundromat { -1 } else { 0 };
                 assert_eq!(
                     plan.work_floors(),
@@ -969,7 +1040,8 @@ mod tests {
                 continue;
             };
             seen.insert(b.kind);
-            let any = (plan.lowest..=plan.top)
+            let any = plan
+                .levels()
                 .any(|l| generate_floor(&c, &plan, l).rooms.iter().any(|r| r.private));
             assert!(any, "{:?} ({:?}) has nothing locked", b.kind, b.id);
         }
@@ -1042,7 +1114,7 @@ mod tests {
                         }
                     }
                 }
-                assert!(plan.corridor_floors().len() as i32 >= plan.top);
+                assert!(plan.corridor_floors().len() as i32 >= plan.top());
             }
         }
         assert_eq!(

@@ -697,9 +697,9 @@ mod tests {
             let Some((city, plan)) = plans(kind).into_iter().next() else {
                 continue;
             };
-            let levels: BTreeSet<i32> = [plan.lowest, 0, plan.top]
+            let levels: BTreeSet<i32> = [plan.lowest(), 0, plan.top()]
                 .into_iter()
-                .filter(|l| (plan.lowest..=plan.top).contains(l))
+                .filter(|l| plan.has_level(*l))
                 .collect();
             for level in levels {
                 let f = generate_floor(city, &plan, level);
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn wall_fittings_light_their_own_side() {
         for (city, plan) in plans(BuildingKind::Hotel).into_iter().take(2) {
-            for level in [0, 1.min(plan.top)] {
+            for level in [0, 1.min(plan.top())] {
                 let b = super::super::built(city, &plan, level);
                 for e in &b.emitters {
                     assert!(
@@ -781,7 +781,7 @@ mod tests {
     fn a_place_keeps_its_mood_on_every_floor_and_every_visit() {
         let (city, plan) = plans(BuildingKind::Hotel)
             .into_iter()
-            .find(|(_, p)| p.top >= 2)
+            .find(|(_, p)| p.top() >= 2)
             .expect("a hotel of three floors");
         let corridor = |level| -> BTreeSet<String> {
             fittings(&generate_floor(city, &plan, level))
@@ -889,7 +889,7 @@ mod tests {
                 .filter_map(move |b| FloorPlan::new(c, b.id).map(|p| (c, p)))
         });
         for (city, plan) in clinics.take(4) {
-            for level in plan.lowest..=plan.top {
+            for level in plan.levels() {
                 let f = generate_floor(city, &plan, level);
                 let Some(chair) = f.chair() else {
                     continue;
@@ -912,7 +912,7 @@ mod tests {
     fn corridors_are_cooler_than_flats() {
         let (city, plan) = plans(BuildingKind::Megablock)
             .into_iter()
-            .find(|(_, p)| p.top >= 3)
+            .find(|(_, p)| p.top() >= 3)
             .expect("a megablock");
         let f = generate_floor(city, &plan, 3);
         let mean = |kind: RoomKind| -> f32 {

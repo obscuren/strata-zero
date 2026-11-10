@@ -7926,7 +7926,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("2F"), "{text}");
-        assert!(text.contains(&FloorPlan::label(plan.top)), "{text}");
+        assert!(text.contains(&FloorPlan::label(plan.top())), "{text}");
         assert!(text.contains("roof"), "{text}");
         // The 2F row rides there, and the log says so.
         for _ in 0..80 {
@@ -7943,10 +7943,10 @@ mod tests {
         assert_eq!(last(&st), Some("Entering 2F"));
         s.update(&mut st, &[]);
         // A ride to a floor never generated before works (and generates it).
-        assert!(st.interiors.floor(b, plan.top).is_none());
+        assert!(st.interiors.floor(b, plan.top()).is_none());
         assert_eq!(
-            crate::interiors::ride(&mut st, b, plan.top).unwrap(),
-            format!("Entering `{}`", FloorPlan::label(plan.top))
+            crate::interiors::ride(&mut st, b, plan.top()).unwrap(),
+            format!("Entering `{}`", FloorPlan::label(plan.top()))
         );
         s.update(&mut st, &[]);
         let (place, pos) = player(&st);
@@ -7954,18 +7954,18 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             }
         );
         assert_eq!(pos, lift);
-        assert!(st.interiors.floor(b, plan.top).is_some());
+        assert!(st.interiors.floor(b, plan.top()).is_some());
         assert_eq!(s.place, place);
         // Stairs: one floor at a time, same tile.
         stand(&mut st, &mut s, place, plan.stair);
         s.update(&mut st, &[key(KeyCode::Char('<'))]);
         assert_eq!(
             last(&st),
-            Some(format!("Entering {}", FloorPlan::label(plan.top - 1)).as_str())
+            Some(format!("Entering {}", FloorPlan::label(plan.top() - 1)).as_str())
         );
         assert_eq!(st.log.latest().unwrap().marks.len(), 1, "the floor is lit");
         let (place, pos) = player(&st);
@@ -7973,7 +7973,7 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.top - 1
+                level: plan.top() - 1
             }
         );
         assert_eq!(pos, plan.stair);
@@ -7982,7 +7982,7 @@ mod tests {
             player(&st).0,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             }
         );
         s.update(&mut st, &[key(KeyCode::Char('>'))]);
@@ -7990,7 +7990,7 @@ mod tests {
             player(&st).0,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             },
             "no floor above the top"
         );
@@ -8000,7 +8000,7 @@ mod tests {
             last(&st)
         );
         // Off the stair, > and < lead nowhere inside.
-        let (_, floor) = st.interiors.floor(b, plan.top).unwrap();
+        let (_, floor) = st.interiors.floor(b, plan.top()).unwrap();
         let open = floor
             .tiles
             .iter()
@@ -8014,7 +8014,7 @@ mod tests {
             &mut s,
             Place::Floor {
                 building: b,
-                level: plan.top,
+                level: plan.top(),
             },
             open,
         );
@@ -8054,7 +8054,7 @@ mod tests {
                 assert_eq!(building, b.id);
                 let plan = st.interiors.plan_of(b.id).unwrap().clone();
                 let expected = match k {
-                    StratumKind::Heights => plan.top,
+                    StratumKind::Heights => plan.top(),
                     StratumKind::Skyways => plan.bridge.unwrap(),
                     StratumKind::Undercity => -1,
                     _ => unreachable!(),
@@ -8609,13 +8609,13 @@ mod tests {
             .expect("a two-floor building without a lift")
             .id;
         let plan = st.interiors.plan(&city, b).unwrap().clone();
-        st.interiors.ensure(&city, b, plan.lowest).unwrap();
+        st.interiors.ensure(&city, b, plan.lowest()).unwrap();
         stand(
             &mut st,
             &mut s,
             Place::Floor {
                 building: b,
-                level: plan.lowest,
+                level: plan.lowest(),
             },
             plan.stair,
         );
@@ -8626,7 +8626,10 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
         assert!(
-            text.contains(&format!(">  Go up: {}", FloorPlan::label(plan.lowest + 1))),
+            text.contains(&format!(
+                ">  Go up: {}",
+                FloorPlan::label(plan.lowest() + 1)
+            )),
             "{text}"
         );
         here.update(&mut st, &[key(KeyCode::Char('>'))]);
@@ -8636,7 +8639,7 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.lowest + 1
+                level: plan.lowest() + 1
             }
         );
         assert_eq!(pos, plan.stair, "stairs keep the tile");

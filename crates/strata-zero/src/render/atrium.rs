@@ -375,7 +375,7 @@ mod tests {
         // From the top of the building, the darkest the look-down gets here: seen
         // now, the floor is faint but legible, scaled once, under the walkway.
         let (f, w, dim) =
-            plaza_and_walkway(&city, plan, upper, ground, plan.top, Visibility::Visible);
+            plaza_and_walkway(&city, plan, upper, ground, plan.top(), Visibility::Visible);
         assert!(!dim, "scaled once, not dimmed again");
         let (lf, lw) = (luma_of(f), luma_of(w));
         assert!(
@@ -384,7 +384,7 @@ mod tests {
         );
         assert!(lf < lw, "plaza floor {lf} not under the walkway {lw}");
         // Remembered, from any height, it stays under the remembered walkway.
-        for level in [1, home.level, plan.top] {
+        for level in [1, home.level, plan.top()] {
             let (f, w, _) =
                 plaza_and_walkway(&city, plan, upper, ground, level, Visibility::Remembered);
             let (lf, lw) = (luma_of(f), luma_of(w));
@@ -397,7 +397,7 @@ mod tests {
         let mut dark = upper.clone();
         dark.light = Grid::filled(dark.light.size(), 0);
         for vis in [Visibility::Visible, Visibility::Remembered] {
-            for level in [1, plan.top] {
+            for level in [1, plan.top()] {
                 let (f, w, _) = plaza_and_walkway(&city, plan, &dark, ground, level, vis);
                 let (lf, lw) = (luma_of(f), luma_of(w));
                 assert!(

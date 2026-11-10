@@ -345,8 +345,8 @@ impl<'a> Builder<'a> {
 
     /// The lift bank and the stairwell, where the plan puts them on every floor.
     fn shafts(&mut self) {
-        let up = self.level < self.plan.top;
-        let down = self.level > self.plan.lowest;
+        let up = self.level < self.plan.top();
+        let down = self.level > self.plan.lowest();
         for p in self.plan.lift_bank() {
             self.tiles[p].terrain = Terrain::Lift;
             self.tiles[p].feature = None;

@@ -516,20 +516,20 @@ pub fn gather(
             }
             Some(citygen::Terrain::Stair) => {
                 fixture = Some("Stairwell");
-                if level < plan.top {
+                if let Some(up) = plan.next_level(level, true) {
                     here_rows.push(Choice::on(
                         '>',
                         "Go up",
-                        FloorPlan::label(level + 1),
+                        FloorPlan::label(up),
                         TEXT,
                         Pick::World(WorldAct::Climb(true)),
                     ));
                 }
-                if level > plan.lowest {
+                if let Some(down) = plan.next_level(level, false) {
                     here_rows.push(Choice::on(
                         '<',
                         "Go down",
-                        FloorPlan::label(level - 1),
+                        FloorPlan::label(down),
                         TEXT,
                         Pick::World(WorldAct::Climb(false)),
                     ));

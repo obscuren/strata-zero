@@ -408,7 +408,7 @@ fn out_of(
         // The floor those doors open onto, unless it is known not to.
         let opens = |l: i32| {
             l != level
-                && plan.levels().any(|x| x == l)
+                && plan.has_level(l)
                 && st.interiors.floor(b, l).is_none_or(|(_, f)| {
                     f.exits
                         .iter()
@@ -1280,7 +1280,7 @@ mod tests {
         assert!(city.portals(b).contains(&(StratumKind::Heights, leg.goal)));
         assert_eq!(next_text(&st, &leg, there).as_deref(), Some("building"));
         // Inside, the way leads down, not back up onto the roof.
-        let top = st.interiors.plan(city, b).unwrap().top;
+        let top = st.interiors.plan(city, b).unwrap().top();
         st.interiors.ensure(city, b, top).unwrap();
         let (_, floor) = st.interiors.floor(b, top).unwrap();
         let roof = floor.exits.iter().find(|e| e.door == leg.goal).unwrap();
@@ -1318,7 +1318,7 @@ mod tests {
         let city = st.city.as_ref().unwrap();
         let plan = st.interiors.plan(city, tower).unwrap().clone();
         st.interiors.ensure(city, tower, 0).unwrap();
-        st.interiors.ensure(city, tower, plan.top).unwrap();
+        st.interiors.ensure(city, tower, plan.top()).unwrap();
         // On the ground floor: out, or to the bridge; not up to the roof.
         let (_, ground) = st.interiors.floor(tower, 0).unwrap();
         let at = ground.doorstep(&ground.exits[0]);
@@ -1342,7 +1342,7 @@ mod tests {
             _ => panic!("{leg:?}"),
         }
         // Beside the roof door upstairs: down, not out onto this roof.
-        let (_, upstairs) = st.interiors.floor(tower, plan.top).unwrap();
+        let (_, upstairs) = st.interiors.floor(tower, plan.top()).unwrap();
         let roof = upstairs
             .exits
             .iter()
@@ -1353,13 +1353,13 @@ mod tests {
             &mut st,
             Place::Floor {
                 building: tower,
-                level: plan.top,
+                level: plan.top(),
             },
             at,
         );
         let leg = super::leg(&st, target).unwrap();
         assert!(
-            matches!(leg.through, Through::Lift(l) if l < plan.top)
+            matches!(leg.through, Through::Lift(l) if l < plan.top())
                 || matches!(leg.through, Through::Stairs { up: false, .. }),
             "{leg:?}"
         );
