@@ -1,6 +1,6 @@
 //! Floor layouts: the frame every floor shares, then one builder per floor type.
 
-use super::floor::{Exit, Floor, Role, Room, RoomKind, Station};
+use super::floor::{DoorLock, Exit, Floor, Role, Room, RoomKind, Station, doorstep_of};
 use super::plan::{FloorPlan, FloorType, LinkKind, SCALE};
 use crate::geom::{Pos, Rect, Size};
 use crate::lighting;
@@ -17,23 +17,31 @@ pub(super) mod clinics;
 mod home;
 mod lights;
 
-pub(super) struct Builder<'a> {
-    city: &'a City,
+/// One floor being laid out: today's builder with its city, or a venue's level drawn from
+/// its layout without one.
+pub(in crate::interior) struct Builder<'a> {
+    /// The city whose doors today's builder opens; None for a venue's level.
+    city: Option<&'a City>,
+    /// The seed the lights' moods read: the city's, or a venue's layout seed.
+    city_seed: u64,
     plan: &'a FloorPlan,
-    level: i32,
-    tiles: crate::geom::Grid<Tile>,
-    rooms: Vec<Room>,
+    pub(in crate::interior) level: i32,
+    /// This level's size: the plan's, but for a venue's deep levels.
+    pub(in crate::interior) size: Size,
+    pub(in crate::interior) tiles: crate::geom::Grid<Tile>,
+    pub(in crate::interior) rooms: Vec<Room>,
     stations: Vec<Station>,
-    exits: Vec<Exit>,
-    rng: ChaCha8Rng,
+    pub(in crate::interior) exits: Vec<Exit>,
+    pub(in crate::interior) locks: Vec<DoorLock>,
+    pub(in crate::interior) rng: ChaCha8Rng,
     /// Tiles that take neither a wall nor furniture: the exits, their doorsteps, the
     /// shafts.
-    reserved: HashSet<Pos>,
+    pub(in crate::interior) reserved: HashSet<Pos>,
     /// Tiles that take no furniture, so a doorway and the shafts stay approachable;
     /// a room wall may still run through them.
-    clear: HashSet<Pos>,
+    pub(in crate::interior) clear: HashSet<Pos>,
     /// Every exit's doorstep.
-    doorsteps: Vec<Pos>,
+    pub(in crate::interior) doorsteps: Vec<Pos>,
     /// The floor's own seed, for the fittings' wear.
     seed: u64,
     /// The lights the floor is lit from, as `light()` places them.
@@ -60,7 +68,7 @@ pub(in crate::interior) fn is_corner(r: Rect, p: Pos) -> bool {
 }
 
 /// Whether a room has walls of its own.
-fn walled(r: &Room) -> bool {
+pub(in crate::interior) fn walled(r: &Room) -> bool {
     !matches!(
         r.kind,
         RoomKind::Lobby
@@ -142,49 +150,55 @@ pub(in crate::interior) fn glazed_edges(city: &City, fp: Rect) -> Vec<u8> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(city: &'a City, plan: &'a FloorPlan, level: i32) -> Self {
-        let seed = hash64(
-            hash64(city.seed, plan.building.index() as u64),
-            level as i64 as u64,
-        );
-        let mut tiles = crate::geom::Grid::filled(plan.size, Tile::new(Terrain::Floor));
-        let frame = plan.size.rect();
-        for p in frame.border() {
+    /// Level `level` of `plan`, floor inside its frame wall, its rng and its fittings'
+    /// wear from `seed`; `city` opens its doors (today's builder), `city_seed` sets its
+    /// lights' moods.
+    pub(in crate::interior) fn new(
+        city: Option<&'a City>,
+        city_seed: u64,
+        plan: &'a FloorPlan,
+        level: i32,
+        seed: u64,
+    ) -> Self {
+        let size = plan.size_of(level);
+        let mut tiles = crate::geom::Grid::filled(size, Tile::new(Terrain::Floor));
+        for p in size.rect().border() {
             tiles[p].terrain = Terrain::Wall;
         }
-        let mut b = Builder {
+        Builder {
             city,
+            city_seed,
             plan,
             level,
+            size,
             tiles,
             rooms: Vec::new(),
             stations: Vec::new(),
             exits: Vec::new(),
+            locks: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(seed),
             reserved: HashSet::new(),
             clear: HashSet::new(),
             doorsteps: Vec::new(),
             seed,
             emitters: Vec::new(),
-            ambient: crate::geom::Grid::filled(plan.size, [0.0; 3]),
-        };
-        b.windows();
-        b
+            ambient: crate::geom::Grid::filled(size, [0.0; 3]),
+        }
     }
 
     fn w(&self) -> i32 {
-        self.plan.size.w as i32
+        self.size.w as i32
     }
 
     fn h(&self) -> i32 {
-        self.plan.size.h as i32
+        self.size.h as i32
     }
 
     fn frame(&self) -> Rect {
-        self.plan.size.rect()
+        self.size.rect()
     }
 
-    fn inner(&self) -> Rect {
+    pub(in crate::interior) fn inner(&self) -> Rect {
         self.frame().inset(1)
     }
 
@@ -202,7 +216,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Whether a tile may take furniture or a station.
-    fn open(&self, p: Pos) -> bool {
+    pub(in crate::interior) fn open(&self, p: Pos) -> bool {
         self.inner().contains(p)
             && !self.reserved.contains(&p)
             && !self.clear.contains(&p)
@@ -210,9 +224,8 @@ impl<'a> Builder<'a> {
             && self.tiles[p].feature.is_none()
     }
 
-    /// Windows every other tile on the sides that face the street outside.
-    fn windows(&mut self) {
-        let facing = glazed_edges(self.city, self.plan.footprint);
+    /// Windows every other tile on the frame's sides `facing` (as `edge` numbers them).
+    pub(in crate::interior) fn windows(&mut self, facing: &[u8]) {
         let frame = self.frame();
         for p in frame.border() {
             if is_corner(frame, p) || !facing.contains(&edge(frame, p)) {
@@ -224,14 +237,14 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The doors of this floor, from the city map's doors on the floor's stratum.
+    /// The doors of this floor, from the city map's doors on the floor's stratum; none
+    /// without a city.
     fn exits(&mut self) {
-        let Some(stratum) = self.plan.door_stratum(self.level) else {
+        let (Some(city), Some(stratum)) = (self.city, self.plan.door_stratum(self.level)) else {
             return;
         };
         let fp = self.plan.footprint;
-        let doors: Vec<Pos> = self
-            .city
+        let doors: Vec<Pos> = city
             .portals(self.plan.building)
             .into_iter()
             .filter(|(k, _)| *k == stratum)
@@ -280,16 +293,7 @@ impl<'a> Builder<'a> {
                 landing,
                 door,
             };
-            let probe = Floor {
-                level: self.level,
-                tiles: self.tiles.clone(),
-                light: crate::geom::Grid::filled(self.plan.size, 0),
-                glow: crate::geom::Grid::filled(self.plan.size, (0, 0, 0)),
-                rooms: Vec::new(),
-                exits: Vec::new(),
-                stations: Vec::new(),
-            };
-            let step = probe.doorstep(&exit);
+            let step = doorstep_of(self.size, at);
             self.tiles[step].terrain = Terrain::Floor;
             self.tiles[step].feature = None;
             self.reserved.insert(at);
@@ -396,7 +400,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn put(&mut self, p: Pos, piece: Furniture) -> bool {
+    pub(in crate::interior) fn put(&mut self, p: Pos, piece: Furniture) -> bool {
         if !self.open(p) {
             return false;
         }
@@ -405,10 +409,15 @@ impl<'a> Builder<'a> {
     }
 
     /// A station: a bare floor tile nobody must pass through.
-    fn station(&mut self, p: Pos, role: Role) {
-        if self.open(p) && !self.stations.iter().any(|s| s.pos == p) {
+    pub(in crate::interior) fn station(&mut self, p: Pos, role: Role) {
+        if self.open(p) && self.station_free(p) {
             self.stations.push(Station { pos: p, role });
         }
+    }
+
+    /// Whether nobody stands at `p` yet.
+    pub(in crate::interior) fn station_free(&self, p: Pos) -> bool {
+        !self.stations.iter().any(|s| s.pos == p)
     }
 
     fn wall_line(&mut self, from: Pos, to: Pos) {
@@ -445,13 +454,8 @@ impl<'a> Builder<'a> {
     /// the back.
     fn lobby(&mut self) {
         let frame = self.frame();
-        self.rooms.push(Room {
-            rect: self.inner(),
-            kind: RoomKind::Lobby,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(self.inner(), RoomKind::Lobby, None, false, 0));
         let Some(main) = self.exits.first().copied() else {
             return;
         };
@@ -516,13 +520,8 @@ impl<'a> Builder<'a> {
         } else {
             Rect::new(c0, 1, 2, h - 2)
         };
-        self.rooms.push(Room {
-            rect: corridor,
-            kind: RoomKind::Corridor,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(corridor, RoomKind::Corridor, None, false, 0));
         // Walls along both sides of the corridor.
         self.wall_line(at(1, c0 - 1), at(along - 2, c0 - 1));
         self.wall_line(at(1, c1 + 1), at(along - 2, c1 + 1));
@@ -573,13 +572,8 @@ impl<'a> Builder<'a> {
                             self.tiles[p].terrain = Terrain::Floor;
                         }
                     }
-                    self.rooms.push(Room {
-                        rect,
-                        kind: RoomKind::Corridor,
-                        door: None,
-                        private: false,
-                        number: 0,
-                    });
+                    self.rooms
+                        .push(Room::new(rect, RoomKind::Corridor, None, false, 0));
                     a = end + 1;
                     continue;
                 }
@@ -625,13 +619,8 @@ impl<'a> Builder<'a> {
                     0
                 };
                 self.furnish_room(rect, room_kind, door);
-                self.rooms.push(Room {
-                    rect,
-                    kind: room_kind,
-                    door,
-                    private,
-                    number: room_number,
-                });
+                self.rooms
+                    .push(Room::new(rect, room_kind, door, private, room_number));
                 a = end + 1;
             }
         }
@@ -655,7 +644,12 @@ impl<'a> Builder<'a> {
     }
 
     /// What a room of a kind holds, and the stations beside it.
-    fn furnish_room(&mut self, rect: Rect, kind: RoomKind, door: Option<Pos>) {
+    pub(in crate::interior) fn furnish_room(
+        &mut self,
+        rect: Rect,
+        kind: RoomKind,
+        door: Option<Pos>,
+    ) {
         if let Some(d) = door {
             for n in d.neighbors4() {
                 if rect.contains(n) {
@@ -786,34 +780,19 @@ impl<'a> Builder<'a> {
         self.wall_line(from, to);
         let door = if self.door(door) { Some(door) } else { None };
         self.furnish_room(open, RoomKind::OpenPlan, None);
-        self.rooms.push(Room {
-            rect: open,
-            kind: RoomKind::OpenPlan,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(open, RoomKind::OpenPlan, None, false, 0));
         self.furnish_room(office, RoomKind::Suite, door);
-        self.rooms.push(Room {
-            rect: office,
-            kind: RoomKind::Suite,
-            door,
-            private: door.is_some(),
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(office, RoomKind::Suite, door, door.is_some(), 0));
     }
 
     /// Shelving rows, the shafts and the basement door.
     fn basement(&mut self) {
         let inner = self.inner();
         self.furnish_room(inner, RoomKind::Storage, None);
-        self.rooms.push(Room {
-            rect: inner,
-            kind: RoomKind::Storage,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(inner, RoomKind::Storage, None, false, 0));
     }
 
     /// Whether every tile of a rect is bare floor nobody has claimed.
@@ -862,13 +841,7 @@ impl<'a> Builder<'a> {
             .find(|d| self.inner().contains(*d) && self.tiles[*d].terrain == Terrain::Wall)
             .filter(|d| self.door(*d));
         self.furnish_room(inside, kind, door);
-        let room = Room {
-            rect: inside,
-            kind,
-            door,
-            private: private && door.is_some(),
-            number: 0,
-        };
+        let room = Room::new(inside, kind, door, private && door.is_some(), 0);
         self.rooms.push(room.clone());
         Some(room)
     }
@@ -970,13 +943,8 @@ impl<'a> Builder<'a> {
     /// The bar: a counter along the wall opposite the door with the staff behind it,
     /// tables and stools, toilets, a locked back room; a club adds a stage.
     fn bar(&mut self, club: bool) {
-        self.rooms.push(Room {
-            rect: self.inner(),
-            kind: RoomKind::Bar,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(self.inner(), RoomKind::Bar, None, false, 0));
         self.corner_room(4, 4, RoomKind::Toilets, false);
         self.corner_room(5, 4, RoomKind::BackRoom, true);
         let len = self.opposite_len();
@@ -1018,13 +986,8 @@ impl<'a> Builder<'a> {
                         wear: Wear::Ok,
                     }));
                 }
-                self.rooms.push(Room {
-                    rect,
-                    kind: RoomKind::Stage,
-                    door: None,
-                    private: false,
-                    number: 0,
-                });
+                self.rooms
+                    .push(Room::new(rect, RoomKind::Stage, None, false, 0));
             }
         }
         // The counter: the wall opposite the door, else another wall.
@@ -1042,13 +1005,8 @@ impl<'a> Builder<'a> {
 
     /// A hall with the shrine at the far wall and a locked side room.
     fn temple(&mut self) {
-        self.rooms.push(Room {
-            rect: self.inner(),
-            kind: RoomKind::Hall,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(self.inner(), RoomKind::Hall, None, false, 0));
         self.corner_room(4, 4, RoomKind::BackRoom, true);
         // The shrine on the wall opposite the door, as near its middle as a free
         // span allows (the other door's doorstep may sit there).
@@ -1082,13 +1040,8 @@ impl<'a> Builder<'a> {
             self.station(before, Role::Shrine);
             let rect = Rect::new(shrine.x.min(before.x) - 1, shrine.y.min(before.y) - 1, 3, 3);
             if let Some(r) = rect.intersection(self.inner()) {
-                self.rooms.push(Room {
-                    rect: r,
-                    kind: RoomKind::Shrine,
-                    door: None,
-                    private: false,
-                    number: 0,
-                });
+                self.rooms
+                    .push(Room::new(r, RoomKind::Shrine, None, false, 0));
             }
         }
     }
@@ -1098,13 +1051,8 @@ impl<'a> Builder<'a> {
         let inner = self.inner();
         self.corner_room(5, 4, RoomKind::Office, true);
         self.furnish_room(inner, RoomKind::Hall, None);
-        self.rooms.push(Room {
-            rect: inner,
-            kind: RoomKind::Hall,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(inner, RoomKind::Hall, None, false, 0));
     }
 
     /// Machine rows with a station at each, a lockers room, a locked office.
@@ -1124,13 +1072,8 @@ impl<'a> Builder<'a> {
             }
             y += 4;
         }
-        self.rooms.push(Room {
-            rect: inner,
-            kind: RoomKind::Hall,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(inner, RoomKind::Hall, None, false, 0));
     }
 
     /// Bays three wide along the wall opposite the door, a locked office.
@@ -1153,13 +1096,8 @@ impl<'a> Builder<'a> {
             }
             a += 4;
         }
-        self.rooms.push(Room {
-            rect: inner,
-            kind: RoomKind::Bays,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms
+            .push(Room::new(inner, RoomKind::Bays, None, false, 0));
     }
 
     // ---- finishing --------------------------------------------------------
@@ -1168,7 +1106,7 @@ impl<'a> Builder<'a> {
     /// pieces meet, around locked rooms where a way exists, else through them (and
     /// then they are no longer locked).
     fn connect(&mut self) {
-        let size = self.plan.size;
+        let size = self.size;
         let inner = self.inner();
         for _ in 0..16 {
             let comps = components(size, |p| self.tiles[p].is_walkable());
@@ -1233,10 +1171,10 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn finish(self) -> Floor {
+    pub(in crate::interior) fn finish(self) -> Floor {
         let tiles = &self.tiles;
         let glow = lighting::compute_coloured(
-            self.plan.size,
+            self.size,
             |p| self.ambient[p],
             |p| tiles.get(p).is_none_or(|t| t.blocks_sight()),
             &self.emitters,
@@ -1252,12 +1190,18 @@ impl<'a> Builder<'a> {
             rooms: self.rooms,
             exits: self.exits,
             stations,
+            locks: self.locks,
         }
     }
 }
 
 fn build<'a>(city: &'a City, plan: &'a FloorPlan, level: i32) -> Builder<'a> {
-    let mut b = Builder::new(city, plan, level);
+    let seed = hash64(
+        hash64(city.seed, plan.building.index() as u64),
+        level as i64 as u64,
+    );
+    let mut b = Builder::new(Some(city), city.seed, plan, level, seed);
+    b.windows(&glazed_edges(city, plan.footprint));
     b.exits();
     b.shafts();
     match plan.floor_type(level) {

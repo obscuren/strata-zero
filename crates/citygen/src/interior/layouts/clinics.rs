@@ -322,13 +322,13 @@ impl Builder<'_> {
                 .copied()
                 .filter(|_| !open_side)
                 .find(|d| d.neighbors4().any(|n| region.contains(&n)));
-            rooms.push(Room {
-                rect: Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+            rooms.push(Room::new(
+                Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1),
                 kind,
                 door,
-                private: door.is_some(),
-                number: 0,
-            });
+                door.is_some(),
+                0,
+            ));
         }
         // The surgery first, then the locked rooms: `room_at` takes the first rect that
         // holds a tile, and the front room's wraps around both.

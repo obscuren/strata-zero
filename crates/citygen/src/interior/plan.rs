@@ -1,6 +1,8 @@
 //! The plan of a closed building's floors: how many, which open onto which stratum,
 //! and the links between them (lifts, stairs, escalators, ladders and crawls).
 
+use super::floor::{Role, RoomKind};
+use super::venue::{PlannedRoom, VenueLayout, WayInKind};
 use crate::clinic::{Front, clinic_front};
 use crate::geom::{Pos, Rect, Size};
 use crate::ids::BuildingId;
@@ -68,6 +70,25 @@ pub struct FloorPlan {
     /// A ripperdoc's clinic: its front and how its grid is turned; `None` for every
     /// other building.
     pub clinic: Option<ClinicPlan>,
+    /// Levels drawn at another size than `size`: a venue's deep levels.
+    #[serde(default)]
+    pub sizes: Vec<(i32, Size)>,
+    /// A venue's crawls in from the city, each to its grille.
+    #[serde(default)]
+    pub crawls: Vec<CrawlWay>,
+    /// The layout a venue's floors are drawn from; None: today's builder.
+    #[serde(default)]
+    pub venue: Option<Box<VenueLayout>>,
+}
+
+/// A crawl in from the city: from the city tile `outside` on `stratum` to the grille at
+/// `at` on `level`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CrawlWay {
+    pub stratum: StratumKind,
+    pub outside: Pos,
+    pub level: i32,
+    pub at: Pos,
 }
 
 /// A level whose doors open onto a stratum.
@@ -173,7 +194,8 @@ fn classic_links(levels: &[i32], lift: Option<Pos>, stair: Option<Pos>) -> Vec<L
 /// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead; saves
 /// written before its levels named their doors name its bridge floor and whether it
 /// has a roof door; and saves written before its links name its lift bank and its
-/// stairwell, both on every floor.
+/// stairwell, both on every floor. Saves written before venues hold no `sizes`, `crawls`
+/// or `venue`: today's builder.
 #[derive(serde::Deserialize)]
 struct FloorPlanRead {
     building: BuildingId,
@@ -202,6 +224,12 @@ struct FloorPlanRead {
     atrium: Option<Rect>,
     home_level: Option<i32>,
     clinic: Option<ClinicPlan>,
+    #[serde(default)]
+    sizes: Vec<(i32, Size)>,
+    #[serde(default)]
+    crawls: Vec<CrawlWay>,
+    #[serde(default)]
+    venue: Option<Box<VenueLayout>>,
 }
 
 impl From<FloorPlanRead> for FloorPlan {
@@ -243,6 +271,9 @@ impl From<FloorPlanRead> for FloorPlan {
             atrium: r.atrium,
             home_level: r.home_level,
             clinic: r.clinic,
+            sizes: r.sizes,
+            crawls: r.crawls,
+            venue: r.venue,
         }
     }
 }
@@ -476,7 +507,73 @@ impl FloorPlan {
             atrium,
             home_level,
             clinic,
+            sizes: Vec::new(),
+            crawls: Vec::new(),
+            venue: None,
         })
+    }
+
+    /// A venue's plan: its levels, the frame's doors (those on levels the layout lacks
+    /// too, which the layout bars), its links, the sizes of its levels that differ from
+    /// the frame's, its crawls in, and the layout its floors are drawn from.
+    pub fn of_layout(layout: VenueLayout) -> FloorPlan {
+        let plan = FloorPlan::of_venue(&layout);
+        FloorPlan {
+            venue: Some(Box::new(layout)),
+            ..plan
+        }
+    }
+
+    /// `of_layout` without the layout: what a venue's floor is drawn on.
+    pub(in crate::interior) fn of_venue(layout: &VenueLayout) -> FloorPlan {
+        let frame = &layout.frame;
+        let mut doors: Vec<LevelDoor> = Vec::new();
+        for d in &frame.doors {
+            let door = LevelDoor {
+                level: d.level,
+                stratum: d.stratum,
+            };
+            if !doors.contains(&door) {
+                doors.push(door);
+            }
+        }
+        let crawls = (layout.ways_in.iter())
+            .filter_map(|w| match w.kind {
+                WayInKind::Crawl { stratum, outside } => Some(CrawlWay {
+                    stratum,
+                    outside,
+                    level: w.level,
+                    at: w.at,
+                }),
+                WayInKind::Door { .. } => None,
+            })
+            .collect();
+        FloorPlan {
+            building: frame.building.unwrap_or(BuildingId(0)),
+            kind: frame.kind,
+            theme: frame.theme,
+            footprint: frame.footprint,
+            size: frame.size,
+            levels: layout.levels.iter().map(|x| x.level).collect(),
+            doors,
+            links: layout.links.clone(),
+            atrium: None,
+            home_level: None,
+            clinic: None,
+            sizes: (layout.levels.iter())
+                .filter(|x| x.size != frame.size)
+                .map(|x| (x.level, x.size))
+                .collect(),
+            crawls,
+            venue: None,
+        }
+    }
+
+    /// The size `level` is drawn at: `size`, but for a venue's deep levels.
+    pub fn size_of(&self, level: i32) -> Size {
+        (self.sizes.iter())
+            .find(|(l, _)| *l == level)
+            .map_or(self.size, |(_, s)| *s)
     }
 
     /// The building's floors, the lowest first.
@@ -519,6 +616,8 @@ impl FloorPlan {
         }
     }
 
+    /// What today's builder lays `level` out as; a venue's levels are drawn from its
+    /// layout instead.
     pub fn floor_type(&self, level: i32) -> FloorType {
         // Every floor of a clinic is its grid, the laundromat's cellar too.
         if self.clinic.is_some() {
@@ -567,11 +666,29 @@ impl FloorPlan {
     }
 
     /// The floors people work on: the office floors of a tower, the one floor of
-    /// everything else.
+    /// everything else; a venue's levels with a room people work in, else its ground.
     pub fn work_floors(&self) -> Vec<i32> {
         // A clinic's doc works by the chair: the laundromat's in its cellar.
         if let Some(c) = self.clinic {
             return vec![1 - c.front.floors() as i32];
+        }
+        if let Some(v) = &self.venue {
+            let work = |r: &Role| {
+                matches!(
+                    r,
+                    Role::Desk
+                        | Role::Reception
+                        | Role::Bar
+                        | Role::Table
+                        | Role::Machine
+                        | Role::Shelf
+                )
+            };
+            let levels: Vec<i32> = (v.levels.iter())
+                .filter(|x| x.rooms.iter().any(|r| r.stations.iter().any(work)))
+                .map(|x| x.level)
+                .collect();
+            return if levels.is_empty() { vec![0] } else { levels };
         }
         let offices: Vec<i32> = self
             .levels()
@@ -588,6 +705,13 @@ impl FloorPlan {
 
     /// The floors with flats or rooms: where residents and guests are.
     pub fn corridor_floors(&self) -> Vec<i32> {
+        if let Some(v) = &self.venue {
+            let rooms = |r: &PlannedRoom| matches!(r.kind, RoomKind::HotelRoom | RoomKind::Flat);
+            return (v.levels.iter())
+                .filter(|x| x.rooms.iter().any(rooms))
+                .map(|x| x.level)
+                .collect();
+        }
         self.levels()
             .filter(|l| matches!(self.floor_type(*l), FloorType::Corridor | FloorType::Atrium))
             .collect()

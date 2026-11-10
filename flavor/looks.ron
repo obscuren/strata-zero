@@ -120,6 +120,7 @@ Looks(
             "Coloured light on the stage boards, waiting for somebody.",
             "The stage glows in two colours that don't agree.",
         ],
+        "shutter": ["A steel shutter down across the tunnel mouth, chained to a ring in the floor."],
     },
     furniture: {
         "desk": ["A desk with a cold monitor and a mug ring nobody wiped."],
@@ -178,6 +179,7 @@ Looks(
         "escalator": ["Grooved steps grinding along, the handrail a beat behind them."],
         "stairs": ["Steps worn hollow by the whole city going up and down."],
         "ladder": ["Rungs bolted into the wall, cold and slick."],
+        "track": ["Two rails on a bed of grit and old cigarette ends."],
         "manhole": ["A cast-iron lid, pried loose often enough to sit crooked."],
         "flat_door": ["Steel door, a peephole, a keypad under a cracked cover."],
     },

@@ -123,6 +123,7 @@ fn feature_name(f: Feature) -> Option<(&'static str, &'static str)> {
         Feature::Pipe => ("Pipe", "pipe"),
         Feature::Cable => ("Cable", "cable"),
         Feature::Awning => ("Awning", "awning"),
+        Feature::Shutter => ("Shutter", "shutter"),
         Feature::Fitting(x) => fitting_name(x),
         _ => return None,
     })
@@ -872,6 +873,14 @@ pub fn look_card(
         }
     } else {
         ground(&location, mark(), tile, own, &mut card);
+        // A station's track has its line, as the stairs do.
+        if visible && !own && tile.terrain == Terrain::Track {
+            card.body.extend(
+                looks
+                    .line(Group::Fixture, "track", seed, at)
+                    .map(String::from),
+            );
+        }
     }
     // What the story left on the tile, its own paragraph.
     if visible
@@ -1265,6 +1274,56 @@ mod tests {
             second.contains("up to") || second.contains("down to"),
             "{second}"
         );
+    }
+
+    #[test]
+    fn a_track_and_its_shutter_read_their_lines() {
+        use citygen::venue::{PieceKind, VenueFrame, VenuePack, lay_out};
+        // Whichever type the data lays a track in, over its own frame.
+        let (layout, level, track) = (VenuePack::builtin().types.iter())
+            .flat_map(|t| (0..10).filter_map(|seed| lay_out(t, VenueFrame::own(t), seed).ok()))
+            .find_map(|l| {
+                let (level, piece) = l.levels.iter().find_map(|x| {
+                    let p = x.pieces.iter().find(|p| p.kind == PieceKind::Track)?;
+                    Some((x.level, p.clone()))
+                })?;
+                Some((l, level, piece))
+            })
+            .expect("a type lays a track");
+        let mut st = state(false);
+        let city = st.city.clone().unwrap();
+        let plan = FloorPlan::of_layout(layout);
+        let b = plan.building;
+        st.interiors.put_plan(plan);
+        st.interiors.ensure(&city, b, level).unwrap();
+        let place = Place::Floor { building: b, level };
+        fn map(st: &AppState, place: Place) -> MapRef<'_> {
+            MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap()
+        }
+        // On the rails beside the shutter at the track's end.
+        let shutter = track.ends[0];
+        let on = (track.rect.iter())
+            .find(|p| p.manhattan(shutter) == 1)
+            .unwrap();
+        let rail = (track.rect.iter()).find(|p| p.manhattan(on) == 1).unwrap();
+        let mut p = Player::at(place, on);
+        p.update_fov(&map(&st, place), 0);
+        st.player = Some(p);
+        let looks = Looks::load();
+        let line = |g, key| looks.line(g, key, 0, Pos::new(0, 0)).unwrap().to_string();
+        let c = look_card(&st, &map(&st, place), place, shutter, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Shutter"), "{c:?}");
+        assert_eq!(c.body, vec![line(Group::Feature, "shutter")]);
+        let c = look_card(&st, &map(&st, place), place, rail, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Track"), "{c:?}");
+        assert_eq!(c.body, vec![line(Group::Fixture, "track")]);
     }
 
     #[test]

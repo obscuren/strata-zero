@@ -2,6 +2,7 @@
 //! metro station), with zones, the locks between them and the links between levels.
 //! The Rust never names a type: a new type is a change to the data.
 
+mod draw;
 mod frame;
 mod layout;
 mod levels;
@@ -11,6 +12,7 @@ mod types;
 mod ways;
 mod zones;
 
+pub use draw::draw_level;
 pub use frame::*;
 pub use layout::*;
 pub use types::*;

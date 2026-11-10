@@ -70,9 +70,11 @@ pub enum Terrain {
     Wash,
     /// An escalator's landing inside a building.
     Escalator,
+    /// A station's track: walked along, seen across.
+    Track,
 }
 
-pub const ALL_TERRAIN: [Terrain; 43] = [
+pub const ALL_TERRAIN: [Terrain; 44] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -116,6 +118,7 @@ pub const ALL_TERRAIN: [Terrain; 43] = [
     Terrain::Rise,
     Terrain::Wash,
     Terrain::Escalator,
+    Terrain::Track,
 ];
 
 impl Terrain {
@@ -166,6 +169,7 @@ impl Terrain {
             Rise => "rise",
             Wash => "dry wash",
             Escalator => "escalator",
+            Track => "track",
         }
     }
 
@@ -224,6 +228,8 @@ pub enum Feature {
     PowerLine(bool),
     /// A fire burning in an oil drum, out in a city's outskirts; nobody walks through it.
     FireBarrel,
+    /// A steel shutter across the end of a track, set in the wall; nobody walks through it.
+    Shutter,
 }
 
 /// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
@@ -367,7 +373,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 25] = [
+pub const ALL_FEATURES: [Feature; 26] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -401,6 +407,7 @@ pub const ALL_FEATURES: [Feature; 25] = [
     Feature::PowerLine(false),
     Feature::PowerLine(true),
     Feature::FireBarrel,
+    Feature::Shutter,
 ];
 
 /// One cell of a stratum.
@@ -464,6 +471,7 @@ impl Tile {
                 | Rise
                 | Wash
                 | Escalator
+                | Track
         );
         let feature_ok = !matches!(
             self.feature,
@@ -478,6 +486,7 @@ impl Tile {
                     | Feature::Pylon
                     | Feature::FireBarrel
                     | Feature::Sign(_)
+                    | Feature::Shutter
             )
         );
         terrain_ok && feature_ok
@@ -536,11 +545,16 @@ mod tests {
         let mut line = Tile::new(Dirt);
         line.feature = Some(Feature::PowerLine(true));
         assert!(line.is_walkable() && !line.blocks_sight());
-        assert_eq!(ALL_TERRAIN.len(), 43);
+        assert_eq!(ALL_TERRAIN.len(), 44);
         assert_eq!(ALL_TERRAIN[41], Wash, "appended, so saves keep indices");
-        assert_eq!(*ALL_TERRAIN.last().unwrap(), Escalator);
+        assert_eq!(
+            ALL_TERRAIN[42], Escalator,
+            "appended, so saves keep indices"
+        );
         assert!(Tile::new(Escalator).is_walkable() && Tile::new(Escalator).is_connector());
-        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::FireBarrel);
+        assert_eq!(*ALL_TERRAIN.last().unwrap(), Track);
+        assert_eq!(ALL_FEATURES[24], Feature::FireBarrel, "appended");
+        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::Shutter);
         let mut fire = Tile::new(Dirt);
         fire.feature = Some(Feature::FireBarrel);
         assert!(!fire.is_walkable() && !fire.blocks_sight());
@@ -564,8 +578,8 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 43);
-        assert_eq!(ALL_FEATURES.len(), 25);
+        assert_eq!(ALL_TERRAIN.len(), 44);
+        assert_eq!(ALL_FEATURES.len(), 26);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -583,7 +597,7 @@ mod tests {
             assert!(!tile.blocks_sight());
             assert!(!tile.is_building_part());
         }
-        assert_eq!(ALL_TERRAIN.len(), 43);
+        assert_eq!(ALL_TERRAIN.len(), 44);
         assert_eq!(
             ALL_TERRAIN[27],
             Terrain::Railing,
@@ -623,6 +637,19 @@ mod tests {
     }
 
     #[test]
+    fn a_track_is_walked_and_seen_across_and_its_shutter_shuts() {
+        let track = Tile::new(Terrain::Track);
+        assert!(track.is_walkable() && !track.blocks_sight() && !track.is_connector());
+        assert_eq!(Terrain::Track.label(), "track");
+        let mut shutter = Tile::new(Terrain::Wall);
+        shutter.feature = Some(Feature::Shutter);
+        assert!(!shutter.is_walkable() && shutter.blocks_sight());
+        let mut dropped = Tile::new(Terrain::Floor);
+        dropped.feature = Some(Feature::Shutter);
+        assert!(!dropped.is_walkable(), "nobody walks through a shutter");
+    }
+
+    #[test]
     fn feature_save_encoding_keeps_its_old_indices() {
         // Postcard writes the variant index first; saves written before the
         // street pieces existed depend on these staying put.
@@ -648,8 +675,8 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 43);
-        assert_eq!(ALL_FEATURES.len(), 25);
+        assert_eq!(ALL_TERRAIN.len(), 44);
+        assert_eq!(ALL_FEATURES.len(), 26);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],

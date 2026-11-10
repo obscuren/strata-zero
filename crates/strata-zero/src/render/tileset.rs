@@ -129,6 +129,7 @@ pub fn glyph_for(
             Feature::PowerLine(false) => '┄',
             Feature::PowerLine(true) => '┆',
             Feature::FireBarrel => '•',
+            Feature::Shutter => '▓',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -290,6 +291,7 @@ pub fn glyph_for(
             Some(ConnDir { down: true, .. }) => '↓',
             _ => '↑',
         },
+        Terrain::Track => '╪',
     }
 }
 
@@ -420,6 +422,8 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::Ford => (Rgb(90, 140, 190), Rgb(14, 40, 64)),
         Terrain::Rise => (Rgb(70, 60, 44), Rgb(20, 17, 13)),
         Terrain::Wash => (Rgb(96, 84, 60), Rgb(22, 19, 14)),
+        // The city's rails, on a station's floor.
+        Terrain::Track => (Rgb(140, 125, 95), ts.floor),
     }
 }
 
@@ -480,6 +484,7 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         // round 2's fire in a drum, guttering
         Feature::FireBarrel => FIRE.scale(flicker(tick, tile.variant, true)),
         Feature::PowerLine(_) => Rgb(42, 46, 54),
+        Feature::Shutter => Rgb(120, 120, 128),
     }
 }
 
@@ -952,6 +957,25 @@ mod tests {
         assert!(warm.bg.0 > warm.bg.2, "{:?}", warm.bg);
         let cold = cell(&floor, &glow_ctx(&s, Some(Rgb(140, 180, 170))));
         assert!(cold.bg.2 >= cold.bg.0, "{:?}", cold.bg);
+    }
+
+    #[test]
+    fn a_track_and_its_shutters_draw_in_their_own_colours() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let track = Tile::new(Terrain::Track);
+        assert_eq!(cell(&track, &ctx).ch, '╪');
+        assert_eq!(
+            terrain_colors(Terrain::Track, &track, &ctx, 0).0,
+            Rgb(140, 125, 95)
+        );
+        let mut shutter = Tile::new(Terrain::Wall);
+        shutter.feature = Some(Feature::Shutter);
+        assert_eq!(cell(&shutter, &ctx).ch, '▓');
+        assert_eq!(
+            feature_color(Feature::Shutter, &shutter, &ctx, 0),
+            Rgb(120, 120, 128)
+        );
     }
 
     #[test]

@@ -15,8 +15,12 @@ use crate::pathing::components;
 use crate::tile::{Feature, Terrain};
 use crate::world::City;
 
-/// Builds one floor of a plan.
+/// Builds one floor of a plan: a venue's level drawn from its layout, else today's
+/// builder's floor.
 pub fn generate_floor(city: &City, plan: &FloorPlan, level: i32) -> Floor {
+    if let Some(floor) = (plan.venue.as_deref()).and_then(|v| venue::draw_level(v, level)) {
+        return floor;
+    }
     layouts::generate(city, plan, level)
 }
 
@@ -26,10 +30,11 @@ pub fn generate_floor(city: &City, plan: &FloorPlan, level: i32) -> Floor {
 /// standing where people must pass.
 pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
     let size = floor.tiles.size();
-    if size != plan.size {
+    let want = plan.size_of(floor.level);
+    if size != want {
         return Err(format!(
             "floor {} is {:?}, the plan says {:?}",
-            floor.level, size, plan.size
+            floor.level, size, want
         ));
     }
     let comps = components(size, |p| floor.tiles[p].is_walkable());
