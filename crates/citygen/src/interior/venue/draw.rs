@@ -5,6 +5,7 @@
 //! checker proves it. A mission's copy of a level is the plain level with the layer laid
 //! on top.
 
+use super::mission::roomy;
 use super::{
     DeviceKind, LevelLayout, MissionLayer, PieceKind, PlacedPiece, PlannedRoom, VenueLayout,
     WayInKind,
@@ -16,6 +17,7 @@ use crate::interior::{Floor, FloorPlan, LinkKind};
 use crate::rng::hash64;
 use crate::tile::{Feature, Furniture, Terrain};
 use rand::Rng;
+use std::collections::BTreeSet;
 
 /// Level `level` of `layout` as a floor; None for a level it doesn't have. Its rng and
 /// its fittings' wear come from the layout's seed and the level, its lights' moods from
@@ -42,9 +44,18 @@ pub fn draw_level(layout: &VenueLayout, level: i32) -> Option<Floor> {
     for piece in &x.pieces {
         lay_piece(&mut b, x, piece);
     }
+    // Nothing stands round a roomy room's spots, so a turret or a container a copy stands
+    // there touches no furniture and cuts no way the furniture left.
+    let round_spots: BTreeSet<Pos> = (0..x.rooms.len())
+        .filter(|&i| roomy(x, i))
+        .flat_map(|i| {
+            let r = &x.rooms[i];
+            (r.spots.iter().flat_map(|p| p.neighbors8())).filter(|q| r.rect.contains(*q))
+        })
+        .collect();
     // A room whose def lists nothing stands bare: its floor, its doors and its light.
     for r in (x.rooms.iter()).filter(|r| !r.furniture.is_empty() || !r.stations.is_empty()) {
-        furnish(&mut b, r);
+        furnish(&mut b, r, &round_spots);
     }
     b.light();
     Some(b.finish())
@@ -228,7 +239,9 @@ fn rooms(x: &LevelLayout) -> Vec<Room> {
 /// a tile the rng picks with a tile between pieces, then a station for each of its roles
 /// beside a piece nobody stands at yet, the role's own kind first (a desk's for a desk
 /// station); with no piece a station fits beside, the free tile nearest the room's middle.
-fn furnish(b: &mut Builder, r: &PlannedRoom) {
+/// Neither stands on a tile `off` holds.
+fn furnish(b: &mut Builder, r: &PlannedRoom, off: &BTreeSet<Pos>) {
+    let free = |b: &Builder, p: Pos| b.open(p) && !off.contains(&p);
     let rect = r.rect;
     let mut along: Vec<Pos> = round(rect)
         .into_iter()
@@ -247,7 +260,10 @@ fn furnish(b: &mut Builder, r: &PlannedRoom) {
         let mut from = 0;
         for &piece in &r.furniture {
             let n = along.len();
-            let Some(k) = (from..n).chain(0..from).find(|&k| fits(b, along[k])) else {
+            let Some(k) = (from..n)
+                .chain(0..from)
+                .find(|&k| free(b, along[k]) && fits(b, along[k]))
+            else {
                 continue;
             };
             b.put(along[k], piece);
@@ -262,7 +278,7 @@ fn furnish(b: &mut Builder, r: &PlannedRoom) {
         order.sort_by_key(|&j| (staffed[j], !own(j)));
         let by_piece = order
             .into_iter()
-            .find_map(|j| beside(b, rect, placed[j].0).map(|p| (j, p)));
+            .find_map(|j| beside(b, rect, placed[j].0, &free).map(|p| (j, p)));
         match by_piece {
             Some((j, p)) => {
                 b.station(p, role);
@@ -271,7 +287,7 @@ fn furnish(b: &mut Builder, r: &PlannedRoom) {
             None => {
                 let middle = rect.center();
                 let free = (rect.iter())
-                    .filter(|p| b.open(*p) && b.station_free(*p))
+                    .filter(|p| free(b, *p) && b.station_free(*p))
                     .min_by_key(|p| (p.manhattan(middle), p.y, p.x));
                 if let Some(p) = free {
                     b.station(p, role);
@@ -295,11 +311,12 @@ fn piece_of(role: Role) -> Option<Furniture> {
     }
 }
 
-/// The free tile beside a piece at `at` in `rect`, nearest the room's middle.
-fn beside(b: &Builder, rect: Rect, at: Pos) -> Option<Pos> {
+/// The tile beside a piece at `at` in `rect` that `free` takes and nobody stands on,
+/// nearest the room's middle.
+fn beside(b: &Builder, rect: Rect, at: Pos, free: &impl Fn(&Builder, Pos) -> bool) -> Option<Pos> {
     let middle = rect.center();
     at.neighbors4()
-        .filter(|n| rect.contains(*n) && b.open(*n) && b.station_free(*n))
+        .filter(|n| rect.contains(*n) && free(b, *n) && b.station_free(*n))
         .min_by_key(|n| (n.manhattan(middle), n.y, n.x))
 }
 
@@ -424,6 +441,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_room_keeps_a_listed_piece_and_a_station() {
+        // Round a roomy room's spots nothing stands, and a small room keeps its furniture:
+        // a room that lists furniture holds a piece of it, and one that lists stations has
+        // one standing, over every type's own frame.
+        let types = (VenuePack::builtin().types.iter().cloned()).chain([test_type()]);
+        let (mut furnished, mut staffed) = (0, 0);
+        for t in types {
+            for seed in 0..30 {
+                let layout = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+                for l in &layout.levels {
+                    let f = draw_level(&layout, l.level).unwrap();
+                    for (r, planned) in f.rooms.iter().zip(&l.rooms) {
+                        let what =
+                            format!("{} seed {seed} level {}: {}", t.id, l.level, planned.name);
+                        if !planned.furniture.is_empty() {
+                            let piece = (r.rect.iter()).any(|q| {
+                                matches!(f.tiles[q].feature,
+                                    Some(Feature::Furniture(x)) if planned.furniture.contains(&x))
+                            });
+                            assert!(piece, "{what} at {:?} stands bare", r.rect);
+                            furnished += 1;
+                        }
+                        if !planned.stations.is_empty() {
+                            let n = (f.stations.iter()).filter(|s| r.rect.contains(s.pos));
+                            assert!(n.count() > 0, "{what} at {:?} has no station", r.rect);
+                            staffed += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(furnished > 0 && staffed > 0);
+    }
+
+    #[test]
+    fn no_furniture_or_station_stands_round_a_roomy_rooms_spot() {
+        let types = (VenuePack::builtin().types.iter().cloned()).chain([test_type()]);
+        let mut rounds = 0;
+        for t in types {
+            for seed in 0..3 {
+                let layout = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+                for l in &layout.levels {
+                    let f = draw_level(&layout, l.level).unwrap();
+                    let what = format!("{} seed {seed} level {}", t.id, l.level);
+                    let roomy = (0..l.rooms.len()).filter(|&i| roomy(l, i));
+                    for (r, at) in roomy.flat_map(|i| l.rooms[i].spots.iter().map(move |s| (i, s)))
+                    {
+                        let rect = l.rooms[r].rect;
+                        for q in at.neighbors8().filter(|q| rect.contains(*q)) {
+                            let piece = matches!(f.tiles[q].feature, Some(Feature::Furniture(_)));
+                            assert!(!piece, "{what}: furniture at {q:?} by the spot {at:?}");
+                            assert!(f.station_at(q).is_none(), "{what}: a station at {q:?}");
+                            rounds += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(rounds > 0);
     }
 
     #[test]

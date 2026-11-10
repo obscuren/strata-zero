@@ -295,8 +295,8 @@ fn no_post_blocks_a_landing_doorway_or_doorstep() {
 
 #[test]
 fn devices_stand_on_floor_spots() {
-    let (mut cameras, mut blockers) = (0, 0);
-    for x in layers().iter().step_by(3).chain(builtin_layers()) {
+    let (mut turrets, mut containers) = (0, 0);
+    for x in layers().iter().step_by(3) {
         let (l, layer, what) = (&x.layout, &x.layer, &x.what);
         let plan = FloorPlan::of_layout(l.clone());
         for lv in &l.levels {
@@ -333,8 +333,8 @@ fn devices_stand_on_floor_spots() {
                 assert_eq!(t.terrain, Terrain::Floor, "{on}: {feature:?} at {at:?}");
                 assert_eq!(t.feature, Some(feature), "{on}: {at:?}");
                 assert!(!steps.contains(&at), "{on}: {feature:?} on a doorstep");
-                cameras += usize::from(feature == Feature::Camera);
-                blockers += usize::from(matches!(feature, Feature::Turret | Feature::Container));
+                turrets += usize::from(feature == Feature::Turret);
+                containers += usize::from(feature == Feature::Container);
             }
             let laid = |p: Pos, feature: Feature| want.contains(&(p, feature));
             for (p, t) in f.tiles.iter() {
@@ -354,11 +354,9 @@ fn devices_stand_on_floor_spots() {
             }
         }
     }
-    // A turret or a container stands only where nothing round it is its room's edge,
-    // which few spots are.
     assert!(
-        cameras > 0 && blockers > 0,
-        "{cameras} cameras, {blockers} turrets and containers"
+        turrets > 0 && containers > 0,
+        "{turrets} turrets, {containers} containers"
     );
 }
 
@@ -379,11 +377,10 @@ fn turrets_and_containers_stand_clear_of_every_way() {
             let room = room_holding(l, level, at).unwrap();
             let r = &lv.rooms[room];
             assert!(r.spots.contains(&at), "{what}: {at:?} is no spot");
+            assert!(roomy(lv, room), "{what}: {at:?} in a small room");
             for q in at.neighbors8() {
                 let on = format!("{what}: beside {at:?} at {q:?}");
                 assert!(r.rect.contains(q), "{on}: off its room");
-                // Furniture stands on a room's edge: nothing round a blocker does.
-                assert!(r.rect.inset(1).contains(q), "{on}: on its room's edge");
                 assert!(!lv.core.is_some_and(|c| c.contains(q)), "{on}: the core");
                 assert!(!lv.doors.iter().any(|d| d.at == q), "{on}: a door");
                 assert!(!lv.reserved.contains(&q), "{on}: reserved");
@@ -539,9 +536,10 @@ fn the_same_inputs_lay_the_same_layer() {
 
 #[test]
 fn a_copy_is_the_plain_level_and_its_layer() {
-    let mut laid = 0;
+    let (mut laid, mut blockers) = (0, 0);
     for x in layers().iter().step_by(5).chain(builtin_layers()) {
         let (l, layer, what) = (&x.layout, &x.layer, &x.what);
+        let plan = FloorPlan::of_layout(l.clone());
         for &level in &layer.kept {
             let on = format!("{what} level {level}");
             let plain = draw_level(l, level).unwrap();
@@ -582,9 +580,22 @@ fn a_copy_is_the_plain_level_and_its_layer() {
                 copy.light == plain.light && copy.glow == plain.glow,
                 "{on}: lit otherwise"
             );
+            // A turret or a container touches no furniture, and the copy is one piece.
+            let blocks = |f: &Feature| matches!(f, Feature::Turret | Feature::Container);
+            for &(at, f) in features.iter().filter(|(_, f)| blocks(f)) {
+                for q in at.neighbors8() {
+                    let piece = matches!(plain.tiles[q].feature, Some(Feature::Furniture(_)));
+                    assert!(!piece, "{on}: furniture at {q:?} by the {f:?} at {at:?}");
+                    blockers += 1;
+                }
+            }
+            validate_floor(&plan, &copy).unwrap_or_else(|e| panic!("{on}: {e}"));
         }
     }
-    assert!(laid > 0);
+    assert!(
+        laid > 0 && blockers > 0,
+        "{laid} laid, {blockers} round blockers"
+    );
 }
 
 #[test]

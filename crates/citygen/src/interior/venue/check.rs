@@ -479,12 +479,11 @@ mod tests {
         assert!(bad(&ways, &|_| {}).contains("ways in"));
         let err = bad(small, &|m| m.kept.retain(|&k| k != 0));
         assert!(err.contains("no way") || err.contains("floors"), "{err}");
-        // A container stood in the frame's wall.
+        // A container moved onto a door.
         let err = bad(small, &|m| {
-            let level = m.kept[0];
-            let at = Pos::new(0, 0);
-            m.containers
-                .push(crate::interior::venue::Placed { level, at });
+            let c = m.containers.first_mut().unwrap();
+            let x = l.level(c.level).unwrap();
+            c.at = x.doors.iter().find(|d| !d.open).unwrap().at;
         });
         assert!(err.contains("Container"), "{err}");
         // The objective's room dropped from the copy.

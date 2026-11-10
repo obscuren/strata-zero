@@ -18,6 +18,8 @@ use super::{
 };
 use crate::geom::Pos;
 use crate::interior::RoomKind;
+use crate::interior::floor::doorstep_of;
+use crate::interior::layouts::walled_kind;
 use crate::rng::hash64;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -451,9 +453,10 @@ impl MissionLayer {
     }
 
     /// Up to `n` of `spots`, in order, that a piece nobody walks through can stand on:
-    /// free, walked by no guard, with every tile round it its room's open floor off the
-    /// room's edge (where the plain level's furniture stands, so a copy's furniture is
-    /// the plain level's) and none of them `blocked`.
+    /// free, in a roomy room (`roomy`: drawing keeps furniture off the tiles round its
+    /// spots, so nothing that stands here touches the plain level's furniture), walked by
+    /// no guard, with every tile round it its room's open floor and none of them
+    /// `blocked`.
     fn blockers(
         &self,
         layout: &VenueLayout,
@@ -477,7 +480,7 @@ impl MissionLayer {
             let Some(room) = room_holding(layout, level, at) else {
                 continue;
             };
-            if !x.rooms[room].rect.inset(2).contains(at) {
+            if !roomy(x, room) {
                 continue;
             }
             let round = |q: Pos| open_floor(x, room, q) && !blocked.contains(&(level, q));
@@ -514,6 +517,42 @@ impl MissionLayer {
 fn scale<T: Into<u32>>((lo, hi): (T, T), security: u8) -> u32 {
     let (lo, hi) = (lo.into(), hi.into());
     lo + hi.saturating_sub(lo) * u32::from(security) / 255
+}
+
+/// Whether room `room` of `x` is roomy, from the layout alone: off its spots' rings it has
+/// a tile of its edge against a wall that drawing leaves free for furniture, and another
+/// tile free for a station. Drawing keeps furniture and stations off a roomy room's spots'
+/// rings, and only a roomy room takes a turret or a container; a small room keeps its
+/// furniture and takes neither.
+pub(in crate::interior::venue) fn roomy(x: &LevelLayout, room: usize) -> bool {
+    let r = &x.rooms[room];
+    let ringed = |q: Pos| r.spots.iter().any(|s| s.chebyshev(q) <= 1);
+    let doors: Vec<Pos> = (x.doors.iter().map(|d| d.at))
+        .chain(x.exits.iter().map(|e| e.at))
+        .collect();
+    let steps: Vec<Pos> = (x.exits.iter())
+        .map(|e| doorstep_of(x.size, e.at))
+        .collect();
+    // What drawing keeps clear, or has drawn on, before the rooms are furnished.
+    let clear = |q: Pos| {
+        x.reserved.contains(&q)
+            || (doors.iter().chain(&steps)).any(|d| d.manhattan(q) <= 1)
+            || x.pieces.iter().any(|p| p.rect.grow(1).contains(q))
+            || x.core.is_some_and(|c| c.contains(q))
+    };
+    let free = |q: Pos| r.rect.contains(q) && !ringed(q) && !clear(q);
+    // A wall drawing stands outside the room at `n`: its own ring, the frame, or where no
+    // room is; never a door.
+    let frame = x.size.rect();
+    let wall = |n: Pos| {
+        !doors.contains(&n)
+            && (walled_kind(r.kind)
+                || !frame.inset(1).contains(n)
+                || !x.rooms.iter().any(|o| o.rect.contains(n)))
+    };
+    let against_wall = |q: Pos| q.neighbors4().any(|n| !r.rect.contains(n) && wall(n));
+    let free_tiles = (r.rect.iter()).filter(|q| free(*q)).count();
+    r.rect.border().any(|q| free(q) && against_wall(q)) && free_tiles >= 2
 }
 
 /// The room of `level` that has `at` as a spot, else whose floor holds it.

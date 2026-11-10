@@ -69,8 +69,13 @@ pub(in crate::interior) fn is_corner(r: Rect, p: Pos) -> bool {
 
 /// Whether a room has walls of its own.
 pub(in crate::interior) fn walled(r: &Room) -> bool {
+    walled_kind(r.kind)
+}
+
+/// Whether a room of `kind` has walls of its own.
+pub(in crate::interior) fn walled_kind(kind: RoomKind) -> bool {
     !matches!(
-        r.kind,
+        kind,
         RoomKind::Lobby
             | RoomKind::Corridor
             | RoomKind::Hall
