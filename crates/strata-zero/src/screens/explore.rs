@@ -8055,7 +8055,7 @@ mod tests {
                 let plan = st.interiors.plan_of(b.id).unwrap().clone();
                 let expected = match k {
                     StratumKind::Heights => plan.top(),
-                    StratumKind::Skyways => plan.bridge.unwrap(),
+                    StratumKind::Skyways => plan.door_level(StratumKind::Skyways).unwrap(),
                     StratumKind::Undercity => -1,
                     _ => unreachable!(),
                 };

@@ -3,7 +3,6 @@
 
 use super::Target;
 use crate::app::AppState;
-use crate::interiors::level_for;
 use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::{astar, bfs_nearest};
 use citygen::{
@@ -415,7 +414,7 @@ fn out_of(
                         .any(|e| e.stratum == k && good.contains(&e.door))
                 })
         };
-        if let Some(l) = level_for(plan, k).filter(|l| opens(*l)) {
+        if let Some(l) = plan.door_level(k).filter(|l| opens(*l)) {
             return to_level(st, map, plan, level, l, from, exits);
         }
     }
@@ -544,8 +543,8 @@ pub fn next_text(st: &AppState, leg: &Leg, target: Target) -> Option<String> {
             };
             let k = leg.place.stratum()?;
             let door = match st.interiors.plan_of(b) {
-                Some(plan) => level_for(plan, k),
-                None => FloorPlan::new(city, b).and_then(|plan| level_for(&plan, k)),
+                Some(plan) => plan.door_level(k),
+                None => FloorPlan::new(city, b).and_then(|plan| plan.door_level(k)),
             };
             Some(match up {
                 Some(l) if Some(l) != door => format!("building, then {}", FloorPlan::label(l)),
@@ -1338,7 +1337,9 @@ mod tests {
             Through::Exit => {
                 assert_ne!(onto(&leg), Some(StratumKind::Heights), "{leg:?}")
             }
-            Through::Lift(l) => assert_eq!(Some(l), plan.bridge, "{leg:?}"),
+            Through::Lift(l) => {
+                assert_eq!(Some(l), plan.door_level(StratumKind::Skyways), "{leg:?}")
+            }
             _ => panic!("{leg:?}"),
         }
         // Beside the roof door upstairs: down, not out onto this roof.

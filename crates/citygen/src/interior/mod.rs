@@ -211,7 +211,12 @@ mod tests {
             let mut h = 0;
             for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
                 let plan = FloorPlan::classic(c, b.id).unwrap();
-                let mut levels = vec![plan.lowest(), 0, plan.top(), plan.bridge.unwrap_or(0)];
+                let mut levels = vec![
+                    plan.lowest(),
+                    0,
+                    plan.top(),
+                    plan.door_level(StratumKind::Skyways).unwrap_or(0),
+                ];
                 levels.sort();
                 levels.dedup();
                 for l in levels {
@@ -251,8 +256,8 @@ mod tests {
                 size: p.size,
                 lowest: p.lowest(),
                 top: p.top(),
-                bridge: p.bridge,
-                roof: p.roof,
+                bridge: p.door_level(StratumKind::Skyways),
+                roof: p.door_level(StratumKind::Heights).is_some(),
                 lift: p.lift,
                 stair: p.stair,
                 atrium: p.atrium,
@@ -291,6 +296,30 @@ mod tests {
         assert_eq!(plan.next_level(plan.top(), true), None);
         assert!(!plan.has_level(2) && plan.has_level(4));
         assert_eq!(plan.floors(), plan.levels.len() as i32);
+    }
+
+    #[test]
+    fn each_level_says_which_stratum_its_doors_open_onto() {
+        let c = city();
+        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            assert_eq!(plan.door_stratum(0), Some(StratumKind::Street));
+            assert_eq!(plan.door_level(StratumKind::Street), Some(0));
+            assert_eq!(
+                plan.door_level(StratumKind::Undercity),
+                (plan.lowest() == -1).then_some(-1)
+            );
+            let skyways = c
+                .portals(b.id)
+                .iter()
+                .any(|(k, _)| *k == StratumKind::Skyways);
+            assert_eq!(plan.door_level(StratumKind::Skyways).is_some(), skyways);
+            assert_eq!(
+                plan.door_level(StratumKind::Heights),
+                (b.span.hi == StratumKind::Heights).then_some(plan.top())
+            );
+            assert_eq!(plan.door_level(StratumKind::Net), None);
+        }
     }
 
     #[test]
@@ -380,7 +409,7 @@ mod tests {
                 StratumKind::Skyways => assert!((3..=8).contains(&plan.top())),
                 StratumKind::Heights => {
                     assert!(plan.top() >= 7);
-                    assert!(plan.roof);
+                    assert_eq!(plan.door_level(StratumKind::Heights), Some(plan.top()));
                     seen_tall = true;
                 }
                 _ => unreachable!(),
@@ -389,8 +418,11 @@ mod tests {
                 .portals(b.id)
                 .iter()
                 .any(|(k, _)| *k == StratumKind::Skyways);
-            assert_eq!(plan.bridge.is_some(), has_bridge_door);
-            if let Some(f) = plan.bridge {
+            assert_eq!(
+                plan.door_level(StratumKind::Skyways).is_some(),
+                has_bridge_door
+            );
+            if let Some(f) = plan.door_level(StratumKind::Skyways) {
                 assert!(f >= 1 && f <= plan.top());
             }
             assert_eq!(plan.lift.is_some(), plan.floors() >= 3);
@@ -481,10 +513,10 @@ mod tests {
             assert!(r.number >= 201 && r.number < 300, "{}", r.number);
         }
         assert!(f.rooms.iter().any(|r| r.kind == RoomKind::Corridor));
-        if plan.bridge != Some(2) {
+        if plan.door_level(StratumKind::Skyways) != Some(2) {
             assert!(f.exits.is_empty());
         }
-        if let Some(bf) = plan.bridge {
+        if let Some(bf) = plan.door_level(StratumKind::Skyways) {
             let bridge = generate_floor(&c, &plan, bf);
             validate_floor(&plan, &bridge).unwrap();
             assert_eq!(bridge.exits.len(), 1);
@@ -540,7 +572,12 @@ mod tests {
         let c = city();
         for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
             let plan = FloorPlan::new(&c, b.id).unwrap();
-            for level in [plan.lowest(), 0, plan.top(), plan.bridge.unwrap_or(0)] {
+            for level in [
+                plan.lowest(),
+                0,
+                plan.top(),
+                plan.door_level(StratumKind::Skyways).unwrap_or(0),
+            ] {
                 let a = generate_floor(&c, &plan, level);
                 validate_floor(&plan, &a).unwrap_or_else(|e| panic!("{:?} {level}: {e}", b.id));
                 let again = generate_floor(&c, &plan, level);
@@ -681,7 +718,7 @@ mod tests {
             for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
                 let plan = FloorPlan::new(c, b.id).unwrap();
                 let mut levels = vec![plan.lowest(), 0, plan.top()];
-                levels.extend(plan.bridge);
+                levels.extend(plan.door_level(StratumKind::Skyways));
                 levels.push(1.min(plan.top()));
                 levels.sort();
                 levels.dedup();
@@ -824,8 +861,8 @@ mod tests {
                 plan.top(),
                 plan.lowest(),
                 plan.top(),
-                plan.bridge,
-                plan.roof
+                plan.door_level(StratumKind::Skyways),
+                plan.door_level(StratumKind::Heights).is_some()
             );
         }
     }
@@ -978,7 +1015,7 @@ mod tests {
                         assert!(chairs.is_empty(), "{what}");
                     }
                     // Every door of the building on this floor's stratum has its own exit.
-                    let stratum = plan.exit_stratum(level);
+                    let stratum = plan.door_stratum(level);
                     let doors: Vec<Pos> = c
                         .portals(b.id)
                         .into_iter()

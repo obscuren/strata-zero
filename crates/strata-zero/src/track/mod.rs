@@ -1426,7 +1426,7 @@ pub(crate) mod tests {
                 continue;
             };
             let plan = citygen::FloorPlan::new(city, b).unwrap();
-            if crate::interiors::level_for(&plan, StratumKind::Street) != Some(level) {
+            if plan.door_level(StratumKind::Street) != Some(level) {
                 return (who, b, door);
             }
         }

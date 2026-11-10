@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use crate::interior::validate_floor;
     use crate::tile::Terrain;
-    use crate::{GenParams, Generator, SizePreset};
+    use crate::{GenParams, Generator, SizePreset, StratumKind};
 
     fn medium(seed: u64) -> City {
         Generator::run(GenParams {
@@ -77,7 +77,11 @@ mod tests {
             let h = home(&c).expect("a home");
             let plan = FloorPlan::new(&c, h.building).unwrap();
             assert_eq!(plan.home_level, Some(h.level));
-            assert!(h.level >= 2 && h.level < plan.top() && Some(h.level) != plan.bridge);
+            assert!(
+                h.level >= 2
+                    && h.level < plan.top()
+                    && Some(h.level) != plan.door_level(StratumKind::Skyways)
+            );
             let f = generate_floor(&c, &plan, h.level);
             validate_floor(&plan, &f).unwrap();
             let room = f.rooms.iter().find(|r| r.kind == RoomKind::Home).unwrap();

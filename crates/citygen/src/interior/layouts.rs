@@ -207,7 +207,7 @@ impl<'a> Builder<'a> {
 
     /// The doors of this floor, from the city map's doors on the floor's stratum.
     fn exits(&mut self) {
-        let Some(stratum) = self.plan.exit_stratum(self.level) else {
+        let Some(stratum) = self.plan.door_stratum(self.level) else {
             return;
         };
         let fp = self.plan.footprint;

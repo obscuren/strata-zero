@@ -5,7 +5,6 @@ use super::route::{field, open};
 use super::ui::{job_source, story_source};
 use super::{ListingId, Resolved, Source, Target, label, locate, resolve};
 use crate::app::AppState;
-use crate::interiors::level_for;
 use crate::jobs::State;
 use crate::render::map::{MapRef, TileMap};
 use crate::ui::chrome::MAGENTA;
@@ -239,7 +238,7 @@ fn way_out(
             })
     };
     let below = || {
-        let l = level_for(st.interiors.plan_of(b)?, stratum)?;
+        let l = st.interiors.plan_of(b)?.door_level(stratum)?;
         exit(l)
     };
     exit(level)

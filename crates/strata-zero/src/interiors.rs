@@ -235,17 +235,6 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
     st.repaint = true;
 }
 
-/// The floor a door on a stratum opens onto.
-pub(crate) fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
-    match stratum {
-        StratumKind::Street => Some(0),
-        StratumKind::Skyways => plan.bridge,
-        StratumKind::Heights => plan.roof.then_some(plan.top()),
-        StratumKind::Undercity => plan.has_level(-1).then_some(-1),
-        StratumKind::Net => None,
-    }
-}
-
 /// Walks the player through a closed building's door on the city map, onto the
 /// doorstep inside; the floor is generated if this is its first visit.
 pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Result<String, String> {
@@ -265,7 +254,9 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
         .plan(city, b)
         .ok_or("that building has no inside")?
         .clone();
-    let level = level_for(&plan, door.0).ok_or("that door opens onto nothing")?;
+    let level = plan
+        .door_level(door.0)
+        .ok_or("that door opens onto nothing")?;
     let floor = st
         .interiors
         .ensure(city, b, level)
@@ -398,11 +389,10 @@ pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
             if level == here {
                 marks.push("here");
             }
-            if plan.bridge == Some(level) {
-                marks.push("bridge");
-            }
-            if plan.roof && level == plan.top() {
-                marks.push("roof");
+            match plan.door_stratum(level) {
+                Some(StratumKind::Skyways) => marks.push("bridge"),
+                Some(StratumKind::Heights) => marks.push("roof"),
+                _ => {}
             }
             if !marks.is_empty() {
                 label = format!("{label} · {}", marks.join(" · "));

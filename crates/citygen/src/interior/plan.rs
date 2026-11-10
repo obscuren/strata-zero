@@ -53,10 +53,9 @@ pub struct FloorPlan {
     pub size: Size,
     /// The building's floors, the lowest first: from -1 with a basement, else from 0.
     pub levels: Vec<i32>,
-    /// The floor the bridge door opens from.
-    pub bridge: Option<i32>,
-    /// A roof door on the top floor.
-    pub roof: bool,
+    /// Which stratum each level with doors opens onto: the tunnel from -1, the street
+    /// from 0, the bridge floor onto the skyways, the top floor onto the roof.
+    pub doors: Vec<LevelDoor>,
     /// The lift bank: this tile and the one east of it, on every floor.
     pub lift: Option<Pos>,
     /// The stairwell, on every floor.
@@ -71,8 +70,17 @@ pub struct FloorPlan {
     pub clinic: Option<ClinicPlan>,
 }
 
+/// A level whose doors open onto a stratum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LevelDoor {
+    pub level: i32,
+    pub stratum: StratumKind,
+}
+
 /// A `FloorPlan` as a save holds it. Saves written before a building's levels were a
-/// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead.
+/// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead, and
+/// saves written before its levels named their doors name its bridge floor and
+/// whether it has a roof door.
 #[derive(serde::Deserialize)]
 struct FloorPlanRead {
     building: BuildingId,
@@ -86,7 +94,11 @@ struct FloorPlanRead {
     lowest: Option<i32>,
     #[serde(default)]
     top: Option<i32>,
+    #[serde(default)]
+    doors: Vec<LevelDoor>,
+    #[serde(default)]
     bridge: Option<i32>,
+    #[serde(default)]
     roof: bool,
     lift: Option<Pos>,
     stair: Pos,
@@ -103,6 +115,13 @@ impl From<FloorPlanRead> for FloorPlan {
         } else {
             r.levels
         };
+        let doors = if r.doors.is_empty() {
+            let lowest = levels.first().copied().unwrap_or(0);
+            let top = levels.last().copied().unwrap_or(0);
+            classic_doors(lowest, r.bridge, r.roof.then_some(top))
+        } else {
+            r.doors
+        };
         FloorPlan {
             building: r.building,
             kind: r.kind,
@@ -110,8 +129,7 @@ impl From<FloorPlanRead> for FloorPlan {
             footprint: r.footprint,
             size: r.size,
             levels,
-            bridge: r.bridge,
-            roof: r.roof,
+            doors,
             lift: r.lift,
             stair: r.stair,
             atrium: r.atrium,
@@ -119,6 +137,21 @@ impl From<FloorPlanRead> for FloorPlan {
             clinic: r.clinic,
         }
     }
+}
+
+/// The doors of a building whose lowest floor is `lowest`: the tunnel from a basement,
+/// the street from the ground floor, the skyways from the `bridge` floor and the roof
+/// from the `roof` floor.
+fn classic_doors(lowest: i32, bridge: Option<i32>, roof: Option<i32>) -> Vec<LevelDoor> {
+    let door = |level, stratum| LevelDoor { level, stratum };
+    let mut doors = Vec::new();
+    if lowest == -1 {
+        doors.push(door(-1, StratumKind::Undercity));
+    }
+    doors.push(door(0, StratumKind::Street));
+    doors.extend(bridge.map(|l| door(l, StratumKind::Skyways)));
+    doors.extend(roof.map(|l| door(l, StratumKind::Heights)));
+    doors
 }
 
 /// How a grid is laid on a floor: mirrored left to right first, then turned clockwise
@@ -259,7 +292,7 @@ impl FloorPlan {
             .iter()
             .any(|(k, _)| *k == StratumKind::Skyways);
         let bridge = has_bridge.then(|| 3.min(top).max(1));
-        let roof = b.span.hi == StratumKind::Heights;
+        let roof = (b.span.hi == StratumKind::Heights).then_some(top);
         let total = top - lowest + 1;
         let (w, h) = (size.w as i32, size.h as i32);
         let atrium = rings_an_atrium(b.kind, size).then(|| size.rect().inset(BAND + 1 + WALK));
@@ -304,8 +337,7 @@ impl FloorPlan {
             footprint: fp,
             size,
             levels: (lowest..=top).collect(),
-            bridge,
-            roof,
+            doors: classic_doors(lowest, bridge, roof),
             lift,
             stair,
             atrium,
@@ -377,8 +409,7 @@ impl FloorPlan {
             | BuildingKind::Hotel => {
                 if level == 0 {
                     FloorType::Lobby
-                } else if self.roof
-                    && level == self.top()
+                } else if self.door_stratum(level) == Some(StratumKind::Heights)
                     && matches!(self.kind, BuildingKind::CorpTower | BuildingKind::Office)
                 {
                     FloorType::Suite
@@ -429,19 +460,17 @@ impl FloorPlan {
             .collect()
     }
 
-    /// The stratum a floor's doors open onto, if any.
-    pub fn exit_stratum(&self, level: i32) -> Option<StratumKind> {
-        if level == -1 {
-            Some(StratumKind::Undercity)
-        } else if level == 0 {
-            Some(StratumKind::Street)
-        } else if self.bridge == Some(level) {
-            Some(StratumKind::Skyways)
-        } else if self.roof && level == self.top() {
-            Some(StratumKind::Heights)
-        } else {
-            None
-        }
+    /// The stratum a level's doors open onto: the first entry for the level.
+    pub fn door_stratum(&self, level: i32) -> Option<StratumKind> {
+        self.doors
+            .iter()
+            .find(|d| d.level == level)
+            .map(|d| d.stratum)
+    }
+
+    /// The level a city-map door on `k` opens onto: the first entry for `k`.
+    pub fn door_level(&self, k: StratumKind) -> Option<i32> {
+        self.doors.iter().find(|d| d.stratum == k).map(|d| d.level)
     }
 
     /// The second tile of the lift bank.
