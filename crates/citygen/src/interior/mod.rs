@@ -526,7 +526,7 @@ mod tests {
             .iter()
             .filter(|b| b.kind.is_closed() && b.kind != BuildingKind::Clinic)
         {
-            let plan = FloorPlan::new(&c, b.id).expect("a plan for a closed building");
+            let plan = FloorPlan::classic(&c, b.id).expect("a plan for a closed building");
             assert_eq!(plan.size.w as i32, (b.footprint.w * 3).max(12));
             assert_eq!(plan.size.h as i32, (b.footprint.h * 3).max(9));
             assert_eq!(
@@ -631,7 +631,7 @@ mod tests {
                     && b.span.contains(StratumKind::Skyways)
             })
             .expect("a residential block with a skyways level");
-        let plan = FloorPlan::new(&c, b.id).unwrap();
+        let plan = FloorPlan::classic(&c, b.id).unwrap();
         let f = generate_floor(&c, &plan, 2);
         validate_floor(&plan, &f).unwrap();
         let flats: Vec<&Room> = f
@@ -1107,7 +1107,7 @@ mod tests {
             BuildingKind::Hotel,
         ] {
             let b = c.buildings.iter().find(|b| b.kind == kind).unwrap();
-            let plan = FloorPlan::new(&c, b.id).unwrap();
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
             for level in [plan.lowest(), 0, 2.min(plan.top()), plan.top()] {
                 dump(&plan, &generate_floor(&c, &plan, level));
             }
@@ -1142,7 +1142,7 @@ mod tests {
                 println!("no {kind:?} in four cities");
                 continue;
             };
-            let plan = FloorPlan::new(city, b.id).unwrap();
+            let plan = FloorPlan::classic(city, b.id).unwrap();
             for level in 0..=plan.top() {
                 dump(&plan, &generate_floor(city, &plan, level));
             }
@@ -1389,6 +1389,64 @@ mod tests {
                 assert!(under.iter().all(|p| f.tiles[p].terrain != Terrain::Atrium));
             }
         }
+    }
+
+    #[test]
+    fn hotels_and_offices_are_venues_and_towers_are_not() {
+        let c = medium(8);
+        let mut seen = 0;
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id) else {
+                continue;
+            };
+            let venue = venue::VenuePack::builtin().for_kind(b.kind).is_some();
+            assert_eq!(plan.venue.is_some(), venue, "{:?} {:?}", b.kind, b.id);
+            seen += usize::from(venue);
+        }
+        assert!(seen > 0);
+    }
+
+    /// A building whose layout can't be laid keeps today's builder: few do.
+    #[test]
+    fn few_venues_fall_back_to_the_classic_builder() {
+        let (mut venues, mut classic) = (0, 0);
+        for c in [city(), medium(8), medium(11)] {
+            for b in &c.buildings {
+                if venue::VenuePack::builtin().for_kind(b.kind).is_none() {
+                    continue;
+                }
+                let plan = FloorPlan::new(&c, b.id).expect("a plan for a closed building");
+                venues += 1;
+                classic += usize::from(plan.venue.is_none());
+            }
+        }
+        assert!(venues > 0);
+        assert!(
+            classic * 20 < venues,
+            "{classic} of {venues} hotels and offices fall back"
+        );
+    }
+
+    #[test]
+    fn a_venue_that_cant_be_laid_keeps_the_classic_builder() {
+        let c = medium(8);
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Hotel)
+            .unwrap()
+            .id;
+        let builtin = venue::VenuePack::builtin();
+        let mut t = builtin.for_kind(BuildingKind::Hotel).unwrap().clone();
+        // A link into no zone: the links stage refuses it.
+        t.links[0].zone = String::new();
+        let pack = venue::VenuePack {
+            types: vec![t],
+            ..builtin.clone()
+        };
+        let plan = FloorPlan::laid_by(&pack, &c, b).expect("a plan all the same");
+        assert!(plan.venue.is_none());
+        assert_eq!(plan, FloorPlan::classic(&c, b).unwrap());
     }
 
     #[test]

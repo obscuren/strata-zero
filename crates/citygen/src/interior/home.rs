@@ -23,12 +23,14 @@ pub struct Home {
     pub bed_side: Pos,
 }
 
-/// The player's home, if the city has a megablock big enough for one.
+/// The player's home, if the city has a megablock big enough for one. A home is never
+/// in a venue, so the search plans every building with today's builder: it lays out
+/// no hotel or office.
 pub fn home(city: &City) -> Option<Home> {
     let plan = city
         .buildings
         .iter()
-        .filter_map(|b| FloorPlan::new(city, b.id))
+        .filter_map(|b| FloorPlan::classic(city, b.id))
         .find(|p| p.home_level.is_some())?;
     let level = plan.home_level?;
     let f = generate_floor(city, &plan, level);

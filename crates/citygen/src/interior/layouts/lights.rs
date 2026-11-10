@@ -682,6 +682,13 @@ mod tests {
             .collect()
     }
 
+    /// Every building of `kind` in the cities, with today's builder's plan.
+    fn classic_plans(kind: BuildingKind) -> Vec<(&'static City, FloorPlan)> {
+        (plans(kind).into_iter())
+            .filter_map(|(c, p)| FloorPlan::classic(c, p.building).map(|p| (c, p)))
+            .collect()
+    }
+
     fn fittings(f: &Floor) -> Vec<(Pos, Fitting)> {
         f.tiles
             .iter()
@@ -759,7 +766,7 @@ mod tests {
 
     #[test]
     fn wall_fittings_light_their_own_side() {
-        for (city, plan) in plans(BuildingKind::Hotel).into_iter().take(2) {
+        for (city, plan) in classic_plans(BuildingKind::Hotel).into_iter().take(2) {
             for level in [0, 1.min(plan.top())] {
                 let b = super::super::built(city, &plan, level);
                 for e in &b.emitters {
@@ -786,7 +793,7 @@ mod tests {
 
     #[test]
     fn a_place_keeps_its_mood_on_every_floor_and_every_visit() {
-        let (city, plan) = plans(BuildingKind::Hotel)
+        let (city, plan) = classic_plans(BuildingKind::Hotel)
             .into_iter()
             .find(|(_, p)| p.top() >= 2)
             .expect("a hotel of three floors");

@@ -2,7 +2,9 @@
 //! and the links between them (lifts, stairs, escalators, ladders and crawls).
 
 use super::floor::{Role, RoomKind};
-use super::venue::{PlannedRoom, VenueLayout, WayInKind};
+use super::venue::{
+    PlannedRoom, VenueFrame, VenueLayout, VenuePack, WayInKind, building_seed, lay_out,
+};
 use crate::clinic::{Front, clinic_front};
 use crate::geom::{Pos, Rect, Size};
 use crate::ids::BuildingId;
@@ -422,12 +424,33 @@ fn draw_storeys(b: &Building, cellar: bool, rng: &mut ChaCha8Rng) -> (i32, i32) 
 }
 
 impl FloorPlan {
-    /// The plan of a closed building; `None` for an open one.
+    /// The plan of a closed building; `None` for an open one. A building of a kind a
+    /// venue type builds is laid out as that type, from the city's seed and the
+    /// building; one whose layout can't be laid keeps today's builder, enterable all
+    /// the same, and holds no mission.
     pub fn new(city: &City, id: BuildingId) -> Option<FloorPlan> {
-        FloorPlan::classic(city, id)
+        FloorPlan::laid_by(VenuePack::builtin(), city, id)
     }
 
-    /// Today's builder's plan: the one `new` gives every closed building.
+    /// `new`, with the venue types of `pack`.
+    pub(in crate::interior) fn laid_by(
+        pack: &VenuePack,
+        city: &City,
+        id: BuildingId,
+    ) -> Option<FloorPlan> {
+        let b = city.building_opt(id)?;
+        let laid = pack.for_kind(b.kind).and_then(|t| {
+            let frame = VenueFrame::of_building(city, id)?;
+            lay_out(t, frame, building_seed(city.seed, id)).ok()
+        });
+        match laid {
+            Some(layout) => Some(FloorPlan::of_layout(layout)),
+            None => FloorPlan::classic(city, id),
+        }
+    }
+
+    /// Today's builder's plan: the one `new` gives every building no venue type builds,
+    /// and a venue whose layout can't be laid.
     pub fn classic(city: &City, id: BuildingId) -> Option<FloorPlan> {
         let b = city.building_opt(id)?;
         if !b.kind.is_closed() {
