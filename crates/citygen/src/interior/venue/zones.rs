@@ -142,19 +142,27 @@ pub(super) fn lay(
 ) -> Result<(), String> {
     let front = front(&layout.frame);
     let seed: u64 = rng.random();
+    // The level below, lowest first: its number, role and spine.
+    let mut below: Option<(i32, String, Spine)> = None;
     for x in &mut layout.levels {
         let mut rng = ChaCha8Rng::seed_from_u64(hash64(seed, x.level as i64 as u64));
-        level(t, &layout.frame, front, x, &mut rng)
+        let hall_below = below.as_ref().is_some_and(|(level, role, spine)| {
+            *level == x.level - 1 && *role == x.role && *spine == Spine::Hall
+        });
+        level(t, &layout.frame, front, hall_below, x, &mut rng)
             .map_err(|e| format!("{}: level {}: {e}", t.id, x.level))?;
+        below = Some((x.level, x.role.clone(), x.spine));
     }
     Ok(())
 }
 
-/// One level's bands, spine rooms, core and border doors.
+/// One level's bands, spine rooms, core and border doors. `hall_below`: the level below
+/// is of the same role and a hall.
 fn level(
     t: &VenueType,
     frame: &VenueFrame,
     front: Dir,
+    hall_below: bool,
     x: &mut LevelLayout,
     rng: &mut ChaCha8Rng,
 ) -> Result<(), String> {
@@ -198,7 +206,7 @@ fn level(
         let (u, e) = clear(ring_band);
         e - u >= RING_ROWS
     };
-    let spine = shape(def.spine, n, ring_fits, rng);
+    let spine = shape(def.spine, n, ring_fits, hall_below, rng);
     x.spine = spine;
 
     let line = axes.line();
@@ -376,7 +384,9 @@ fn clear_row(want: i32, range: (i32, i32), blocked: &BTreeSet<i32>) -> Option<i3
 
 /// The spine a level takes: its role's, or for `Any` one the rng picks. A `Bent` needs two
 /// bands, and a `Ring` a floor `ring` says holds it; without them the spine runs straight.
-fn shape(want: Spine, bands: usize, ring: bool, rng: &mut ChaCha8Rng) -> Spine {
+/// `Any` never picks a `Hall` when the level below of the same role is one (`hall_below`):
+/// a hall's rooms are its bands, so two halls cut alike would be the same floor.
+fn shape(want: Spine, bands: usize, ring: bool, hall_below: bool, rng: &mut ChaCha8Rng) -> Spine {
     let fits = |s: Spine| match s {
         Spine::Bent => bands > 1,
         Spine::Ring => ring,
@@ -385,7 +395,7 @@ fn shape(want: Spine, bands: usize, ring: bool, rng: &mut ChaCha8Rng) -> Spine {
     if want == Spine::Any {
         let can: Vec<Spine> = [Spine::Straight, Spine::Bent, Spine::Ring, Spine::Hall]
             .into_iter()
-            .filter(|s| fits(*s))
+            .filter(|s| fits(*s) && !(*s == Spine::Hall && hall_below))
             .collect();
         can[rng.random_range(0..can.len())]
     } else if fits(want) {
@@ -747,6 +757,27 @@ mod tests {
             );
         }
         assert!(shapes.len() >= 2, "{shapes:?}");
+    }
+
+    #[test]
+    fn any_never_picks_two_halls_in_a_row() {
+        let t = test_type();
+        let mut halls = 0;
+        for seed in 0..20 {
+            let l = lay_out(&t, VenueFrame::own(&t).raised(9), seed).unwrap();
+            for w in l.levels.windows(2) {
+                let any = t.role(&w[1].role).unwrap().spine == Spine::Any;
+                let alike = w[0].role == w[1].role;
+                halls += usize::from(w[1].spine == Spine::Hall);
+                assert!(
+                    !(any && alike && w[0].spine == Spine::Hall && w[1].spine == Spine::Hall),
+                    "seed {seed}: levels {} and {} both halls",
+                    w[0].level,
+                    w[1].level
+                );
+            }
+        }
+        assert!(halls > 0);
     }
 
     #[test]

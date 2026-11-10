@@ -277,7 +277,8 @@ pub struct BandDef {
 pub struct RoomDef {
     pub name: String,
     pub kind: RoomKind,
-    /// The smallest and the largest, width and height.
+    /// The smallest and the largest, width x height, either way round: width across the
+    /// level and height front to back, or turned when only that fits.
     pub size: ((i32, i32), (i32, i32)),
     #[serde(default)]
     pub private: bool,

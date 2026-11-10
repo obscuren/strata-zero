@@ -3,16 +3,21 @@
 //! turnstiles across the first border, a ramp in a car park.
 //!
 //! A room is its def's width across the level and its height front to back, within the
-//! def's range; a fill room takes what the listed rooms leave, never under 3 x 3. Rooms
-//! pack along the walls of the band's spine room, each with its door on the wall, and the
-//! floor they leave stays wall. A stretch along a spine wall with a doorstep in it or on
-//! its walls is a vestibule instead: a room of the corridor out to the frame, open to the
-//! spine across the wall, so no wall stands on a doorstep or beside one.
+//! def's range, or turned when only that fits; a fill room takes what the listed rooms
+//! leave, never under 3 x 3. Rooms pack along the walls of the band's spine room, each
+//! with its door on the wall, and the floor they leave stays wall. A stretch along a spine
+//! wall with a doorstep in it or on its walls is a vestibule instead: a room of the
+//! corridor out to the frame, open to the spine across the wall, so no wall stands on a
+//! doorstep or beside one.
+
+mod pieces;
+#[cfg(test)]
+mod tests;
 
 use super::zones::{self, Axes};
 use super::{
-    LOCK_NUMBERS, LevelDef, LevelLayout, PieceDef, PieceKind, PlacedPiece, PlannedDoor,
-    PlannedRoom, RoomDef, Spine, VenueLayout, VenueType, room_number,
+    LOCK_NUMBERS, LevelDef, LevelLayout, PieceDef, PieceKind, PlannedDoor, PlannedRoom, RoomDef,
+    Spine, VenueLayout, VenueType, room_number,
 };
 use crate::geom::{Dir, Pos, Rect};
 use crate::interior::{DoorLock, RoomKind};
@@ -27,11 +32,6 @@ pub(super) const STAGE: u64 = 0x3_0035;
 /// The least a room runs along its wall and out from it: a fill room's least, and the
 /// sliver a room takes rather than leave.
 const LEAST: i32 = 3;
-/// A platform's rows, and its track's behind it against the far wall.
-const PLATFORM: i32 = 3;
-const TRACK: i32 = 2;
-/// The most doors a gate line takes.
-const GATES: i32 = 6;
 
 /// Fills every level's bands with rooms and lays its set pieces. Each level draws from
 /// its own rng, so two levels of one role differ.
@@ -186,8 +186,9 @@ impl Lot {
         (self.touch.0..self.touch.1).contains(&s)
     }
 
-    /// A def's least and most along the wall, then out from it: its height along a
-    /// side's wall, which runs front to back, and its width along a bent's turn.
+    /// A def's least and most along the wall, then out from it, its own way round: its
+    /// height along a side's wall, which runs front to back, and its width along a bent's
+    /// turn.
     fn ranges(&self, d: &RoomDef) -> ((i32, i32), (i32, i32)) {
         let ((w0, h0), (w1, h1)) = d.size;
         match self.side {
@@ -402,120 +403,6 @@ impl<'a> Stage<'a> {
         Ok(())
     }
 
-    /// Whether the last band holds a platform and its track at the far side, behind a
-    /// wall on no doorstep's row, with a row of its spine left in front.
-    fn track_fits(&self) -> bool {
-        let depth = self.axes.depth();
-        let (u, e) = self.rows[self.bands() - 1];
-        let wall = depth - PLATFORM - TRACK - 1;
-        e == depth && wall > u && !self.reserved.iter().any(|p| self.axes.deep(*p) == wall)
-    }
-
-    /// Runs the last band's spine straight to the far side when a track needs it there,
-    /// or when a bent's turn would stand a wall on a doorstep.
-    fn straighten(&mut self, track: bool) {
-        let last = self.bands() - 1;
-        let ring = self.ring_in(last);
-        let bent = self.x.spine == Spine::Bent;
-        let (band, turn) = (self.x.bands[last].rect, self.x.rooms[last].rect);
-        let touched = bent
-            && self
-                .reserved
-                .iter()
-                .any(|p| band.contains(*p) && !turn.contains(*p));
-        if (track && (bent || ring)) || touched {
-            self.x.rooms[last].rect = self.axes.rect(self.rows[last], self.axes.line());
-            if ring {
-                self.x.core = None;
-            }
-            self.x.spine = Spine::Straight;
-        }
-    }
-
-    /// A platform 3 deep along the far side, the track 2 deep behind it against the far
-    /// wall, both the level's width; the last band's spine room ends at the platform's
-    /// wall, with a door onto it, and the track opens off the platform's edge.
-    fn track(&mut self, p: &PieceDef) {
-        if !self.track_fits() {
-            return;
-        }
-        let last = self.bands() - 1;
-        let (depth, width) = (self.axes.depth(), self.axes.width());
-        let (a, c) = self.axes.span(self.x.rooms[last].rect);
-        if a.1 != depth {
-            return;
-        }
-        let rail = depth - TRACK;
-        let wall = rail - PLATFORM - 1;
-        self.x.rooms[last].rect = self.axes.rect((a.0, wall), c);
-        self.rows[last].1 = wall;
-        let zone = self.x.bands[last].zone;
-        let edge = self.axes.rect((wall + 1, rail), (0, width));
-        let platform = self.push(plain(edge, RoomKind::Platform, zone));
-        let rails = self.axes.rect((rail, depth), (0, width));
-        let track = self.push(plain(rails, RoomKind::Track, zone));
-        let col = self.axes.line().0.clamp(c.0, c.1 - 1);
-        self.join(self.axes.pos(wall, col), (last, platform), false);
-        self.join(self.axes.pos(rail, col), (platform, track), true);
-        self.x.pieces.push(PlacedPiece {
-            name: p.name.clone(),
-            kind: p.kind,
-            rect: rails,
-            ends: vec![self.axes.pos(rail, -1), self.axes.pos(rail, width)],
-        });
-    }
-
-    /// The spine's door on the first cut becomes a line of doors a tile apart, as many as
-    /// fit up to six, each with the border's lock and its own number. A straight piece of
-    /// spine on either side widens to the line; a hall, a ring's lane and a bent's turn
-    /// keep their own tiles, and the line stays within them.
-    fn gate_line(&mut self, p: &PieceDef) {
-        if self.bands() < 2 {
-            return;
-        }
-        let cut = self.rows[1].0 - 1;
-        let Some(k) = (0..self.x.doors.len())
-            .find(|&k| !self.loops[k] && self.axes.deep(self.x.doors[k].at) == cut)
-        else {
-            return;
-        };
-        let line = self.axes.line();
-        let (mut lo, mut hi) = (0, self.axes.width());
-        for i in [0, 1] {
-            if !self.widens(i) {
-                let (_, c) = self.axes.span(self.x.rooms[i].rect);
-                (lo, hi) = (lo.max(c.0), hi.min(c.1));
-            }
-        }
-        if !(lo..hi).contains(&line.0) {
-            return;
-        }
-        let count = ((hi - lo + 1) / 2).min(GATES);
-        let len = 2 * count - 1;
-        let start = (line.0 + 1 - count).clamp(lo.max(line.0 + 1 - len), (hi - len).min(line.0));
-        let span = (start, start + len);
-        for i in [0, 1] {
-            if self.widens(i) {
-                let (a, c) = self.axes.span(self.x.rooms[i].rect);
-                let c = (c.0.min(span.0), c.1.max(span.1));
-                self.x.rooms[i].rect = self.axes.rect(a, c);
-            }
-        }
-        let old = self.x.doors[k];
-        let gates: Vec<PlannedDoor> = (0..count)
-            .map(|j| moved(self.axes, &old, start + 2 * j, old.rooms))
-            .collect();
-        self.x.doors.splice(k..=k, gates);
-        self.loops
-            .splice(k..=k, std::iter::repeat_n(false, count as usize));
-        self.x.pieces.push(PlacedPiece {
-            name: p.name.clone(),
-            kind: p.kind,
-            rect: self.axes.rect((cut, cut + 1), span),
-            ends: Vec::new(),
-        });
-    }
-
     /// The lots beside band `i`'s spine room: one each side of a straight piece or a ring;
     /// beside a bent's turn, one off its end and one behind it.
     fn lots(&self, i: usize) -> Vec<Lot> {
@@ -691,12 +578,25 @@ impl<'a> Stage<'a> {
         false
     }
 
-    /// Where a room of `d` fits in `lot`: in the first free stretch long enough, as far
-    /// out as the lot and its range allow (a fill room all the way out), and along as the
-    /// rng draws within its range, taking the rest of the stretch rather than leave a
-    /// sliver when its range allows. A lot off a bent's turn takes one room at the turn.
+    /// Where a room of `d` fits in `lot`: its def's way round, else turned.
     fn fit(&mut self, i: usize, lot: &Lot, d: &RoomDef, fill: bool) -> Option<Fit> {
-        let ((a0, a1), (o0, o1)) = lot.ranges(d);
+        let (along, out) = lot.ranges(d);
+        self.fit_ranges(i, lot, (along, out), fill)
+            .or_else(|| self.fit_ranges(i, lot, (out, along), fill))
+    }
+
+    /// Where a room runs `along` the lot's wall and `out` from it (each least and most):
+    /// in the first free stretch long enough, as far out as the lot and its range allow
+    /// (a fill room all the way out), and along as the rng draws within its range, taking
+    /// the rest of the stretch rather than leave a sliver when its range allows. A lot off
+    /// a bent's turn takes one room at the turn.
+    fn fit_ranges(
+        &mut self,
+        i: usize,
+        lot: &Lot,
+        ((a0, a1), (o0, o1)): ((i32, i32), (i32, i32)),
+        fill: bool,
+    ) -> Option<Fit> {
         let out = if fill { lot.out() } else { lot.out().min(o1) };
         if out < if fill { LEAST } else { o0 } {
             return None;
@@ -759,59 +659,6 @@ impl<'a> Stage<'a> {
                 && !self.reserved.contains(&inside)
                 && !self.x.doors.iter().any(|d| d.at.manhattan(at) <= 1)
         })
-    }
-
-    /// A ramp: a strip 2 along the frame wall and 4 out from it in a car park on the wall,
-    /// else 4 along and 2 out, clear of doorsteps and doors. None without a car park on
-    /// the frame wall with room for one.
-    fn ramp(&mut self, p: &PieceDef) {
-        let (depth, width) = (self.axes.depth(), self.axes.width());
-        let near = self.near_doors();
-        let taken = |q: Pos| {
-            self.reserved.contains(&q)
-                || near.contains(&q)
-                || self.x.pieces.iter().any(|x| x.rect.contains(q))
-        };
-        for (l, o) in [(2, 4), (4, 2)] {
-            let mut strips = Vec::new();
-            for r in self.x.rooms.iter().filter(|r| r.kind == RoomKind::CarPark) {
-                let (ra, rc) = self.axes.span(r.rect);
-                // Each of its sides on the frame wall: tiles along it, rows out from it.
-                let walls = [
-                    (ra.0 == 0, rc, ra.1 - ra.0),
-                    (ra.1 == depth, rc, ra.1 - ra.0),
-                    (rc.0 == 0, ra, rc.1 - rc.0),
-                    (rc.1 == width, ra, rc.1 - rc.0),
-                ];
-                for (side, (on, along, deep)) in walls.into_iter().enumerate() {
-                    if !on || deep <= o {
-                        continue;
-                    }
-                    for s in along.0..=along.1 - l {
-                        let (a, c) = match side {
-                            0 => ((ra.0, ra.0 + o), (s, s + l)),
-                            1 => ((ra.1 - o, ra.1), (s, s + l)),
-                            2 => ((s, s + l), (rc.0, rc.0 + o)),
-                            _ => ((s, s + l), (rc.1 - o, rc.1)),
-                        };
-                        let strip = self.axes.rect(a, c);
-                        if strip.iter().all(|q| !taken(q)) {
-                            strips.push(strip);
-                        }
-                    }
-                }
-            }
-            if !strips.is_empty() {
-                let rect = strips[self.rng.random_range(0..strips.len())];
-                self.x.pieces.push(PlacedPiece {
-                    name: p.name.clone(),
-                    kind: p.kind,
-                    rect,
-                    ends: Vec::new(),
-                });
-                return;
-            }
-        }
     }
 
     /// Each extra door of a border moves along its cut to the nearest tile with a room
@@ -911,521 +758,5 @@ impl<'a> Stage<'a> {
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::zones::{Axes, front};
-    use crate::geom::{Pos, Rect};
-    use crate::interior::RoomKind;
-    use crate::interior::venue::testutil::{cities, test_type};
-    use crate::interior::venue::{
-        LevelLayout, PieceKind, Spine, VenueFrame, VenueLayout, VenuePack, VenueType, lay_out,
-        room_label, room_number,
-    };
-    use std::collections::BTreeSet;
-
-    fn layouts(t: &VenueType) -> Vec<(u64, VenueLayout)> {
-        (0..20)
-            .map(|s| (s, lay_out(t, VenueFrame::own(t), s).unwrap()))
-            .collect()
-    }
-
-    fn axes(l: &VenueLayout, x: &LevelLayout) -> Axes {
-        Axes::new(x.size, front(&l.frame))
-    }
-
-    /// The band whose rect holds all of `r`.
-    fn band_of(x: &LevelLayout, r: Rect) -> Option<usize> {
-        x.bands
-            .iter()
-            .position(|b| b.rect.intersection(r) == Some(r))
-    }
-
-    /// The name of the role whose pieces name one of `kind`.
-    fn role_with(t: &VenueType, kind: PieceKind) -> String {
-        let piece = &t.pieces.iter().find(|p| p.kind == kind).unwrap().name;
-        let l = &t.levels;
-        let mut roles = l
-            .below
-            .iter()
-            .chain([&l.ground])
-            .chain(&l.middle)
-            .chain(&l.top);
-        roles
-            .find(|d| d.pieces.contains(piece))
-            .unwrap()
-            .name
-            .clone()
-    }
-
-    /// The type with an own frame wide and deep enough for every room it lists.
-    fn roomy(t: &VenueType) -> VenueType {
-        let mut t = t.clone();
-        t.frame.footprint = (20, 12);
-        t
-    }
-
-    /// Every builtin type and the test type, over its own frame and every building of its
-    /// kinds in the test cities, seeds 0..3.
-    fn sweep() -> Vec<(String, VenueLayout)> {
-        let cities = cities();
-        let mut v = Vec::new();
-        for t in VenuePack::builtin()
-            .types
-            .iter()
-            .cloned()
-            .chain([test_type()])
-        {
-            let buildings = cities.iter().flat_map(|c| {
-                c.buildings
-                    .iter()
-                    .filter(|b| t.builds.contains(&b.kind))
-                    .filter_map(|b| VenueFrame::of_building(c, b.id))
-            });
-            for f in std::iter::once(VenueFrame::own(&t)).chain(buildings) {
-                for seed in 0..3 {
-                    let what = format!("{} in {:?} {:?}, seed {seed}", t.id, f.kind, f.footprint);
-                    let l = lay_out(&t, f.clone(), seed).unwrap_or_else(|e| panic!("{what}: {e}"));
-                    v.push((what, l));
-                }
-            }
-        }
-        v
-    }
-
-    #[test]
-    fn basement_rooms_number_apart_from_the_lobby() {
-        assert_eq!(room_number(0, 4), 4);
-        assert_eq!(room_number(12, 3), 1203);
-        assert_eq!(room_number(-1, 4), 9104);
-        assert_eq!(room_number(-5, 12), 9512);
-        assert_eq!(room_label(1203), "1203");
-        assert_eq!(room_label(9104), "B1-04");
-    }
-
-    #[test]
-    fn rooms_fill_their_band_and_keep_its_zone() {
-        let t = test_type();
-        let (mut loops, mut sized) = (0, 0);
-        for (seed, l) in layouts(&t) {
-            for x in &l.levels {
-                let what = format!("seed {seed} level {}", x.level);
-                let def = t.role(&x.role).unwrap();
-                let ax = axes(&l, x);
-                let n = x.bands.len();
-                let joined = |a: usize, b: usize| {
-                    x.doors
-                        .iter()
-                        .any(|d| d.rooms == (a, b) || d.rooms == (b, a))
-                };
-                for (i, r) in x.rooms.iter().enumerate() {
-                    let b = band_of(x, r.rect)
-                        .unwrap_or_else(|| panic!("{what}: room {i} at {:?} in no band", r.rect));
-                    assert_eq!(r.zone, x.bands[b].zone, "{what}: room {i}");
-                    for (j, o) in x.rooms.iter().enumerate().skip(i + 1) {
-                        assert!(!r.rect.intersects(o.rect), "{what}: rooms {i} and {j}");
-                    }
-                    if i < n {
-                        assert_eq!(b, i, "{what}: spine room {i}");
-                        continue;
-                    }
-                    // A track is joined to its platform, every other room to its band's
-                    // spine room.
-                    if r.kind == RoomKind::Track {
-                        let platform = x.rooms.iter().position(|o| o.kind == RoomKind::Platform);
-                        assert!(joined(platform.unwrap(), i), "{what}: the track");
-                    } else {
-                        assert!(joined(b, i), "{what}: room {i} ({}) has no door", r.name);
-                    }
-                    let band = &def.bands[b];
-                    let (rows, across) = ax.span(r.rect);
-                    let (w, h) = (across.1 - across.0, rows.1 - rows.0);
-                    if band.rooms.contains(&r.name) {
-                        let d = t.room(&r.name).unwrap();
-                        let ((w0, h0), (w1, h1)) = d.size;
-                        assert!(
-                            (w0..=w1).contains(&w) && (h0..=h1).contains(&h),
-                            "{what}: {} is {w} x {h}, its range {:?}",
-                            r.name,
-                            d.size
-                        );
-                        sized += 1;
-                    } else if band.fill.as_ref() == Some(&r.name) {
-                        assert!(w >= 3 && h >= 3, "{what}: a fill {} is {w} x {h}", r.name);
-                    }
-                }
-                // A door stands on the wall between its two rooms; an opening is a tile of
-                // its second room, beside its first.
-                for d in &x.doors {
-                    let (r0, r1) = (x.rooms[d.rooms.0].rect, x.rooms[d.rooms.1].rect);
-                    let beside = |r: Rect| d.at.neighbors4().any(|p| r.contains(p));
-                    if d.open {
-                        assert!(r1.contains(d.at) && beside(r0), "{what}: {:?}", d.at);
-                    } else {
-                        assert!(x.rooms.iter().all(|r| !r.rect.contains(d.at)), "{what}");
-                        assert!(beside(r0) && beside(r1), "{what}: the door at {:?}", d.at);
-                    }
-                }
-                // Every border door joins a room of each of its two bands, across its cut.
-                let mut first = BTreeSet::new();
-                for d in x.doors.iter().filter(|d| d.border) {
-                    let (cut, c) = (ax.deep(d.at), ax.across(d.at));
-                    let j = x
-                        .bands
-                        .iter()
-                        .position(|b| ax.span(b.rect).0.0 == cut)
-                        .unwrap_or_else(|| panic!("{what}: the door at {:?} is on no cut", d.at));
-                    let (f, k) = (ax.pos(cut - 1, c), ax.pos(cut + 1, c));
-                    let (rf, rb) = (&x.rooms[d.rooms.0], &x.rooms[d.rooms.1]);
-                    assert!(
-                        rf.rect.contains(f) && rb.rect.contains(k),
-                        "{what}: {:?}",
-                        d.at
-                    );
-                    assert_eq!(band_of(x, rf.rect), Some(j - 1), "{what}: {:?}", d.at);
-                    assert_eq!(band_of(x, rb.rect), Some(j), "{what}: {:?}", d.at);
-                    loops += usize::from(!first.insert(cut));
-                }
-            }
-        }
-        assert!(loops > 0, "a band with doors: 2 has its loop door");
-        assert!(sized > 0);
-    }
-
-    #[test]
-    fn private_rooms_and_offices_take_the_levels_numbers() {
-        let t = test_type();
-        let mut numbered = 0;
-        for (seed, l) in layouts(&t) {
-            for x in &l.levels {
-                let mut n = 0;
-                for r in &x.rooms {
-                    let want = t.room(&r.name).is_some_and(|d| {
-                        d.private
-                            || matches!(
-                                d.kind,
-                                RoomKind::HotelRoom | RoomKind::Flat | RoomKind::Office
-                            )
-                    });
-                    if want {
-                        n += 1;
-                        assert_eq!(r.number, room_number(x.level, n), "seed {seed}");
-                    } else {
-                        assert_eq!(r.number, 0, "seed {seed}: {}", r.name);
-                    }
-                }
-                numbered += n;
-            }
-        }
-        assert!(numbered > 0);
-    }
-
-    #[test]
-    fn listed_rooms_come_before_the_fill() {
-        let t = test_type();
-        for (t, every) in [(t.clone(), false), (roomy(&t), true)] {
-            for (seed, l) in layouts(&t) {
-                for x in &l.levels {
-                    let what = format!("seed {seed} level {}", x.level);
-                    let def = t.role(&x.role).unwrap();
-                    let n = x.bands.len();
-                    for (b, band) in def.bands.iter().enumerate() {
-                        let fill = band.fill.as_ref();
-                        if x.spine == Spine::Hall {
-                            // A hall band is one room of its first listed def.
-                            let first = band.rooms.first().or(fill).unwrap();
-                            assert_eq!(&x.rooms[b].name, first, "{what}: band {b}");
-                        }
-                        let names: Vec<&String> = x
-                            .rooms
-                            .iter()
-                            .skip(n)
-                            .filter(|r| band_of(x, r.rect) == Some(b))
-                            .map(|r| &r.name)
-                            .filter(|m| band.rooms.contains(m) || fill == Some(*m))
-                            .collect();
-                        let split = names
-                            .iter()
-                            .position(|m| !band.rooms.contains(m))
-                            .unwrap_or(names.len());
-                        let (listed, rest) = names.split_at(split);
-                        assert!(rest.iter().all(|m| fill == Some(*m)), "{what}: {names:?}");
-                        // The listed rooms that fit, in list order, each once.
-                        let mut order = band.rooms.iter();
-                        for m in listed {
-                            assert!(order.any(|o| o == *m), "{what}: band {b} {names:?}");
-                        }
-                        if every && x.spine != Spine::Hall {
-                            assert_eq!(listed.len(), band.rooms.len(), "{what}: band {b}");
-                        }
-                        if x.spine == Spine::Hall {
-                            assert!(names.is_empty(), "{what}: band {b} {names:?}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn doorsteps_landings_and_spots_stay_clear() {
-        let mut spots = 0;
-        for (what, l) in sweep() {
-            for x in &l.levels {
-                let what = format!("{what}, level {}", x.level);
-                let reserved: BTreeSet<Pos> = x.reserved.iter().copied().collect();
-                // A tile no room holds is wall.
-                for p in &reserved {
-                    assert!(
-                        x.rooms.iter().any(|r| r.rect.contains(*p)),
-                        "{what}: a wall on {p:?}"
-                    );
-                    assert!(
-                        !x.doors.iter().any(|d| !d.open && d.at == *p),
-                        "{what}: a door on {p:?}"
-                    );
-                }
-                let near: BTreeSet<Pos> = x
-                    .doors
-                    .iter()
-                    .flat_map(|d| std::iter::once(d.at).chain(d.at.neighbors4()))
-                    .collect();
-                let taken = |p: Pos| {
-                    reserved.contains(&p)
-                        || near.contains(&p)
-                        || x.core.is_some_and(|c| c.contains(p))
-                        || x.pieces.iter().any(|q| q.rect.contains(p))
-                };
-                for r in &x.rooms {
-                    assert!(r.spots.len() <= 4, "{what}");
-                    for s in &r.spots {
-                        assert!(
-                            r.rect.inset(1).contains(*s),
-                            "{what}: {s:?} in {:?}",
-                            r.rect
-                        );
-                        assert!(!taken(*s), "{what}: the spot {s:?} isn't free");
-                    }
-                    spots += r.spots.len();
-                    let inner = r.rect.inset(1);
-                    if r.rect.w >= 3 && r.rect.h >= 3 && inner.iter().any(|p| !taken(p)) {
-                        assert!(!r.spots.is_empty(), "{what}: {} has no spot", r.name);
-                    }
-                }
-            }
-        }
-        assert!(spots > 0);
-    }
-
-    #[test]
-    fn a_track_runs_the_far_side_and_ends_in_shutters() {
-        let t = test_type();
-        let role = role_with(&t, PieceKind::Track);
-        for (seed, l) in layouts(&t) {
-            let x = l.levels.iter().find(|x| x.role == role).unwrap();
-            let what = format!("seed {seed} level {}", x.level);
-            let ax = axes(&l, x);
-            let (depth, width) = (ax.depth(), ax.width());
-            let tracks: Vec<_> = x
-                .pieces
-                .iter()
-                .filter(|p| p.kind == PieceKind::Track)
-                .collect();
-            assert_eq!(tracks.len(), 1, "{what}");
-            let room = |k: RoomKind| x.rooms.iter().position(|r| r.kind == k).unwrap();
-            let (platform, track) = (room(RoomKind::Platform), room(RoomKind::Track));
-            // Both span the inner width: the platform 3 deep, then the track 2 deep against
-            // the back wall.
-            let span = |i: usize| ax.span(x.rooms[i].rect);
-            assert_eq!(
-                span(platform),
-                ((depth - 5, depth - 2), (0, width)),
-                "{what}"
-            );
-            assert_eq!(span(track), ((depth - 2, depth), (0, width)), "{what}");
-            assert_eq!(tracks[0].rect, x.rooms[track].rect, "{what}");
-            let back = x.bands.last().unwrap().zone;
-            assert_eq!((x.rooms[platform].zone, x.rooms[track].zone), (back, back));
-            // Its ends are the frame wall's tiles at each end of the track.
-            let frame = x.size.rect();
-            let ends = &tracks[0].ends;
-            assert_eq!(ends, &vec![ax.pos(depth - 2, -1), ax.pos(depth - 2, width)]);
-            for e in ends {
-                assert!(frame.contains(*e) && !frame.inset(1).contains(*e), "{what}");
-                assert!(e.neighbors4().any(|p| x.rooms[track].rect.contains(p)));
-            }
-            // The platform opens off the spine; the track off the platform's edge.
-            let n = x.bands.len();
-            let to = |a: usize, b: usize| x.doors.iter().find(|d| d.rooms == (a, b));
-            assert!(to(n - 1, platform).is_some_and(|d| !d.open), "{what}");
-            assert!(to(platform, track).is_some_and(|d| d.open), "{what}");
-        }
-    }
-
-    #[test]
-    fn a_gate_line_turns_its_border_into_turnstiles() {
-        let t = test_type();
-        let role = role_with(&t, PieceKind::GateLine);
-        let mut spines = BTreeSet::new();
-        for (seed, l) in layouts(&t) {
-            let x = l.levels.iter().find(|x| x.role == role).unwrap();
-            let what = format!("seed {seed} level {}", x.level);
-            let ax = axes(&l, x);
-            let cut = ax.span(x.bands[1].rect).0.0;
-            let (zf, zb) = (x.bands[0].zone, x.bands[1].zone);
-            let b = t.border(zf, zb).unwrap();
-            let gate: Vec<_> = x.doors.iter().filter(|d| ax.deep(d.at) == cut).collect();
-            assert!(
-                (3..=6).contains(&gate.len()),
-                "{what}: {} doors",
-                gate.len()
-            );
-            // One line, a tile apart, where the spine's single door was.
-            let cols: Vec<i32> = gate.iter().map(|d| ax.across(d.at)).collect();
-            assert!(
-                cols.windows(2).all(|w| w[1] - w[0] == 2),
-                "{what}: {cols:?}"
-            );
-            let line = ax.line();
-            assert!(
-                cols[0] <= line.0 && line.0 <= cols[cols.len() - 1],
-                "{what}"
-            );
-            for d in &gate {
-                let fit = d.fit.unwrap();
-                assert!(d.border && !d.open, "{what}");
-                assert_eq!(
-                    (fit.at, fit.kind, fit.zone),
-                    (d.at, b.lock, zf.max(zb)),
-                    "{what}"
-                );
-                assert_eq!(d.lock, b.always.then_some(fit), "{what}");
-                assert_eq!(d.rooms, (0, 1), "{what}");
-            }
-            let pieces: Vec<_> = x
-                .pieces
-                .iter()
-                .filter(|p| p.kind == PieceKind::GateLine)
-                .collect();
-            assert_eq!(pieces.len(), 1, "{what}");
-            assert!(gate.iter().all(|d| pieces[0].rect.contains(d.at)), "{what}");
-            spines.insert(format!("{:?}", x.spine));
-        }
-        assert!(spines.len() >= 2, "{spines:?}");
-    }
-
-    #[test]
-    fn a_ramp_is_two_by_four_against_a_wall() {
-        let t = test_type();
-        let role = role_with(&t, PieceKind::Ramp);
-        let mut ramps = 0;
-        for (seed, l) in layouts(&t) {
-            let x = l.levels.iter().find(|x| x.role == role).unwrap();
-            let what = format!("seed {seed} level {}", x.level);
-            let inner = x.size.rect().inset(1);
-            for p in x.pieces.iter().filter(|p| p.kind == PieceKind::Ramp) {
-                ramps += 1;
-                let r = p.rect;
-                assert!(matches!((r.w, r.h), (2, 4) | (4, 2)), "{what}: {r:?}");
-                let walls = [
-                    r.x == inner.x,
-                    r.y == inner.y,
-                    r.right() == inner.right(),
-                    r.bottom() == inner.bottom(),
-                ];
-                assert!(walls.contains(&true), "{what}: {r:?} off the frame wall");
-                assert!(
-                    x.rooms
-                        .iter()
-                        .any(|c| c.kind == RoomKind::CarPark && c.rect.intersection(r) == Some(r)),
-                    "{what}: {r:?} in no car park"
-                );
-                assert!(r.iter().all(|q| !x.reserved.contains(&q)), "{what}");
-            }
-        }
-        assert!(ramps > 0);
-    }
-
-    #[test]
-    fn middle_floors_differ() {
-        let t = test_type();
-        let middle = &t.levels.middle.as_ref().unwrap().name;
-        let top = t.levels.top.len() as i32 + 6;
-        for seed in 0..10 {
-            let l = lay_out(&t, VenueFrame::own(&t).raised(top), seed).unwrap();
-            let levels: Vec<&LevelLayout> = l.levels.iter().filter(|x| &x.role == middle).collect();
-            let floors: Vec<Vec<Rect>> = levels
-                .iter()
-                .map(|x| x.rooms.iter().map(|r| r.rect).collect())
-                .collect();
-            assert_eq!(floors.len(), 6);
-            for (k, w) in floors.windows(2).enumerate() {
-                // A hall's rooms are its bands, which only the zones stage's cuts move: two
-                // halls cut alike are the one floor that repeats.
-                let halls = levels[k].spine == Spine::Hall && levels[k + 1].spine == Spine::Hall;
-                if !halls {
-                    assert_ne!(w[0], w[1], "seed {seed}: neighbouring floors alike");
-                }
-            }
-            let mut kinds: Vec<&Vec<Rect>> = Vec::new();
-            for f in &floors {
-                if !kinds.contains(&f) {
-                    kinds.push(f);
-                }
-            }
-            assert!(
-                kinds.len() >= 3,
-                "seed {seed}: {} kinds of floor",
-                kinds.len()
-            );
-        }
-    }
-
-    #[test]
-    fn a_thin_band_holds_only_what_fits() {
-        // Shallow real buildings thin a band to as little as 2 rows. The layout still lays,
-        // and the band keeps only the listed rooms that fit it, in list order.
-        let mut thin = 0;
-        let pack = VenuePack::builtin();
-        for (what, l) in sweep() {
-            let t = pack.by_id(&l.type_id).cloned().unwrap_or_else(test_type);
-            for x in l.levels.iter().filter(|x| x.spine != Spine::Hall) {
-                let ax = axes(&l, x);
-                let what = format!("{what}, level {}", x.level);
-                let def = t.role(&x.role).unwrap();
-                for (b, band) in x.bands.iter().enumerate() {
-                    let (rows, _) = ax.span(band.rect);
-                    let floor = rows.1 - rows.0 - i32::from(b > 0);
-                    let listed = &def.bands[b].rooms;
-                    let tall: Vec<&String> = listed
-                        .iter()
-                        .filter(|m| t.room(m).unwrap().size.0.1 > floor)
-                        .collect();
-                    if floor > 2 || tall.is_empty() {
-                        continue;
-                    }
-                    thin += 1;
-                    let placed: Vec<&String> = x
-                        .rooms
-                        .iter()
-                        .skip(x.bands.len())
-                        .filter(|r| band_of(x, r.rect) == Some(b) && listed.contains(&r.name))
-                        .map(|r| &r.name)
-                        .collect();
-                    // Those too tall for it are left out; the rest keep their list order.
-                    assert!(
-                        tall.iter().all(|m| !placed.contains(m)),
-                        "{what}: {placed:?}"
-                    );
-                    let mut order = listed.iter();
-                    for m in &placed {
-                        assert!(order.any(|o| o == *m), "{what}: {placed:?}");
-                    }
-                }
-            }
-        }
-        assert!(thin > 0, "no band thinned under its listed rooms");
     }
 }
