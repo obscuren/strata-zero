@@ -24,9 +24,9 @@ pub enum WorldAct {
     JackOut,
     Up,
     Down,
-    /// A lift ride to a floor of the building the player is in.
+    /// A ride on the lift under the player to a floor it stops at.
     Lift(i32),
-    /// The stairwell, one floor up or down.
+    /// The stair, escalator or ladder under the player, to its next stop up or down.
     Climb(bool),
 }
 

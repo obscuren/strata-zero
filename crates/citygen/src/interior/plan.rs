@@ -1,10 +1,11 @@
-//! The plan of a closed building's floors: how many, which are special, where the
-//! lift bank and the stairwell stand on every one of them.
+//! The plan of a closed building's floors: how many, which open onto which stratum,
+//! and the links between them (lifts, stairs, escalators, ladders and crawls).
 
 use crate::clinic::{Front, clinic_front};
 use crate::geom::{Pos, Rect, Size};
 use crate::ids::BuildingId;
 use crate::rng::hash64;
+use crate::tile::Terrain;
 use crate::world::Theme;
 use crate::world::{BuildingKind, City, StratumKind};
 use rand::{Rng, SeedableRng};
@@ -56,10 +57,8 @@ pub struct FloorPlan {
     /// Which stratum each level with doors opens onto: the tunnel from -1, the street
     /// from 0, the bridge floor onto the skyways, the top floor onto the roof.
     pub doors: Vec<LevelDoor>,
-    /// The lift bank: this tile and the one east of it, on every floor.
-    pub lift: Option<Pos>,
-    /// The stairwell, on every floor.
-    pub stair: Pos,
+    /// How you move between levels.
+    pub links: Vec<LevelLink>,
     /// The railing ring around an atrium megablock's open drop, the same on every
     /// floor above the ground; `None` for every other building.
     pub atrium: Option<Rect>,
@@ -77,10 +76,103 @@ pub struct LevelDoor {
     pub stratum: StratumKind,
 }
 
+/// What carries you between levels.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum LinkKind {
+    Lift,
+    Stair,
+    Escalator,
+    Ladder,
+    Crawl,
+}
+
+impl LinkKind {
+    /// The terrain of its landings: a crawl comes up a ladder.
+    pub fn terrain(self) -> Terrain {
+        match self {
+            LinkKind::Lift => Terrain::Lift,
+            LinkKind::Stair => Terrain::Stair,
+            LinkKind::Escalator => Terrain::Escalator,
+            LinkKind::Ladder | LinkKind::Crawl => Terrain::Ladder,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Where a link stops on one level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LinkStop {
+    pub level: i32,
+    /// The landing; a lift's bank is this tile and the one east of it.
+    pub at: Pos,
+    /// The zone card a lift asks for to stop here; 0 asks none.
+    #[serde(default)]
+    pub card: u8,
+    /// You can get on here, and get off here.
+    #[serde(default = "yes")]
+    pub on: bool,
+    #[serde(default = "yes")]
+    pub off: bool,
+}
+
+/// A lift, a stair, an escalator, a ladder or a crawl, and where it stops.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LevelLink {
+    pub kind: LinkKind,
+    /// Lowest first.
+    pub stops: Vec<LinkStop>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl LevelLink {
+    /// Its stop on `level`.
+    pub fn stop(&self, level: i32) -> Option<&LinkStop> {
+        self.stops.iter().find(|s| s.level == level)
+    }
+
+    /// Its landing tiles on `level`: both tiles of a lift's bank, one of anything else.
+    pub fn tiles(&self, level: i32) -> Vec<Pos> {
+        match self.stop(level) {
+            Some(s) if self.kind == LinkKind::Lift => vec![s.at, s.at.offset(1, 0)],
+            Some(s) => vec![s.at],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Today's links: the lift bank, then the stairwell, each stopping on every level.
+fn classic_links(levels: &[i32], lift: Option<Pos>, stair: Option<Pos>) -> Vec<LevelLink> {
+    let link = |kind, at: Pos| LevelLink {
+        kind,
+        stops: levels
+            .iter()
+            .map(|&level| LinkStop {
+                level,
+                at,
+                card: 0,
+                on: true,
+                off: true,
+            })
+            .collect(),
+        name: None,
+    };
+    lift.map(|at| link(LinkKind::Lift, at))
+        .into_iter()
+        .chain(stair.map(|at| link(LinkKind::Stair, at)))
+        .collect()
+}
+
 /// A `FloorPlan` as a save holds it. Saves written before a building's levels were a
-/// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead, and
-/// saves written before its levels named their doors name its bridge floor and
-/// whether it has a roof door.
+/// list (`runs/fixtures/run-v1*.run`) name its lowest and top floors instead; saves
+/// written before its levels named their doors name its bridge floor and whether it
+/// has a roof door; and saves written before its links name its lift bank and its
+/// stairwell, both on every floor.
 #[derive(serde::Deserialize)]
 struct FloorPlanRead {
     building: BuildingId,
@@ -100,8 +192,12 @@ struct FloorPlanRead {
     bridge: Option<i32>,
     #[serde(default)]
     roof: bool,
+    #[serde(default)]
+    links: Vec<LevelLink>,
+    #[serde(default)]
     lift: Option<Pos>,
-    stair: Pos,
+    #[serde(default)]
+    stair: Option<Pos>,
     atrium: Option<Rect>,
     home_level: Option<i32>,
     clinic: Option<ClinicPlan>,
@@ -122,6 +218,12 @@ impl From<FloorPlanRead> for FloorPlan {
         } else {
             r.doors
         };
+        // An old one-floor plan names a stairwell that led nowhere and was never drawn.
+        let links = if r.links.is_empty() {
+            classic_links(&levels, r.lift, r.stair.filter(|_| levels.len() >= 2))
+        } else {
+            r.links
+        };
         FloorPlan {
             building: r.building,
             kind: r.kind,
@@ -130,8 +232,7 @@ impl From<FloorPlanRead> for FloorPlan {
             size: r.size,
             levels,
             doors,
-            lift: r.lift,
-            stair: r.stair,
+            links,
             atrium: r.atrium,
             home_level: r.home_level,
             clinic: r.clinic,
@@ -245,7 +346,7 @@ impl FloorPlan {
         FloorPlan::classic(city, id)
     }
 
-    /// Today's builder's plan. `new` calls it until Task 12 dispatches to venues.
+    /// Today's builder's plan: the one `new` gives every closed building.
     pub fn classic(city: &City, id: BuildingId) -> Option<FloorPlan> {
         let b = city.building_opt(id)?;
         if !b.kind.is_closed() {
@@ -330,16 +431,16 @@ impl FloorPlan {
         } else {
             None
         };
+        let levels: Vec<i32> = (lowest..=top).collect();
         Some(FloorPlan {
             building: id,
             kind: b.kind,
             theme: city.district(b.district).theme,
             footprint: fp,
             size,
-            levels: (lowest..=top).collect(),
             doors: classic_doors(lowest, bridge, roof),
-            lift,
-            stair,
+            links: classic_links(&levels, lift, (total >= 2).then_some(stair)),
+            levels,
             atrium,
             home_level,
             clinic,
@@ -473,11 +574,73 @@ impl FloorPlan {
         self.doors.iter().find(|d| d.stratum == k).map(|d| d.level)
     }
 
-    /// The second tile of the lift bank.
-    pub fn lift_bank(&self) -> Vec<Pos> {
-        match self.lift {
-            Some(p) => vec![p, p.offset(1, 0)],
-            None => Vec::new(),
+    /// The link with a landing tile at `p` on `level`.
+    pub fn link_at(&self, level: i32, p: Pos) -> Option<usize> {
+        self.links.iter().position(|l| l.tiles(level).contains(&p))
+    }
+
+    /// Every link's landing tiles on a level, in link order.
+    pub fn landings(&self, level: i32) -> Vec<Pos> {
+        self.links.iter().flat_map(|l| l.tiles(level)).collect()
+    }
+
+    /// The stops of link `link` you can get off at, on the plan's levels, `from` left
+    /// out; none when you can't get on at `from`.
+    fn alights(&self, link: usize, from: i32) -> impl Iterator<Item = i32> + '_ {
+        let link = self.links.get(link);
+        let boards = link
+            .and_then(|l| l.stop(from))
+            .is_some_and(|s| s.on && self.has_level(from));
+        link.filter(|_| boards)
+            .into_iter()
+            .flat_map(|l| l.stops.iter())
+            .filter(move |s| s.off && s.level != from && self.has_level(s.level))
+            .map(|s| s.level)
+    }
+
+    /// From `level` on link `link`: the next stop up or down you can get off at;
+    /// None when you can't get on here. Stops are read through `levels`: a stop whose
+    /// level the plan lacks is skipped.
+    pub fn next_stop(&self, link: usize, level: i32, up: bool) -> Option<i32> {
+        let stops = self.alights(link, level);
+        if up {
+            stops.filter(|l| *l > level).min()
+        } else {
+            stops.filter(|l| *l < level).max()
         }
+    }
+
+    /// The levels a lift takes you to from `from`: its stops you can get off at,
+    /// `from` left out; empty when you can't get on at `from`. Stops on levels the plan
+    /// lacks are left out.
+    pub fn rides(&self, link: usize, from: i32) -> Vec<i32> {
+        self.alights(link, from).collect()
+    }
+
+    /// The first lift's landing on `level`: the west tile of its bank.
+    pub fn lift_on(&self, level: i32) -> Option<Pos> {
+        self.landing_of(LinkKind::Lift, level)
+    }
+
+    /// The first stair's landing on `level`.
+    pub fn stair_on(&self, level: i32) -> Option<Pos> {
+        self.landing_of(LinkKind::Stair, level)
+    }
+
+    fn landing_of(&self, kind: LinkKind, level: i32) -> Option<Pos> {
+        self.links
+            .iter()
+            .filter(|l| l.kind == kind)
+            .find_map(|l| l.stop(level))
+            .map(|s| s.at)
+    }
+
+    /// Where a floor's people and its connect pass gather: the first landing, else
+    /// `(w / 2 - 1, h / 2)`, where the stairwell stood in a one-floor building.
+    pub fn anchor(&self, level: i32) -> Pos {
+        self.landings(level)
+            .first()
+            .copied()
+            .unwrap_or(Pos::new(self.size.w as i32 / 2 - 1, self.size.h as i32 / 2))
     }
 }

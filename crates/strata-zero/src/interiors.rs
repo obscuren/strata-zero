@@ -5,8 +5,8 @@ use crate::app::AppState;
 use crate::render::map::MapRef;
 use citygen::rng::hash64;
 use citygen::{
-    BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, Role, RoomKind, StratumKind, Terrain,
-    generate_floor,
+    BuildingId, City, Exit, Floor, FloorPlan, LinkKind, Place, Pos, Role, RoomKind, StratumKind,
+    Terrain, generate_floor,
 };
 use sim::{HouseholdId, Occupant, OccupantRole, PersonId, Whereabouts, World};
 use std::borrow::Cow;
@@ -310,61 +310,63 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
     Ok(format!("Entering {onto}"))
 }
 
-/// Rides the lift to a floor: the player steps out at that floor's lift bank.
+/// The level the player stands on in building `b`, the link under them, and the plan.
+fn link_under(st: &mut AppState, b: BuildingId) -> Option<(i32, usize, FloorPlan)> {
+    let (level, pos) = match st.player.as_ref().map(|p| (p.place, p.pos))? {
+        (Place::Floor { building, level }, pos) if building == b => (level, pos),
+        _ => return None,
+    };
+    let plan = st.interiors.plan(st.city.as_ref()?, b)?.clone();
+    let link = plan.link_at(level, pos)?;
+    Some((level, link, plan))
+}
+
+/// Rides the lift under the player to a floor it stops at: the player steps out at its
+/// bank there.
 pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
-    let city = st.city.as_ref().ok_or("no city")?;
-    let plan = st
-        .interiors
-        .plan(city, b)
-        .ok_or("that building has no inside")?
-        .clone();
-    let lift = plan.lift.ok_or("no lift here")?;
-    if !plan.has_level(level) {
-        return Err("no such floor".to_string());
-    }
+    let (here, link, plan) = link_under(st, b)
+        .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
+        .ok_or("no lift here")?;
+    let at = plan.links[link]
+        .stop(level)
+        .filter(|_| plan.rides(link, here).contains(&level))
+        .ok_or("the lift doesn't stop there")?
+        .at;
     let now = st.net.now(st);
     if !st.net.lifts_answer(b, now) {
         return Err("lifts locked down".to_string());
     }
+    let city = st.city.as_ref().ok_or("no city")?;
     st.interiors
         .ensure(city, b, level)
         .ok_or("that floor is missing")?;
     crate::credentials::prepare(st, b);
-    land(st, Place::Floor { building: b, level }, lift);
+    land(st, Place::Floor { building: b, level }, at);
     Ok(format!("Entering `{}`", FloorPlan::label(level)))
 }
 
-/// Takes the stairwell one floor up or down, staying on the same tile.
+/// Takes the stair, escalator, ladder or crawl under the player to its next stop up or
+/// down, landing on its landing there.
 pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
-    let (b, level, pos) = match st.player.as_ref().map(|p| (p.place, p.pos)) {
-        Some((Place::Floor { building, level }, pos)) => (building, level, pos),
+    let b = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::Floor { building, .. }) => building,
         _ => return Err("no stairs here".to_string()),
     };
-    let city = st.city.as_ref().ok_or("no city")?;
-    let plan = st
-        .interiors
-        .plan(city, b)
-        .ok_or("that building has no inside")?
-        .clone();
-    let on_stair = st.interiors.floor(b, level).is_some_and(|(_, f)| {
-        f.tiles
-            .get(pos)
-            .is_some_and(|t| t.terrain == Terrain::Stair)
-    });
-    if !on_stair {
-        return Err(if up {
+    let nothing = || {
+        if up {
             "nothing leads up from here".to_string()
         } else {
             "nothing leads down from here".to_string()
-        });
-    }
-    let Some(next) = plan.next_level(level, up) else {
-        return Err(if up {
-            "nothing leads up from here".to_string()
-        } else {
-            "nothing leads down from here".to_string()
-        });
+        }
     };
+    let (level, link, plan) = link_under(st, b)
+        .filter(|(_, link, plan)| plan.links[*link].kind != LinkKind::Lift)
+        .ok_or_else(nothing)?;
+    let (next, at) = plan
+        .next_stop(link, level, up)
+        .and_then(|next| Some((next, plan.links[link].stop(next)?.at)))
+        .ok_or_else(nothing)?;
+    let city = st.city.as_ref().ok_or("no city")?;
     st.interiors
         .ensure(city, b, next)
         .ok_or("that floor is missing")?;
@@ -375,14 +377,21 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
             building: b,
             level: next,
         },
-        pos,
+        at,
     );
     Ok(format!("Entering `{}`", FloorPlan::label(next)))
 }
 
-/// The lift panel's rows: every floor, marked where it opens somewhere.
-pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
-    plan.levels()
+/// The lift panel's rows for link `link` from `here`: the floors it takes you to and
+/// your own, lowest first, marked where they open somewhere.
+pub fn floor_rows(plan: &FloorPlan, link: usize, here: i32) -> Vec<(i32, String)> {
+    let mut levels = plan.rides(link, here);
+    if plan.links.get(link).is_some_and(|l| l.stop(here).is_some()) {
+        levels.push(here);
+    }
+    levels.sort_unstable();
+    levels
+        .into_iter()
         .map(|level| {
             let mut label = FloorPlan::label(level);
             let mut marks = Vec::new();
@@ -597,8 +606,8 @@ impl Placement {
                 }
             }
         }
-        // Whoever found no station stands on open floor, nearest the lift.
-        let anchor = plan.lift.unwrap_or(plan.stair);
+        // Whoever found no station stands on open floor, nearest the first landing.
+        let anchor = plan.anchor(floor.level);
         let used: HashSet<Pos> = at.iter().map(|(p, _)| *p).collect();
         let doorsteps: HashSet<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
         let mut spots: Vec<Pos> = floor
@@ -607,7 +616,8 @@ impl Placement {
             .filter(|(p, t)| {
                 t.is_walkable()
                     && t.feature.is_none()
-                    && !matches!(t.terrain, Terrain::Lift | Terrain::Stair | Terrain::Door)
+                    && !t.is_connector()
+                    && t.terrain != Terrain::Door
                     && !used.contains(p)
                     && !doorsteps.contains(p)
                     && floor.room_at(*p).is_none_or(|r| !r.private)
@@ -796,27 +806,164 @@ mod tests {
             .unwrap()
             .id;
         let mut plan = st.interiors.plan(&city, b).unwrap().clone();
+        // The links keep their stops on 2F and 3F: they are read through the levels.
         plan.levels.retain(|l| ![2, 3].contains(l));
         st.interiors.put_plan(plan.clone());
         st.interiors.ensure(&city, b, 1).unwrap();
         st.player = Some(crate::walker::Player::spawn(&city, 1));
-        let p = st.player.as_mut().unwrap();
-        (p.place, p.pos) = (
-            Place::Floor {
-                building: b,
-                level: 1,
-            },
-            plan.stair,
-        );
+        let floor1 = Place::Floor {
+            building: b,
+            level: 1,
+        };
+        stand(&mut st, floor1, plan.stair_on(1).unwrap());
         assert_eq!(climb(&mut st, true).unwrap(), "Entering `4F`");
         assert_eq!(climb(&mut st, false).unwrap(), "Entering `1F`");
-        assert!(ride(&mut st, b, 3).is_err());
+        stand(&mut st, floor1, plan.lift_on(1).unwrap());
+        assert_eq!(
+            ride(&mut st, b, 3).unwrap_err(),
+            "the lift doesn't stop there"
+        );
         assert_eq!(ride(&mut st, b, 4).unwrap(), "Entering `4F`");
         assert!(st.interiors.ensure(&city, b, 2).is_none());
         assert!(
-            floor_rows(st.interiors.plan_of(b).unwrap(), 0)
+            floor_rows(st.interiors.plan_of(b).unwrap(), 0, 0)
                 .iter()
                 .all(|(l, _)| ![2, 3].contains(l))
+        );
+    }
+
+    fn stand(st: &mut AppState, place: Place, pos: Pos) {
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos) = (place, pos);
+    }
+
+    /// The home city with the player in it, and its first corp tower with `edit` made
+    /// to its plan.
+    fn tower_edited(edit: impl FnOnce(&mut FloorPlan)) -> (AppState, BuildingId, FloorPlan) {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let mut plan = st.interiors.plan(&city, b).unwrap().clone();
+        edit(&mut plan);
+        st.interiors.put_plan(plan.clone());
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        (st, b, plan)
+    }
+
+    #[test]
+    fn an_escalator_and_a_ladder_climb_like_stairs() {
+        let stop = |level, at, on, off| citygen::LinkStop {
+            level,
+            at,
+            card: 0,
+            on,
+            off,
+        };
+        let (p0, p1, q) = (Pos::new(2, 2), Pos::new(5, 2), Pos::new(2, 5));
+        let (mut st, b, _) = tower_edited(|plan| {
+            plan.links.push(citygen::LevelLink {
+                kind: citygen::LinkKind::Escalator,
+                stops: vec![stop(0, p0, true, false), stop(1, p1, false, true)],
+                name: None,
+            });
+            plan.links.push(citygen::LevelLink {
+                kind: citygen::LinkKind::Ladder,
+                stops: vec![stop(1, q, true, true), stop(2, q, true, true)],
+                name: None,
+            });
+        });
+        let city = st.city.clone().unwrap();
+        for level in 0..=2 {
+            st.interiors.ensure(&city, b, level).unwrap();
+        }
+        let floor = |level| Place::Floor { building: b, level };
+        assert_eq!(
+            st.interiors.floor(b, 0).unwrap().1.tiles[p0].terrain,
+            Terrain::Escalator
+        );
+        assert_eq!(
+            st.interiors.floor(b, 1).unwrap().1.tiles[q].terrain,
+            Terrain::Ladder
+        );
+        // The map draws each the way it runs from here: the escalator up only.
+        let way = |level, p| {
+            use crate::render::map::TileMap;
+            MapRef::for_place(&city, &st.interiors, &st.constructs, floor(level), 0)
+                .unwrap()
+                .connector(p)
+                .map(|d| (d.kind, d.up, d.down))
+        };
+        let stair = citygen::ConnectorKind::Stair;
+        assert_eq!(way(0, p0), Some((stair, true, false)));
+        assert_eq!(way(1, p1), Some((stair, false, false)));
+        let ladder = citygen::ConnectorKind::Ladder;
+        assert_eq!(way(1, q), Some((ladder, true, false)));
+        assert_eq!(way(2, q), Some((ladder, false, true)));
+        // Up the escalator, three tiles on; there is no going back down it.
+        stand(&mut st, floor(0), p0);
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `1F`");
+        let at = |st: &AppState| st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        assert_eq!(at(&st), (floor(1), p1));
+        assert_eq!(
+            climb(&mut st, false).unwrap_err(),
+            "nothing leads down from here"
+        );
+        // Up the ladder and back down it, on its tile.
+        stand(&mut st, floor(1), q);
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `2F`");
+        assert_eq!(at(&st), (floor(2), q));
+        assert_eq!(climb(&mut st, false).unwrap(), "Entering `1F`");
+        assert_eq!(at(&st), (floor(1), q));
+    }
+
+    #[test]
+    fn the_lift_rides_only_where_it_stops() {
+        use crate::screens::popup::{Pick, WorldAct};
+        let (mut st, b, plan) = tower_edited(|plan| {
+            let top = plan.top();
+            assert_eq!(plan.links[0].kind, citygen::LinkKind::Lift);
+            plan.links[0]
+                .stops
+                .retain(|s| [0, 2, top].contains(&s.level));
+        });
+        let (top, city) = (plan.top(), st.city.clone().unwrap());
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let lobby = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        stand(&mut st, lobby, plan.lift_on(0).unwrap());
+        let rows: Vec<(i32, bool)> =
+            crate::interact::ride_rows(&st, &mut crate::interact::FREE_LETTERS.chars())
+                .unwrap()
+                .into_iter()
+                .map(|c| match c.pick {
+                    Pick::World(WorldAct::Lift(l)) => (l, c.enabled),
+                    _ => panic!("a ride row"),
+                })
+                .collect();
+        assert_eq!(rows, vec![(top, true), (2, true), (0, false)]);
+        assert_eq!(
+            ride(&mut st, b, 1).unwrap_err(),
+            "the lift doesn't stop there"
+        );
+        assert_eq!(ride(&mut st, b, 2).unwrap(), "Entering `2F`");
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            (p.place, p.pos),
+            (
+                Place::Floor {
+                    building: b,
+                    level: 2
+                },
+                plan.lift_on(2).unwrap()
+            )
         );
     }
 

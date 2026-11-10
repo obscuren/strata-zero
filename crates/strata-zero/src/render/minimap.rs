@@ -10,7 +10,7 @@ use crate::render::style::StylePack;
 use crate::track::mini::MapTrack;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT};
 use citygen::{
-    Floor, FloorPlan, Grid, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Terrain, Tile,
+    Floor, FloorPlan, Grid, LinkKind, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Tile,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -398,19 +398,24 @@ impl Minimap<'_> {
         let colours = PlanColours::of(self.style.theme_or_neutral(Some(plan.theme)));
         let room = |p: Pos| rooms.get(p).copied().flatten();
         let (px, v) = self.plan(&floor.tiles, room, &colours, plan_area, buf);
-        // The lift wins a cell it shares with the stairs, unless the walk takes the stairs.
-        let stairs = floor
-            .tiles
-            .get(plan.stair)
-            .is_some_and(|t| t.terrain == Terrain::Stair)
-            .then_some((plan.stair, '≡', DIM));
-        let lift = plan.lift.map(|l| (l, '⇅', CORNER));
-        let ways = if self.track.walk.last() == Some(&plan.stair) {
-            [lift, stairs]
-        } else {
-            [stairs, lift]
-        };
-        for (at, ch, fg) in ways.into_iter().flatten() {
+        // A mark per link that stops here. The lift wins a cell it shares with the
+        // stairs, unless the walk takes the stairs: the landing the walk ends on wins.
+        let walked = self.track.walk.last().copied();
+        let mut ways: Vec<(bool, bool, Pos, char, Color)> = plan
+            .links
+            .iter()
+            .filter_map(|l| {
+                let at = l.stop(floor.level)?.at;
+                let (ch, fg) = match l.kind {
+                    LinkKind::Lift => ('⇅', CORNER),
+                    LinkKind::Stair | LinkKind::Escalator => ('≡', DIM),
+                    LinkKind::Ladder | LinkKind::Crawl => ('╫', DIM),
+                };
+                Some((walked == Some(at), l.kind == LinkKind::Lift, at, ch, fg))
+            })
+            .collect();
+        ways.sort_by_key(|(walk, lift, ..)| (*walk, *lift));
+        for (_, _, at, ch, fg) in ways {
             mark(buf, &px, &v, at, ch, fg, false);
         }
         for r in floor.rooms.iter().filter(|r| r.kind == RoomKind::Home) {
@@ -1080,7 +1085,7 @@ mod tests {
     fn the_flat_is_drawn_whole() {
         let (st, _) = crate::screens::shots::tracked_from_the_flat();
         let buf = inside(&st, 40, 13);
-        let (v, plan, _) = flat_view(&st, 12);
+        let (v, plan, level) = flat_view(&st, 12);
         assert_eq!(v.s, 3, "a megablock's floor is drawn at 3");
         let (_, floor) = st
             .interiors
@@ -1093,9 +1098,9 @@ mod tests {
         ] {
             assert!(v.cell_of(corner).is_some(), "the whole floor shows");
         }
-        let lift = v.cell_of(plan.lift.unwrap()).unwrap();
+        let lift = v.cell_of(plan.lift_on(level).unwrap()).unwrap();
         assert_eq!(buf[lift].symbol(), "⇅");
-        let stair = v.cell_of(plan.stair).unwrap();
+        let stair = v.cell_of(plan.stair_on(level).unwrap()).unwrap();
         assert_eq!(buf[stair].symbol(), "≡");
         let you = v.cell_of(st.player.as_ref().unwrap().pos).unwrap();
         assert_eq!(buf[you].symbol(), "@");
@@ -1248,9 +1253,9 @@ mod tests {
     fn the_lift_wins_a_shared_cell_unless_you_take_the_stairs() {
         let (mut st, _) = crate::screens::shots::tracked_from_the_flat();
         // At 11 rows the flat's lift and stairs fall in one cell.
-        let (v, plan, _) = flat_view(&st, 11);
-        let cell = v.cell_of(plan.stair).unwrap();
-        assert_eq!(v.cell_of(plan.lift.unwrap()), Some(cell));
+        let (v, plan, level) = flat_view(&st, 11);
+        let cell = v.cell_of(plan.stair_on(level).unwrap()).unwrap();
+        assert_eq!(v.cell_of(plan.lift_on(level).unwrap()), Some(cell));
         assert_eq!(inside(&st, 40, 12)[cell].symbol(), "⇅");
         let now = st.net.now(&st);
         st.net.trace(plan.building).add(game::ALARM_HEAT, now);

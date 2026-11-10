@@ -10,7 +10,7 @@ use crate::render::people::card_lines;
 use crate::screens::popup::{Choice, Header, Pick, Popup, WorldAct};
 use crate::ui::chrome::{CYAN, MAGENTA, TEXT};
 use crate::ui::hud::{AMBER, capitalised};
-use citygen::{Dir, Feature, FloorPlan, Furniture, Place, Pos};
+use citygen::{Dir, Feature, FloorPlan, Furniture, LinkKind, Place, Pos};
 use ratatui::style::Color;
 
 /// Letters for take, ride and program rows: no verb letter, none of the window's
@@ -505,18 +505,19 @@ pub fn gather(
             ));
         }
     }
-    // Inside: the lift panel on a lift bank, the next floors on the stairs.
+    // Inside: the lift panel on a lift bank, the next stops on anything else.
     if let Place::Floor { building, level } = place
-        && let Some((plan, floor)) = st.interiors.floor(building, level)
+        && let Some((plan, _)) = st.interiors.floor(building, level)
+        && let Some(link) = plan.link_at(level, pos)
     {
-        match floor.tiles.get(pos).map(|t| t.terrain) {
-            Some(citygen::Terrain::Lift) => {
+        match plan.links[link].kind {
+            LinkKind::Lift => {
                 fixture = Some("Lift");
                 here_rows.extend(ride_rows(st, &mut letters).unwrap_or_default());
             }
-            Some(citygen::Terrain::Stair) => {
-                fixture = Some("Stairwell");
-                if let Some(up) = plan.next_level(level, true) {
+            kind => {
+                fixture = Some(link_name(kind));
+                if let Some(up) = plan.next_stop(link, level, true) {
                     here_rows.push(Choice::on(
                         '>',
                         "Go up",
@@ -525,7 +526,7 @@ pub fn gather(
                         Pick::World(WorldAct::Climb(true)),
                     ));
                 }
-                if let Some(down) = plan.next_level(level, false) {
+                if let Some(down) = plan.next_stop(link, level, false) {
                     here_rows.push(Choice::on(
                         '<',
                         "Go down",
@@ -535,7 +536,6 @@ pub fn gather(
                     ));
                 }
             }
-            _ => {}
         }
     }
     here.choices.splice(0..0, here_rows);
@@ -558,17 +558,30 @@ pub fn gather(
     subs
 }
 
-/// The lift panel's rows: every floor of the building, the current one greyed, the one
-/// the track wants you on marked `⌖` in cyan.
+/// What a link's landing is called: the window's header and the Look's name.
+pub fn link_name(kind: LinkKind) -> &'static str {
+    match kind {
+        LinkKind::Lift => "Lift",
+        LinkKind::Stair => "Stairwell",
+        LinkKind::Escalator => "Escalator",
+        LinkKind::Ladder | LinkKind::Crawl => "Ladder",
+    }
+}
+
+/// The lift panel's rows: every floor the lift under you stops at, top first, yours
+/// greyed, the one the track wants you on marked `⌖` in cyan.
 pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Choice>> {
     let player = st.player.as_ref()?;
     let Place::Floor { building, level } = player.place else {
         return None;
     };
     let plan = st.interiors.plan_of(building)?;
+    let link = plan
+        .link_at(level, player.pos)
+        .filter(|l| plan.links[*l].kind == LinkKind::Lift)?;
     let wanted = crate::track::floor_wanted(st, building).filter(|w| *w != level);
     Some(
-        crate::interiors::floor_rows(plan, level)
+        crate::interiors::floor_rows(plan, link, level)
             .into_iter()
             .rev()
             .map(|(l, label)| {
@@ -804,7 +817,7 @@ mod tests {
             let city = st.city.as_ref().unwrap();
             st.interiors.ensure(city, b, 0).unwrap();
             st.interiors.ensure(city, b, level).unwrap();
-            st.interiors.plan_of(b).unwrap().lift.unwrap()
+            st.interiors.plan_of(b).unwrap().lift_on(0).unwrap()
         };
         let stand = |st: &mut AppState, level: i32| {
             let p = st.player.as_mut().unwrap();

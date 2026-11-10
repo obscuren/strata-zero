@@ -280,6 +280,16 @@ pub fn glyph_for(
         Terrain::Ford => one_in(variant, 2, '·'),
         Terrain::Rise => ['·', '░', '░', '░'][(variant % 4) as usize],
         Terrain::Wash => ['░', '·', ' '][(variant % 3) as usize],
+        // The way it runs from here.
+        Terrain::Escalator => match connector {
+            Some(ConnDir {
+                up: true,
+                down: true,
+                ..
+            }) => '⇅',
+            Some(ConnDir { down: true, .. }) => '↓',
+            _ => '↑',
+        },
     }
 }
 
@@ -382,7 +392,9 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::Bridge => (ts.wall.scale(1.3), Rgb(18, 22, 30)),
         Terrain::Tunnel => (Rgb(48, 58, 48), Rgb(13, 16, 14)),
         Terrain::Rail => (Rgb(140, 125, 95), Rgb(13, 16, 14)),
-        Terrain::Stair | Terrain::Lift | Terrain::Ladder => (ts.accent2, ts.floor),
+        Terrain::Stair | Terrain::Lift | Terrain::Ladder | Terrain::Escalator => {
+            (ts.accent2, ts.floor)
+        }
         Terrain::Grate => (Rgb(100, 112, 100), Rgb(13, 16, 14)),
         Terrain::NetGrid => (ts.accent.mix(SIGNAL, 0.5).scale(0.45), Rgb(3, 6, 10)),
         Terrain::NetLane => (
@@ -714,6 +726,22 @@ mod tests {
         assert_eq!(g(Terrain::Bridge, MASK_E), '╍');
         assert_eq!(g(Terrain::Railing, MASK_N | MASK_S), '│');
         assert_eq!(g(Terrain::Railing, MASK_W | MASK_E), '─');
+    }
+
+    #[test]
+    fn an_escalator_points_the_way_it_runs() {
+        let s = StylePack::load().unwrap();
+        let g = |up, down| {
+            let way = ConnDir {
+                kind: ConnectorKind::Stair,
+                up,
+                down,
+            };
+            glyph_for(Terrain::Escalator, None, Some(way), None, 1, 0, 0, &s)
+        };
+        assert_eq!(g(true, false), '↑');
+        assert_eq!(g(false, true), '↓');
+        assert_eq!(g(true, true), '⇅');
     }
 
     #[test]

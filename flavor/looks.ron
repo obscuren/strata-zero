@@ -175,6 +175,7 @@ Looks(
         "rig": ["Your rig, humming under the desk, its fans full of dust."],
         "stairwell": ["Concrete steps, a handrail rubbed bright."],
         "lift": ["Steel doors, a panel of buttons and a smell of old cigarettes."],
+        "escalator": ["Grooved steps grinding along, the handrail a beat behind them."],
         "stairs": ["Steps worn hollow by the whole city going up and down."],
         "ladder": ["Rungs bolted into the wall, cold and slick."],
         "manhole": ["A cast-iron lid, pried loose often enough to sit crooked."],

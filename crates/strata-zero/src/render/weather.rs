@@ -88,6 +88,7 @@ impl Fall<'_> {
                         | Terrain::Window
                         | Terrain::Stair
                         | Terrain::Lift
+                        | Terrain::Escalator
                 );
                 if div > 0 && outdoors && drop_at(sx, sy, tick, div) {
                     let g =

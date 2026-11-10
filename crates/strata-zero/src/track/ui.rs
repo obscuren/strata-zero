@@ -102,7 +102,7 @@ mod tests {
     fn the_pane_names_the_next_leg() {
         let mut st = outside();
         let b = st.home.unwrap().home.building;
-        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift_on(0).unwrap();
         let p = st.player.as_mut().unwrap();
         p.place = Place::Floor {
             building: b,

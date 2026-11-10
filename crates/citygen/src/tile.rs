@@ -68,9 +68,11 @@ pub enum Terrain {
     Rise,
     /// A dry wash's bed.
     Wash,
+    /// An escalator's landing inside a building.
+    Escalator,
 }
 
-pub const ALL_TERRAIN: [Terrain; 42] = [
+pub const ALL_TERRAIN: [Terrain; 43] = [
     Terrain::Void,
     Terrain::Water,
     Terrain::Sewage,
@@ -113,6 +115,7 @@ pub const ALL_TERRAIN: [Terrain; 42] = [
     Terrain::Ford,
     Terrain::Rise,
     Terrain::Wash,
+    Terrain::Escalator,
 ];
 
 impl Terrain {
@@ -162,6 +165,7 @@ impl Terrain {
             Ford => "ford",
             Rise => "rise",
             Wash => "dry wash",
+            Escalator => "escalator",
         }
     }
 
@@ -459,6 +463,7 @@ impl Tile {
                 | Ford
                 | Rise
                 | Wash
+                | Escalator
         );
         let feature_ok = !matches!(
             self.feature,
@@ -504,7 +509,7 @@ impl Tile {
     pub fn is_connector(&self) -> bool {
         matches!(
             self.terrain,
-            Terrain::Stair | Terrain::Lift | Terrain::Ladder
+            Terrain::Stair | Terrain::Lift | Terrain::Ladder | Terrain::Escalator
         )
     }
 }
@@ -531,8 +536,10 @@ mod tests {
         let mut line = Tile::new(Dirt);
         line.feature = Some(Feature::PowerLine(true));
         assert!(line.is_walkable() && !line.blocks_sight());
-        assert_eq!(ALL_TERRAIN.len(), 42);
-        assert_eq!(*ALL_TERRAIN.last().unwrap(), Wash);
+        assert_eq!(ALL_TERRAIN.len(), 43);
+        assert_eq!(ALL_TERRAIN[41], Wash, "appended, so saves keep indices");
+        assert_eq!(*ALL_TERRAIN.last().unwrap(), Escalator);
+        assert!(Tile::new(Escalator).is_walkable() && Tile::new(Escalator).is_connector());
         assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::FireBarrel);
         let mut fire = Tile::new(Dirt);
         fire.feature = Some(Feature::FireBarrel);
@@ -557,7 +564,7 @@ mod tests {
         assert!(!Tile::new(Terrain::Window).is_walkable());
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
-        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_TERRAIN.len(), 43);
         assert_eq!(ALL_FEATURES.len(), 25);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
@@ -576,7 +583,7 @@ mod tests {
             assert!(!tile.blocks_sight());
             assert!(!tile.is_building_part());
         }
-        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_TERRAIN.len(), 43);
         assert_eq!(
             ALL_TERRAIN[27],
             Terrain::Railing,
@@ -641,7 +648,7 @@ mod tests {
         assert_eq!(Terrain::NetWall.label(), "construct wall");
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
-        assert_eq!(ALL_TERRAIN.len(), 42);
+        assert_eq!(ALL_TERRAIN.len(), 43);
         assert_eq!(ALL_FEATURES.len(), 25);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(

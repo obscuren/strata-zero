@@ -222,8 +222,11 @@ impl<'a> Builder<'a> {
         for door in doors {
             let (at, landing) = if stratum == StratumKind::Heights {
                 // The roof door: a stair-house door beside the stairwell, landing on
-                // the roof's door tile.
-                (self.plan.stair.offset(1, 0), door)
+                // the roof's door tile. No stairwell, no stair-house.
+                let Some(stair) = self.plan.stair_on(self.level) else {
+                    continue;
+                };
+                (stair.offset(1, 0), door)
             } else {
                 (exit_tile(self.plan, door), outward(fp, door))
             };
@@ -343,25 +346,18 @@ impl<'a> Builder<'a> {
             .min_by_key(|p| (p.manhattan(from), p.y, p.x))
     }
 
-    /// The lift bank and the stairwell, where the plan puts them on every floor.
+    /// Every link's landing on this floor, where the plan puts it: both tiles of a
+    /// lift's bank, the one tile of anything else.
     fn shafts(&mut self) {
-        let up = self.level < self.plan.top();
-        let down = self.level > self.plan.lowest();
-        for p in self.plan.lift_bank() {
-            self.tiles[p].terrain = Terrain::Lift;
-            self.tiles[p].feature = None;
-            self.reserved.insert(p);
-            for n in p.neighbors4() {
-                self.clear.insert(n);
-            }
-        }
-        if up || down {
-            let s = self.plan.stair;
-            self.tiles[s].terrain = Terrain::Stair;
-            self.tiles[s].feature = None;
-            self.reserved.insert(s);
-            for n in s.neighbors4() {
-                self.clear.insert(n);
+        let plan = self.plan;
+        for link in &plan.links {
+            for p in link.tiles(self.level) {
+                self.tiles[p].terrain = link.kind.terrain();
+                self.tiles[p].feature = None;
+                self.reserved.insert(p);
+                for n in p.neighbors4() {
+                    self.clear.insert(n);
+                }
             }
         }
     }
@@ -1145,7 +1141,7 @@ impl<'a> Builder<'a> {
             if comps.len() <= 1 {
                 return;
             }
-            let anchor = self.plan.lift.unwrap_or(self.plan.stair);
+            let anchor = self.plan.anchor(self.level);
             let main_idx = comps.iter().position(|c| c.contains(&anchor)).unwrap_or(0);
             let mut in_main = crate::geom::Grid::filled(size, false);
             for p in &comps[main_idx] {

@@ -8,8 +8,8 @@ use crate::render::mark::{mark_items, mark_person, mark_tile};
 use crate::ui::chrome::{DIM, TEXT, frame, put, solid};
 use crate::ui::hud::capitalised;
 use citygen::{
-    City, ConnectorKind, Feature, FloorPlan, Place, Pos, Rect as TileRect, StratumKind, Terrain,
-    Tile,
+    City, ConnectorKind, Feature, FloorPlan, LinkKind, Place, Pos, Rect as TileRect, StratumKind,
+    Terrain, Tile,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -218,26 +218,38 @@ fn fixture_at(
                     key: "flat_door",
                 });
             }
-            match tile.terrain {
-                Terrain::Stair => Some(Fixture {
-                    name: "Stairwell".into(),
-                    second: leads(
-                        plan.next_level(level, true).map(FloorPlan::label),
-                        plan.next_level(level, false).map(FloorPlan::label),
-                    ),
-                    key: "stairwell",
-                }),
-                Terrain::Lift => Some(Fixture {
-                    name: "Lift".into(),
-                    second: Some(format!(
+            let link = plan.link_at(level, pos)?;
+            let kind = plan.links[link].kind;
+            let second = match kind {
+                // The lift's whole run, over the floors the building has.
+                LinkKind::Lift => {
+                    let stops = plan.links[link]
+                        .stops
+                        .iter()
+                        .map(|s| s.level)
+                        .filter(|l| plan.has_level(*l));
+                    let (lo, hi) = (stops.clone().min()?, stops.max()?);
+                    Some(format!(
                         "{} to {}",
-                        FloorPlan::label(plan.lowest()),
-                        FloorPlan::label(plan.top())
-                    )),
-                    key: "lift",
-                }),
-                _ => None,
-            }
+                        FloorPlan::label(lo),
+                        FloorPlan::label(hi)
+                    ))
+                }
+                _ => leads(
+                    plan.next_stop(link, level, true).map(FloorPlan::label),
+                    plan.next_stop(link, level, false).map(FloorPlan::label),
+                ),
+            };
+            Some(Fixture {
+                name: crate::interact::link_name(kind).into(),
+                second,
+                key: match kind {
+                    LinkKind::Lift => "lift",
+                    LinkKind::Stair => "stairwell",
+                    LinkKind::Escalator => "escalator",
+                    LinkKind::Ladder | LinkKind::Crawl => "ladder",
+                },
+            })
         }
         Place::Stratum(k) => {
             if city

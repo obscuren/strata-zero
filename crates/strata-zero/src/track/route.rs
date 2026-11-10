@@ -6,7 +6,8 @@ use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::{astar, bfs_nearest};
 use citygen::{
-    BuildingId, City, ConnectorKind, Floor, FloorPlan, Grid, Place, Pos, Size, StratumKind, Terrain,
+    BuildingId, City, ConnectorKind, Floor, FloorPlan, Grid, LinkKind, Place, Pos, Size,
+    StratumKind, Terrain,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -326,7 +327,9 @@ fn on_floor(
     }
 }
 
-/// To the lift bank when the lifts answer, else to the stairwell.
+/// To a link on towards level `to`, among those you can get on here: a lift that stops
+/// there when the lifts answer; else a stair, escalator or ladder that goes that way;
+/// else a lift to the floor nearest it. The shortest walk wins among equals.
 fn to_level(
     st: &AppState,
     map: &MapRef,
@@ -336,25 +339,66 @@ fn to_level(
     from: Pos,
     exits: &[Pos],
 ) -> Result<Leg, NoLeg> {
-    let place = map.place();
     let answer = st.net.lifts_answer(plan.building, st.net.now(st));
-    if let Some(lift) = plan.lift.filter(|_| answer)
-        && let Some(path) = walk(map, from, lift, false, exits)
-    {
-        return Ok(Leg {
-            place,
-            path,
-            goal: lift,
-            through: Through::Lift(to),
-        });
+    let up = to > level;
+    // Each link you can get on here, with where it takes you as a rank: lower first.
+    let mut ways: Vec<(u32, Pos, Through)> = Vec::new();
+    for (i, link) in plan.links.iter().enumerate() {
+        let Some(stop) = link.stop(level).filter(|s| s.on) else {
+            continue;
+        };
+        let way = match link.kind {
+            LinkKind::Lift if !answer => None,
+            LinkKind::Crawl => None,
+            LinkKind::Lift => {
+                let rides = plan.rides(i, level);
+                if rides.contains(&to) {
+                    Some((0, Through::Lift(to)))
+                } else {
+                    rides
+                        .into_iter()
+                        .min_by_key(|l| (l.abs_diff(to), *l))
+                        .map(|l| (2, Through::Lift(l)))
+                }
+            }
+            _ => plan
+                .next_stop(i, level, up)
+                .map(|_| (1, Through::Stairs { up, to })),
+        };
+        if let Some((rank, through)) = way {
+            ways.push((rank, stop.at, through));
+        }
     }
-    let path = walk(map, from, plan.stair, false, exits).ok_or(NoLeg::NoWay)?;
-    Ok(Leg {
-        place,
-        path,
-        goal: plan.stair,
-        through: Through::Stairs { up: to > level, to },
-    })
+    // How near a lift takes you ranks it too, so lifts to the nearest floor are equals.
+    let near = |t: &Through| match t {
+        Through::Lift(l) => l.abs_diff(to),
+        _ => 0,
+    };
+    ways.sort_by_key(|(rank, _, t)| (*rank, near(t)));
+    // The best rank you can walk to; a way you can't walk to gives way to the next.
+    let mut best: Option<((u32, u32), Leg)> = None;
+    for (rank, goal, through) in ways {
+        let key = (rank, near(&through));
+        if best.as_ref().is_some_and(|(k, _)| *k < key) {
+            break;
+        }
+        let Some(path) = walk(map, from, goal, false, exits) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(_, b)| path.len() < b.path.len()) {
+            let place = map.place();
+            best = Some((
+                key,
+                Leg {
+                    place,
+                    path,
+                    goal,
+                    through,
+                },
+            ));
+        }
+    }
+    best.map(|(_, leg)| leg).ok_or(NoLeg::NoWay)
 }
 
 /// Out of the building by a door whose landing leads on to the target, the target's
@@ -949,7 +993,7 @@ mod tests {
         let mut st = awake();
         let (b, lobby) = home_lobby(&mut st);
         let (plan, floor) = st.interiors.floor(b, 0).unwrap();
-        let (lift, stair) = (plan.lift.unwrap(), plan.stair);
+        let (lift, stair) = (plan.lift_on(0).unwrap(), plan.stair_on(0).unwrap());
         let door = floor
             .exits
             .iter()
@@ -993,6 +1037,48 @@ mod tests {
     }
 
     #[test]
+    fn the_track_takes_a_lift_that_stops_there() {
+        let mut st = awake();
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let plan = st.interiors.plan(&city, b).unwrap().clone();
+        let lobby = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        let target = spot(
+            Place::Floor {
+                building: b,
+                level: 2,
+            },
+            plan.stair_on(2).unwrap(),
+        );
+        let leg_with = |st: &mut AppState, plan: FloorPlan| {
+            st.interiors.put_plan(plan);
+            let floor = st.interiors.ensure(&city, b, 0).unwrap();
+            let start = floor.doorstep(&floor.exits[0]);
+            put(st, lobby, start);
+            leg(st, target).unwrap()
+        };
+        // Its only lift passes 2F by: the stairs.
+        let mut skips = plan.clone();
+        assert_eq!(skips.links[0].kind, citygen::LinkKind::Lift);
+        skips.links[0].stops.retain(|s| s.level != 2);
+        let leg = leg_with(&mut st, skips);
+        assert_eq!(leg.through, Through::Stairs { up: true, to: 2 });
+        assert_eq!(leg.goal, plan.stair_on(0).unwrap());
+        // Stopping there, the lift.
+        let leg = leg_with(&mut st, plan.clone());
+        assert_eq!(leg.through, Through::Lift(2));
+        assert_eq!(leg.goal, plan.lift_on(0).unwrap());
+    }
+
+    #[test]
     fn home_from_the_lobby_stays_inside() {
         let mut st = awake();
         let (b, lobby) = home_lobby(&mut st);
@@ -1003,7 +1089,7 @@ mod tests {
             radius: 0,
         };
         let (plan, floor) = st.interiors.floor(b, 0).unwrap();
-        let lift = plan.lift.unwrap();
+        let lift = plan.lift_on(0).unwrap();
         let steps: Vec<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
         assert!(!steps.is_empty());
         // From beside every door of the lobby, the lift; never out.
@@ -1026,7 +1112,7 @@ mod tests {
         let outside = outside_home(&mut st);
         let (b, lobby) = home_lobby(&mut st);
         let (plan, floor) = st.interiors.floor(b, 0).unwrap();
-        let lift = plan.lift.unwrap();
+        let lift = plan.lift_on(0).unwrap();
         let doors: Vec<Pos> = floor
             .exits
             .iter()
@@ -1076,7 +1162,7 @@ mod tests {
         let city = st.city.as_ref().unwrap();
         st.interiors.ensure(city, b, level).unwrap();
         let (plan, floor) = st.interiors.floor(b, level).unwrap();
-        let start = plan.lift.unwrap_or(plan.stair);
+        let start = plan.anchor(level);
         let exits: Vec<Pos> = floor.exits.iter().map(|e| e.at).collect();
         let place = Place::Floor { building: b, level };
         put(&mut st, place, start);

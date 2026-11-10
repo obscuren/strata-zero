@@ -1367,7 +1367,7 @@ pub(crate) mod tests {
         set(&mut st, src).unwrap();
         tick(&mut st);
         assert!(st.track.is_some());
-        let lift = st.interiors.floor(home, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(home, 0).unwrap().0.lift_on(0).unwrap();
         put(
             &mut st,
             Place::Floor {
@@ -1467,6 +1467,9 @@ pub(crate) mod tests {
         assert!(st.track.is_some(), "entering is not reaching them");
         assert_eq!(floor_wanted(&st, b), Some(level));
         // On their floor, the walk ends at them.
+        let lobby = st.player.as_ref().unwrap().place;
+        let lift = st.interiors.plan_of(b).unwrap().lift_on(0).unwrap();
+        put(&mut st, lobby, lift);
         crate::interiors::ride(&mut st, b, level).unwrap();
         tick(&mut st);
         let leg = leg_now(&st).unwrap().unwrap().clone();
@@ -1772,7 +1775,7 @@ pub(crate) mod tests {
             building: b,
             level: 0,
         };
-        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift_on(0).unwrap();
         put(&mut st, lobby, lift);
         st.tick = 500;
         set(&mut st, street_spot(to, 1)).unwrap();

@@ -6,8 +6,8 @@ use crate::interiors::Interiors;
 use crate::outside::stream::{Beyond, GroundMap, Owner};
 use crate::render::{ConnDir, Rgb};
 use citygen::{
-    BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, Place, Pos, Size, StratumKind,
-    Terrain, Theme, Tile,
+    BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, LinkKind, Place, Pos, Size,
+    StratumKind, Terrain, Theme, Tile,
 };
 
 /// What the viewport, the field of view, the walker and the inspector need from a map.
@@ -428,15 +428,17 @@ impl TileMap for FloorMap<'_> {
     }
 
     fn connector(&self, p: Pos) -> Option<ConnDir> {
-        let kind = match self.floor.tiles.get(p)?.terrain {
-            Terrain::Lift => ConnectorKind::Lift,
-            Terrain::Stair => ConnectorKind::Stair,
-            _ => return None,
+        let level = self.floor.level;
+        let link = self.plan.link_at(level, p)?;
+        let kind = match self.plan.links[link].kind {
+            LinkKind::Lift => ConnectorKind::Lift,
+            LinkKind::Stair | LinkKind::Escalator => ConnectorKind::Stair,
+            LinkKind::Ladder | LinkKind::Crawl => ConnectorKind::Ladder,
         };
         Some(ConnDir {
             kind,
-            up: self.plan.next_level(self.floor.level, true).is_some(),
-            down: self.plan.next_level(self.floor.level, false).is_some(),
+            up: self.plan.next_stop(link, level, true).is_some(),
+            down: self.plan.next_stop(link, level, false).is_some(),
         })
     }
 }

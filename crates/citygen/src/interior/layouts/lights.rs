@@ -46,11 +46,16 @@ impl Side {
     }
 }
 
-/// A part's tiles count as floor for light: the floor, grates, stairs and lifts.
+/// A part's tiles count as floor for light: the floor, grates and every link's landing.
 fn part_terrain(t: Terrain) -> bool {
     matches!(
         t,
-        Terrain::Floor | Terrain::Grate | Terrain::Stair | Terrain::Lift | Terrain::Ladder
+        Terrain::Floor
+            | Terrain::Grate
+            | Terrain::Stair
+            | Terrain::Lift
+            | Terrain::Ladder
+            | Terrain::Escalator
     )
 }
 

@@ -7904,7 +7904,8 @@ mod tests {
         let city = st.city.as_ref().unwrap().clone();
         let plan = st.interiors.plan(&city, b).unwrap().clone();
         st.interiors.ensure(&city, b, 0).unwrap();
-        let lift = plan.lift.expect("a tower has a lift bank");
+        let lift = plan.lift_on(0).expect("a tower has a lift bank");
+        let stair = plan.stair_on(0).expect("and a stairwell");
         stand(
             &mut st,
             &mut s,
@@ -7961,7 +7962,7 @@ mod tests {
         assert!(st.interiors.floor(b, plan.top()).is_some());
         assert_eq!(s.place, place);
         // Stairs: one floor at a time, same tile.
-        stand(&mut st, &mut s, place, plan.stair);
+        stand(&mut st, &mut s, place, stair);
         s.update(&mut st, &[key(KeyCode::Char('<'))]);
         assert_eq!(
             last(&st),
@@ -7976,7 +7977,7 @@ mod tests {
                 level: plan.top() - 1
             }
         );
-        assert_eq!(pos, plan.stair);
+        assert_eq!(pos, stair);
         s.update(&mut st, &[key(KeyCode::Char('>'))]);
         assert_eq!(
             player(&st).0,
@@ -8005,7 +8006,7 @@ mod tests {
             .tiles
             .iter()
             .find(|(p, t)| {
-                t.terrain == citygen::Terrain::Floor && t.feature.is_none() && *p != plan.stair
+                t.terrain == citygen::Terrain::Floor && t.feature.is_none() && *p != stair
             })
             .unwrap()
             .0;
@@ -8604,12 +8605,13 @@ mod tests {
             .filter(|b| b.kind.is_closed())
             .find(|b| {
                 let plan = FloorPlan::new(&city, b.id).unwrap();
-                plan.lift.is_none() && plan.floors() >= 2
+                plan.lift_on(0).is_none() && plan.floors() >= 2
             })
             .expect("a two-floor building without a lift")
             .id;
         let plan = st.interiors.plan(&city, b).unwrap().clone();
         st.interiors.ensure(&city, b, plan.lowest()).unwrap();
+        let stair = plan.stair_on(plan.lowest()).unwrap();
         stand(
             &mut st,
             &mut s,
@@ -8617,7 +8619,7 @@ mod tests {
                 building: b,
                 level: plan.lowest(),
             },
-            plan.stair,
+            stair,
         );
         let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
@@ -8642,7 +8644,7 @@ mod tests {
                 level: plan.lowest() + 1
             }
         );
-        assert_eq!(pos, plan.stair, "stairs keep the tile");
+        assert_eq!(pos, stair, "stairs keep the tile");
     }
 
     #[test]
@@ -8962,6 +8964,16 @@ mod tests {
             last(&st).is_some_and(|l| l.starts_with("locked")),
             "{:?}",
             last(&st)
+        );
+        let lift = st.interiors.plan_of(b).unwrap().lift_on(1).unwrap();
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            lift,
         );
         assert_eq!(
             crate::interiors::ride(&mut st, b, 0).unwrap_err(),
