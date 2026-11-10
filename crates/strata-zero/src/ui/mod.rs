@@ -17,6 +17,7 @@ pub mod looks;
 pub mod menu;
 pub mod meter;
 pub mod panel;
+pub mod picture;
 pub mod pixels;
 pub mod preview;
 pub mod sidebar;

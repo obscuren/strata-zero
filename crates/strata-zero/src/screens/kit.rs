@@ -1029,17 +1029,79 @@ mod tests {
     fn an_item_without_a_drawing_shows_the_missing_box() {
         let mut st = state();
         st.character
-            .wear(Slot::Eyes, ItemId::new("mirrorshades"), None);
+            .wear(Slot::Primary, ItemId::new("scrap_nine"), None);
         let mut k = Kit::new(0);
-        k.state.tile = 1;
+        k.state.tile = 4;
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
         corners_in(&buf, Rect::new(61, 18, 21, 5), FAINTER);
         assert_eq!((buf[(62, 18)].symbol(), buf[(62, 18)].fg), ("╌", FAINTER));
         assert_eq!((buf[(61, 19)].symbol(), buf[(61, 19)].fg), ("╎", FAINTER));
-        assert_eq!((buf[(71, 19)].symbol(), buf[(71, 19)].fg), ("▣", DIM));
+        let icon = kind_icon(game::ItemKind::Weapon).to_string();
+        assert_eq!((buf[(71, 19)].symbol(), buf[(71, 19)].fg), (icon.as_str(), DIM));
         assert_eq!(cells(&buf, 63, 21, 17), "MISSING BLUEPRINT");
         assert_eq!(buf[(63, 21)].fg, FAINTER);
+    }
+
+    /// The viewer's cells, inside its corner ticks.
+    const VIEWER: Rect = Rect::new(47, 16, 50, 10);
+
+    fn viewer_text(buf: &Buffer) -> String {
+        (VIEWER.y..VIEWER.bottom())
+            .map(|y| cells(buf, VIEWER.x, y, VIEWER.width))
+            .collect()
+    }
+
+    #[test]
+    fn worn_armor_shows_its_picture() {
+        for (slot, tile, item) in [
+            (Slot::Head, 0, "hardhat"),
+            (Slot::Eyes, 1, "mirrorshades"),
+            (Slot::Torso, 2, "salvage_jacket"),
+            (Slot::Legs, 3, "cargo_pants"),
+        ] {
+            let mut st = state();
+            st.character.wear(slot, ItemId::new(item), None);
+            let mut k = Kit::new(0);
+            k.state.tile = tile;
+            settle(&k, &mut st);
+            let buf = drawn(&k, &st);
+            assert!(!viewer_text(&buf).contains("MISSING"), "{item}");
+            let picture = st.content.picture(&ItemId::new(item)).unwrap();
+            let colours: Vec<Color> = picture
+                .colours
+                .values()
+                .map(|&(r, g, b)| Color::Rgb(r, g, b))
+                .collect();
+            let painted = (VIEWER.y..VIEWER.bottom())
+                .flat_map(|y| (VIEWER.x..VIEWER.right()).map(move |x| (x, y)))
+                .filter(|&p| colours.contains(&buf[p].bg) || colours.contains(&buf[p].fg))
+                .count();
+            assert!(painted > 40, "{item}: {painted} cells drawn");
+        }
+    }
+
+    #[test]
+    fn the_tallest_picture_stays_in_the_viewer() {
+        let mut st = state();
+        st.character
+            .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
+        let tall = st.content.picture(&ItemId::new("salvage_jacket")).unwrap();
+        assert_eq!(tall.rows.len(), game::PICTURE_MAX_H, "the jacket is the tallest");
+        let mut k = Kit::new(0);
+        k.state.tile = 2;
+        settle(&k, &mut st);
+        let with = drawn(&k, &st);
+        st.content.pictures.clear();
+        let without = drawn(&k, &st);
+        let viewer = Rect::new(46, 15, 52, 12);
+        for y in 0..30 {
+            for x in 0..100 {
+                if !viewer.contains((x, y).into()) {
+                    assert_eq!(with[(x, y)], without[(x, y)], "({x}, {y})");
+                }
+            }
+        }
     }
 
     #[test]
