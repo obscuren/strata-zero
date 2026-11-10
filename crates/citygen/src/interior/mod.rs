@@ -165,6 +165,63 @@ mod tests {
         .unwrap()
     }
 
+    fn medium(seed: u64) -> City {
+        Generator::run(GenParams {
+            seed,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// A floor as one number: what is laid on it and where, not how it is lit.
+    pub(crate) fn floor_fingerprint(f: &Floor) -> u64 {
+        use std::fmt::Write;
+        let mut text = String::new();
+        for (_, t) in f.tiles.iter() {
+            let _ = writeln!(text, "{:?} {:?}", t.terrain, t.feature);
+        }
+        for r in &f.rooms {
+            let _ = writeln!(
+                text,
+                "{:?} {:?} {:?} {:?} {:?}",
+                r.rect, r.kind, r.door, r.private, r.number
+            );
+        }
+        for e in &f.exits {
+            let _ = writeln!(text, "{e:?}");
+        }
+        for s in &f.stations {
+            let _ = writeln!(text, "{s:?}");
+        }
+        text.as_bytes().chunks(8).fold(0, |h, chunk| {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            crate::rng::hash64(h, u64::from_le_bytes(word))
+        })
+    }
+
+    /// Today's floors as one number per city: every closed building's lowest, ground,
+    /// bridge and top floors. The level, door and link refactors (Tasks 1-3) keep them.
+    #[test]
+    fn classic_floors_are_pinned() {
+        const PINNED: [u64; 2] = [16392843263592621219, 8103014452885745522];
+        for (i, c) in [city(), medium(8)].iter().enumerate() {
+            let mut h = 0;
+            for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+                let plan = FloorPlan::new(c, b.id).unwrap();
+                let mut levels = vec![plan.lowest, 0, plan.top, plan.bridge.unwrap_or(0)];
+                levels.sort();
+                levels.dedup();
+                for l in levels {
+                    h = crate::rng::hash64(h, floor_fingerprint(&generate_floor(c, &plan, l)));
+                }
+            }
+            assert_eq!(h, PINNED[i], "city {i}");
+        }
+    }
+
     #[test]
     fn megablock_ground_floors_validate_with_the_service_exit() {
         for seed in [1u64, 2, 8, 11] {
