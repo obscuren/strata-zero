@@ -38,7 +38,7 @@ pub(super) fn roles(t: &VenueType, top: i32) -> Vec<(i32, &LevelDef)> {
 
 /// Places the type's roles onto the frame's floors. A level at or above -1 is the
 /// frame's size; one below it is its role's `scale` of the frame, growing east and
-/// south. Each keeps its role's spine.
+/// south. Each keeps its role's spine, for the zones stage to lay.
 pub(super) fn place(
     t: &VenueType,
     layout: &mut VenueLayout,
@@ -59,6 +59,10 @@ pub(super) fn place(
                 frame
             },
             spine: def.spine,
+            bands: Vec::new(),
+            rooms: Vec::new(),
+            doors: Vec::new(),
+            core: None,
             reserved: Vec::new(),
         })
         .collect();

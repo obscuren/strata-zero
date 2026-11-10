@@ -414,11 +414,13 @@ impl VenueType {
         self.rooms.iter().find(|r| r.name == name)
     }
 
-    /// The border between the zones ranked `outer` and `inner`.
-    pub fn border(&self, outer: u8, inner: u8) -> Option<&BorderDef> {
+    /// The border between the zones ranked `a` and `b`, given in either order: a level
+    /// can put the deeper zone in front.
+    pub fn border(&self, a: u8, b: u8) -> Option<&BorderDef> {
+        let (outer, inner) = (a.min(b), a.max(b));
         self.borders
             .iter()
-            .find(|b| self.zone(&b.zones.0) == Some(outer) && self.zone(&b.zones.1) == Some(inner))
+            .find(|d| self.zone(&d.zones.0) == Some(outer) && self.zone(&d.zones.1) == Some(inner))
     }
 
     /// The level role named `name`.
@@ -439,9 +441,10 @@ impl VenueType {
 
     /// Whether the type is whole: everything it names exists, every border can be got
     /// past more than one way by ways that fit its lock, its frame's doors stand on a
-    /// side between its corners, no two level roles share a name, every link joins two
-    /// levels or more, every objective has a room, the levels' shares and scales hold,
-    /// and every size has its security.
+    /// side between its corners, no two level roles share a name, neighbouring bands of
+    /// two zones have a border between them, every link joins two levels or more, every
+    /// objective has a room, the levels' shares and scales hold, and every size has its
+    /// security.
     pub fn check(&self, sizes: &[SizeRule]) -> Result<(), String> {
         let id = &self.id;
         let zone = |z: &str, what: &str| -> Result<u8, String> {
@@ -534,6 +537,15 @@ impl VenueType {
                 zone(&b.zone, &what)?;
                 for r in b.rooms.iter().chain(b.fill.iter()) {
                     room(r, &what)?;
+                }
+            }
+            for pair in d.bands.windows(2) {
+                let (a, z) = (&pair[0].zone, &pair[1].zone);
+                let (ra, rz) = (zone(a, &what)?, zone(z, &what)?);
+                if ra != rz && self.border(ra, rz).is_none() {
+                    return Err(format!(
+                        "{id}: {what} has no border between its bands `{a}` and `{z}`"
+                    ));
                 }
             }
             for p in &d.pieces {
@@ -699,6 +711,12 @@ mod tests {
         assert!(bad(&|t| t.frame.doors[0].side = Dir::NE).contains("between its corners"));
         let ground = test_type().levels.ground.name;
         assert!(bad(&|t| t.levels.top[0].name = ground.clone()).contains("two levels are named"));
+        assert!(
+            bad(&|t| {
+                t.borders.remove(1);
+            })
+            .contains("no border between")
+        );
 
         let bad_pack = |f: &dyn Fn(&mut VenuePack)| {
             let mut p = VenuePack::builtin().clone();
@@ -721,6 +739,17 @@ mod tests {
         let mut p = VenuePack::builtin().clone();
         p.types.push(test_type());
         p.check().unwrap();
+    }
+
+    #[test]
+    fn a_border_is_found_from_either_side() {
+        let t = test_type();
+        for b in &t.borders {
+            let (outer, inner) = (t.zone(&b.zones.0).unwrap(), t.zone(&b.zones.1).unwrap());
+            assert_eq!(t.border(outer, inner), Some(b));
+            assert_eq!(t.border(inner, outer), Some(b), "the pair reversed");
+            assert_eq!(t.border(inner, inner), None);
+        }
     }
 
     #[test]

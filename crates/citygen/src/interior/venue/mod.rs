@@ -6,6 +6,7 @@ mod frame;
 mod layout;
 mod levels;
 mod types;
+mod zones;
 
 pub use frame::*;
 pub use layout::*;

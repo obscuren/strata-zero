@@ -1,6 +1,7 @@
 //! One floor of an interior: tiles, light, rooms, exits and the stations people
 //! stand at.
 
+use super::venue::{LockKind, Ways};
 use crate::geom::{Grid, Pos, Rect};
 use crate::tile::Tile;
 use crate::world::StratumKind;
@@ -102,6 +103,20 @@ pub struct Room {
     pub private: bool,
     /// A flat or room number, 0 when the room has none.
     pub number: u16,
+}
+
+/// The lock on a door between two zones: a card reader or a keypad, and the ways past it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DoorLock {
+    pub at: Pos,
+    /// Keys its code with (building, level), as a flat's number does.
+    pub number: u16,
+    /// The card that opens it: this zone's, or a deeper one's.
+    pub zone: u8,
+    pub kind: LockKind,
+    pub ways: Ways,
+    /// The tile it opens from without a key: a one-way lock's inner side.
+    pub free_from: Option<Pos>,
 }
 
 /// A door tile on the floor that leads outside.
