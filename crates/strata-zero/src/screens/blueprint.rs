@@ -886,7 +886,10 @@ mod tests {
                 let r = window(w, h);
                 let hint = row(&buf, r.y + r.height - 2);
                 assert!(hint.contains("esc close"), "{hint}");
-                assert!(!hint.contains("m mod") && !hint.contains("s stickers"), "{hint}");
+                assert!(
+                    !hint.contains("m mod") && !hint.contains("s stickers"),
+                    "{hint}"
+                );
             }
             for code in [KeyCode::Char('m'), KeyCode::Char('s')] {
                 assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));

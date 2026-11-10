@@ -1038,7 +1038,10 @@ mod tests {
         assert_eq!((buf[(62, 18)].symbol(), buf[(62, 18)].fg), ("╌", FAINTER));
         assert_eq!((buf[(61, 19)].symbol(), buf[(61, 19)].fg), ("╎", FAINTER));
         let icon = kind_icon(game::ItemKind::Weapon).to_string();
-        assert_eq!((buf[(71, 19)].symbol(), buf[(71, 19)].fg), (icon.as_str(), DIM));
+        assert_eq!(
+            (buf[(71, 19)].symbol(), buf[(71, 19)].fg),
+            (icon.as_str(), DIM)
+        );
         assert_eq!(cells(&buf, 63, 21, 17), "MISSING BLUEPRINT");
         assert_eq!(buf[(63, 21)].fg, FAINTER);
     }
@@ -1087,7 +1090,11 @@ mod tests {
         st.character
             .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
         let tall = st.content.picture(&ItemId::new("salvage_jacket")).unwrap();
-        assert_eq!(tall.rows.len(), game::PICTURE_MAX_H, "the jacket is the tallest");
+        assert_eq!(
+            tall.rows.len(),
+            game::PICTURE_MAX_H,
+            "the jacket is the tallest"
+        );
         let mut k = Kit::new(0);
         k.state.tile = 2;
         settle(&k, &mut st);

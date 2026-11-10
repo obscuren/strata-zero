@@ -3038,7 +3038,11 @@ mod tests {
     #[test]
     fn every_armor_piece_has_a_picture() {
         let c = Content::load().unwrap();
-        let armor: Vec<&Item> = c.items.iter().filter(|i| i.kind == ItemKind::Armor).collect();
+        let armor: Vec<&Item> = c
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Armor)
+            .collect();
         assert_eq!(armor.len(), 5);
         for i in armor {
             assert!(c.picture(&i.id).is_some(), "{}", i.id);
@@ -3083,7 +3087,8 @@ mod tests {
         };
         let w = art.width() as u16;
         let rows = art.rows.len() as u16;
-        let bad: [(&str, &dyn Fn(&mut Picture)); 11] = [
+        type Edit<'a> = (&'a str, &'a dyn Fn(&mut Picture));
+        let bad: [Edit; 11] = [
             ("a short row", &|a| {
                 a.rows[3].pop();
             }),
@@ -3105,7 +3110,9 @@ mod tests {
                 a.colours.insert('.', (1, 2, 3));
             }),
             ("an empty label", &|a| a.labels.push(label(0, 0, ""))),
-            ("a label past plain text", &|a| a.labels.push(label(0, 0, "é"))),
+            ("a label past plain text", &|a| {
+                a.labels.push(label(0, 0, "é"))
+            }),
             ("a label past the right edge", &|a| {
                 a.labels.push(label(w - 2, 0, "AB!"));
             }),
@@ -3121,7 +3128,11 @@ mod tests {
         assert!(!invalid(&edited(&|a| {
             a.rows = vec!["a".repeat(PICTURE_MAX_W); PICTURE_MAX_H];
             a.colours = BTreeMap::from([('a', (9, 9, 9))]);
-            a.labels = vec![label(PICTURE_MAX_W as u16 - 2, PICTURE_MAX_H as u16 / 2 - 1, "AB")];
+            a.labels = vec![label(
+                PICTURE_MAX_W as u16 - 2,
+                PICTURE_MAX_H as u16 / 2 - 1,
+                "AB",
+            )];
         })));
     }
 

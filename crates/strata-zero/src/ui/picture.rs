@@ -94,7 +94,10 @@ mod tests {
         assert_eq!((at(1, 1).symbol(), at(1, 1).bg), (" ", rgb(A)));
         assert_eq!((at(3, 2).symbol(), at(3, 2).bg), (" ", rgb(B)));
         // The label over an empty cell: bold, in its colour, on what was there.
-        assert_eq!((at(4, 1).symbol(), at(4, 1).fg, at(4, 1).bg), ("X", rgb(INK), BACK));
+        assert_eq!(
+            (at(4, 1).symbol(), at(4, 1).fg, at(4, 1).bg),
+            ("X", rgb(INK), BACK)
+        );
         assert!(at(4, 1).modifier.contains(Modifier::BOLD));
         // Empty pixels write nothing; nothing lands outside the drawing.
         assert_eq!(at(3, 1).symbol(), "~");
