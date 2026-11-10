@@ -68,8 +68,10 @@ Sites(
                     Band(zone: "public", share: 15, rooms: ["lift lobby"]),
                     Band(zone: "guest", share: 65, rooms: [], fill: Some("guest room")),
                     Band(zone: "staff", share: 20, rooms: ["linen room"])])),
-                top: [Level(name: "penthouse", bands: [Band(zone: "guest", share: 30, rooms: ["foyer"]),
-                                                      Band(zone: "secure", share: 70, rooms: ["lounge", "office"])])],
+                top: [Level(name: "penthouse", spine: Straight, bands: [Band(zone: "guest", share: 25, rooms: ["foyer"]),
+                                                      Band(zone: "staff", share: 20, rooms: ["linen room"]),
+                                                      Band(zone: "secure", share: 55, rooms: ["lounge", "office"])]),
+                      Level(name: "plant floor", bands: [Band(zone: "staff", share: 100, rooms: ["plant room"])])],
             ),
             rooms: [
                 Room(name: "reception", kind: Lobby, size: ((8, 6), (14, 10)), furniture: [Counter], stations: [Reception]),
@@ -86,12 +88,13 @@ Sites(
                 Room(name: "foyer", kind: Lobby, size: ((4, 4), (8, 6))),
                 Room(name: "lounge", kind: Suite, size: ((6, 5), (12, 8)), furniture: [Couch, Table]),
                 Room(name: "office", kind: Office, size: ((4, 4), (6, 6)), private: true, furniture: [Desk], stations: [Desk]),
+                Room(name: "plant room", kind: Plant, size: ((5, 4), (9, 6)), furniture: [Machine], stations: [Machine]),
             ],
             links: [
                 Link(name: "guest lift", kind: Lift, zone: "public", serves: Roles(["car park", "lobby", "guest floor", "penthouse"]),
-                     cards: [("penthouse", "secure")]),
+                     cards: [("penthouse", "guest")]),
                 Link(name: "service lift", kind: Lift, zone: "staff", serves: Roles(["car park", "service", "lobby", "guest floor"])),
-                Link(name: "service stair", kind: Stair, zone: "staff", serves: All),
+                Link(name: "service stair", kind: Stair, zone: "staff", serves: Roles(["car park", "service", "lobby", "guest floor", "plant floor"])),
                 Link(name: "grand stair", kind: Stair, zone: "public", serves: Levels([0, 1])),
                 Link(name: "riser", kind: Crawl, zone: "staff", serves: All),
             ],
@@ -122,7 +125,7 @@ Sites(
             ],
             levels: Levels(
                 below: [
-                    Level(name: "server basement", bands: [Band(zone: "staff", share: 55, rooms: ["plant room", "store"]),
+                    Level(name: "server basement", spine: Straight, bands: [Band(zone: "staff", share: 55, rooms: ["plant room", "store"]),
                                                            Band(zone: "secure", share: 45, rooms: ["server room"])]),
                 ],
                 ground: Level(name: "lobby", pieces: ["gate line"], bands: [
@@ -151,9 +154,10 @@ Sites(
             links: [
                 Link(name: "lifts", kind: Lift, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]),
                      cards: [("executive floor", "executive")]),
-                Link(name: "goods lift", kind: Lift, zone: "staff", serves: Roles(["server basement", "lobby", "open-plan floor"])),
-                Link(name: "stair", kind: Stair, zone: "staff", serves: All),
-                Link(name: "fire stair", kind: Stair, zone: "staff", serves: All, alight: Ends),
+                Link(name: "goods lift", kind: Lift, zone: "staff", serves: Roles(["server basement", "lobby", "open-plan floor"]),
+                     cards: [("server basement", "staff")]),
+                Link(name: "stair", kind: Stair, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"])),
+                Link(name: "fire stair", kind: Stair, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]), alight: Ends),
                 Link(name: "duct", kind: Crawl, zone: "staff", serves: All),
             ],
             crawls_in: [Crawl(stratum: Heights, zone: "staff")],
@@ -194,7 +198,7 @@ Sites(
                     Level(name: "lower platform", pieces: ["track"], bands: [
                         Band(zone: "staff", share: 20, rooms: ["equipment room"]),
                         Band(zone: "paid", share: 80, rooms: ["platform landing"])]),
-                    Level(name: "service", bands: [
+                    Level(name: "service", spine: Straight, bands: [
                         Band(zone: "staff", share: 60, rooms: ["workshop", "lockers"]),
                         Band(zone: "secure", share: 40, rooms: ["line control"])]),
                     Level(name: "drainage", bands: [
@@ -227,7 +231,7 @@ Sites(
                 Link(name: "platform lift", kind: Lift, zone: "paid", serves: Roles(["concourse", "upper platform", "lower platform"])),
                 Link(name: "freight lift", kind: Lift, zone: "staff", serves: Roles(["hall", "concourse", "service"]),
                      cards: [("service", "staff")]),
-                Link(name: "emergency stair", kind: Stair, zone: "staff", serves: Roles(["hall", "concourse", "upper platform", "lower platform", "service"]),
+                Link(name: "emergency stair", kind: Stair, zone: "staff", serves: Roles(["hall", "concourse", "upper platform", "lower platform"]),
                      alight: Ends),
                 Link(name: "ventilation shaft", kind: Crawl, zone: "staff", serves: Roles(["hall", "concourse", "upper platform", "lower platform", "service"])),
                 Link(name: "old shaft", kind: Ladder, zone: "staff", serves: Roles(["service", "drainage"])),
