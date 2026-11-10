@@ -15,10 +15,10 @@
 
 ## Global Constraints
 
-- **No type's name in Rust.** The spec: "The Rust never names a type, so a new type is a file change", and "A type's name in the Rust code" is a failure. Rust code and Rust tests never spell a type's id or name (hotel, office, metro station, the test type's id). They reach types through `VenuePack::for_kind(BuildingKind)`, `VenuePack::by_id(&str)` with an id read from data or typed at the console, or by iterating `VenuePack::builtin().types`.
+- **No type's name in Rust.** The spec: "The Rust never names a type, so a new type is a file change", and "A type's name in the Rust code" is a failure. Rust code and Rust tests never spell a type's id or name (hotel, office, metro station, the test type's id). They reach types through `VenuePack::for_kind(BuildingKind)`, `VenuePack::by_id(&str)` with an id read from data or typed at the console, or by iterating `VenuePack::builtin().types`. A test name may name a `BuildingKind` (an enum that predates types, as in `hotels_and_offices_are_venues_and_towers_are_not`) but never a type id.
 - **Same seed, same site, every platform.** "The same inputs give the same site on every platform." "Generation follows the world's rule: no libm `powf`, `sin`, `cos` or `hypot`." In `venue` generation: integer arithmetic only (shares are percent), every rng is a `ChaCha8Rng` seeded from `citygen::rng::hash64`, and no `HashMap`/`HashSet` is iterated (use `Vec`, `BTreeMap`, `BTreeSet`; a `HashSet` used only for `contains`, as `layouts::Builder` does, is fine).
 - **Saving** (CLAUDE.md, `docs/saving.md`): "Saved types derive `Serialize` and `Deserialize`. No `HashSet` (use `BTreeSet`), `Rc`, `Cell`, `Instant` or `&'static str` in them." "A new field in a saved type needs `#[serde(default)]`, and renaming or reshaping one needs a reader for its old shape (as `net::EchoRead` does); the fixtures in `runs/fixtures/` must keep opening. Never regenerate them to pass a test." This plan adds no `AppState` field. Enums that saves hold (`Terrain`, `Feature`, `RoomKind`) grow only at their end: "New generic kinds join the enum at its end."
-- **Drawing** (CLAUDE.md): "Draw everything through ratatui." "Prefer exact `Color::Rgb` colours." "A new symbol that no font has fails `every_drawn_character_has_a_glyph`." Glyphs this plan adds: `↑` `↓` (escalator), `╪` (track), `▓` (shutter), `◆` (turret), `□` (container), `◎` (objective), `▮` (barred door). If one fails the glyph test on macOS, use one the game already draws instead and say so in the commit.
+- **Drawing** (CLAUDE.md): "Draw everything through ratatui." "Prefer exact `Color::Rgb` colours." "A new symbol that no font has fails `every_drawn_character_has_a_glyph`." Glyphs this plan adds: `↑` `↓` (escalator), `╪` (track), `▓` (shutter), `◆` (turret), `□` (container), `◎` (objective), `▮` (barred door). That test lives in `window/font.rs` and runs only with the window feature, so each task that adds a glyph also runs `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character` before its commit. If one fails the glyph test on macOS, use one the game already draws instead and say so in the commit.
 - **The word "site".** "`game::model::Site` is a place on the body for chrome, and `citygen::generate::site` (`CitySite`) is a city's place in the world." The code says *venue*: `citygen::interior::venue`, `strata_zero::venues`, `VenueLayout`, and the spec's `validate_site` is `validate_venue`. citygen also exports `Link` (a Net link) and `Guard` (construct ICE), so this plan's names are `LevelLink` and `GuardPost`. The data file keeps the spec's name, `flavor/sites.ron`, and the console command is `site`.
 - **The size table lives in `flavor/sites.ron`, not in code:** Small 2–3 floors kept, 2 locks to the objective, at least 2 ways in, 6–10 guards; Medium 4–6, 3, 3, 12–20; Large 6–9, 4–5, 4, 25–40. Security is "0–255, the scale a subnet's `security` uses" (`u8`).
 - **IP:** "inspired by" Cyberpunk 2020 only; no Cyberpunk 2077, CDPR or R. Talsorian proper nouns in data, copy or docs.
@@ -35,7 +35,7 @@ Where the spec leaves a choice to the builder, or is silent, this plan decides:
 2. **The plan is saved, not remade:** the layout rides in the building's `FloorPlan` (`venue: Option<Box<VenueLayout>>`, saved with `Interiors.plans`), so floors saved before a generator change and floors drawn after it agree.
 3. **Copies live in `Interiors.copies`** (`#[serde(default)]`), so `Stay` and `StayParts` carry them through their existing `interiors` field and need no new field.
 4. **Card readers are locks on doors** (`Floor.locks`), drawn as the door in the reader colour. "No device stands on a wall or in a doorway" applies to cameras, turrets, containers and the objective, which stand on floor spots.
-5. **A mission fits the border's own lock** on a candidate door: a card reader on a card border, a keypad on a keypad border. Candidate doors are zone-border doors and the doors of rooms above public.
+5. **A mission fits the border's own lock** on a candidate door: a card reader on a card border, a keypad on a keypad border. Candidate doors are zone-border doors only, never the doors of private rooms (those already carry the keypad of their number, and no edge carries two locks); a layout with too few border doors holds fewer sizes.
 6. **Crawls:** a crawl's grille is its landing tile (a `Ladder` tile, or a `Floor` tile for a crawl way in, with `Feature::Vent`). Crossing a crawl link or a crawl way in is one lock. In play the grille wants Tech ≥ `crawl_tech` (6, in `sites.ron`).
 7. **Numbers:** a room is `level * 100 + n` at or above the street and `9000 + 100 * depth + n` below it, shown `B1-04`; zone locks are numbered `60000 + i` per level, so a lock's code keys `(building, level, number)` like a flat's.
 8. **Doors:** a flagged door is the door glyph in `MAGENTA_RGB`; a barred door is `▮` in a dim grey. Their Look: `Flagged door` / `{type name} · a job inside`, and `Barred door` / `shut for the job`.
@@ -45,7 +45,7 @@ Where the spec leaves a choice to the builder, or is silent, this plan decides:
 12. **Shots:** one SVG per type and size with every kept level's map side by side.
 13. **Codes found in the site** are a sticky note under a desk spot's Look; typed at the keypad, the journal learns them as it does today.
 14. **Kept floors:** G, the objective's level and the levels the copy's links need to join them are always kept (a size that can't hold them is refused); the other door levels fill the count the mission seed draws, nearest G first, then levels next to the objective's.
-15. **Frame for the console and shots:** the building's frame, its top raised to the type's own frame top when lower (`VenueFrame::raised`).
+15. **Frame for the console and shots:** the building's frame as the city made it; its top is raised to the type's own frame top (`VenueFrame::raised`) only when the building can't hold the asked size (Task 17's `dev_site`).
 16. **Deep levels larger than the frame** grow east and south; the frame's area sits at the origin, so links line up.
 17. **Landings:** lifts are two tiles wide as today; stairs, escalators, ladders and crawls one tile. Escalator stops sit 3–5 tiles apart.
 18. **Talk in the checker:** a person of zone z hands over card z (a guard's post zone in a copy; a staff station's room zone in the plain building).
@@ -66,7 +66,7 @@ citygen (`crates/citygen/src/interior/`):
 - `plan.rs`: `FloorPlan` as levels, doors and links; `LevelDoor`, `LinkKind`, `LinkStop`, `LevelLink`, `CrawlWay`; the reader for old saves (`FloorPlanRead`); `FloorPlan::classic` (today's builder) and `FloorPlan::of_layout`.
 - `floor.rs`: `DoorLock`, `Floor.locks`, `Room.name`, `Room.zone`, new `RoomKind`s.
 - `layouts.rs`: today's builder, reading links; `Builder` usable without a city for venue levels.
-- `venue/mod.rs` (new): module doc, re-exports.
+- `venue/mod.rs` (new): module doc, re-exports, `#[cfg(test)] mod testutil;`.
 - `venue/types.rs` (new): the pack: `VenuePack`, `VenueType` and the data types; `check`.
 - `venue/frame.rs` (new): `VenueFrame`.
 - `venue/layout.rs` (new): `VenueLayout`, `LevelLayout`, `lay_out`, numbers.
@@ -76,6 +76,7 @@ citygen (`crates/citygen/src/interior/`):
 - `venue/check.rs` (new): `validate_layout`, `validate_venue`, `validate_copy`, `holds`, `venue_fingerprint`.
 - `venue/mission.rs` (new): `MissionInputs`, `MissionLayer`.
 - `venue/test_type.ron` (new): the test-only type.
+- `venue/testutil.rs` (new, `#[cfg(test)]`, `pub(crate)`): `test_type`, `city`, `medium`, `cities`, the helpers every venue test module shares (Task 4 creates it, Task 5 adds the cities).
 - `crates/citygen/tests/venues.rs` (new): the checker over every type.
 - `flavor/sites.ron` (new): the types.
 
@@ -211,7 +212,8 @@ fn shaft_rows_follow_the_level_list() {
     let f = |l: i32| Some(l);
     // -3 and -1 are neighbours in the list: no gap between them.
     assert_eq!(shaft_rows(&[-3, -1, 0, 1, 2], 0, None, 12), vec![f(2), f(1), f(0), f(-1), f(-3)]);
-    assert_eq!(shaft_rows(&[0, 1, 5, 9], 5, Some(0), 3), vec![None, f(5), f(0)]);
+    // Today's trim order: the end gaps go first, so three rows keep 5, the gap below it and 0.
+    assert_eq!(shaft_rows(&[0, 1, 5, 9], 5, Some(0), 3), vec![f(5), None, f(0)]);
 }
 ```
 
@@ -312,7 +314,7 @@ Expected: FAIL to compile (`door_stratum`, `door_level`).
 
 - [ ] **Step 3: Implement the doors**
 
-`classic` builds `doors` in today's `exit_stratum` order: `(-1, Undercity)` when the lowest level is −1, `(0, Street)`, `(bridge, Skyways)` when there is a bridge, `(top, Heights)` when there is a roof. `FloorPlanRead` takes old `bridge: Option<i32>` and `roof: bool` (`#[serde(default)]`) and fills an empty `doors` the same way. `interiors::level_for` goes; its callers use `door_level`. `floor_rows` marks `bridge` and `roof` from `door_stratum`. `classic` keeps a local `bridge` for `home_level`.
+`classic` builds `doors` in today's `exit_stratum` order: `(-1, Undercity)` when the lowest level is −1, `(0, Street)`, `(bridge, Skyways)` when there is a bridge, `(top, Heights)` when there is a roof. `FloorPlanRead` takes old `bridge: Option<i32>` and `roof: bool` (`#[serde(default)]`) and fills an empty `doors` the same way. `interiors::level_for` goes; its callers use `door_level`. `floor_rows` marks `bridge` and `roof` from `door_stratum`. `classic` keeps a local `bridge` for `home_level`. Task 1's pin (`classic_floors_are_pinned`) now reads `plan.door_level(StratumKind::Skyways).unwrap_or(0)` where it read `plan.bridge.unwrap_or(0)`; its pinned numbers stay, since this task deletes the field.
 
 - [ ] **Step 4: Run the tests**
 
@@ -340,7 +342,7 @@ EOF
 - Modify: `crates/citygen/src/interior/plan.rs` (fields `lift`/`stair` → `links`; the link types; reader)
 - Modify: `crates/citygen/src/tile.rs` (`Terrain::Escalator` at the end, walkable, in `ALL_TERRAIN`)
 - Modify: `crates/citygen/src/interior/layouts.rs` (`shafts` draws every link stop; `connect` anchors on `plan.anchor`; roof door beside `stair_on`), `layouts/atrium.rs`, `interior/mod.rs` (`validate_floor`, tests)
-- Modify: `crates/strata-zero/src/interiors.rs` (`ride`, `climb`, `floor_rows`, `Placement` anchor), `interact.rs` (`ride_rows`, stair rows for every link kind), `screens/popup.rs`, `render/map.rs` (`connector`), `render/minimap.rs` (a mark per link), `render/tileset.rs` (escalator glyph), `look.rs` (stairwell, lift, escalator, ladder fixtures), `track/route.rs` (`to_level`), tests in `screens/explore.rs`, `track/`, `render/minimap.rs`
+- Modify: `crates/strata-zero/src/interiors.rs` (`ride`, `climb`, `floor_rows`, `Placement` anchor), `interact.rs` (`ride_rows`, stair rows for every link kind), `screens/popup.rs`, `render/map.rs` (`connector`), `render/minimap.rs` (a mark per link), `render/tileset.rs` (escalator glyph), `look.rs` + `flavor/looks.ron` (stairwell, lift, escalator, ladder fixtures), `track/route.rs` (`to_level`), tests in `screens/explore.rs`, `track/`, `render/minimap.rs`
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
@@ -381,10 +383,12 @@ EOF
       /// Every link's landing tiles on a level, in link order.
       pub fn landings(&self, level: i32) -> Vec<Pos>;
       /// From `level` on link `link`: the next stop up or down you can get off at;
-      /// None when you can't get on here.
+      /// None when you can't get on here. Stops are read through `plan.levels`: a stop whose
+      /// level the plan lacks is skipped.
       pub fn next_stop(&self, link: usize, level: i32, up: bool) -> Option<i32>;
       /// The levels a lift takes you to from `from`: its stops you can get off at,
-      /// `from` left out; empty when you can't get on at `from`.
+      /// `from` left out; empty when you can't get on at `from`. Stops on levels the plan
+      /// lacks are left out.
       pub fn rides(&self, link: usize, from: i32) -> Vec<i32>;
       pub fn lift_on(&self, level: i32) -> Option<Pos>;  // the first Lift's landing
       pub fn stair_on(&self, level: i32) -> Option<Pos>; // the first Stair's landing
@@ -445,6 +449,17 @@ fn next_stop_and_rides_follow_on_and_off() {
 }
 ```
 
+Links are always read through `plan.levels`, so Task 1's `levels_with_a_gap_climb_and_ride_over_it` (stops left on 2F and 3F in the links, those levels cut from `levels` only) still passes; this test pins the rule:
+
+```rust
+#[test]
+fn links_skip_a_stop_on_a_level_the_plan_lacks() {
+    // The classic lift and stair of a 5-floor building with 2 and 3 cut from plan.levels:
+    // next_stop(stair, 1, true) == Some(4); next_stop(stair, 4, false) == Some(1);
+    // rides(lift, 0) holds neither 2 nor 3.
+}
+```
+
 In `interiors.rs` tests (a CorpTower of `home_city()`; links edited with `put_plan`, its floors generated by `ensure`):
 
 ```rust
@@ -476,6 +491,7 @@ Expected: FAIL to compile (`LinkKind`, `LevelLink`, `links`).
 
 - `classic` makes the lift link (every level at today's lift position, when there are three floors or more) then the stair link (every level at today's stair position, when there are two or more). `FloorPlanRead` takes old `lift: Option<Pos>` and `stair: Option<Pos>` and builds the same two links when `links` is empty.
 - `shafts` draws every stop on the level with `kind.terrain()` (both tiles of a lift); the roof door stands east of `stair_on(level)`; `connect` and `Placement` anchor on `anchor(level)`; `validate_floor` checks each stop's tiles carry its kind's terrain and that every exit reaches one of `landings(level)`.
+- Link stops are read through `plan.levels`: `next_stop`, `rides` and `floor_rows` skip a stop whose level the plan lacks, so a plan cut from `levels` alone and a plan cut by Task 15's `kept` agree. `floor_rows` takes the link now, so Task 1's `levels_with_a_gap…` test calls `floor_rows(plan, 0, 0)` (link 0, from level 0).
 - `climb` uses the link under the player and lands on that link's stop on the next level (`next_stop`); `ride` uses the lift under the player, refuses a level not in `rides` with `"the lift doesn't stop there"`, and lands on its stop. Errors keep today's words: `"nothing leads up from here"`, `"no lift here"`, `"lifts locked down"`.
 - Rows: a Stair, Escalator, Ladder or Crawl landing offers `>`/`<` to `next_stop`; a Lift landing offers `ride_rows` from `floor_rows(plan, link, here)`: `rides` and your own stop (greyed), top first, marked as today. The map's `connector` reports a Lift as `ConnectorKind::Lift`, Stair and Escalator as `Stair`, Ladder and Crawl as `Ladder`, with `up`/`down` from `next_stop`. The escalator glyph is `↑` up only, `↓` down only, `⇅` both, in the stair's colours.
 - `to_level` picks, among links with a stop on this level you can get on at: a lift (when lifts answer) whose `rides` holds the target level; else a Stair, Escalator or Ladder whose `next_stop` moves toward it; else a lift to the level nearest it; the shortest walk wins among equals. With today's one lift and one stair this is today's choice.
@@ -487,11 +503,13 @@ Run: `cargo test -p citygen --target-dir target/smoke interior::`
 Expected: PASS, `classic_floors_are_pinned` unchanged.
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS.
+Run: `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character`
+Expected: PASS (`↑` and `↓` are new; `⇅` is already drawn).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/citygen crates/strata-zero
+git add crates/citygen crates/strata-zero flavor/looks.ron
 git commit -F - <<'EOF'
 citygen: every building moves between levels by links
 
@@ -506,7 +524,7 @@ EOF
 ### Task 4: Venue types as data
 
 **Files:**
-- Create: `crates/citygen/src/interior/venue/mod.rs`, `venue/types.rs`, `venue/test_type.ron`, `flavor/sites.ron`
+- Create: `crates/citygen/src/interior/venue/mod.rs`, `venue/types.rs`, `venue/test_type.ron`, `venue/testutil.rs`, `flavor/sites.ron`
 - Modify: `crates/citygen/src/interior/mod.rs` (`pub mod venue;`), `interior/floor.rs` (`RoomKind` grows), `interior/layouts.rs` (`walled`), `lighting/tuning.rs` (`room_light` for the new kinds), `crates/strata-zero/src/look.rs` + `flavor/looks.ron` only if a test there wants a Look line per room kind
 
 **Interfaces:**
@@ -599,7 +617,7 @@ In `venue/types.rs`:
 
 ```rust
 fn sizes() -> &'static [SizeRule] { &VenuePack::builtin().sizes }
-fn test_type() -> VenueType { VenueType::parse(include_str!("test_type.ron")).unwrap() }
+// test_type() is `venue::testutil`'s (see below).
 
 #[test]
 fn the_builtin_pack_loads_with_the_size_table() {
@@ -638,6 +656,8 @@ fn check_finds_what_is_wrong() {
 ```
 
 `check`'s rules, each an `Err` naming what it found: at least two zones; every zone, room, piece and role a type names exists; every border has two ways or more (`"one way past"`), and its ways fit its lock (a `Card` lock lists `Card` and neither `Code` nor `Keyjack`; a `Keypad` lock lists `Code`; `Grille` is never a border's); every link serves at least two levels of the type's own frame; every objective's room is in some level's bands (and on its `level` role when it names one); `scale` is 100 for the ground, middle and top roles and the first below role (−1), and 100–200 below that; shares of a level sum to 100; `security` covers every size. (A level need not have a link's zone: Task 8 lands the link in the next deeper zone the level has.)
+
+`venue/testutil.rs` (`#[cfg(test)] mod testutil;` in `venue/mod.rs`) holds the helpers every venue test module shares, so no module keeps its own copy: `pub(crate) fn test_type() -> VenueType` (parses `test_type.ron`). Task 5 adds `city()`, `medium(seed)` and `cities()`; Tasks 5–11 and 14 use it.
 
 `venue/test_type.ron` is a whole `Type(...)` that exercises every piece of the schema: three zones with one `one_way` border and one `Keypad` border; two below roles, the deeper with `scale: (150, 120)` and a `Track` piece; a ground role with a `GateLine`; a middle role with `spine: Any`; one top role with a `Ring` spine; a `Ramp`; links of all five kinds, among them an `Up` escalator, a stair with `alight: Ends` and a lift with a card on its top stop; a crawl in from `Heights` and one from `Undercity`; two objectives; security for every size; an own frame with two street doors, a Skyways door, `roof: true` and `undercity: true`.
 
@@ -713,7 +733,8 @@ Sites(
         // office: builds [Office]; zones public, staff, secure, executive; below [server basement];
         //   ground lobby with a "gate line" piece; middle open-plan floor; top [executive floor].
         // metro station: builds []; zones public, paid, staff, secure; ground hall;
-        //   below [concourse, platform, platform, service, drainage]; no middle, no top.
+        //   below [concourse, platform, platform, service, drainage], a Track piece on each platform
+        //   level (Task 15's copy test needs one before Task 16 writes the full type); no middle, no top.
     ],
 )
 ```
@@ -725,12 +746,14 @@ The first cut only has to pass `check`; Task 16 writes each type's full program.
 Run: `cargo test -p citygen --target-dir target/smoke venue::types`
 Expected: PASS.
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
-Expected: PASS (`every_drawn_character_has_a_glyph` scans `flavor/sites.ron`: keep it ASCII).
+Expected: PASS.
+Run: `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character`
+Expected: PASS (`every_drawn_character_has_a_glyph` scans `flavor/sites.ron`: keep it ASCII; the test lives in `window/font.rs` and runs only with the window feature, so this command is the one that checks it).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/citygen flavor/sites.ron
+git add crates/citygen flavor/sites.ron   # and crates/strata-zero flavor/looks.ron if a Look line was added
 git commit -F - <<'EOF'
 citygen: venue types are data, in flavor/sites.ron
 
@@ -744,6 +767,7 @@ EOF
 
 **Files:**
 - Create: `crates/citygen/src/interior/venue/frame.rs`, `venue/layout.rs`, `venue/levels.rs`
+- Modify: `crates/citygen/src/interior/venue/testutil.rs` (Task 4's: adds `city()`, `medium(seed)`, `cities()`, with the bodies of `interior/mod.rs`'s test helpers)
 - Modify: `crates/citygen/src/interior/plan.rs` (share today's storey count as `pub(crate) fn storeys(city, id) -> (i32, i32)`), `interior/layouts.rs` (`exit_tile`, `outward`, `edge` reachable from `venue` as `pub(in crate::interior)`)
 
 **Interfaces:**
@@ -816,7 +840,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-In `venue/frame.rs` (cities: `city()` as in `interior/mod.rs`, `medium(8)`, `medium(11)`):
+In `venue/frame.rs` (cities from `venue::testutil`: `cities()` is `city()`, `medium(8)` and `medium(11)`):
 
 ```rust
 #[test]
@@ -849,7 +873,7 @@ fn the_own_frame_is_the_types_frame() {
 }
 ```
 
-In `venue/levels.rs` (the test type of Task 4, `test_type()`):
+In `venue/levels.rs` (`testutil::test_type()`, the test type of Task 4):
 
 ```rust
 #[test]
@@ -906,7 +930,9 @@ Expected: FAIL to compile.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p citygen --target-dir target/smoke venue::`
+Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test -p citygen --target-dir target/smoke interior::`
+Expected: PASS (this task edits `classic`, so `classic_floors_are_pinned` runs and stays unchanged).
+Run: `cargo test --workspace --target-dir target/smoke`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -970,20 +996,21 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-In `venue/zones.rs` (test type, own frame, seeds `0..20`):
+In `venue/zones.rs` (`testutil::test_type()`, own frame, seeds `0..20`):
 
 ```rust
 #[test]
 fn bands_run_front_to_back_in_data_order() {
     // For each level: bands.len() == the role's bands; band i's zone == t.zone(def.bands[i].zone);
     // band 0 touches the front side (the side of the frame's first Street door);
-    // each band's depth is within 10 percentage points of its share; bands tile the level's inner rect.
+    // each cut between bands lies within 10 percentage points of its running share (the shares so far summed), the jitter the step allows each cut; bands tile the level's inner rect.
 }
 
 #[test]
 fn border_doors_join_neighbouring_bands_on_the_spine() {
     // For every pair of neighbouring bands with different zones: at least `doors` of the inner
-    // band's BandDef are PlannedDoors with border == true joining the two bands' spine rooms;
+    // band's BandDef are PlannedDoors with border == true; the first joins the two bands' spine rooms
+    // (a `doors: 2` loop door's rooms are set by Task 7, once the rooms exist);
     // a border def with `always` puts a lock on each (kind and ways from the def, zone = the inner
     // rank); `fit` equals that lock (or the lock it would carry, for a border not always locked).
 }
@@ -1016,12 +1043,12 @@ Expected: FAIL to compile.
 - **Front:** the side of the frame's first Street door, on every level, so zones stack the same way up the building: public at the doors, the deepest band at the back.
 - **Spine:** a level's `Any` takes, by the level's rng, `Straight` (a 2-wide corridor from front to back along the middle), `Bent` (straight, then turning along the back band), `Ring` (round a central core, only when the inner rect is at least 24 x 16) or `Hall` (no corridor: each band is one open room). The spine becomes one `Corridor` room per band (its zone the band's).
 - **Bands:** cut across the spine's run, front to back, by share, each cut moved by up to ±10 points of the level's depth by the rng (integer percent), never thinner than 5 tiles.
-- **Border doors:** where the spine crosses from a band to the next, a door across the spine's width at the cut; `doors: 2` adds a second border door along the cut away from the spine (a loop); on a `Hall` spine the door sits on the cut at the spine line. Each border door gets `fit` from `t.border(outer, inner)` (kind, ways, zone = inner rank, `free_from` the inner neighbour when `one_way`), and `lock = fit` when the border is `always`. Lock numbers count from `LOCK_NUMBERS` per level in door order.
+- **Border doors:** where the spine crosses from a band to the next, a door across the spine's width at the cut; `doors: 2` adds a second border door along the cut away from the spine (a loop; its `rooms` stay the first door's until Task 7 re-points them); on a `Hall` spine the door sits on the cut at the spine line. Each border door gets `fit` from `t.border(outer, inner)` (kind, ways, zone = inner rank, `free_from` the inner neighbour when `one_way`), and `lock = fit` when the border is `always`. `fit` is set on border doors only, never on a room's own door (Choice 5). Lock numbers count from `LOCK_NUMBERS` per level in door order.
 - Doorsteps of the frame's doors and their 4-neighbours go into `reserved`; no cut or wall crosses them.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p citygen --target-dir target/smoke venue::`
+Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test --workspace --target-dir target/smoke`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1058,6 +1085,8 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
+The tests take the test type from `venue::testutil`.
+
 ```rust
 #[test]
 fn basement_rooms_number_apart_from_the_lobby() {
@@ -1074,7 +1103,9 @@ fn rooms_fill_their_band_and_keep_its_zone() {
     // Test type, own frame, seeds 0..20, every level: each room's rect lies inside its band's
     // rect (or its piece's) and takes the band's zone; no two rooms overlap; each room but a Hall
     // band's open room has a PlannedDoor to its band's spine room; a listed room's size is within
-    // its RoomDef's range; a fill room is at least 3 x 3.
+    // its RoomDef's range; a fill room is at least 3 x 3;
+    // every border door, a `doors: 2` loop door included, joins a room of each of its two bands
+    // (Task 6 left the loop door's rooms to this task).
 }
 
 #[test]
@@ -1125,7 +1156,7 @@ Expected: FAIL to compile.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p citygen --target-dir target/smoke venue::`
+Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test --workspace --target-dir target/smoke`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1148,9 +1179,11 @@ EOF
 
 **Interfaces:**
 - Consumes: `LevelLink`, `LinkStop`, `LinkKind` (Task 3); `LinkDef`, `Serves`, `LinkDir`, `Alight` (Task 4); the rooms (Task 7).
-- Produces: `VenueLayout.links: Vec<LevelLink>` in the type's link order, each named from its def, with landings and their 4-neighbours added to their level's `reserved`.
+- Produces: `VenueLayout.links: Vec<LevelLink>` in the type's link order, each named from its def, with landings and their 4-neighbours added to their level's `reserved`, and any mission spot those tiles cover removed from its room's `spots` (spots are never reserved, and no post lands on a landing).
 
 - [ ] **Step 1: Write the failing tests**
+
+The tests take the test type from `venue::testutil`.
 
 ```rust
 #[test]
@@ -1187,6 +1220,12 @@ fn a_lift_asks_for_its_card_where_the_type_says() {
 fn a_roof_level_keeps_a_stair_with_room_beside_it() {
     // When the frame has a Heights door: a Stair stop on that level whose east neighbour is free floor in a room.
 }
+
+#[test]
+fn landings_leave_no_spot_reserved() {
+    // After the links stage, on every level no room's spots hold a reserved tile
+    // (Task 7's doorsteps_landings_and_spots_stay_clear holds on the finished layout too).
+}
 ```
 
 - [ ] **Step 2: Run them to make sure they fail**
@@ -1200,7 +1239,7 @@ Per def, per level it serves, lowest first: a landing on free floor of a room of
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p citygen --target-dir target/smoke venue::`
+Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test --workspace --target-dir target/smoke`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1234,6 +1273,8 @@ EOF
   and `LevelLayout.exits` (`citygen::Exit`), `VenueLayout.barred`.
 
 - [ ] **Step 1: Write the failing tests**
+
+The tests take the test type and the cities from `venue::testutil`.
 
 ```rust
 #[test]
@@ -1272,7 +1313,7 @@ An exit per frame door on a level the layout has (the roof door's `at` east of t
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p citygen --target-dir target/smoke venue::`
+Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test --workspace --target-dir target/smoke`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1324,7 +1365,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-In `venue/draw.rs` (test type, own frame, seeds `0..10`):
+In `venue/draw.rs` (`testutil::test_type()`, own frame, seeds `0..10`):
 
 ```rust
 #[test]
@@ -1395,6 +1436,8 @@ Run: `cargo test -p citygen --target-dir target/smoke interior::`
 Expected: PASS, `classic_floors_are_pinned` unchanged.
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS.
+Run: `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character`
+Expected: PASS (`╪` and `▓` are new).
 
 - [ ] **Step 5: Commit**
 
@@ -1439,6 +1482,7 @@ EOF
   /// The four ways of playing, each a set of means on top of open doors and the cards
   /// and codes found on the way.
   pub const PLAYS: [(&str, Ways); 4]; // ("force", FORCE), ("the Net", NET), ("the Keyjack", KEYJACK | CRAWL), ("talk", TALK)
+  // `BitOr` isn't const: write the bits (`Ways(KEYJACK.0 | CRAWL.0)`), or make PLAYS a `pub fn plays() -> [(&'static str, Ways); 4]`.
   impl VenueGraph {
       /// Every level's rooms, doors (a private room's door is a Keypad lock coded by its
       /// number, ways Code | Keyjack | Net | Force), links (a lift edge carries a Card | Net | Talk
@@ -1540,7 +1584,7 @@ As the interface says. Doors join both ways, a one-way lock with `free: true` on
 
 - [ ] **Step 4: Write the failing checks and the sweep**
 
-In `venue/check.rs`:
+In `venue/check.rs` (`testutil::test_type()` for the test type):
 
 ```rust
 #[test]
@@ -1556,7 +1600,7 @@ fn validate_layout_finds_a_room_nobody_reaches() {
 
 `validate_layout` checks: every room is reached from the starts by someone holding every key (`means` all bits, `card` the deepest zone, every code); every link stop lies in a room of its level; every exit's doorstep lies in its way-in room; every level has at most one door stratum; lock numbers are unique per level. `validate_venue` adds every level drawn by `draw_level` and checked by `validate_floor` against `FloorPlan::of_layout`. `holds` (until Task 14): the layout has at least `rule.floors.0` levels, at least `rule.ways_in` ways in, and some objective room of the type at depth `rule.locks.0` or more in `VenueGraph::of(layout, &layout.candidates(), None)`.
 
-`crates/citygen/tests/venues.rs`:
+`crates/citygen/tests/venues.rs` (an integration test: it can't reach `testutil`, so it builds its own cities):
 
 ```rust
 const SEEDS: u64 = 50;
@@ -1577,8 +1621,9 @@ fn every_type_passes_the_checker() {
             validate_venue(&l).unwrap_or_else(|e| panic!("{} own {seed}: {e}", t.id));
             for rule in &pack.sizes { assert!(l.holds(&t, rule), "{} own {seed} {:?}", t.id, rule.size); }
         }
-        // The buildings of its kinds; a type no kind builds stands, as the console puts it, in the
-        // five largest closed buildings of each city, raised to its own top.
+        // The buildings of its kinds; a type no kind builds stands in the
+        // five largest closed buildings of each city, raised to its own top here so every size is held
+        // (the console raises only when a building can't hold the size).
         let frames: Vec<VenueFrame> = if t.builds.is_empty() {
             cities.iter().flat_map(|c| largest_closed(c, 5).into_iter()
                 .filter_map(|b| VenueFrame::of_building(c, b)).map(|f| f.raised(t.frame.top.max(f.storeys.1)))).collect()
@@ -1613,7 +1658,9 @@ fn venue_fingerprints_are_pinned() {
 - [ ] **Step 5: Run the checks**
 
 Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test -p citygen --target-dir target/smoke --test venues`
-Expected: PASS after the fingerprints are recorded. A failure in the sweep names the type, the frame and the seed: fix the stage, or the first cut in `sites.ron`, not the check. Note the sweep's time; over 60 s in debug, `SEEDS = 20` (say so in the commit).
+Expected: PASS after the fingerprints are recorded.
+Run: `cargo test --workspace --target-dir target/smoke`
+Expected: PASS. A failure in the sweep names the type, the frame and the seed: fix the stage, or the first cut in `sites.ron`, not the check. Note the sweep's time; over 60 s in debug, `SEEDS = 20` (say so in the commit).
 
 - [ ] **Step 6: Commit**
 
@@ -1720,6 +1767,7 @@ EOF
 
 **Files:**
 - Modify: `crates/strata-zero/src/credentials.rs` (zone cards, `opens_lock`, `opens_stop`, `door_label`, `How::Free`, `carries`, `prepare` stocks zone cards), `interiors.rs` (`ride` asks for a stop's card; `crawl_in`, `crawl_out`; `climb` onto a crawl wants the check), `screens/explore.rs` (stepping onto a lock door or a grille), `interact.rs` (a keypad row on a keypad lock door; crawl rows on a grille, on a crawl way in, and on the city tile outside one), `screens/popup.rs` (`WorldAct::Crawl`), `screens/keypad.rs` (`door_label`), `look.rs` + `flavor/looks.ron` (fixtures `zone_door`, `grille`, `escalator`)
+- Modify: `crates/strata-zero/src/jobs/card.rs` (its exhaustive match on `Option<How>`, lines 411-418, gets a `How::Free` arm)
 - Create: `crates/strata-zero/src/venues.rs` (`can_crawl`; `pub mod venues;` in `main.rs`/`lib.rs` as the crate does)
 
 **Interfaces:**
@@ -1741,7 +1789,8 @@ EOF
   pub fn opens_lock(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock, from: Pos) -> Option<How>;
   /// A lift stop's card: none asked, the Net's crack, or a zone card at `card` or deeper.
   pub fn opens_stop(st: &AppState, b: BuildingId, card: u8) -> Option<How>;
-  /// "{zone} door" for a lock number, else `flat_label`.
+  /// "{zone} door" for a lock number; a venue room's number reads its `room_label` ("B1-04",
+  /// not "flat 9104"); any other number, `flat_label`.
   pub fn door_label(st: &AppState, b: BuildingId, level: i32, number: u16) -> String;
   // strata_zero::venues
   pub fn can_crawl(st: &AppState) -> bool; // Tech >= crawl_tech
@@ -1771,6 +1820,12 @@ fn a_card_lock_stays_shut_and_says_whose() {
 fn a_keypad_lock_takes_its_code_and_the_keyjack() {
     // try_code(st, b, level, lock.number, door_code(seed, b, level, lock.number)) == Verdict::Open,
     // then opens_lock == Some(How::Code(_)); Keypad::open's label is "{zone} door".
+}
+
+#[test]
+fn a_venue_room_reads_its_label() {
+    // door_label for the number of a venue room below the street is "B1-04"-style (room_label), not
+    // "flat 9104"; for a room at or above the street it is its number; a flat's number still reads flat_label.
 }
 
 #[test]
@@ -1846,7 +1901,7 @@ EOF
 **Files:**
 - Create: `crates/citygen/src/interior/venue/mission.rs`
 - Modify: `venue/draw.rs` (`draw_copy_level`), `venue/check.rs` (`validate_copy`; `holds` lays a copy), `crates/citygen/tests/venues.rs` (copies in the sweep), `crates/citygen/src/tile.rs` (`Feature::Turret`, `Feature::Container`, `Feature::Objective` at the end; turret and container not walkable)
-- Modify: `crates/strata-zero/src/foes.rs` (`Post`, `Foe.post`), `venues.rs` (`guard_foes`), `render/tileset.rs` (`◆` turret `Rgb(255, 60, 70)`, `□` container `Rgb(150, 160, 170)`, `◎` objective `MAGENTA_RGB`; a door with a reader in `Rgb(255, 154, 60)`), `look.rs` + `flavor/looks.ron` (keys `turret`, `container`, `objective`)
+- Modify: `crates/strata-zero/src/foes.rs` (`Post`, `Foe.post`), `grid.rs` (its `Foe` literal, line 134, gets `post: None`), `venues.rs` (`guard_foes`), `render/tileset.rs` (`◆` turret `Rgb(255, 60, 70)`, `□` container `Rgb(150, 160, 170)`, `◎` objective `MAGENTA_RGB`; a door with a reader in `Rgb(255, 154, 60)`), `look.rs` + `flavor/looks.ron` (keys `turret`, `container`, `objective`)
 
 **Interfaces:**
 - Consumes: Tasks 4–11; `Foe::goon`'s fields.
@@ -1896,7 +1951,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-In `venue/mission.rs` (test type, own frame, seeds `0..20`, each size, security `0` and `255`):
+In `venue/mission.rs` (`testutil::test_type()`, own frame, seeds `0..20`, each size, security `0` and `255`):
 
 ```rust
 #[test]
@@ -1935,10 +1990,16 @@ fn devices_stand_on_floor_spots() {
 }
 
 #[test]
+fn a_grille_needs_no_key() {
+    // A layout whose lowest-zone lock out of the start is a grille (a crawl way in): `lay` is still Ok
+    // and no CardSpot or CodeSpot is laid for it.
+}
+
+#[test]
 fn the_same_inputs_lay_the_same_layer() { /* lay twice: equal */ }
 ```
 
-In `crates/citygen/tests/venues.rs`, `every_type_passes_the_checker` adds, for each own-frame and building layout and each size it `holds`: `lay` with `objective = seed as usize % t.objectives.len()`, `security = (seed * 37 % 256) as u8`, `seed`, then `validate_copy(..).unwrap_or_else(|e| panic!("{} {seed} {:?}: {e}", t.id, size))`.
+In `crates/citygen/tests/venues.rs`, `every_type_passes_the_checker` adds, for each own-frame and building layout and each size it `holds`: `lay` with `objective = seed as usize % t.objectives.len()` and then each other objective, `security = (seed * 37 % 256) as u8`, `seed`; an (objective, seed) whose `lay` errs is skipped, and the test fails if a seed lays no objective at all at a size the building `holds`; every layer that lays goes to `validate_copy(..).unwrap_or_else(|e| panic!("{} {seed} {:?}: {e}", t.id, size))`.
 
 In `strata-zero/src/venues.rs`:
 
@@ -1977,11 +2038,11 @@ Its rng is `hash64(layout.seed, inputs.seed)`; it fails with a reason a test can
    // candidate on it nearest the goal; none left on it: Err("too shallow for {size}").
    ```
    Any route at depth `d` holds an unfitted candidate while `d` is below the depth with every candidate fitted, so this ends once `holds` says yes.
-4. **Keys:** repeat until the base way (no means) gets in and out: reach with what lies so far; among the locks on edges leaving the reached rooms, the one of lowest zone (then lowest node) gets its card (a `Card` lock) or code (a `Code` lock) left on a free spot of the reached room of deepest zone (then nearest the lock); a lock with neither is `Err`. The same for the way out from the goal.
+4. **Keys:** repeat until the base way (no means) gets in and out: reach with what lies so far; among the locks on edges leaving the reached rooms whose ways include `Card` or `Code` (a grille's ways are `CRAWL`: it needs no key and is skipped, a crawl way in's included), the one of lowest zone (then lowest node) gets its card (a `Card` lock) or code (a `Code` lock) left on a free spot of the reached room of deepest zone (then nearest the lock); a lock with neither is `Err`. The same for the way out from the goal.
 5. **Guards:** `rule.guards.0 + (rule.guards.1 - rule.guards.0) * security / 255`, shared out by the security def's zone weights over kept rooms of those zones, one to a spot; each patrol is 2–4 spots of rooms of its zone on its level, starting at the post.
 6. **Devices and containers:** cameras and turrets from the def's ranges scaled by security the same way, cameras on spots of spine and hall rooms nearest the fitted doors, turrets only in `turret_zones`; containers in rooms above public; the objective spot drawn as `Feature::Objective`.
 
-`holds` now returns whether `lay` with seed 0 succeeds for some objective and `validate_copy_graph` passes (no floor is drawn, so a mission can ask it of many buildings). `validate_copy_graph`: the four ways (`PLAYS`) each have `route_in`, and `route_out` from the goal with the keys it ended with; depth at least `rule.locks.0`; at least `rule.ways_in` open ways in on kept levels; kept levels joined by the restricted links. `validate_copy` adds every kept level drawn by `draw_copy_level`, checked by `validate_floor` against `FloorPlan::of_layout(layout.clone())` and by the device rule.
+`holds` now returns whether `lay` with seed 0 succeeds for some objective and `validate_copy_graph` passes (it stays that: the sweep, not `holds`, skips an (objective, seed) that errs; Task 16's test still wants three objectives per type) (no floor is drawn, so a mission can ask it of many buildings). `validate_copy_graph`: the four ways (`PLAYS`) each have `route_in`, and `route_out` from the goal with the keys it ended with; depth at least `rule.locks.0`; at least `rule.ways_in` open ways in on kept levels; kept levels joined by the restricted links. `validate_copy` adds every kept level drawn by `draw_copy_level`, checked by `validate_floor` against `FloorPlan::of_layout(layout.clone())` and by the device rule.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1989,11 +2050,13 @@ Run: `cargo test -p citygen --target-dir target/smoke venue:: && cargo test -p c
 Expected: PASS; the fingerprints stay (the layer doesn't touch the plain layout).
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS (fixtures: `Foe.post` defaults).
+Run: `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character`
+Expected: PASS (`◆`, `□` and `◎` are new).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/citygen crates/strata-zero flavor/looks.ron
+git add crates/citygen crates/strata-zero flavor/looks.ron flavor/sites.ron
 git commit -F - <<'EOF'
 citygen: a mission's layer on a venue: kept floors, locks, keys, guards and devices
 
@@ -2129,8 +2192,9 @@ fn a_track_to_a_dropped_floor_finds_no_way() {
 }
 
 #[test]
-fn a_station_copy_seals_its_tracks() {
-    // The builtin type with a Track piece, laid on the largest closed building of home_city()
+fn a_copy_seals_its_track_ends() {
+    // A builtin type with a Track piece (found by iterating the pack; the first cut has one on each
+    // platform level), laid on the largest closed building of home_city() other than the player's home
     // (VenueFrame::of_building(..).raised(its own top)), made the building's plan with put_plan,
     // then begin at Large (it keeps every level): the Look of a shutter tile reads
     // a `shutter_sealed` line; before begin, a `shutter` line.
@@ -2156,6 +2220,8 @@ Expected: FAIL to compile.
 
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS, the fixtures among them (`Interiors.copies` defaults).
+Run: `cargo test -p strata-zero --features window --target-dir target/smoke every_drawn_character`
+Expected: PASS (`▮` is new).
 
 - [ ] **Step 5: Commit**
 
@@ -2214,7 +2280,7 @@ From the spec's lists and the mocks (room programs in `levels.py` and `metro.py`
 
 - **Hotel** (`builds: [Hotel]`; zones public, guest, staff, secure): −1 car park (`CarPark` with the `Ramp` up to G, the security office with its server, `Server`), −2 service (kitchen, laundry, lockers, a store); G lobby (reception, a bar, the lift lobby; a staff band with the back corridor and the manager's office); guest floors in the middle with guest rooms of three sizes, a linen room and the staff stair; the penthouse on top (foyer, lounge, bedroom, the office with the safe). Links: guest lift (all, a secure card at the penthouse), service lift (not the penthouse), service stair, grand stair (G and 1F), a fire stair with `alight: Ends`, the riser crawl; crawls in from the roof and the Undercity. Borders: staff and secure doors `always`; secure one-way out. Objectives: the penthouse safe, a guest's room, the security office's server. Own frame about the Pale Orchid's size (mock 46 x 28 on G).
 - **Office** (`builds: [Office]`; zones public, staff, secure, executive): G lobby with the `GateLine` (public to staff, one-way out) and a security desk; open-plan floors to fill the middle; the executive floor on top; a server room in a −1 basement with the plant room. Links: two public lifts behind the gate line (staff stops), a goods lift, two stairs (one a fire stair with `alight: Ends`), a duct crawl. Objectives: the server room, the executive's office, a desk on the open plan.
-- **Metro station** (`builds: []`, own frame `kind: Depot`, footprint as Cinder Cross's 96 x 40 / 3; zones public, paid, staff, secure): G the station hall; −1 the concourse (ticket hall, gate line into the paid side, the staff block, the cash room; Undercity maintenance doors from the frame); −2 and −3 platforms (`Track` each) for two lines; −4 service with Line Control (`secure`); −5 drainage and a cable vault. Links: street stairs and hall escalators (G and −1), platform escalators (−1 to −2, −2 to −3, one `Up` and one `Down` bank), the platform lift (−1 to −3), the freight lift (G, −1, −4, a staff card), the emergency stair (G to −4, `alight: Ends`), the ventilation shaft crawl (G to −4), the old shaft ladder (−4 to −5). Objectives: Line Control's core, the cash room, the signal box.
+- **Metro station** (`builds: []`, own frame `kind: Depot`, footprint as Cinder Cross's 96 x 40 / 3; zones public, paid, staff, secure): G the station hall; −1 the concourse (ticket hall, gate line into the paid side (its (public, paid) border is `one_way`: exit-only, free from the paid side to the public), the staff block, the cash room; Undercity maintenance doors from the frame); −2 and −3 platforms (`Track` each) for two lines; −4 service with Line Control (`secure`); −5 drainage and a cable vault. Links: street stairs and hall escalators (G and −1), platform escalators (−1 to −2, −2 to −3, one `Up` and one `Down` bank), the platform lift (−1 to −3), the freight lift (G, −1, −4, a staff card), the emergency stair (G to −4, `alight: Ends`), the ventilation shaft crawl (G to −4), the old shaft ladder (−4 to −5). Objectives: Line Control's core, the cash room, the signal box.
 
 Security for every size in each, first guesses. Run the sweep; tune shares, sizes and borders until every size passes on each own frame and on the city buildings. Then record the new `PINNED` fingerprints (this change is meant to move them).
 
@@ -2282,7 +2348,8 @@ fn site_refuses_home_and_inside() {
 #[test]
 fn site_raises_a_low_building_to_hold_the_size() {
     // A four-floor building and the type whose own frame is tallest, "site {id} large": Ok, and the
-    // plan's top equals the type's own top.
+    // plan's top equals the type's own top. The same type at a size the building holds leaves the
+    // top the city made.
 }
 ```
 
@@ -2300,6 +2367,8 @@ Expected: FAIL (`unknown command site`).
 - [ ] **Step 4: Run the tests and the shots**
 
 Run: `cargo test -p strata-zero --target-dir target/smoke console::`
+Expected: PASS.
+Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS.
 Run: `SHOT_DIR=<an empty folder of your own> cargo test -p strata-zero --features window --target-dir target/smoke -- --ignored site_shots`
 Expected: PASS, and `.svg` and `.png` for every type, size and level. Look at a few: levels differ, more than one lift or stair, guards and devices on the copies, flagged doors on the street.
