@@ -1,6 +1,6 @@
 //! A venue's layout: its levels, laid out stage by stage from a type, a frame and a seed.
 
-use super::{Spine, VenueFrame, VenueType, levels, zones};
+use super::{PieceKind, Spine, VenueFrame, VenueType, levels, rooms, zones};
 use crate::geom::{Pos, Rect, Size};
 use crate::interior::{DoorLock, Role, RoomKind};
 use crate::rng::hash64;
@@ -35,10 +35,11 @@ pub struct LevelLayout {
     /// The level cut front to back, one strip per band of its role, in the role's order.
     pub bands: Vec<BandArea>,
     /// The spine rooms first, one per band in the bands' order: the band's piece of the
-    /// corridor, or on a `Hall` spine the whole band, which the rooms stage gives its
-    /// first listed room.
+    /// corridor, or on a `Hall` spine the whole band as its first listed room. A tile
+    /// inside the frame wall that no room holds and no door stands on is wall.
     pub rooms: Vec<PlannedRoom>,
     pub doors: Vec<PlannedDoor>,
+    pub pieces: Vec<PlacedPiece>,
     /// The solid block a `Ring` spine runs round, inside its band's spine room: no room,
     /// door, spot or landing uses it, and drawing walls it.
     pub core: Option<Rect>,
@@ -65,6 +66,9 @@ pub struct PlannedDoor {
     pub fit: Option<DoorLock>,
     /// Joins two zones.
     pub border: bool,
+    /// No door stands here: the two rooms touch, open to each other along their edge (a
+    /// vestibule on the spine, a platform's edge), and `at` is a tile of the second.
+    pub open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +86,40 @@ pub struct PlannedRoom {
     pub spots: Vec<Pos>,
 }
 
+/// A set piece where it stands on its level.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacedPiece {
+    pub name: String,
+    pub kind: PieceKind,
+    /// A track's rails, a gate line's row of doors, a ramp's strip.
+    pub rect: Rect,
+    /// A track's two end tiles on the frame wall: its shutters.
+    pub ends: Vec<Pos>,
+}
+
+/// Where the rooms below the street number from: B1's are 9101 on.
+const BELOW: u16 = 9000;
+
+/// A room's number: level x 100 + n at or above the street; 9000 + 100 x depth + n below
+/// it, so a basement's rooms never take the lobby's numbers (on levels from -9 to 89).
+pub fn room_number(level: i32, n: u16) -> u16 {
+    if level >= 0 {
+        level as u16 * 100 + n
+    } else {
+        BELOW + level.unsigned_abs() as u16 * 100 + n
+    }
+}
+
+/// "1204", or "B1-04" below the street.
+pub fn room_label(number: u16) -> String {
+    if number > BELOW {
+        let below = number - BELOW;
+        format!("B{}-{:02}", below / 100, below % 100)
+    } else {
+        number.to_string()
+    }
+}
+
 /// Lays out a venue of type `t` in `frame` from `seed`, a stage at a time: each stage
 /// draws from its own rng, seeded from `seed` and the stage.
 pub fn lay_out(t: &VenueType, frame: VenueFrame, seed: u64) -> Result<VenueLayout, String> {
@@ -96,6 +134,7 @@ pub fn lay_out(t: &VenueType, frame: VenueFrame, seed: u64) -> Result<VenueLayou
     };
     levels::place(t, &mut layout, &mut rng(levels::STAGE))?;
     zones::lay(t, &mut layout, &mut rng(zones::STAGE))?;
+    rooms::lay(t, &mut layout, &mut rng(rooms::STAGE))?;
     Ok(layout)
 }
 

@@ -5,6 +5,7 @@
 mod frame;
 mod layout;
 mod levels;
+mod rooms;
 mod types;
 mod zones;
 

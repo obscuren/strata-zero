@@ -83,6 +83,29 @@ impl Axes {
         }
     }
 
+    /// How many tiles across `p` lies.
+    pub fn across(self, p: Pos) -> i32 {
+        let r = self.inner;
+        match self.front {
+            Dir::N | Dir::S => p.x - r.x,
+            _ => p.y - r.y,
+        }
+    }
+
+    /// The rows and the tiles across that a rect covers: `rect` the other way.
+    pub fn span(self, r: Rect) -> ((i32, i32), (i32, i32)) {
+        let (p, q) = (Pos::new(r.x, r.y), Pos::new(r.right() - 1, r.bottom() - 1));
+        let (a, b) = (self.deep(p), self.deep(q));
+        let (c, d) = (self.across(p), self.across(q));
+        ((a.min(b), a.max(b) + 1), (c.min(d), c.max(d) + 1))
+    }
+
+    /// The 2-wide corridor's tiles across: the middle of the level.
+    pub fn line(self) -> (i32, i32) {
+        let w = self.width();
+        (w / 2 - 1, w / 2 + 1)
+    }
+
     /// The rect over rows `a.0..a.1` and tiles `c.0..c.1` across; neither range empty.
     pub fn rect(self, a: (i32, i32), c: (i32, i32)) -> Rect {
         debug_assert!(a.0 < a.1 && c.0 < c.1, "an empty rect: {a:?} by {c:?}");
@@ -178,8 +201,7 @@ fn level(
     let spine = shape(def.spine, n, ring_fits, rng);
     x.spine = spine;
 
-    // The 2-wide corridor's tiles across: the middle of the level.
-    let line = (width / 2 - 1, width / 2 + 1);
+    let line = axes.line();
     let turn_left = spine == Spine::Bent && rng.random_range(0..2) == 0;
     // The ring stands this far in from each side, leaving its band's rooms a quarter to a
     // third of the width there.
@@ -259,6 +281,7 @@ fn level(
                 lock: fit.filter(|_| border.is_some_and(|b| b.always)),
                 fit,
                 border: border.is_some(),
+                open: false,
             });
         }
     }
@@ -477,6 +500,13 @@ mod tests {
             (back - 1, f),
             (back, Pos::new(2 * at.x - f.x, 2 * at.y - f.y)),
         )
+    }
+
+    /// The band behind the cut a door stands on; None for a room's door.
+    fn cut_of(x: &LevelLayout, at: Pos) -> Option<usize> {
+        let back = x.bands.iter().position(|b| b.rect.contains(at))?;
+        let on = back > 0 && at.neighbors4().any(|p| x.bands[back - 1].rect.contains(p));
+        on.then_some(back)
     }
 
     /// The border between zones ranked `a` and `b`, found by name in either order.
@@ -871,7 +901,7 @@ mod tests {
                 let plain: Vec<_> = x
                     .doors
                     .iter()
-                    .filter(|d| across(x, d.at).1.0 == 1)
+                    .filter(|d| cut_of(x, d.at) == Some(1))
                     .collect();
                 assert_eq!(plain.len(), doors, "{what}");
                 for d in &plain {

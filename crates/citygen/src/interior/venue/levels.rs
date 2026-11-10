@@ -62,6 +62,7 @@ pub(super) fn place(
             bands: Vec::new(),
             rooms: Vec::new(),
             doors: Vec::new(),
+            pieces: Vec::new(),
             core: None,
             reserved: Vec::new(),
         })
