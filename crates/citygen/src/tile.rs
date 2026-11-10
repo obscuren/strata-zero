@@ -230,6 +230,13 @@ pub enum Feature {
     FireBarrel,
     /// A steel shutter across the end of a track, set in the wall; nobody walks through it.
     Shutter,
+    /// A mission's gun turret on a venue's floor; nobody walks through it.
+    Turret,
+    /// A mission's container on a venue's floor: a crate, a locker, a case; nobody walks
+    /// through it.
+    Container,
+    /// The spot a mission's objective marks on a venue's floor; walked onto.
+    Objective,
 }
 
 /// A light fitting on an interior floor: hung from the ceiling (walked under), set in a
@@ -373,7 +380,7 @@ impl Furniture {
     }
 }
 
-pub const ALL_FEATURES: [Feature; 26] = [
+pub const ALL_FEATURES: [Feature; 29] = [
     Feature::Neon(Hue::Cyan),
     Feature::HoloAd,
     Feature::Lamp,
@@ -408,6 +415,9 @@ pub const ALL_FEATURES: [Feature; 26] = [
     Feature::PowerLine(true),
     Feature::FireBarrel,
     Feature::Shutter,
+    Feature::Turret,
+    Feature::Container,
+    Feature::Objective,
 ];
 
 /// One cell of a stratum.
@@ -487,6 +497,8 @@ impl Tile {
                     | Feature::FireBarrel
                     | Feature::Sign(_)
                     | Feature::Shutter
+                    | Feature::Turret
+                    | Feature::Container
             )
         );
         terrain_ok && feature_ok
@@ -554,7 +566,8 @@ mod tests {
         assert!(Tile::new(Escalator).is_walkable() && Tile::new(Escalator).is_connector());
         assert_eq!(*ALL_TERRAIN.last().unwrap(), Track);
         assert_eq!(ALL_FEATURES[24], Feature::FireBarrel, "appended");
-        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::Shutter);
+        assert_eq!(ALL_FEATURES[25], Feature::Shutter, "appended");
+        assert_eq!(*ALL_FEATURES.last().unwrap(), Feature::Objective);
         let mut fire = Tile::new(Dirt);
         fire.feature = Some(Feature::FireBarrel);
         assert!(!fire.is_walkable() && !fire.blocks_sight());
@@ -579,7 +592,7 @@ mod tests {
         assert!(Tile::new(Terrain::Plaza).is_outdoor_ground());
         assert!(Tile::new(Terrain::Door).is_building_part());
         assert_eq!(ALL_TERRAIN.len(), 44);
-        assert_eq!(ALL_FEATURES.len(), 26);
+        assert_eq!(ALL_FEATURES.len(), 29);
         assert!(!Tile::new(Terrain::Mass).is_walkable());
         assert!(Tile::new(Terrain::Mass).blocks_sight());
         assert!(Tile::new(Terrain::Mass).is_building_part());
@@ -650,6 +663,20 @@ mod tests {
     }
 
     #[test]
+    fn a_turret_and_a_container_stand_in_the_way_and_the_objective_is_walked_onto() {
+        let on = |f| {
+            let mut t = Tile::new(Terrain::Floor);
+            t.feature = Some(f);
+            t
+        };
+        for f in [Feature::Turret, Feature::Container] {
+            assert!(!on(f).is_walkable() && !on(f).blocks_sight(), "{f:?}");
+        }
+        assert!(on(Feature::Objective).is_walkable());
+        assert!(on(Feature::Camera).is_walkable());
+    }
+
+    #[test]
     fn feature_save_encoding_keeps_its_old_indices() {
         // Postcard writes the variant index first; saves written before the
         // street pieces existed depend on these staying put.
@@ -676,7 +703,7 @@ mod tests {
         assert_eq!(Terrain::Road.label(), "road");
         assert!(Terrain::NetLane.is_net() && !Terrain::Road.is_net());
         assert_eq!(ALL_TERRAIN.len(), 44);
-        assert_eq!(ALL_FEATURES.len(), 26);
+        assert_eq!(ALL_FEATURES.len(), 29);
         assert_eq!(crate::world::StratumKind::ALL.len(), 5);
         assert_eq!(
             crate::world::StratumKind::ALL[4],

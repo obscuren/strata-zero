@@ -2,7 +2,8 @@
 //! buildings, through the checker; and one site per type pinned.
 
 use citygen::venue::{
-    VenueFrame, VenuePack, VenueType, lay_out, validate_venue, venue_fingerprint,
+    MissionInputs, MissionLayer, VenueFrame, VenueLayout, VenuePack, VenueType, lay_out,
+    validate_copy, validate_venue, venue_fingerprint,
 };
 use citygen::{BuildingId, City, GenParams, Generator, SizePreset};
 
@@ -44,6 +45,41 @@ fn largest_closed(c: &City, n: usize) -> Vec<BuildingId> {
     v.into_iter().take(n).map(|(_, id)| id).collect()
 }
 
+/// A mission's copy of `l` at every size it holds, from mission seed `seed` at security
+/// `seed * 37 % 256`: for the objective the seed picks, then each other. An objective
+/// that doesn't lay (one too shallow for the size, say) is passed by, but one at least
+/// lays; every copy laid passes the copy's checks.
+fn copies(t: &VenueType, l: &VenueLayout, seed: u64, what: &str) {
+    let pack = VenuePack::builtin();
+    let n = t.objectives.len();
+    for rule in pack.sizes.iter().filter(|rule| l.holds(t, rule)) {
+        let size = rule.size;
+        let mut laid = 0;
+        let mut errs = Vec::new();
+        for k in 0..n {
+            let inputs = MissionInputs {
+                size,
+                objective: (seed as usize + k) % n,
+                security: (seed * 37 % 256) as u8,
+                seed,
+            };
+            match MissionLayer::lay(l, t, rule, inputs) {
+                Ok(layer) => {
+                    validate_copy(l, &layer, rule)
+                        .unwrap_or_else(|e| panic!("{} {seed} {:?}: {e}", t.id, size));
+                    laid += 1;
+                }
+                Err(e) => errs.push(e),
+            }
+        }
+        assert!(
+            laid > 0,
+            "{} {what} {seed} {size:?}: no objective lays: {errs:?}",
+            t.id
+        );
+    }
+}
+
 #[test]
 fn every_type_passes_the_checker() {
     let pack = VenuePack::builtin();
@@ -56,6 +92,7 @@ fn every_type_passes_the_checker() {
             for rule in &pack.sizes {
                 assert!(l.holds(&t, rule), "{} own {seed} {:?}", t.id, rule.size);
             }
+            copies(&t, &l, seed, "own");
         }
         // The buildings of its kinds; a type no kind builds stands in the
         // five largest closed buildings of each city, raised to its own top here so every size is held
@@ -85,6 +122,7 @@ fn every_type_passes_the_checker() {
             let l =
                 lay_out(&t, f, seed).unwrap_or_else(|e| panic!("{} building {seed}: {e}", t.id));
             validate_venue(&l).unwrap_or_else(|e| panic!("{} building {seed}: {e}", t.id));
+            copies(&t, &l, seed, "building");
         }
     }
 }

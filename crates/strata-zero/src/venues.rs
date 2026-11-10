@@ -1,11 +1,12 @@
 //! Venues in play: the Tech a crawl's grille wants, the grilles on a floor and the crawls
 //! in from the city, what a lock's number names, what a step onto a venue's door or grille
-//! meets, which doors in from the city stay shut to you, and how far a walk across a level
-//! gets past what the player can open now.
+//! meets, which doors in from the city stay shut to you, how far a walk across a level
+//! gets past what the player can open now, and a mission's guards at their posts.
 
 use crate::app::AppState;
 use crate::credentials::{self, How};
-use citygen::venue::{LockKind, VenueFrame, VenueLayout, VenuePack, WayInKind};
+use crate::foes::{Foe, Post};
+use citygen::venue::{LockKind, MissionLayer, VenueFrame, VenueLayout, VenuePack, WayInKind};
 use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind, Terrain};
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -311,6 +312,33 @@ pub fn reached(st: &AppState, plan: &FloorPlan, level: i32, from: Pos) -> Option
         }
     }
     Some(seen)
+}
+
+/// The layer's guards as inert foes at their posts: name "guard", glyph '@', post set.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "a mission's copy puts its guards on its floors")
+)]
+pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
+    (layer.guards.iter())
+        .map(|g| {
+            let place = Place::Floor {
+                building: b,
+                level: g.level,
+            };
+            Foe {
+                name: "guard".to_string(),
+                inert: true,
+                glyph: '@',
+                post: Some(Post {
+                    building: b,
+                    zone: g.zone,
+                    patrol: g.patrol.clone(),
+                }),
+                ..Foe::goon(place, g.at)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

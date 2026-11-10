@@ -125,6 +125,9 @@ fn feature_name(f: Feature) -> Option<(&'static str, &'static str)> {
         Feature::Cable => ("Cable", "cable"),
         Feature::Awning => ("Awning", "awning"),
         Feature::Shutter => ("Shutter", "shutter"),
+        Feature::Turret => ("Turret", "turret"),
+        Feature::Container => ("Container", "container"),
+        Feature::Objective => ("Objective", "objective"),
         Feature::Fitting(x) => fitting_name(x),
         _ => return None,
     })
@@ -1493,6 +1496,23 @@ mod tests {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
+    }
+
+    #[test]
+    fn a_missions_turret_container_and_objective_read_their_lines() {
+        let l = Looks::load();
+        for (f, name) in [
+            (Feature::Turret, "Turret"),
+            (Feature::Container, "Container"),
+            (Feature::Objective, "Objective"),
+        ] {
+            let (header, key) = feature_name(f).unwrap_or_else(|| panic!("{f:?} has no name"));
+            assert_eq!(header, name);
+            assert!(
+                l.line(Group::Feature, key, 0, Pos::new(0, 0)).is_some(),
+                "{key}"
+            );
+        }
     }
 
     #[test]

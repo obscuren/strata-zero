@@ -3,7 +3,7 @@
 use crate::render::lighting::{apply_vis, sky_of};
 use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
-use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects};
+use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects, reader_cell};
 use crate::render::{Cell, RenderCtx, Visibility};
 use citygen::{Grid, Pos, Size, StratumKind};
 use ratatui::buffer::Buffer;
@@ -221,7 +221,12 @@ impl TilePass<'_> {
                     sky,
                     glow: map.glow(p),
                 };
-                apply_vis(cell(tile, &ctx), vis).write(buf, sx, sy);
+                let styled = if map.reader(p) {
+                    reader_cell(tile, &ctx)
+                } else {
+                    cell(tile, &ctx)
+                };
+                apply_vis(styled, vis).write(buf, sx, sy);
             }
         }
     }

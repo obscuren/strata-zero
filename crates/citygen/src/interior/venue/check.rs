@@ -1,12 +1,16 @@
 //! The venue checker: a layout's links, ways in and locks where they should be, every
 //! room reached through its graph, and every level drawn and checked as a floor.
 
+use super::mission::joined;
 use super::{
-    Keys, Means, NodeAt, SizeRule, VenueGraph, VenueLayout, VenueType, WayInKind, Ways, draw_level,
+    DeviceKind, Keys, Means, MissionInputs, MissionLayer, NodeAt, PLAYS, SizeRule, VenueGraph,
+    VenueLayout, VenueType, WayInKind, Ways, draw_copy_level, draw_level,
 };
+use crate::geom::Pos;
 use crate::interior::floor::doorstep_of;
 use crate::interior::{FloorPlan, validate_floor};
 use crate::rng::hash64;
+use crate::tile::{Feature, Terrain};
 use crate::world::StratumKind;
 use std::collections::BTreeSet;
 
@@ -33,26 +37,24 @@ impl VenueLayout {
             .collect()
     }
 
-    /// Whether this layout can hold a mission of `size`: floors and ways in enough, and
-    /// some room of one of the type's objectives (on its role's levels when it names one)
-    /// at least the size's locks deep with every candidate door locked.
+    /// Whether this layout can hold a mission of `size`: floors and ways in enough, and a
+    /// copy laid for one of the type's objectives, at the size's most guards from mission
+    /// seed 0, that passes the copy's graph checks. It draws no floor.
     pub fn holds(&self, t: &VenueType, rule: &SizeRule) -> bool {
         if self.levels.len() < usize::from(rule.floors.0)
             || self.ways_in.len() < usize::from(rule.ways_in)
         {
             return false;
         }
-        let g = VenueGraph::of(self, &self.candidates(), None);
-        let deep = |n: usize| g.depth(n).is_some_and(|d| d >= u32::from(rule.locks.0));
-        t.objectives.iter().any(|o| {
-            (self.levels.iter())
-                .filter(|x| o.level.as_ref().is_none_or(|role| *role == x.role))
-                .any(|x| {
-                    (x.rooms.iter().enumerate())
-                        .filter(|(_, r)| r.name == o.room)
-                        .filter_map(|(i, _)| g.room(x.level, i))
-                        .any(deep)
-                })
+        (0..t.objectives.len()).any(|objective| {
+            let inputs = MissionInputs {
+                size: rule.size,
+                objective,
+                security: u8::MAX,
+                seed: 0,
+            };
+            MissionLayer::lay(self, t, rule, inputs)
+                .is_ok_and(|layer| validate_copy_graph(self, &layer, rule).is_ok())
         })
     }
 }
@@ -166,6 +168,112 @@ pub fn validate_venue(layout: &VenueLayout) -> Result<(), String> {
         let on = FloorPlan::label(x.level);
         let floor = draw_level(layout, x.level).ok_or_else(|| format!("{on} draws no floor"))?;
         validate_floor(&plan, &floor).map_err(|e| format!("{on}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The copy's graph checks: each of the four ways of playing gets in to the objective,
+/// and out from it to the city with the keys it got in with; the objective lies at least
+/// the size's locks deep; the kept levels hold the size's floors and ways in, and the
+/// links between them join them.
+pub fn validate_copy_graph(
+    layout: &VenueLayout,
+    layer: &MissionLayer,
+    rule: &SizeRule,
+) -> Result<(), String> {
+    let size = layer.inputs.size;
+    let g = VenueGraph::copy(layout, layer);
+    let goal = g.goal.ok_or("the objective stands in no kept room")?;
+    for (name, means) in PLAYS {
+        let keys = (g.route_in(means)).ok_or_else(|| format!("{name} finds no way in"))?;
+        if !g.route_out(means, keys) {
+            return Err(format!("{name} finds no way out"));
+        }
+    }
+    let depth = g.depth(goal).unwrap_or(0);
+    if depth < u32::from(rule.locks.0) {
+        return Err(format!(
+            "the objective is {depth} locks deep; {size:?} wants {}",
+            rule.locks.0
+        ));
+    }
+    let (least, most) = rule.floors;
+    if !(usize::from(least)..=usize::from(most)).contains(&layer.kept.len()) {
+        return Err(format!(
+            "it keeps {} floors; {size:?} keeps {least} to {most}",
+            layer.kept.len()
+        ));
+    }
+    if let Some(l) = layer.kept.iter().find(|l| layout.level(**l).is_none()) {
+        return Err(format!(
+            "it keeps {}, which the layout lacks",
+            FloorPlan::label(*l)
+        ));
+    }
+    let ways = (layout.ways_in.iter())
+        .filter(|w| layer.kept.contains(&w.level))
+        .count();
+    if ways < usize::from(rule.ways_in) {
+        return Err(format!(
+            "{ways} ways in on its floors; {size:?} wants {}",
+            rule.ways_in
+        ));
+    }
+    if !joined(layout, &layer.kept) {
+        return Err(format!(
+            "no lift or stair joins its floors {:?}",
+            layer.kept
+        ));
+    }
+    Ok(())
+}
+
+/// The copy's graph checks, and every kept level drawn with the layer and checked: as a
+/// floor of the building's plan, its fitted doors among its locks, and each camera,
+/// turret, container and the objective drawn on open floor, off every door and doorstep.
+pub fn validate_copy(
+    layout: &VenueLayout,
+    layer: &MissionLayer,
+    rule: &SizeRule,
+) -> Result<(), String> {
+    validate_copy_graph(layout, layer, rule)?;
+    let plan = FloorPlan::of_layout(layout.clone());
+    for &level in &layer.kept {
+        let on = FloorPlan::label(level);
+        let x = layout
+            .level(level)
+            .ok_or_else(|| format!("{on} isn't laid out"))?;
+        let floor =
+            draw_copy_level(layout, layer, level).ok_or_else(|| format!("{on} draws no floor"))?;
+        validate_floor(&plan, &floor).map_err(|e| format!("{on}: {e}"))?;
+        for &(_, k) in layer.fitted.iter().filter(|f| f.0 == level) {
+            let fit = (x.doors.get(k).and_then(|d| d.fit))
+                .ok_or_else(|| format!("{on}: door {k} takes no lock"))?;
+            if !floor.locks.contains(&fit) {
+                return Err(format!("{on}: the lock at {:?} isn't on the door", fit.at));
+            }
+        }
+        let devices = (layer.devices.iter().filter(|d| d.level == level)).map(|d| {
+            let f = match d.kind {
+                DeviceKind::Camera => Feature::Camera,
+                DeviceKind::Turret => Feature::Turret,
+            };
+            (d.at, f)
+        });
+        let containers = (layer.containers.iter().filter(|c| c.level == level))
+            .map(|c| (c.at, Feature::Container));
+        let objective =
+            (layer.objective.level == level).then_some((layer.objective.at, Feature::Objective));
+        let steps: Vec<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
+        for (at, f) in devices.chain(containers).chain(objective) {
+            let t = (floor.tiles.get(at)).ok_or_else(|| format!("{on}: {f:?} off the floor"))?;
+            if t.terrain != Terrain::Floor || t.feature != Some(f) || steps.contains(&at) {
+                return Err(format!(
+                    "{on}: the {f:?} at {at:?} stands on {:?} {:?}",
+                    t.terrain, t.feature
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -322,6 +430,10 @@ mod tests {
         let mut more = small.clone();
         more.locks.0 = 30;
         assert!(!l.holds(&t, &more), "too shallow");
+        // It lays a copy: one with more guards than spots doesn't lay.
+        let mut more = small.clone();
+        more.guards = (500, 500);
+        assert!(!l.holds(&t, &more), "too few spots for its guards");
         let mut none = t.clone();
         none.objectives.clear();
         assert!(!l.holds(&none, small), "no objective");
@@ -339,6 +451,44 @@ mod tests {
         let s = k.stops.iter_mut().find(|s| s.level == x).unwrap();
         s.at = Pos::new(0, 1);
         assert!(validate_venue(&l).is_err());
+    }
+
+    #[test]
+    fn validate_copy_finds_what_is_wrong() {
+        let t = test_type();
+        let l = laid(0);
+        let small = VenuePack::builtin().size(crate::interior::venue::MissionSize::Small);
+        let inputs = MissionInputs {
+            size: small.size,
+            objective: 0,
+            security: 255,
+            seed: 0,
+        };
+        let layer = MissionLayer::lay(&l, &t, small, inputs).unwrap();
+        validate_copy(&l, &layer, small).unwrap();
+        let bad = |rule: &SizeRule, f: &dyn Fn(&mut MissionLayer)| {
+            let mut m = layer.clone();
+            f(&mut m);
+            validate_copy(&l, &m, rule).unwrap_err()
+        };
+        let mut deep = small.clone();
+        deep.locks.0 = 30;
+        assert!(bad(&deep, &|_| {}).contains("locks deep"));
+        let mut ways = small.clone();
+        ways.ways_in = 30;
+        assert!(bad(&ways, &|_| {}).contains("ways in"));
+        let err = bad(small, &|m| m.kept.retain(|&k| k != 0));
+        assert!(err.contains("no way") || err.contains("floors"), "{err}");
+        // A container moved onto a door.
+        let err = bad(small, &|m| {
+            let c = m.containers.first_mut().unwrap();
+            let x = l.level(c.level).unwrap();
+            c.at = x.doors.iter().find(|d| !d.open).unwrap().at;
+        });
+        assert!(err.contains("Container"), "{err}");
+        // The objective's room dropped from the copy.
+        let err = bad(small, &|m| m.kept.retain(|&k| k != m.objective.level));
+        assert!(err.contains("objective"), "{err}");
     }
 
     #[test]

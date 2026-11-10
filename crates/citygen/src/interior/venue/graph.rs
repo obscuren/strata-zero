@@ -4,7 +4,9 @@
 //! that holds it shut. A route is walked by a way of playing: a set of means on top of open
 //! doors and the cards and codes it finds on the way.
 
-use super::{VenueLayout, WayInKind, Ways};
+use super::mission::room_holding;
+use super::{MissionLayer, VenueLayout, WayInKind, Ways};
+use crate::geom::Pos;
 use crate::interior::{DoorLock, LinkKind, LinkStop};
 use crate::world::StratumKind;
 use std::collections::{BTreeSet, VecDeque};
@@ -38,6 +40,8 @@ pub struct GraphEdge {
     pub from: usize,
     pub to: usize,
     pub lock: Option<GraphLock>,
+    /// The planned door it goes through: (level, index in the level's doors).
+    pub door: Option<(i32, usize)>,
 }
 
 /// What a route holds: the deepest zone's card, the deepest zone of anyone talked to, and
@@ -91,7 +95,7 @@ const GRILLE: GraphLock = GraphLock {
 };
 
 /// Whether an edge under `lock` passes for means `m` holding `k`.
-fn passes(lock: Option<&GraphLock>, m: Ways, k: &Keys) -> bool {
+pub(super) fn passes(lock: Option<&GraphLock>, m: Ways, k: &Keys) -> bool {
     let Some(l) = lock else { return true };
     l.free
         || (l.ways.has(Ways::CARD) && k.card >= l.zone)
@@ -113,7 +117,7 @@ fn of_door(level: i32, l: &DoorLock, free: bool) -> GraphLock {
 /// Whether a link carries you from its stop `a` to its stop `b`: on at `a`, off at `b`,
 /// and the way it runs. A link you can neither leave at its first stop nor board at its
 /// last runs only up, and the other way round only down.
-fn rides(stops: &[LinkStop], a: usize, b: usize) -> bool {
+pub(super) fn rides(stops: &[LinkStop], a: usize, b: usize) -> bool {
     let (first, last) = (&stops[0], &stops[stops.len() - 1]);
     let up = !first.off && !last.on;
     let down = !first.on && !last.off;
@@ -155,8 +159,9 @@ impl VenueGraph {
                 else {
                     continue;
                 };
+                let door = Some((x.level, k));
                 if d.open {
-                    g.both(a, b, None, None);
+                    g.both(a, b, None, None, door);
                     continue;
                 }
                 let fit = d.fit.filter(|_| fitted.contains(&(x.level, k)));
@@ -165,7 +170,7 @@ impl VenueGraph {
                         |r: usize| l.free_from.is_some_and(|p| x.rooms[r].rect.contains(p));
                     let ab = of_door(x.level, &l, inside(d.rooms.0));
                     let ba = of_door(x.level, &l, inside(d.rooms.1));
-                    g.both(a, b, Some(ab), Some(ba));
+                    g.both(a, b, Some(ab), Some(ba), door);
                     continue;
                 }
                 let private = [d.rooms.0, d.rooms.1]
@@ -177,7 +182,7 @@ impl VenueGraph {
                     code: Some((x.level, x.rooms[r].number)),
                     free: false,
                 });
-                g.both(a, b, lock, lock);
+                g.both(a, b, lock, lock, door);
             }
         }
         for link in &layout.links {
@@ -207,7 +212,12 @@ impl VenueGraph {
                         LinkKind::Crawl => Some(GRILLE),
                         _ => None,
                     };
-                    g.edges.push(GraphEdge { from, to, lock });
+                    g.edges.push(GraphEdge {
+                        from,
+                        to,
+                        lock,
+                        door: None,
+                    });
                 }
             }
         }
@@ -222,11 +232,34 @@ impl VenueGraph {
             match w.kind {
                 WayInKind::Door { .. } => {
                     let lock = |free| w.lock.map(|l| of_door(w.level, &l, free));
-                    g.both(outside, room, lock(false), lock(true));
+                    g.both(outside, room, lock(false), lock(true), None);
                 }
-                WayInKind::Crawl { .. } => g.both(outside, room, Some(GRILLE), Some(GRILLE)),
+                WayInKind::Crawl { .. } => {
+                    g.both(outside, room, Some(GRILLE), Some(GRILLE), None);
+                }
             }
         }
+        g
+    }
+
+    /// A mission's copy of `layout`: the graph of its kept levels with its fitted doors
+    /// locked, the objective's room as the goal, the cards and codes the layer leaves, and
+    /// its guards as people of their posts' zones.
+    pub fn copy(layout: &VenueLayout, layer: &MissionLayer) -> VenueGraph {
+        let mut g = VenueGraph::of(layout, &layer.fitted, Some(&layer.kept));
+        let node = |g: &VenueGraph, level: i32, at: Pos| {
+            room_holding(layout, level, at).and_then(|r| g.room(level, r))
+        };
+        g.goal = node(&g, layer.objective.level, layer.objective.at);
+        g.cards = (layer.cards.iter())
+            .filter_map(|c| Some((node(&g, c.level, c.at)?, c.zone)))
+            .collect();
+        g.codes = (layer.codes.iter())
+            .filter_map(|c| Some((node(&g, c.level, c.at)?, c.lock)))
+            .collect();
+        g.people = (layer.guards.iter())
+            .filter_map(|p| Some((node(&g, p.level, p.at)?, p.zone)))
+            .collect();
         g
     }
 
@@ -247,17 +280,27 @@ impl VenueGraph {
         self.nodes.len() - 1
     }
 
-    /// An edge each way between `a` and `b`: `ab` the lock from `a`, `ba` from `b`.
-    fn both(&mut self, a: usize, b: usize, ab: Option<GraphLock>, ba: Option<GraphLock>) {
+    /// An edge each way between `a` and `b` through `door`: `ab` the lock from `a`, `ba`
+    /// from `b`.
+    fn both(
+        &mut self,
+        a: usize,
+        b: usize,
+        ab: Option<GraphLock>,
+        ba: Option<GraphLock>,
+        door: Option<(i32, usize)>,
+    ) {
         self.edges.push(GraphEdge {
             from: a,
             to: b,
             lock: ab,
+            door,
         });
         self.edges.push(GraphEdge {
             from: b,
             to: a,
             lock: ba,
+            door,
         });
     }
 
@@ -296,6 +339,12 @@ impl VenueGraph {
             }
         }
         back
+    }
+
+    /// The nodes that get back to one of `to` over the edges means `means` holding `keys`
+    /// can pass: where a key `reach` picks up counts.
+    pub fn returns(&self, to: &[usize], means: Ways, keys: &Keys) -> Vec<bool> {
+        self.back(&self.into(), to, means, keys)
     }
 
     /// Everything a way of means `means` holding `keys` reaches from `from`: a pass over
@@ -369,8 +418,30 @@ impl VenueGraph {
     /// The fewest locks on any route from a way in to `goal`, any lock passable: a lock
     /// passed from its free side costs none, and a crawl's grille is a lock.
     pub fn depth(&self, goal: usize) -> Option<u32> {
+        self.cheapest().0[goal]
+    }
+
+    /// One route from a way in to `goal` with the fewest locks, as `depth` counts them:
+    /// its edges in order, by index. None when nothing reaches it.
+    pub fn cheapest_route(&self, goal: usize) -> Option<Vec<usize>> {
+        let (dist, parent) = self.cheapest();
+        dist[goal]?;
+        let mut route = Vec::new();
+        let mut n = goal;
+        while let Some(e) = parent[n] {
+            route.push(e);
+            n = self.edges[e].from;
+        }
+        route.reverse();
+        Some(route)
+    }
+
+    /// The fewest locks from the ways in to each node, and the edge each is reached by on
+    /// such a route: a search that takes a free edge before a locked one.
+    fn cheapest(&self) -> (Vec<Option<u32>>, Vec<Option<usize>>) {
         let out = self.out();
         let mut dist: Vec<Option<u32>> = vec![None; self.nodes.len()];
+        let mut parent: Vec<Option<usize>> = vec![None; self.nodes.len()];
         let mut queue = VecDeque::new();
         for &s in &self.starts {
             dist[s] = Some(0);
@@ -378,10 +449,12 @@ impl VenueGraph {
         }
         while let Some(n) = queue.pop_front() {
             let d = dist[n].expect("a queued node has a distance");
-            for e in out[n].iter().map(|&i| &self.edges[i]) {
+            for &i in &out[n] {
+                let e = &self.edges[i];
                 let cost = u32::from(e.lock.is_some_and(|l| !l.free));
                 if dist[e.to].is_none_or(|t| d + cost < t) {
                     dist[e.to] = Some(d + cost);
+                    parent[e.to] = Some(i);
                     if cost == 0 {
                         queue.push_front(e.to);
                     } else {
@@ -390,7 +463,7 @@ impl VenueGraph {
                 }
             }
         }
-        dist[goal]
+        (dist, parent)
     }
 }
 
@@ -412,7 +485,12 @@ mod tests {
         VenueGraph {
             nodes,
             edges: (edges.iter())
-                .map(|&(from, to, lock)| GraphEdge { from, to, lock })
+                .map(|&(from, to, lock)| GraphEdge {
+                    from,
+                    to,
+                    lock,
+                    door: None,
+                })
                 .collect(),
             starts: vec![0],
             cards: Vec::new(),
@@ -534,6 +612,22 @@ mod tests {
         let mut cut = graph(7, &edges(None, false));
         cut.edges.retain(|e| e.to != 5);
         assert_eq!(cut.depth(5), None, "nothing reaches it");
+        assert_eq!(cut.cheapest_route(5), None);
+        // A cheapest route runs from a start to the goal through as many locks as the
+        // depth counts.
+        for (b_open, a_more) in [(None, false), (door, false), (door, true)] {
+            let g = graph(7, &edges(b_open, a_more));
+            let route = g.cheapest_route(5).unwrap();
+            assert!(g.starts.contains(&g.edges[route[0]].from));
+            assert_eq!(g.edges[*route.last().unwrap()].to, 5);
+            assert!(
+                route
+                    .windows(2)
+                    .all(|w| g.edges[w[0]].to == g.edges[w[1]].from)
+            );
+            let locks = route.iter().filter(|&&i| g.edges[i].lock.is_some()).count();
+            assert_eq!(Some(locks as u32), g.depth(5));
+        }
     }
 
     #[test]

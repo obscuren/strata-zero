@@ -121,6 +121,15 @@ Looks(
             "The stage glows in two colours that don't agree.",
         ],
         "shutter": ["A steel shutter down across the tunnel mouth, chained to a ring in the floor."],
+        "turret": [
+            "A gun on a floor mount, cabled into the wall. Its barrel follows the door.",
+            "Twin barrels on a swivel, a red eye under them, warm and waiting.",
+        ],
+        "container": [
+            "A steel case on the floor, a corp seal across the latch.",
+            "A crate with a stencilled number and a lock nobody bothered to hide.",
+        ],
+        "objective": ["What the job came for."],
     },
     furniture: {
         "desk": ["A desk with a cold monitor and a mug ring nobody wiped."],

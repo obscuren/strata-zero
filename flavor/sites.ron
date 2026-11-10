@@ -239,7 +239,7 @@ Sites(
             crawls_in: [Crawl(stratum: Undercity, zone: "staff")],
             objectives: [Objective(id: "core", name: "the Line Control core", room: "line control", level: Some("service"))],
             security: [
-                Security(size: Small, guards: [("paid", 1), ("staff", 2), ("secure", 1)], cameras: (3, 5),
+                Security(size: Small, guards: [("public", 1), ("paid", 1), ("staff", 2), ("secure", 1)], cameras: (3, 5),
                          turrets: (0, 0), containers: (1, 2)),
                 Security(size: Medium, guards: [("public", 1), ("paid", 2), ("staff", 2), ("secure", 2)],
                          cameras: (5, 9), turrets: (0, 1), turret_zones: ["secure"], containers: (2, 4)),

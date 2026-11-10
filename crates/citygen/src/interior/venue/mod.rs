@@ -9,16 +9,20 @@ mod graph;
 mod layout;
 mod levels;
 mod links;
+mod mission;
 mod rooms;
 mod types;
 mod ways;
 mod zones;
 
 pub use check::*;
-pub use draw::draw_level;
+pub use draw::{draw_copy_level, draw_level};
 pub use frame::*;
 pub use graph::*;
 pub use layout::*;
+pub use mission::{
+    CardSpot, CodeSpot, Device, DeviceKind, GuardPost, MissionInputs, MissionLayer, Placed,
+};
 pub use types::*;
 
 #[cfg(test)]

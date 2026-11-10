@@ -5,6 +5,7 @@ use crate::render::lighting::{lit, lit_by};
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
+use crate::ui::chrome::MAGENTA_RGB;
 use citygen::lighting::tuning::tone_rgb;
 use citygen::{
     BuildingKind, ConnectorKind, Feature, Fitting, FittingKind, Furniture, IceGrade, NodeKind,
@@ -130,6 +131,9 @@ pub fn glyph_for(
             Feature::PowerLine(true) => '┆',
             Feature::FireBarrel => '•',
             Feature::Shutter => '▓',
+            Feature::Turret => '◆',
+            Feature::Container => '□',
+            Feature::Objective => '◎',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -485,6 +489,9 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::FireBarrel => FIRE.scale(flicker(tick, tile.variant, true)),
         Feature::PowerLine(_) => Rgb(42, 46, 54),
         Feature::Shutter => Rgb(120, 120, 128),
+        Feature::Turret => Rgb(255, 60, 70),
+        Feature::Container => Rgb(150, 160, 170),
+        Feature::Objective => MAGENTA_RGB,
     }
 }
 
@@ -520,8 +527,21 @@ pub fn fitting_colour(f: Fitting) -> Rgb {
     }
 }
 
+/// A card reader's orange: a door with one is drawn in it.
+pub const READER: Rgb = Rgb(255, 154, 60);
+
 /// The styled cell for a tile. Remembered tiles freeze at tick 0.
 pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
+    styled(tile, ctx, false)
+}
+
+/// The styled cell for a door with a card reader on it: the door in the reader's orange.
+/// Any other tile is styled as `cell` styles it.
+pub fn reader_cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
+    styled(tile, ctx, true)
+}
+
+fn styled(tile: &Tile, ctx: &RenderCtx, reader: bool) -> Cell {
     let tick = if ctx.vis == Visibility::Remembered {
         0
     } else {
@@ -538,6 +558,9 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
         ctx.style,
     );
     let (mut fg, mut bg) = terrain_colors(tile.terrain, tile, ctx, tick);
+    if reader && tile.terrain == Terrain::Door {
+        fg = READER;
+    }
     if let Some(f) = tile.feature {
         fg = feature_color(f, tile, ctx, tick);
     }
@@ -976,6 +999,37 @@ mod tests {
             feature_color(Feature::Shutter, &shutter, &ctx, 0),
             Rgb(120, 120, 128)
         );
+    }
+
+    #[test]
+    fn a_missions_devices_draw_in_their_own_colours() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        for (f, ch, colour) in [
+            (Feature::Turret, '◆', Rgb(255, 60, 70)),
+            (Feature::Container, '□', Rgb(150, 160, 170)),
+            (Feature::Objective, '◎', MAGENTA_RGB),
+        ] {
+            let mut t = Tile::new(Terrain::Floor);
+            t.feature = Some(f);
+            assert_eq!(cell(&t, &ctx).ch, ch, "{f:?}");
+            assert_eq!(feature_color(f, &t, &ctx, 0), colour, "{f:?}");
+        }
+    }
+
+    #[test]
+    fn a_door_with_a_reader_draws_in_the_readers_orange() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let door = Tile::new(Terrain::Door);
+        let (plain, _) = terrain_colors(Terrain::Door, &door, &ctx, 0);
+        assert_eq!(cell(&door, &ctx).fg, lit(street_tint(&s, plain), 120));
+        let reader = reader_cell(&door, &ctx);
+        assert_eq!(reader.fg, lit(street_tint(&s, READER), 120));
+        assert_eq!(reader.ch, cell(&door, &ctx).ch);
+        // Anything but a door draws as it always does.
+        let floor = Tile::new(Terrain::Floor);
+        assert_eq!(reader_cell(&floor, &ctx), cell(&floor, &ctx));
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::constructs::Constructs;
 use crate::interiors::Interiors;
 use crate::outside::stream::{Beyond, GroundMap, Owner};
 use crate::render::{ConnDir, Rgb};
+use citygen::venue::LockKind;
 use citygen::{
     BuildingKind, City, ConnectorKind, Construct, Floor, FloorPlan, LinkKind, Place, Pos, Size,
     StratumKind, Terrain, Theme, Tile,
@@ -66,6 +67,10 @@ pub trait TileMap {
     /// The light's colour on the tile, where light has one (an interior floor).
     fn glow(&self, _p: Pos) -> Option<Rgb> {
         None
+    }
+    /// Whether the door at `p` has a card reader on it: a floor's card lock.
+    fn reader(&self, _p: Pos) -> bool {
+        false
     }
 }
 
@@ -419,6 +424,10 @@ impl TileMap for FloorMap<'_> {
         self.floor.glow.get(p).map(|&(r, g, b)| Rgb(r, g, b))
     }
 
+    fn reader(&self, p: Pos) -> bool {
+        (self.floor.lock_at(p)).is_some_and(|l| l.kind == LockKind::Card)
+    }
+
     fn theme(&self, _p: Pos) -> Option<Theme> {
         Some(self.plan.theme)
     }
@@ -473,6 +482,14 @@ impl TileMap for MapRef<'_> {
             MapRef::Stratum(m) => m.glow(p),
             MapRef::Floor(m) => m.glow(p),
             MapRef::Construct(m) => m.glow(p),
+        }
+    }
+
+    fn reader(&self, p: Pos) -> bool {
+        match self {
+            MapRef::Stratum(m) => m.reader(p),
+            MapRef::Floor(m) => m.reader(p),
+            MapRef::Construct(m) => m.reader(p),
         }
     }
 

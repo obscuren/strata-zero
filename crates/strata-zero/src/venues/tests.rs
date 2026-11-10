@@ -8,7 +8,7 @@ use crate::messages::Kind;
 use crate::screens::explore::MapScreen;
 use crate::screens::popup::{Pick, WorldAct};
 use crate::screens::testutil::key;
-use citygen::venue::{LOCK_NUMBERS, WayInKind, Ways, room_label};
+use citygen::venue::{LOCK_NUMBERS, MissionInputs, WayInKind, Ways, room_label};
 use citygen::{BuildingKind, City, Floor, GenParams, Generator, Place, SizePreset};
 use crossterm::event::KeyCode;
 
@@ -873,5 +873,74 @@ fn a_locked_way_in_takes_a_code_and_the_keyjack_from_the_city() {
             crate::interiors::enter(&mut st, b, (k, door)).is_ok(),
             "{what}"
         );
+    }
+}
+
+#[test]
+fn a_card_readers_door_reads_as_one_on_the_map() {
+    use crate::render::map::{MapRef, TileMap};
+    let (mut st, b) = first_venue();
+    let (level, card) = lock_where(&mut st, b, |l| l.kind == LockKind::Card);
+    let place = Place::Floor { building: b, level };
+    let map = MapRef::for_place(
+        st.city.as_ref().unwrap(),
+        &st.interiors,
+        &st.constructs,
+        place,
+        0,
+    )
+    .unwrap();
+    assert!(map.reader(card.at));
+    let floor = floor_of(&st, b, level);
+    let plain = (floor.tiles.iter())
+        .find(|(p, t)| t.terrain == Terrain::Door && floor.lock_at(*p).is_none())
+        .map(|(p, _)| p)
+        .expect("a door with no lock");
+    assert!(!map.reader(plain));
+    let pad = floor.locks.iter().find(|l| l.kind == LockKind::Keypad);
+    assert!(
+        pad.is_none_or(|k| !map.reader(k.at)),
+        "a keypad is no reader"
+    );
+}
+
+#[test]
+fn guards_are_inert_foes_at_their_posts() {
+    let (st, b) = first_venue();
+    let plan = st.interiors.plan_of(b).unwrap();
+    let layout = plan.venue.as_deref().unwrap();
+    let pack = VenuePack::builtin();
+    let t = pack.by_id(&layout.type_id).unwrap();
+    let layer = (pack.sizes.iter())
+        .flat_map(|rule| {
+            (0..t.objectives.len()).map(move |objective| {
+                let inputs = MissionInputs {
+                    size: rule.size,
+                    objective,
+                    security: 128,
+                    seed: 7,
+                };
+                MissionLayer::lay(layout, t, rule, inputs)
+            })
+        })
+        .find_map(Result::ok)
+        .expect("the venue holds a mission");
+    let foes = guard_foes(&layer, b);
+    assert!(!layer.guards.is_empty());
+    assert_eq!(foes.len(), layer.guards.len());
+    for (f, g) in foes.iter().zip(&layer.guards) {
+        assert_eq!((f.name.as_str(), f.glyph), ("guard", '@'));
+        assert!(f.inert && !f.down && !f.hunting(), "{f:?}");
+        let place = Place::Floor {
+            building: b,
+            level: g.level,
+        };
+        assert_eq!((f.place, f.pos), (place, g.at));
+        let post = crate::foes::Post {
+            building: b,
+            zone: g.zone,
+            patrol: g.patrol.clone(),
+        };
+        assert_eq!(f.post, Some(post));
     }
 }
