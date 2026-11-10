@@ -717,7 +717,7 @@ fn a_locked_way_in_holds_from_the_street_side_only() {
     put(&mut st, roof, door);
     assert_eq!(
         crate::interiors::enter(&mut st, b, (StratumKind::Heights, door)),
-        Err(format!("locked · {zone} door"))
+        Err(format!("locked · {zone} door, keypad"))
     );
     assert_eq!(at(&st), (roof, door), "still on the roof");
     let card = zone_card_id(b, lock.zone);
@@ -781,4 +781,97 @@ fn standing_on_a_crawls_tile_lays_its_venue_out_once() {
         "borrowed on the next"
     );
     assert_eq!(crawl_in_at(&st, w.stratum, w.outside), Some((b, 0)));
+}
+
+/// A locked door in from the city off the roof, a step from where you'd stand outside it,
+/// whose type's border into its zone is a `border` lock: the building, the stratum, the
+/// city-map door, the tile outside it, and the lock's level and lock.
+fn street_side_door(
+    st: &mut AppState,
+    border: LockKind,
+) -> (BuildingId, StratumKind, Pos, Pos, i32, DoorLock) {
+    let city = st.city.clone().unwrap();
+    (city.buildings.iter())
+        .find_map(|x| {
+            let t = VenuePack::builtin().for_kind(x.kind)?;
+            let v = st.interiors.plan(&city, x.id)?.venue.clone()?;
+            v.ways_in.iter().find_map(|w| {
+                let WayInKind::Door { stratum, door } = w.kind else {
+                    return None;
+                };
+                let lock = w.lock?;
+                let b = (0..lock.zone).rev().find_map(|z| t.border(z, lock.zone))?;
+                let exit = v.level(w.level)?.exits.iter().find(|e| e.door == door)?;
+                let beside = exit.landing.neighbors4().any(|n| n == door);
+                (stratum != StratumKind::Heights && b.lock == border && beside).then_some((
+                    x.id,
+                    stratum,
+                    door,
+                    exit.landing,
+                    w.level,
+                    lock,
+                ))
+            })
+        })
+        .unwrap_or_else(|| panic!("a locked door in behind a {border:?} border"))
+}
+
+#[test]
+fn a_locked_way_in_takes_a_code_and_the_keyjack_from_the_city() {
+    for border in [LockKind::Card, LockKind::Keypad] {
+        let mut st = state();
+        let (b, k, door, outside, level, lock) = street_side_door(&mut st, border);
+        let what = format!("{border:?} border, {b:?} {k:?} {door:?}");
+        assert_eq!(lock.kind, LockKind::Keypad, "{what}");
+        assert!(
+            lock.ways.has(Ways::CODE) && lock.ways.has(Ways::KEYJACK),
+            "{what}"
+        );
+        let zone = zone_name(plan(&st, b), lock.zone);
+        let city_side = Place::Stratum(k);
+        put(&mut st, city_side, outside);
+        // Space beside it offers its pad.
+        let subjects = crate::interact::gather(&st, &|_, _| None);
+        let pad = (subjects.iter())
+            .filter(|s| s.pos == door)
+            .flat_map(|s| s.choices.iter())
+            .find(|c| {
+                matches!(c.pick, Pick::Keypad { building, level: l, number }
+                if building == b && l == level && number == lock.number)
+            });
+        assert!(pad.is_some_and(|c| c.enabled), "{what}: no keypad");
+        assert_eq!(
+            crate::interiors::enter(&mut st, b, (k, door)),
+            Err(format!("locked · {zone} door, keypad")),
+            "{what}"
+        );
+        // Its code, keyed in there.
+        let seed = st.city.as_ref().unwrap().seed;
+        let code = citygen::rng::door_code(seed, b, level, lock.number);
+        assert_eq!(
+            try_code(&mut st, b, level, lock.number, code),
+            Verdict::Open
+        );
+        assert_eq!(
+            crate::interiors::enter(&mut st, b, (k, door)),
+            Ok(format!("{zone} door · you key in {code:04}")),
+            "{what}"
+        );
+        assert_eq!(at(&st).0, Place::Floor { building: b, level }, "{what}");
+        // Back out, the code forgotten: the Keyjack cracks it.
+        put(&mut st, city_side, outside);
+        st.journal = Default::default();
+        assert!(
+            crate::interiors::enter(&mut st, b, (k, door)).is_err(),
+            "{what}"
+        );
+        assert_eq!(
+            open_with(&mut st, b, level, lock.number, Source::Keyjack),
+            Verdict::Open
+        );
+        assert!(
+            crate::interiors::enter(&mut st, b, (k, door)).is_ok(),
+            "{what}"
+        );
+    }
 }

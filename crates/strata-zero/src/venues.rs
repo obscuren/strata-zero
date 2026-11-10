@@ -6,7 +6,8 @@
 use crate::app::AppState;
 use crate::credentials::{self, How};
 use citygen::venue::{LockKind, VenueFrame, VenueLayout, VenuePack, WayInKind};
-use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind};
+use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind, Terrain};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 /// The Tech a crawl's grille wants.
@@ -76,21 +77,55 @@ pub fn crawl_in_at(st: &AppState, k: StratumKind, p: Pos) -> Option<(BuildingId,
     })
 }
 
-/// Keeps the plan of the building whose crawl comes in from the city tile you stand on, so
-/// Space and Look there borrow it instead of laying the venue out every frame.
-pub fn keep_crawl_plan(st: &mut AppState) {
+/// Keeps the plans of the venues about the city tile you stand on: one whose crawl comes
+/// in from it, and one with a door beside it. Space and Look there borrow them instead of
+/// laying the venue out every frame.
+pub fn keep_plans_here(st: &mut AppState) {
     let Some((Place::Stratum(k), p)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return;
     };
-    let unplanned: Vec<BuildingId> = (crawl_candidates(st, k, p))
+    let mut unplanned: Vec<BuildingId> = (crawl_candidates(st, k, p))
         .filter(|(_, planned)| !planned)
         .map(|(b, _)| b)
         .collect();
-    if let Some(city) = st.city.as_ref() {
-        for b in unplanned {
-            st.interiors.plan(city, b);
+    let Some(city) = st.city.as_ref() else {
+        return;
+    };
+    for n in p.neighbors4() {
+        let Some(b) = (city.tile(k, n))
+            .filter(|t| t.terrain == Terrain::Door)
+            .and_then(|t| t.building)
+        else {
+            continue;
+        };
+        let venue =
+            (city.building_opt(b)).is_some_and(|x| VenuePack::builtin().for_kind(x.kind).is_some());
+        if venue && st.interiors.plan_of(b).is_none() && !unplanned.contains(&b) {
+            unplanned.push(b);
         }
     }
+    for b in unplanned {
+        st.interiors.plan(city, b);
+    }
+}
+
+/// Building `b`'s plan when a venue type builds its kind: the session's, or laid out fresh.
+fn venue_plan(st: &AppState, b: BuildingId) -> Option<Cow<'_, FloorPlan>> {
+    let kind = st.city.as_ref()?.building_opt(b)?.kind;
+    VenuePack::builtin().for_kind(kind)?;
+    crate::interiors::plan_now(st, b)
+}
+
+/// The lock on `plan`'s way in through the city-map door `door` on stratum `k`, and the
+/// level it stands on.
+fn way_in_of(plan: &FloorPlan, k: StratumKind, door: Pos) -> Option<(i32, DoorLock)> {
+    let v = plan.venue.as_deref()?;
+    v.ways_in.iter().find_map(|w| match w.kind {
+        WayInKind::Door { stratum, door: d } if stratum == k && d == door => {
+            Some((w.level, w.lock?))
+        }
+        _ => None,
+    })
 }
 
 /// The lock on the way in through the city-map door `door` on stratum `k` into building
@@ -101,19 +136,27 @@ pub fn way_in_lock(
     k: StratumKind,
     door: Pos,
 ) -> Option<(i32, DoorLock)> {
-    let kind = st.city.as_ref()?.building_opt(b)?.kind;
-    VenuePack::builtin().for_kind(kind)?;
-    let plan = crate::interiors::plan_now(st, b)?;
-    plan.venue
-        .as_deref()?
-        .ways_in
-        .iter()
-        .find_map(|w| match w.kind {
-            WayInKind::Door { stratum, door: d } if stratum == k && d == door => {
-                Some((w.level, w.lock?))
-            }
-            _ => None,
-        })
+    let plan = venue_plan(st, b)?;
+    way_in_of(&plan, k, door)
+}
+
+/// The locked way in through the city-map door on tile `p` of stratum `k`: its building,
+/// the level its lock stands on, the lock, and what the door is called ("staff door").
+pub fn locked_door_in(
+    st: &AppState,
+    k: StratumKind,
+    p: Pos,
+) -> Option<(BuildingId, i32, DoorLock, String)> {
+    let city = st.city.as_ref()?;
+    let b = (city.tile(k, p))
+        .filter(|t| t.terrain == Terrain::Door)?
+        .building?;
+    if !city.portals(b).contains(&(k, p)) {
+        return None;
+    }
+    let plan = venue_plan(st, b)?;
+    let (level, lock) = way_in_of(&plan, k, p)?;
+    Some((b, level, lock, lock_label(&plan, &lock)))
 }
 
 /// Whether the city-map door `door` on `k` into building `b` stays shut to you from the

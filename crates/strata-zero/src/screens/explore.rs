@@ -3751,8 +3751,8 @@ impl Screen for MapScreen {
             self.targeting = None;
         }
         crate::track::tick(st);
-        // A crawl's tile outside a venue: its plan kept, so Space and Look borrow it.
-        crate::venues::keep_crawl_plan(st);
+        // Beside a venue's door or on its crawl's tile: its plan kept, for Space and Look.
+        crate::venues::keep_plans_here(st);
         // The asides run out on the clock, and all go once a scene, a rest or a fight is on.
         crate::missions::asides::prune(st);
         crate::missions::news::tick(st, self.mode == Mode::Walk);

@@ -257,6 +257,34 @@ pub fn gather(
         }
     }
 
+    // A venue's locked door in from the city beside you: its keypad.
+    if let Some(k) = place.stratum() {
+        let now = st.net.now(st);
+        for d in pos.neighbors4() {
+            let Some((building, level, lock, name)) = crate::venues::locked_door_in(st, k, d)
+            else {
+                continue;
+            };
+            let number = lock.number;
+            let mut row = Choice::on(
+                'i',
+                "Interact",
+                "Keypad",
+                AMBER,
+                Pick::Keypad {
+                    building,
+                    level,
+                    number,
+                },
+            );
+            if let Some(until) = st.journal.keypad_locked_until(building, level, number, now) {
+                row = row.tail(format!(" · locked {}m", until.saturating_sub(now).max(1)));
+            }
+            let head = header(capitalised(&name), mark_tile(st, &map, d));
+            add(&mut subs, &mut here, d, Some(head), None, vec![row]);
+        }
+    }
+
     // A ripperdoc's chair beside you: sit in it, while the doc is in.
     if let Place::Floor { building, level } = place
         && let Some(chair) = st

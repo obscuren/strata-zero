@@ -94,9 +94,9 @@ fn every_type_passes_the_checker() {
 #[test]
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
-        7046344752502809448,
-        16642891407113574217,
-        7833987451598395203,
+        12979167704675157047,
+        12500839520295178152,
+        6713321246441217806,
     ];
     let pack = VenuePack::builtin();
     assert_eq!(

@@ -9,8 +9,9 @@ use crate::interior::layouts::{exit_tile_on, floor_tile, glazed_edges, is_corner
 use crate::interior::plan::{bridge_level, floor_size, storeys};
 use crate::rng::hash64;
 use crate::tile::Terrain;
-use crate::world::{BuildingKind, City, StratumKind, Theme};
+use crate::world::{BuildingKind, City, ConnectorKind, StratumKind, Theme};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VenueFrame {
@@ -38,6 +39,11 @@ pub struct FrameDoor {
     pub door: Pos,
     pub landing: Pos,
     pub at: Option<Pos>,
+    /// The ground outside it has no other way off (`enclosed`): nobody comes to it but
+    /// through the building, so it is no way in from the city and takes no lock. A type's
+    /// own frame stands in no city: none of its doors is.
+    #[serde(default)]
+    pub enclosed: bool,
 }
 
 /// Where a crawl reaches the frame from a stratum: the city tile you go in from, and
@@ -80,7 +86,44 @@ fn frame_door(fp: Rect, size: Size, k: StratumKind, level: i32, door: Pos) -> Fr
         door,
         landing,
         at,
+        enclosed: false,
     }
+}
+
+/// Whether the ground outside `door` on stratum `k` has no other way off: the walkable
+/// tiles its `landing` joins on `k`, never walking through a door, reach no other door (of
+/// any building, this one's too), no connector and no edge of the map. A landing nobody
+/// can stand on is not taken for enclosed.
+fn enclosed(city: &City, k: StratumKind, door: Pos, landing: Pos) -> bool {
+    let Some(s) = city.stratum(k) else {
+        return false;
+    };
+    let (w, h) = (s.tiles.size().w as i32, s.tiles.size().h as i32);
+    let edge = |p: Pos| p.x == 0 || p.y == 0 || p.x == w - 1 || p.y == h - 1;
+    let ways_off: HashSet<Pos> = (city.connectors.iter())
+        .filter(|c| c.kind != ConnectorKind::Jack && c.serves.len() > 1 && c.serves.contains(&k))
+        .map(|c| c.pos)
+        .collect();
+    let mut seen = HashSet::from([door, landing]);
+    let mut queue = VecDeque::from([landing]);
+    while let Some(p) = queue.pop_front() {
+        let Some(t) = s.tiles.get(p).filter(|t| t.is_walkable()) else {
+            if p == landing {
+                return false;
+            }
+            continue;
+        };
+        let another_door = p != door && t.terrain == Terrain::Door;
+        if another_door || edge(p) || ways_off.contains(&p) {
+            return false;
+        }
+        for n in p.neighbors4() {
+            if seen.insert(n) {
+                queue.push_back(n);
+            }
+        }
+    }
+    true
 }
 
 /// The roof crawl: the roof tile nearest the footprint's centre that isn't a roof door,
@@ -168,7 +211,13 @@ impl VenueFrame {
         let portals = city.portals(id);
         let doors = portals
             .iter()
-            .map(|&(k, door)| frame_door(fp, size, k, door_level(k, top, bridge_level(top)), door))
+            .map(|&(k, door)| {
+                let d = frame_door(fp, size, k, door_level(k, top, bridge_level(top)), door);
+                FrameDoor {
+                    enclosed: enclosed(city, k, d.door, d.landing),
+                    ..d
+                }
+            })
             .collect();
         let doors_on = |k: StratumKind| -> Vec<Pos> {
             portals

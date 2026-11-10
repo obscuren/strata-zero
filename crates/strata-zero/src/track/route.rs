@@ -1686,17 +1686,6 @@ mod tests {
             .collect();
         put(&mut st, HEIGHTS, here.beside());
         let there = spot(STREET, outside);
-        // A venue's roof door is a way in to a deep zone: shut without its card.
-        assert_eq!(leg(&st, there), Err(NoLeg::NoWay));
-        let city = st.city.clone().unwrap();
-        for &b in &on_it {
-            let zones =
-                (st.interiors.plan(&city, b)).and_then(|p| Some(p.venue.as_ref()?.zones.len()));
-            if let Some(n) = zones {
-                let card = crate::credentials::zone_card_id(b, (n - 1) as u8);
-                st.character.give(card, 1);
-            }
-        }
         let leg = leg(&st, there).unwrap();
         let Through::Door(b) = leg.through else {
             panic!("{leg:?}")

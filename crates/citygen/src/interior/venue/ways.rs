@@ -2,8 +2,10 @@
 //!
 //! A frame door on a level the layout has is that level's exit, coming into the room that
 //! holds its doorstep; one on a level it lacks is barred. A door into a zone above public,
-//! but the main street door (the frame's first), is locked as the border into that zone,
-//! always, and one-way: a way out without a key. The roof door stands on the
+//! but the main street door (the frame's first) and a door whose outside has no other way
+//! off (`FrameDoor::enclosed`), is locked, always, with a keypad: past it go the ways of
+//! the border into that zone, a code and the Keyjack, so every locked door from the city
+//! takes the pad. It is one-way: a way out without a key. The roof door stands on the
 //! floor east of a landing, its doorstep: east of a stair that kept the tile free, else
 //! east of another landing, else on the free floor nearest the level's first landing
 //! with free floor of its room west of it. Each of the type's crawls in from a stratum
@@ -20,7 +22,7 @@
 use super::links::{reserve, zone_on};
 use super::rooms::Taken;
 use super::zones::inward;
-use super::{LOCK_NUMBERS, LevelLayout, VenueLayout, VenueType, WayIn, WayInKind, Ways};
+use super::{LOCK_NUMBERS, LevelLayout, LockKind, VenueLayout, VenueType, WayIn, WayInKind, Ways};
 use crate::geom::Pos;
 use crate::interior::{DoorLock, Exit, FloorPlan, LinkKind};
 use crate::world::StratumKind;
@@ -70,7 +72,7 @@ pub(super) fn lay(
             reserve(x, &[at]);
         }
         let zone = x.rooms[room].zone;
-        let lock = if zone > 0 && Some(k) != main {
+        let lock = if zone > 0 && Some(k) != main && !d.enclosed {
             Some(door_lock(t, x, &layout.ways_in, zone, at, step)?)
         } else {
             None
@@ -125,10 +127,10 @@ pub(super) fn lay(
     Ok(())
 }
 
-/// The lock on a door at `at` on `x` into `zone`, above public: the type's border into
-/// the zone from the next shallower zone with one, one-way, opening from the doorstep
-/// `step` without a key, numbered on from the level's zone locks and the locks of the
-/// doors laid before it (`ways`).
+/// The lock on a door at `at` on `x` into `zone`, above public: a keypad, past which go
+/// the ways of the type's border into the zone from the next shallower zone with one, a
+/// code and the Keyjack; one-way, opening from the doorstep `step` without a key; numbered
+/// on from the level's zone locks and the locks of the doors laid before it (`ways`).
 fn door_lock(
     t: &VenueType,
     x: &LevelLayout,
@@ -153,8 +155,8 @@ fn door_lock(
         at,
         number: last.map_or(LOCK_NUMBERS, |n| n + 1),
         zone,
-        kind: b.lock,
-        ways: Ways::of(&b.ways),
+        kind: LockKind::Keypad,
+        ways: Ways::of(&b.ways) | Ways::CODE | Ways::KEYJACK,
         free_from: Some(step),
     })
 }
@@ -253,14 +255,17 @@ fn grille(layout: &VenueLayout, i: usize, zone: u8, near: Pos) -> Option<(usize,
 
 #[cfg(test)]
 mod tests {
+    use super::LockKind;
     use crate::geom::Pos;
+    use crate::interior::venue::building_seed;
     use crate::interior::venue::testutil::{cities, crowded, medium, test_type};
     use crate::interior::venue::{
         LOCK_NUMBERS, LevelLayout, Serves, VenueFrame, VenueLayout, VenuePack, VenueType, WayIn,
         WayInKind, Ways, lay_out,
     };
     use crate::interior::{Exit, LinkKind};
-    use crate::world::{BuildingKind, StratumKind};
+    use crate::tile::Terrain;
+    use crate::world::{BuildingKind, City, ConnectorKind, StratumKind};
     use std::collections::BTreeSet;
 
     /// Every builtin type and the test type over its own frame, seeds 0..5, and over the
@@ -609,8 +614,9 @@ mod tests {
         Some((l.level(w.level).unwrap().rooms[w.room].zone, main))
     }
 
-    /// The lock a door into `zone` above public carries: the border into it from the next
-    /// shallower zone with one, at the door, one-way from its doorstep.
+    /// The lock a door into `zone` above public carries: a keypad at the door, past which
+    /// go the ways of the border into the zone from the next shallower zone with one, a
+    /// code and the Keyjack; one-way from its doorstep.
     fn assert_door_lock(what: &str, t: &VenueType, l: &VenueLayout, w: &WayIn, zone: u8) {
         let x = l.level(w.level).unwrap();
         let b = (0..zone)
@@ -620,9 +626,18 @@ mod tests {
         let lock = w
             .lock
             .unwrap_or_else(|| panic!("{what}: {w:?} into {zone} is open"));
-        let want = (w.at, zone, b.lock, Ways::of(&b.ways));
+        let ways = Ways::of(&b.ways) | Ways::CODE | Ways::KEYJACK;
+        let want = (w.at, zone, LockKind::Keypad, ways);
         assert_eq!((lock.at, lock.zone, lock.kind, lock.ways), want, "{what}");
         assert_eq!(lock.free_from, Some(doorstep(x, w.at)), "{what}: {w:?}");
+    }
+
+    /// Whether the frame door a door way in comes through has no other way off outside it.
+    fn enclosed(l: &VenueLayout, w: &WayIn) -> bool {
+        let WayInKind::Door { stratum, door } = w.kind else {
+            return false;
+        };
+        (l.frame.doors.iter()).any(|d| d.stratum == stratum && d.door == door && d.enclosed)
     }
 
     #[test]
@@ -637,6 +652,77 @@ mod tests {
             let (zone, _) = door_zone(&l, roof).unwrap();
             assert!(zone > 0, "{what}: the roof door comes into public");
             assert_door_lock(&what, t, &l, roof, zone);
+        }
+    }
+
+    /// Whether the roof ground a walk joins from the roof door `door` (never through a door)
+    /// reaches another door, a connector or the map's edge.
+    fn a_roof_way_off(c: &City, door: Pos) -> bool {
+        let k = StratumKind::Heights;
+        let tiles = &c.stratum(k).unwrap().tiles;
+        let (w, h) = (tiles.size().w as i32, tiles.size().h as i32);
+        let mut seen = BTreeSet::from([door]);
+        let mut todo = vec![door];
+        while let Some(p) = todo.pop() {
+            let Some(t) = tiles.get(p).filter(|t| t.is_walkable()) else {
+                continue;
+            };
+            let ladder = (c.connectors_at(p)).any(|x| {
+                x.kind != ConnectorKind::Jack && x.serves.len() > 1 && x.serves.contains(&k)
+            });
+            let edge = p.x == 0 || p.y == 0 || p.x == w - 1 || p.y == h - 1;
+            if (p != door && t.terrain == Terrain::Door) || ladder || edge {
+                return true;
+            }
+            todo.extend(p.neighbors4().filter(|n| seen.insert(*n)));
+        }
+        false
+    }
+
+    #[test]
+    fn a_roof_door_with_no_other_way_off_its_roof_carries_no_lock() {
+        let (mut alone, mut joined) = (0, 0);
+        for c in cities() {
+            for b in &c.buildings {
+                let (Some(t), Some(f)) = (
+                    VenuePack::builtin().for_kind(b.kind),
+                    VenueFrame::of_building(&c, b.id),
+                ) else {
+                    continue;
+                };
+                let Some(d) = (f.doors.iter()).find(|d| d.stratum == StratumKind::Heights) else {
+                    continue;
+                };
+                assert_eq!(d.enclosed, !a_roof_way_off(&c, d.door), "{:?}", b.id);
+                let (door, shut_in) = (d.door, d.enclosed);
+                let Ok(l) = lay_out(t, f, building_seed(c.seed, b.id)) else {
+                    continue;
+                };
+                let roof = (l.ways_in.iter()).find(|w| {
+                    matches!(w.kind, WayInKind::Door { stratum: StratumKind::Heights, door: x } if x == door)
+                });
+                let Some(w) = roof else { continue };
+                if door_zone(&l, w).is_none_or(|(zone, _)| zone == 0) {
+                    continue;
+                }
+                if shut_in {
+                    alone += 1;
+                    assert_eq!(w.lock, None, "{:?}: nobody reaches its roof", b.id);
+                } else {
+                    joined += 1;
+                    assert!(w.lock.is_some(), "{:?}: its roof joins a way off", b.id);
+                }
+            }
+        }
+        assert!(alone > 0, "no roof with only its own door");
+        assert!(joined > 0, "no roof that joins a way off");
+        // A type's own frame stands in no city: its roof door keeps its lock.
+        for t in &VenuePack::builtin().types {
+            assert!(
+                VenueFrame::own(t).doors.iter().all(|d| !d.enclosed),
+                "{}",
+                t.id
+            );
         }
     }
 
@@ -667,6 +753,10 @@ mod tests {
                 if let Some((zone, false)) = door_zone(&l, w)
                     && zone > 0
                 {
+                    if enclosed(&l, w) {
+                        assert_eq!(w.lock, None, "{what}: {w:?} has no outside to lock");
+                        continue;
+                    }
                     locked += 1;
                     assert_door_lock(&what, &t, &l, w, zone);
                 }
