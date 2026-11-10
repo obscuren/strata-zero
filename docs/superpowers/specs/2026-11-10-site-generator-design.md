@@ -66,7 +66,8 @@ Jeff settled these while the mocks were drawn.
   `generate_floor(city, plan, level)` (`crates/citygen/src/interior/`), from a
   `FloorPlan` (`plan.rs`).
 - They are cached in `Interiors.floors` (`crates/strata-zero/src/interiors.rs`) and
-  saved whole (`docs/saving.md` §12).
+  saved whole (`docs/saving.md`, checklist item 12), although the module's own comment
+  still says they are never saved.
 - A floor's rng comes from the city seed, the building id and the level.
 - A floor's tiles never change after it is made. Play state lives beside it: items in
   `Ground`, codes and keypads in `Journal`, building-wide locks in `NetState`.
@@ -76,7 +77,8 @@ Jeff settled these while the mocks were drawn.
 **How tall.**
 - A hotel or an office is Mid (4–9 floors) or Tall (hotels 10–24, offices 12–24). A corp
   tower is 18–48.
-- A building has at most one basement, at −1, and only when it reaches the Undercity.
+- A building has at most one basement, at −1: when it reaches the Undercity, or when it
+  is a clinic with a cellar.
 - A floor is the footprint × 3, at least 12×9.
 - Hotels and offices stand only in a Corp Core district, and hotels on the Neon Strip.
 
@@ -393,11 +395,12 @@ drawing, light, sight, walking, items lying on it, tracking and saving.
 bridge, roof and Undercity. A flagged door is drawn in the mission's mark, and its look
 says what it is.
 
-**Which floors it keeps.** In this order, up to the size's count:
-1. G;
-2. the other levels with a door to the city;
-3. the objective's level;
-4. the rest, as the layout needs to join them.
+**Which floors it keeps.**
+1. Always: G, the objective's level, and the levels needed to join them. A size that
+   can't hold those is refused.
+2. Then, up to the size's count: the other levels with a door to the city, nearest G
+   first.
+3. Then the levels next to the objective's.
 
 A door on a level the copy doesn't keep is barred: it's drawn shut, its look says so,
 and it isn't a way in. So a small copy of a tall hotel may lose its bridge and roof
@@ -519,13 +522,17 @@ this list.
 - G is the station hall. The plaza, the yard and the street around it are city ground,
   laid by the metro project.
 - −1 is the concourse: the ticket hall, the gate line, the paid side and the staff block.
-  Maintenance doors open into the Undercity's tunnels.
+  City generation gives a building one Undercity door, so the way into the Undercity's
+  tunnels is that door plus crawls.
 - −2 and −3 are platforms for two lines crossing.
 - −4 is the service level, with Line Control.
 - −5 holds drainage and a cable vault, in place of the old line, so a large station has
   six levels.
-- In the plain station, the tracks at the platform ends meet a wall or a shutter until
-  the metro network exists. In a copy they are sealed.
+- The track is walkable, since the player can walk on the rails. In the plain station
+  it ends at a shutter at each end of the platform until the metro network exists. In a
+  copy those shutters are sealed.
+- In a typical city building, the station's G and −1 stay within the footprint × 3. Its
+  platforms below can be larger. Its own frame is Cinder Cross's size.
 - Cinder Cross is the target. Its ways out by the tracks and the old line go, so every
   route leaves by the street doors or the −1 maintenance doors.
 
@@ -558,7 +565,8 @@ These weren't settled with Jeff. Each is open to change.
 14. The plain building locks only the doors the type marks. A mission adds card readers
     on the layout's doors up to its size, and a building holds only the sizes its layout
     can reach.
-15. A copy keeps its door levels first. Doors on levels it doesn't keep are barred.
+15. A copy always keeps G, the objective's level and what joins them, and then door
+    levels nearest G. Doors on levels it doesn't keep are barred.
 16. Depth counts crawl grilles as locks, so crawls stand in for doors without making the
     site shallower.
 17. Locks and links can be one-way now, and the checker finds the way in and the way out
