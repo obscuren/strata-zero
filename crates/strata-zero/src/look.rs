@@ -285,6 +285,37 @@ fn fixture_at(
             })
         }
         Place::Stratum(k) => {
+            // A venue's door the session marks: into a mission's copy, or shut.
+            let live = st.city.as_ref().is_some_and(|c| std::ptr::eq(c, city));
+            if let Some((b, mark)) = live
+                .then(|| crate::venues::door_mark_at(st, k, at))
+                .flatten()
+            {
+                return Some(match mark {
+                    crate::venues::DoorMark::Flagged => {
+                        let kind = (st.interiors.plan_of(b))
+                            .and_then(|p| p.venue.as_deref())
+                            .map_or_else(String::new, |v| v.type_name.clone());
+                        Fixture {
+                            name: "Flagged door".into(),
+                            second: Some(format!("{kind} · a job inside")),
+                            key: "flagged_door",
+                        }
+                    }
+                    crate::venues::DoorMark::Barred => Fixture {
+                        name: "Barred door".into(),
+                        second: Some(
+                            if crate::venues::copy_live(st, b) {
+                                "shut for the job"
+                            } else {
+                                "shut"
+                            }
+                            .into(),
+                        ),
+                        key: "barred_door",
+                    },
+                });
+            }
             if city
                 .connectors_at(at)
                 .any(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
@@ -848,6 +879,15 @@ pub fn look_card(
             f => match feature_name(f) {
                 Some((name, key)) => {
                     set_head(&mut card, name.to_string(), glyph);
+                    // A mission's copy seals its track ends.
+                    let key = match place {
+                        Place::Floor { building, .. }
+                            if f == Feature::Shutter && crate::venues::copy_live(st, building) =>
+                        {
+                            "shutter_sealed"
+                        }
+                        _ => key,
+                    };
                     // A holo ad cutting into the news reads the headline while it lasts.
                     let cut = (visible
                         && live_cell
@@ -927,6 +967,16 @@ pub fn look_card(
             card.body.push(String::new());
         }
         card.body.push(note.clone());
+    }
+    // A code a mission's copy left on the tile, its own paragraph too.
+    if visible
+        && live_cell
+        && let Some(note) = crate::venues::note_at(st, place, pos)
+    {
+        if !card.body.is_empty() {
+            card.body.push(String::new());
+        }
+        card.body.push(note);
     }
     if !visible {
         card.second = Some("as you last saw it".to_string());

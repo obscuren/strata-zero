@@ -1703,7 +1703,8 @@ impl MapScreen {
     }
 
     /// Works out where the occupants stand when the player is on a floor; once per
-    /// place and world minute.
+    /// place and world minute. Nobody stands on a mission's copy: the real building
+    /// carries on unseen.
     fn refresh_placement(&mut self, st: &AppState) {
         let Some(p) = st.player.as_ref() else {
             self.placement = None;
@@ -1713,6 +1714,10 @@ impl MapScreen {
             self.placement = None;
             return;
         };
+        if crate::venues::copy_live(st, building) {
+            self.placement = None;
+            return;
+        }
         let Some(world) = st.world.as_ref() else {
             return;
         };
@@ -4031,6 +4036,16 @@ impl Screen for MapScreen {
             overlays.push(&weather);
         }
         overlays.push(&digital);
+        // The venues' doors: a mission's flagged, and those onto floors the plan lacks shut.
+        let marks = if self.place.stratum().is_some() {
+            crate::venues::door_marks(st)
+        } else {
+            Vec::new()
+        };
+        let door_marks = crate::render::doors::DoorMarks { marks: &marks, vis };
+        if !marks.is_empty() {
+            overlays.push(&door_marks);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
         let scorch = ScorchOverlay { fx: &st.fx, vis };

@@ -168,6 +168,44 @@ impl LevelLink {
             None => Vec::new(),
         }
     }
+
+    /// The link with only the stops on levels `keeps` takes, running the way it ran: a
+    /// one-way link's new first and last stops take its ends' flags, which say its way
+    /// (`one_way`). That changes no ride: one up never lets you off at its lowest stop
+    /// nor on at its highest, and one down the other way round. None with fewer than two
+    /// stops left.
+    fn cut(&self, keeps: impl Fn(i32) -> bool) -> Option<LevelLink> {
+        let mut stops: Vec<LinkStop> = (self.stops.iter())
+            .filter(|s| keeps(s.level))
+            .copied()
+            .collect();
+        if stops.len() < 2 {
+            return None;
+        }
+        let (up, down) = one_way(&self.stops);
+        let last = stops.len() - 1;
+        if up {
+            stops[0].off = false;
+            stops[last].on = false;
+        }
+        if down {
+            stops[0].on = false;
+            stops[last].off = false;
+        }
+        Some(LevelLink {
+            stops,
+            ..self.clone()
+        })
+    }
+}
+
+/// Whether a link with `stops` (lowest first) runs only up, and only down: up when you can
+/// neither leave at its first stop nor board at its last, down the other way round.
+pub(in crate::interior) fn one_way(stops: &[LinkStop]) -> (bool, bool) {
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+        return (false, false);
+    };
+    (!first.off && !last.on, !first.on && !last.off)
 }
 
 /// Today's links: the lift bank, then the stairwell, each stopping on every level.
@@ -589,6 +627,25 @@ impl FloorPlan {
                 .collect(),
             crawls,
             venue: None,
+        }
+    }
+
+    /// The plan with only `kept` levels: link stops cut to them, links with fewer than two
+    /// stops dropped, crawls on other levels dropped, `doors` kept whole (so their doors
+    /// read barred).
+    pub fn kept(&self, kept: &[i32]) -> FloorPlan {
+        let keeps = |level: i32| kept.contains(&level) && self.has_level(level);
+        let links = (self.links.iter())
+            .filter_map(|link| link.cut(keeps))
+            .collect();
+        FloorPlan {
+            levels: self.levels().filter(|l| keeps(*l)).collect(),
+            links,
+            crawls: (self.crawls.iter())
+                .filter(|c| keeps(c.level))
+                .copied()
+                .collect(),
+            ..self.clone()
         }
     }
 

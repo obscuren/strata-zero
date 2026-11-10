@@ -12,8 +12,8 @@ pub const PATHS_PER_FRAME: usize = 4;
 /// to `paths` requests a tick into trips; a step over a minute (an overworld step over
 /// rough ground) is caught up as a city you come back to is (`sim::World::catch_up`), so
 /// every trip leaves on its minute and nothing is left queued. With `None` it holds (the
-/// free camera). Either way the bots, the Net's minute, the backdoors, the jobs and the
-/// story take their step.
+/// free camera). Either way the bots, the Net's minute, the backdoors, the jobs, the
+/// missions' copies and the story take their step.
 pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     if let (Some(n), Some(city), Some(world)) = (world_ticks, st.city.as_ref(), st.world.as_mut()) {
         if n > sim::TICKS_PER_MINUTE {
@@ -37,6 +37,8 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     crate::holds::tick(st);
     crate::grid::tick(st);
     crate::jobs::tick(st);
+    // A mission's copy taken or let go once you're out of its building.
+    crate::venues::tick(st);
     // Out in the world the city holds still for you: its cameras look at no one, and
     // its story waits (a call keeps ringing from the start when you're back).
     if crate::outside::away(st) {

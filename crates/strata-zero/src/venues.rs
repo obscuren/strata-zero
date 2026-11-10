@@ -1,7 +1,21 @@
 //! Venues in play: the Tech a crawl's grille wants, the grilles on a floor and the crawls
 //! in from the city, what a lock's number names, what a step onto a venue's door or grille
 //! meets, which doors in from the city stay shut to you, how far a walk across a level
-//! gets past what the player can open now, and a mission's guards at their posts.
+//! gets past what the player can open now, and a mission's guards at their posts. A
+//! mission's copy of a venue is in `copy`.
+
+mod copy;
+
+pub(crate) use copy::copy_floor;
+pub use copy::{DoorMark, MissionCopy, copy_live, door_mark_at, door_marks, note_at, tick};
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "the console's `site` and the jobs begin missions"
+    )
+)]
+pub use copy::{begin, end};
 
 use crate::app::AppState;
 use crate::credentials::{self, How};
@@ -110,35 +124,37 @@ pub fn keep_plans_here(st: &mut AppState) {
     }
 }
 
-/// Building `b`'s plan when a venue type builds its kind: the session's, or laid out fresh.
+/// Building `b`'s plan as the session has it, else, when a venue type builds its kind,
+/// laid out fresh.
 fn venue_plan(st: &AppState, b: BuildingId) -> Option<Cow<'_, FloorPlan>> {
+    if let Some(plan) = st.interiors.plan_of(b) {
+        return Some(Cow::Borrowed(plan));
+    }
     let kind = st.city.as_ref()?.building_opt(b)?.kind;
     VenuePack::builtin().for_kind(kind)?;
     crate::interiors::plan_now(st, b)
 }
 
 /// The lock on `plan`'s way in through the city-map door `door` on stratum `k`, and the
-/// level it stands on.
+/// level it stands on; none on a level the plan lacks, where the door is barred.
 fn way_in_of(plan: &FloorPlan, k: StratumKind, door: Pos) -> Option<(i32, DoorLock)> {
     let v = plan.venue.as_deref()?;
     v.ways_in.iter().find_map(|w| match w.kind {
-        WayInKind::Door { stratum, door: d } if stratum == k && d == door => {
+        WayInKind::Door { stratum, door: d }
+            if stratum == k && d == door && plan.has_level(w.level) =>
+        {
             Some((w.level, w.lock?))
         }
         _ => None,
     })
 }
 
-/// The lock on the way in through the city-map door `door` on stratum `k` into building
-/// `b`, and the level it stands on; a building of a kind no venue type builds has none.
-pub fn way_in_lock(
-    st: &AppState,
-    b: BuildingId,
-    k: StratumKind,
-    door: Pos,
-) -> Option<(i32, DoorLock)> {
-    let plan = venue_plan(st, b)?;
-    way_in_of(&plan, k, door)
+/// Whether `plan`'s city-map door `door` on stratum `k` is barred: a venue's door onto a
+/// level the plan lacks, which the layout lacks or a mission's copy doesn't keep.
+fn barred_in(plan: &FloorPlan, k: StratumKind, door: Pos) -> bool {
+    (plan.venue.as_deref()).is_some_and(|v| {
+        (v.frame.doors.iter()).any(|d| d.stratum == k && d.door == door && !plan.has_level(d.level))
+    })
 }
 
 /// The locked way in through the city-map door on tile `p` of stratum `k`: its building,
@@ -161,11 +177,15 @@ pub fn locked_door_in(
 }
 
 /// Whether the city-map door `door` on `k` into building `b` stays shut to you from the
-/// city: a way in whose lock doesn't open for you now.
+/// city: a barred door, or a way in whose lock doesn't open for you now.
 pub fn door_shut(st: &AppState, b: BuildingId, k: StratumKind, door: Pos) -> bool {
-    way_in_lock(st, b, k, door).is_some_and(|(level, lock)| {
-        credentials::opens_lock(st, b, level, &lock, lock.at).is_none()
-    })
+    let Some(plan) = venue_plan(st, b) else {
+        return false;
+    };
+    barred_in(&plan, k, door)
+        || way_in_of(&plan, k, door).is_some_and(|(level, lock)| {
+            credentials::opens_lock(st, b, level, &lock, lock.at).is_none()
+        })
 }
 
 /// A zone's name in a venue's plan: "staff". A plan with no layout has no zones.
@@ -276,6 +296,9 @@ pub fn room_of(plan: &FloorPlan, level: i32, p: Pos) -> Option<usize> {
 pub fn reached(st: &AppState, plan: &FloorPlan, level: i32, from: Pos) -> Option<Vec<bool>> {
     let x = plan.venue.as_deref()?.level(level)?;
     let b = plan.building;
+    // A mission's copy fits locks to doors the plain building leaves unlocked: its drawn
+    // floor holds them.
+    let floor = st.interiors.floor(b, level).map(|(_, f)| f);
     let mut seen = vec![false; x.rooms.len()];
     let Some(start) = room_of(plan, level, from) else {
         return Some(seen);
@@ -292,8 +315,11 @@ pub fn reached(st: &AppState, plan: &FloorPlan, level: i32, from: Pos) -> Option
             if seen[other] {
                 continue;
             }
+            let lock = d
+                .lock
+                .or_else(|| floor.and_then(|f| f.lock_at(d.at)).copied());
             let opens = d.open
-                || match d.lock {
+                || match lock {
                     Some(l) => {
                         let side = (l.free_from)
                             .filter(|p| x.rooms[r].rect.contains(*p))
@@ -315,10 +341,6 @@ pub fn reached(st: &AppState, plan: &FloorPlan, level: i32, from: Pos) -> Option
 }
 
 /// The layer's guards as inert foes at their posts: name "guard", glyph '@', post set.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a mission's copy puts its guards on its floors")
-)]
 pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
     (layer.guards.iter())
         .map(|g| {

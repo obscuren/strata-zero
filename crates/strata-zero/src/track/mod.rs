@@ -240,6 +240,14 @@ pub fn refollow(st: &mut AppState) {
     tick(st);
 }
 
+/// Has the next tick make the walk again although neither you nor the target moved: the
+/// floors under it changed (a mission's copy taken or ended).
+pub fn rewalk(st: &mut AppState) {
+    if let Some(t) = st.track.as_mut() {
+        t.walk = Walk::unmade();
+    }
+}
+
 /// Stops tracking, and logs it.
 pub fn stop(st: &mut AppState) {
     end(st, |label| format!("⌖ stopped tracking {label}"));

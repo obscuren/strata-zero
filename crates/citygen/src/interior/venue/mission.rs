@@ -451,8 +451,9 @@ impl MissionLayer {
     }
 
     /// Up to `n` of `spots`, in order, that a piece nobody walks through can stand on:
-    /// free, walked by no guard, with every tile round it its room's open floor and none
-    /// of them `blocked`.
+    /// free, walked by no guard, with every tile round it its room's open floor off the
+    /// room's edge (where the plain level's furniture stands, so a copy's furniture is
+    /// the plain level's) and none of them `blocked`.
     fn blockers(
         &self,
         layout: &VenueLayout,
@@ -476,6 +477,9 @@ impl MissionLayer {
             let Some(room) = room_holding(layout, level, at) else {
                 continue;
             };
+            if !x.rooms[room].rect.inset(2).contains(at) {
+                continue;
+            }
             let round = |q: Pos| open_floor(x, room, q) && !blocked.contains(&(level, q));
             if !at.neighbors8().all(round) {
                 continue;

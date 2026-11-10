@@ -25,6 +25,11 @@ pub struct Interiors {
     floors: HashMap<(BuildingId, i32), Floor>,
     /// Who lives in which flat, per residential building.
     homes: HashMap<BuildingId, Homes>,
+    /// The venues a mission holds, each with its copy: a live one's plan is cut to the
+    /// copy's floors, and its floors are drawn with the mission's layer. After the first
+    /// saves, so it defaults: they hold none.
+    #[serde(default)]
+    copies: BTreeMap<BuildingId, crate::venues::MissionCopy>,
 }
 
 /// Which household lives in which flat of one building: stable, in or out.
@@ -117,6 +122,19 @@ fn plan_in<'a>(
     }
 }
 
+/// Level `level` of `plan` drawn: a live copy's with the mission's layer on it, else
+/// from the seed (and a copy whose layer this build can't lay, plain).
+fn draw_floor(
+    city: &City,
+    plan: &FloorPlan,
+    copy: Option<&crate::venues::MissionCopy>,
+    level: i32,
+) -> Floor {
+    (copy.filter(|c| c.live))
+        .and_then(|c| crate::venues::copy_floor(plan, c, level))
+        .unwrap_or_else(|| generate_floor(city, plan, level))
+}
+
 /// A venue's flats, (level, number), from its layout.
 fn venue_flats(layout: &VenueLayout) -> Vec<(i32, u16)> {
     (layout.levels.iter())
@@ -139,16 +157,43 @@ impl Interiors {
     }
 
     /// Replaces a building's plan and drops the floors made from the old one.
-    #[cfg(test)]
     pub fn put_plan(&mut self, plan: FloorPlan) {
-        self.floors.retain(|(b, _), _| *b != plan.building);
+        self.drop_floors(plan.building);
         self.plans.insert(plan.building, plan);
     }
 
-    /// A floor, generated if this is its first visit. `None` for an open building or
-    /// a level the plan does not have. An atrium floor brings the plaza below with it,
-    /// for the look-down. The plan is borrowed beside the floors, not copied: a venue's
-    /// carries its whole layout.
+    /// Drops every floor of building `b`: each is drawn again from its plan when next
+    /// needed.
+    pub(crate) fn drop_floors(&mut self, b: BuildingId) {
+        self.floors.retain(|(x, _), _| *x != b);
+    }
+
+    /// The mission's copy of venue `b`, live or waiting.
+    pub fn copy(&self, b: BuildingId) -> Option<&crate::venues::MissionCopy> {
+        self.copies.get(&b)
+    }
+
+    pub(crate) fn copy_mut(&mut self, b: BuildingId) -> Option<&mut crate::venues::MissionCopy> {
+        self.copies.get_mut(&b)
+    }
+
+    /// Records venue `b`'s copy, or with None lets it go.
+    pub(crate) fn set_copy(&mut self, b: BuildingId, copy: Option<crate::venues::MissionCopy>) {
+        match copy {
+            Some(c) => self.copies.insert(b, c),
+            None => self.copies.remove(&b),
+        };
+    }
+
+    /// Every venue a mission holds, in building order.
+    pub(crate) fn copies(&self) -> impl Iterator<Item = (BuildingId, &crate::venues::MissionCopy)> {
+        self.copies.iter().map(|(b, c)| (*b, c))
+    }
+
+    /// A floor, generated if this is its first visit: a live copy's with the mission's
+    /// layer on it. `None` for an open building or a level the plan does not have. An
+    /// atrium floor brings the plaza below with it, for the look-down. The plan is
+    /// borrowed beside the floors, not copied: a venue's carries its whole layout.
     pub fn ensure(&mut self, city: &City, b: BuildingId, level: i32) -> Option<&Floor> {
         let plan = plan_in(&mut self.plans, city, b)?;
         if !plan.has_level(level) {
@@ -159,10 +204,11 @@ impl Interiors {
                 .entry((b, 0))
                 .or_insert_with(|| generate_floor(city, plan, 0));
         }
+        let copy = self.copies.get(&b);
         Some(
             self.floors
                 .entry((b, level))
-                .or_insert_with(|| generate_floor(city, plan, level)),
+                .or_insert_with(|| draw_floor(city, plan, copy, level)),
         )
     }
 
@@ -279,12 +325,17 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
         Some(code.ok_or_else(|| crate::clinic::closed_line(st, b))?)
     };
     let city = st.city.as_ref().ok_or("no city")?;
-    let level = st
+    let plan = st
         .interiors
         .plan(city, b)
-        .ok_or("that building has no inside")?
+        .ok_or("that building has no inside")?;
+    let level = plan
         .door_level(door.0)
         .ok_or("that door opens onto nothing")?;
+    // A venue's door onto a level it lacks, or a mission's copy doesn't keep, is shut.
+    if !plan.has_level(level) {
+        return Err("barred".to_string());
+    }
     let floor = st
         .interiors
         .ensure(city, b, level)
@@ -534,13 +585,17 @@ pub fn floor_now<'a>(st: &'a AppState, plan: &FloorPlan, level: i32) -> Option<C
     }
     match st.interiors.floor(plan.building, level) {
         Some((_, floor)) => Some(Cow::Borrowed(floor)),
-        None => Some(Cow::Owned(generate_floor(st.city.as_ref()?, plan, level))),
+        None => {
+            let copy = st.interiors.copy(plan.building);
+            Some(Cow::Owned(draw_floor(st.city.as_ref()?, plan, copy, level)))
+        }
     }
 }
 
 /// Where a person is drawn now (doctor spec §4): their tile on the street, or inside a
 /// building the tile its floor's `Placement` stands them on, on the floor they occupy.
-/// None for the dead, and for anyone behind a door.
+/// None for the dead, for anyone behind a door, and for anyone in a building a mission's
+/// live copy stands in for: the real building carries on unseen.
 pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
     let world = st.world.as_ref()?;
     if let Some(pos) = world.pos_of(id) {
@@ -549,6 +604,9 @@ pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
     let Whereabouts::Inside(b) = world.people().get(id.0 as usize)?.whereabouts else {
         return None;
     };
+    if crate::venues::copy_live(st, b) {
+        return None;
+    }
     let occupants = world.inside(b);
     let o = occupants.iter().find(|o| o.id == id)?;
     // Residents and guests are behind their doors: no plan is made for them.

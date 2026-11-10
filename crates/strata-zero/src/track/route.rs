@@ -128,6 +128,18 @@ pub fn leg_from(st: &AppState, place: Place, from: Pos, target: Target) -> Resul
     ) {
         return Err(NoLeg::JackedIn);
     }
+    // No way to a floor its building's plan lacks: one a mission's copy doesn't keep.
+    if let Target::Spot {
+        place: Place::Floor { building, level },
+        ..
+    } = target
+        && st
+            .interiors
+            .plan_of(building)
+            .is_some_and(|p| !p.has_level(level))
+    {
+        return Err(NoLeg::NoWay);
+    }
     let map = MapRef::for_place(
         city,
         &st.interiors,

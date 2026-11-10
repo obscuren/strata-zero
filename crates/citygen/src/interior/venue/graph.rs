@@ -7,6 +7,7 @@
 use super::mission::room_holding;
 use super::{MissionLayer, VenueLayout, WayInKind, Ways};
 use crate::geom::Pos;
+use crate::interior::plan::one_way;
 use crate::interior::{DoorLock, LinkKind, LinkStop};
 use crate::world::StratumKind;
 use std::collections::{BTreeSet, VecDeque};
@@ -115,12 +116,9 @@ fn of_door(level: i32, l: &DoorLock, free: bool) -> GraphLock {
 }
 
 /// Whether a link carries you from its stop `a` to its stop `b`: on at `a`, off at `b`,
-/// and the way it runs. A link you can neither leave at its first stop nor board at its
-/// last runs only up, and the other way round only down.
+/// and the way it runs (`one_way`).
 pub(super) fn rides(stops: &[LinkStop], a: usize, b: usize) -> bool {
-    let (first, last) = (&stops[0], &stops[stops.len() - 1]);
-    let up = !first.off && !last.on;
-    let down = !first.on && !last.off;
+    let (up, down) = one_way(stops);
     a != b && stops[a].on && stops[b].off && (!up || b > a) && (!down || b < a)
 }
 

@@ -4,9 +4,9 @@ use crate::interior::floor::doorstep_of;
 use crate::interior::venue::testutil::test_type;
 use crate::interior::venue::{
     GraphLock, Keys, MissionSize, NodeAt, VenueFrame, VenueGraph, VenuePack, WayInKind, Ways,
-    draw_copy_level, lay_out,
+    draw_copy_level, draw_level, lay_out,
 };
-use crate::interior::{FloorPlan, validate_floor};
+use crate::interior::{FloorPlan, LinkKind, validate_floor};
 use crate::tile::{Feature, Terrain};
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -61,6 +61,52 @@ fn layers() -> &'static [Laid] {
         }
         v
     })
+}
+
+/// Every builtin type over its own frame, seeds 0..5, laid at each size it holds at
+/// security 255 for the first objective that lays.
+fn builtin_layers() -> &'static [Laid] {
+    static LAYERS: OnceLock<Vec<Laid>> = OnceLock::new();
+    LAYERS.get_or_init(|| {
+        let pack = VenuePack::builtin();
+        let mut v = Vec::new();
+        for t in &pack.types {
+            for seed in 0..5 {
+                let layout = lay_out(t, VenueFrame::own(t), seed).unwrap();
+                for size in SIZES {
+                    let rule = pack.size(size);
+                    let laid = (0..t.objectives.len()).find_map(|objective| {
+                        let inputs = MissionInputs {
+                            size,
+                            objective,
+                            security: 255,
+                            seed,
+                        };
+                        MissionLayer::lay(&layout, t, rule, inputs).ok()
+                    });
+                    if let Some(layer) = laid {
+                        v.push(Laid {
+                            what: format!("{} seed {seed} {size:?}", t.id),
+                            layout: layout.clone(),
+                            rule: rule.clone(),
+                            layer,
+                        });
+                    }
+                }
+            }
+        }
+        v
+    })
+}
+
+/// The copy's graph of `layout` as the plan `cut` holds it: its levels, its links and its
+/// ways in, under `layer`.
+fn cut_graph(layout: &VenueLayout, cut: &FloorPlan, layer: &MissionLayer) -> VenueGraph {
+    let mut l = layout.clone();
+    l.levels.retain(|x| cut.has_level(x.level));
+    l.links = cut.links.clone();
+    l.ways_in.retain(|w| cut.has_level(w.level));
+    VenueGraph::copy(&l, layer)
 }
 
 /// The graph node of the room holding `at` on `level`.
@@ -249,8 +295,8 @@ fn no_post_blocks_a_landing_doorway_or_doorstep() {
 
 #[test]
 fn devices_stand_on_floor_spots() {
-    let (mut turrets, mut containers) = (0, 0);
-    for x in layers().iter().step_by(3) {
+    let (mut cameras, mut blockers) = (0, 0);
+    for x in layers().iter().step_by(3).chain(builtin_layers()) {
         let (l, layer, what) = (&x.layout, &x.layer, &x.what);
         let plan = FloorPlan::of_layout(l.clone());
         for lv in &l.levels {
@@ -287,8 +333,8 @@ fn devices_stand_on_floor_spots() {
                 assert_eq!(t.terrain, Terrain::Floor, "{on}: {feature:?} at {at:?}");
                 assert_eq!(t.feature, Some(feature), "{on}: {at:?}");
                 assert!(!steps.contains(&at), "{on}: {feature:?} on a doorstep");
-                turrets += usize::from(feature == Feature::Turret);
-                containers += usize::from(feature == Feature::Container);
+                cameras += usize::from(feature == Feature::Camera);
+                blockers += usize::from(matches!(feature, Feature::Turret | Feature::Container));
             }
             let laid = |p: Pos, feature: Feature| want.contains(&(p, feature));
             for (p, t) in f.tiles.iter() {
@@ -308,16 +354,18 @@ fn devices_stand_on_floor_spots() {
             }
         }
     }
+    // A turret or a container stands only where nothing round it is its room's edge,
+    // which few spots are.
     assert!(
-        turrets > 0 && containers > 0,
-        "{turrets} turrets, {containers} containers"
+        cameras > 0 && blockers > 0,
+        "{cameras} cameras, {blockers} turrets and containers"
     );
 }
 
 #[test]
 fn turrets_and_containers_stand_clear_of_every_way() {
     let mut stood = 0;
-    for x in layers() {
+    for x in layers().iter().chain(builtin_layers()) {
         let (l, layer, what) = (&x.layout, &x.layer, &x.what);
         let blockers: Vec<(i32, Pos)> = (layer.devices.iter())
             .filter(|d| d.kind == DeviceKind::Turret)
@@ -334,6 +382,8 @@ fn turrets_and_containers_stand_clear_of_every_way() {
             for q in at.neighbors8() {
                 let on = format!("{what}: beside {at:?} at {q:?}");
                 assert!(r.rect.contains(q), "{on}: off its room");
+                // Furniture stands on a room's edge: nothing round a blocker does.
+                assert!(r.rect.inset(1).contains(q), "{on}: on its room's edge");
                 assert!(!lv.core.is_some_and(|c| c.contains(q)), "{on}: the core");
                 assert!(!lv.doors.iter().any(|d| d.at == q), "{on}: a door");
                 assert!(!lv.reserved.contains(&q), "{on}: reserved");
@@ -485,4 +535,143 @@ fn the_same_inputs_lay_the_same_layer() {
         MissionLayer::lay(&x.layout, &t, &x.rule, inputs).is_ok_and(|o| o != x.layer)
     });
     assert!(differ);
+}
+
+#[test]
+fn a_copy_is_the_plain_level_and_its_layer() {
+    let mut laid = 0;
+    for x in layers().iter().step_by(5).chain(builtin_layers()) {
+        let (l, layer, what) = (&x.layout, &x.layer, &x.what);
+        for &level in &layer.kept {
+            let on = format!("{what} level {level}");
+            let plain = draw_level(l, level).unwrap();
+            let copy = draw_copy_level(l, layer, level).unwrap();
+            let here = |p: &Placed| p.level == level;
+            let mut features: Vec<(Pos, Feature)> = (layer.devices.iter())
+                .filter(|d| d.level == level)
+                .map(|d| match d.kind {
+                    DeviceKind::Camera => (d.at, Feature::Camera),
+                    DeviceKind::Turret => (d.at, Feature::Turret),
+                })
+                .collect();
+            features.extend(
+                (layer.containers.iter().filter(|c| here(c))).map(|c| (c.at, Feature::Container)),
+            );
+            if here(&layer.objective) {
+                features.push((layer.objective.at, Feature::Objective));
+            }
+            for (p, t) in copy.tiles.iter() {
+                let mut want = plain.tiles[p];
+                if let Some(&(_, f)) = features.iter().find(|(at, _)| *at == p) {
+                    assert_eq!(plain.tiles[p].feature, None, "{on}: {p:?}");
+                    want.feature = Some(f);
+                    laid += 1;
+                }
+                assert_eq!(*t, want, "{on}: {p:?}");
+            }
+            let mut locks = plain.locks.clone();
+            locks.extend(
+                (layer.fitted.iter().filter(|f| f.0 == level))
+                    .map(|&(_, k)| l.level(level).unwrap().doors[k].fit.unwrap()),
+            );
+            assert_eq!(copy.locks, locks, "{on}");
+            assert_eq!(copy.rooms, plain.rooms, "{on}");
+            assert_eq!(copy.exits, plain.exits, "{on}");
+            assert_eq!(copy.stations, plain.stations, "{on}");
+            assert!(
+                copy.light == plain.light && copy.glow == plain.glow,
+                "{on}: lit otherwise"
+            );
+        }
+    }
+    assert!(laid > 0);
+}
+
+#[test]
+fn the_cut_plans_graph_is_the_copys() {
+    for x in layers().iter().chain(builtin_layers()) {
+        let (l, layer, what) = (&x.layout, &x.layer, &x.what);
+        let plain = FloorPlan::of_layout(l.clone());
+        let cut = plain.kept(&layer.kept);
+        assert_eq!(cut.levels, layer.kept, "{what}");
+        assert_eq!(cut.doors, plain.doors, "{what}: its doors whole");
+        assert_eq!(cut.venue, plain.venue, "{what}: its layout whole");
+        assert!(
+            (cut.crawls.iter()).all(|c| layer.kept.contains(&c.level)),
+            "{what}"
+        );
+        assert_eq!(
+            cut.crawls.len(),
+            (plain.crawls.iter())
+                .filter(|c| layer.kept.contains(&c.level))
+                .count(),
+            "{what}"
+        );
+        for k in &cut.links {
+            assert!(k.stops.len() >= 2, "{what}: {k:?}");
+            assert!(
+                (k.stops.iter()).all(|s| layer.kept.contains(&s.level)),
+                "{what}: {k:?}"
+            );
+        }
+        assert_eq!(
+            cut_graph(l, &cut, layer),
+            VenueGraph::copy(l, layer),
+            "{what}"
+        );
+    }
+}
+
+#[test]
+fn a_cut_one_way_link_runs_its_way_still() {
+    let t = test_type();
+    let mut l = lay_out(&t, VenueFrame::own(&t), 0).unwrap();
+    // The lift made one way up, then its lowest stop left out: the lift's first stop now
+    // is one you could get off at, and it still runs only up.
+    let lift = (l.links.iter().position(|k| k.kind == LinkKind::Lift)).unwrap();
+    let n = l.links[lift].stops.len();
+    assert!(n >= 4, "{n} stops");
+    for (i, s) in l.links[lift].stops.iter_mut().enumerate() {
+        (s.on, s.off) = (i + 1 < n, i > 0);
+    }
+    let lowest = l.links[lift].stops[0].level;
+    let kept: Vec<i32> = (l.levels.iter().map(|x| x.level))
+        .filter(|&level| level != lowest)
+        .collect();
+    let layer = MissionLayer {
+        inputs: MissionInputs {
+            size: MissionSize::Large,
+            objective: 0,
+            security: 0,
+            seed: 0,
+        },
+        kept: kept.clone(),
+        objective: Placed {
+            level: 0,
+            at: l.level(0).unwrap().rooms[0].spots[0],
+        },
+        fitted: Vec::new(),
+        guards: Vec::new(),
+        devices: Vec::new(),
+        containers: Vec::new(),
+        cards: Vec::new(),
+        codes: Vec::new(),
+    };
+    let cut = FloorPlan::of_layout(l.clone()).kept(&kept);
+    let k = (cut.links.iter().find(|k| k.kind == LinkKind::Lift)).unwrap();
+    assert_eq!(k.stops.len(), n - 1);
+    assert_eq!(cut_graph(&l, &cut, &layer), VenueGraph::copy(&l, &layer));
+    // And one way down the same, its top stop left out.
+    for (i, s) in l.links[lift].stops.iter_mut().enumerate() {
+        (s.on, s.off) = (i > 0, i + 1 < n);
+    }
+    let top = l.links[lift].stops[n - 1].level;
+    let layer = MissionLayer {
+        kept: (l.levels.iter().map(|x| x.level))
+            .filter(|&level| level != top)
+            .collect(),
+        ..layer
+    };
+    let cut = FloorPlan::of_layout(l.clone()).kept(&layer.kept);
+    assert_eq!(cut_graph(&l, &cut, &layer), VenueGraph::copy(&l, &layer));
 }

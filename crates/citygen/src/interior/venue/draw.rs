@@ -2,7 +2,8 @@
 //! and over a ring's core, its doors, landings, ways in and set pieces, then each room
 //! furnished as its def lists (bare when it lists nothing) and the floor lit. There is no
 //! pass that cuts doors to join it up: the layout is joined by construction, and the
-//! checker proves it.
+//! checker proves it. A mission's copy of a level is the plain level with the layer laid
+//! on top.
 
 use super::{
     DeviceKind, LevelLayout, MissionLayer, PieceKind, PlacedPiece, PlannedRoom, VenueLayout,
@@ -20,21 +21,6 @@ use rand::Rng;
 /// its fittings' wear come from the layout's seed and the level, its lights' moods from
 /// the layout's seed: it needs no city.
 pub fn draw_level(layout: &VenueLayout, level: i32) -> Option<Floor> {
-    draw(layout, level, None)
-}
-
-/// Level `level` of a mission's copy of `layout`, drawn as the plain level is with the
-/// layer on it: its fitted doors' locks, and its cameras, turrets, containers and the
-/// objective on their spots before the rooms are furnished. None for a level the copy
-/// doesn't keep.
-pub fn draw_copy_level(layout: &VenueLayout, layer: &MissionLayer, level: i32) -> Option<Floor> {
-    if !layer.kept.contains(&level) {
-        return None;
-    }
-    draw(layout, level, Some(layer))
-}
-
-fn draw(layout: &VenueLayout, level: i32, layer: Option<&MissionLayer>) -> Option<Floor> {
     let x = layout.level(level)?;
     let plan = FloorPlan::of_venue(layout);
     let seed = hash64(layout.seed, level as i64 as u64);
@@ -46,11 +32,7 @@ fn draw(layout: &VenueLayout, level: i32, layer: Option<&MissionLayer>) -> Optio
         let faces: Vec<u8> = layout.frame.faces.iter().map(|d| edge(*d)).collect();
         b.windows(&faces);
     }
-    let fitted: Vec<usize> = (layer.iter().flat_map(|l| &l.fitted))
-        .filter(|f| f.0 == level)
-        .map(|f| f.1)
-        .collect();
-    doors(&mut b, x, &fitted);
+    doors(&mut b, x);
     landings(&mut b, layout);
     ways_in(&mut b, layout);
     exits(&mut b, x);
@@ -60,15 +42,44 @@ fn draw(layout: &VenueLayout, level: i32, layer: Option<&MissionLayer>) -> Optio
     for piece in &x.pieces {
         lay_piece(&mut b, x, piece);
     }
-    if let Some(layer) = layer {
-        stand(&mut b, layer);
-    }
     // A room whose def lists nothing stands bare: its floor, its doors and its light.
     for r in (x.rooms.iter()).filter(|r| !r.furniture.is_empty() || !r.stations.is_empty()) {
         furnish(&mut b, r);
     }
     b.light();
     Some(b.finish())
+}
+
+/// Level `level` of a mission's copy of `layout`: the plain level, furnished and lit as
+/// the plain building's, with the layer laid on top: its fitted doors' locks after the
+/// level's own, and its cameras, turrets, containers and the objective on their spots,
+/// which the plain level leaves bare. None for a level the copy doesn't keep.
+pub fn draw_copy_level(layout: &VenueLayout, layer: &MissionLayer, level: i32) -> Option<Floor> {
+    if !layer.kept.contains(&level) {
+        return None;
+    }
+    let x = layout.level(level)?;
+    let mut floor = draw_level(layout, level)?;
+    let fitted = (layer.fitted.iter().filter(|f| f.0 == level))
+        .filter_map(|&(_, k)| x.doors.get(k).and_then(|d| d.fit));
+    floor.locks.extend(fitted);
+    let here = |l: i32| l == level;
+    let devices = (layer.devices.iter().filter(|d| here(d.level))).map(|d| {
+        let f = match d.kind {
+            DeviceKind::Camera => Feature::Camera,
+            DeviceKind::Turret => Feature::Turret,
+        };
+        (d.at, f)
+    });
+    let containers =
+        (layer.containers.iter().filter(|c| here(c.level))).map(|c| (c.at, Feature::Container));
+    let objective = here(layer.objective.level).then_some((layer.objective.at, Feature::Objective));
+    for (at, f) in devices.chain(containers).chain(objective) {
+        if let Some(t) = floor.tiles.get_mut(at) {
+            t.feature = Some(f);
+        }
+    }
+    Some(floor)
 }
 
 /// A frame side as `layouts::edge` numbers it.
@@ -104,9 +115,8 @@ fn walls(b: &mut Builder, x: &LevelLayout) {
 }
 
 /// A door on each planned door but an open join (a lock's door is a door too), the tiles
-/// beside every one kept clear, and the planned doors' locks: those locked in the plain
-/// building, and the `fit` of those `fitted` by index.
-fn doors(b: &mut Builder, x: &LevelLayout, fitted: &[usize]) {
+/// beside every one kept clear, and the locks of the doors locked in the plain building.
+fn doors(b: &mut Builder, x: &LevelLayout) {
     for d in &x.doors {
         if !d.open {
             b.tiles[d.at].terrain = Terrain::Door;
@@ -114,33 +124,7 @@ fn doors(b: &mut Builder, x: &LevelLayout, fitted: &[usize]) {
         }
         b.clear.extend(d.at.neighbors4());
     }
-    let locks = (x.doors.iter().enumerate())
-        .filter_map(|(k, d)| d.lock.or(d.fit.filter(|_| fitted.contains(&k))));
-    b.locks.extend(locks);
-}
-
-/// A mission's layer on its spots: its cameras and turrets, its containers and the
-/// objective.
-fn stand(b: &mut Builder, layer: &MissionLayer) {
-    let here = |level: i32| level == b.level;
-    let mut on: Vec<(Pos, Feature)> = (layer.devices.iter().filter(|d| here(d.level)))
-        .map(|d| {
-            let f = match d.kind {
-                DeviceKind::Camera => Feature::Camera,
-                DeviceKind::Turret => Feature::Turret,
-            };
-            (d.at, f)
-        })
-        .collect();
-    on.extend(
-        (layer.containers.iter().filter(|c| here(c.level))).map(|c| (c.at, Feature::Container)),
-    );
-    if here(layer.objective.level) {
-        on.push((layer.objective.at, Feature::Objective));
-    }
-    for (at, f) in on {
-        b.tiles[at].feature = Some(f);
-    }
+    b.locks.extend(x.doors.iter().filter_map(|d| d.lock));
 }
 
 /// Each link's landing on this level as its kind's terrain, both tiles of a lift's bank,

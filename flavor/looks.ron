@@ -121,6 +121,7 @@ Looks(
             "The stage glows in two colours that don't agree.",
         ],
         "shutter": ["A steel shutter down across the tunnel mouth, chained to a ring in the floor."],
+        "shutter_sealed": ["The shutter's welded to its frame, a fresh seal stamped over the chain."],
         "turret": [
             "A gun on a floor mount, cabled into the wall. Its barrel follows the door.",
             "Twin barrels on a swivel, a red eye under them, warm and waiting.",
@@ -199,5 +200,7 @@ Looks(
             "A vent grille, four screws, the dark behind it breathing warm air.",
             "A duct cover, its screws scratched bright by somebody's knife.",
         ],
+        "flagged_door": ["The same door as yesterday, but somebody's waiting behind it now."],
+        "barred_door": ["Steel bars across the frame, bolted into the wall on both sides."],
     },
 )
