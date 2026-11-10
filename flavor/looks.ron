@@ -182,5 +182,13 @@ Looks(
         "track": ["Two rails on a bed of grit and old cigarette ends."],
         "manhole": ["A cast-iron lid, pried loose often enough to sit crooked."],
         "flat_door": ["Steel door, a peephole, a keypad under a cracked cover."],
+        "zone_door": [
+            "A heavy door with no handle, its lock blinking red beside it.",
+            "Brushed steel, a lock panel and a camera dome that watches it.",
+        ],
+        "grille": [
+            "A vent grille, four screws, the dark behind it breathing warm air.",
+            "A duct cover, its screws scratched bright by somebody's knife.",
+        ],
     },
 )

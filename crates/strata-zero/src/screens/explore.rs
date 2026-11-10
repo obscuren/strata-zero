@@ -2390,10 +2390,10 @@ impl MapScreen {
     }
 
     /// A step onto a closed building's door goes inside; onto an exit, back out; onto
-    /// a locked door, nowhere.
+    /// a locked door or a grille you can't crawl through, nowhere.
     fn doorway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
-        let (target, place) = (player.pos.step(dir), player.place);
+        let (here, target, place) = (player.pos, player.pos.step(dir), player.place);
         let city = st.city.as_ref()?;
         match place {
             Place::Stratum(k) => {
@@ -2420,13 +2420,32 @@ impl MapScreen {
                 Some(ScreenCmd::Stay)
             }
             Place::Floor { building, level } => {
-                let (_, floor) = st.interiors.floor(building, level)?;
-                if let Some(exit) = floor.exit_at(target).copied() {
+                let exit = st
+                    .interiors
+                    .floor(building, level)?
+                    .1
+                    .exit_at(target)
+                    .copied();
+                if let Some(exit) = exit {
                     let result = crate::interiors::leave(st, &exit);
                     report(st, result);
                     return Some(ScreenCmd::Stay);
                 }
-                let here = player.pos;
+                // A venue's lock or grille, before any room's door.
+                match crate::venues::step_onto(st, building, level, here, target) {
+                    crate::venues::Meets::Held(why) => {
+                        st.warn(why);
+                        return Some(ScreenCmd::Stay);
+                    }
+                    crate::venues::Meets::Through(line) => {
+                        if let Some(line) = line {
+                            st.say(line);
+                        }
+                        return None;
+                    }
+                    crate::venues::Meets::Nothing => {}
+                }
+                let (_, floor) = st.interiors.floor(building, level)?;
                 let room = floor
                     .door_of(target)
                     .filter(|r| {
@@ -2458,7 +2477,10 @@ impl MapScreen {
                         });
                     let mut what = r.kind.label().to_string();
                     if r.number > 0 {
-                        what = format!("{what} {}", r.number);
+                        // A venue room by its label: B1-04 below the street.
+                        let number = crate::credentials::venue_door(st, building, level, r.number)
+                            .unwrap_or_else(|| r.number.to_string());
+                        what = format!("{what} {number}");
                     }
                     let (whose, lit) = match &owner {
                         Some(name) => (format!("{name}'s {what}"), format!("`{name}`'s {what}")),
@@ -2469,7 +2491,7 @@ impl MapScreen {
                             st.warn(format!("locked · {whose}"));
                             return Some(ScreenCmd::Stay);
                         }
-                        Some(How::Cracked) => {}
+                        Some(How::Cracked | How::Free) => {}
                         Some(How::Keycard) => st.say(format!("{lit} · the keycard opens it")),
                         Some(How::Code(c)) => st.say(format!("{lit} · you key in {c:04}")),
                     }

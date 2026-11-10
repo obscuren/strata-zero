@@ -319,21 +319,76 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
                         .is_some_and(|t| t.terrain != Terrain::Door && !t.is_building_part()))
         })
         .ok_or("the way out is blocked")?;
-    // Where you are entering: the district on the street, the kind of way elsewhere.
-    let onto = match exit.stratum {
-        StratumKind::Street => city
-            .tile(exit.stratum, landing)
-            .and_then(|t| t.district)
-            .map_or_else(
-                || "the `STREET`".to_string(),
-                |d| format!("`{}`", city.district(d).name),
-            ),
+    let onto = onto(city, exit.stratum, landing);
+    land(st, Place::Stratum(exit.stratum), landing);
+    Ok(format!("Entering {onto}"))
+}
+
+/// Where you come out onto at tile `at` of stratum `k`, as a log line names it: the
+/// district on the street, the kind of way elsewhere.
+fn onto(city: &City, k: StratumKind, at: Pos) -> String {
+    match k {
+        StratumKind::Street => city.tile(k, at).and_then(|t| t.district).map_or_else(
+            || "the `STREET`".to_string(),
+            |d| format!("`{}`", city.district(d).name),
+        ),
         StratumKind::Skyways => "the `WALKWAY`".to_string(),
         StratumKind::Heights => "the `ROOF`".to_string(),
         StratumKind::Undercity => "the `TUNNEL`".to_string(),
         StratumKind::Net => "the `GRID`".to_string(),
+    }
+}
+
+/// Crawls in through crawl `way` of building `b` from the city tile you stand on, outside
+/// it, onto its grille inside; the floor is generated if this is its first visit. The
+/// grille wants a crawler.
+pub fn crawl_in(st: &mut AppState, b: BuildingId, way: usize) -> Result<String, String> {
+    if st.net.engaged.is_some() {
+        return Err("not now".to_string());
+    }
+    if !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
+    let city = st.city.as_ref().ok_or("no city")?;
+    let w = (st.interiors.plan(city, b))
+        .and_then(|plan| plan.crawls.get(way))
+        .copied()
+        .ok_or("no crawl here")?;
+    let here = st.player.as_ref().map(|p| (p.place, p.pos));
+    if here != Some((Place::Stratum(w.stratum), w.outside)) {
+        return Err("no crawl here".to_string());
+    }
+    st.interiors
+        .ensure(city, b, w.level)
+        .ok_or("that floor is missing")?;
+    let name = building_name(city, b);
+    crate::credentials::prepare(st, b);
+    land(
+        st,
+        Place::Floor {
+            building: b,
+            level: w.level,
+        },
+        w.at,
+    );
+    Ok(format!("Crawling into `{name}`"))
+}
+
+/// Crawls out through the grille under the player, onto the city tile it comes in from.
+pub fn crawl_out(st: &mut AppState) -> Result<String, String> {
+    let Some((Place::Floor { building, level }, pos)) =
+        st.player.as_ref().map(|p| (p.place, p.pos))
+    else {
+        return Err("no crawl here".to_string());
     };
-    land(st, Place::Stratum(exit.stratum), landing);
+    let w = (st.interiors.plan_of(building))
+        .and_then(|plan| Some(plan.crawls[crate::venues::crawl_way_at(plan, level, pos)?]))
+        .ok_or("no crawl here")?;
+    if !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
+    let onto = onto(st.city.as_ref().ok_or("no city")?, w.stratum, w.outside);
+    land(st, Place::Stratum(w.stratum), w.outside);
     Ok(format!("Entering {onto}"))
 }
 
@@ -349,7 +404,8 @@ fn link_under(st: &mut AppState, b: BuildingId) -> Option<(i32, usize, FloorPlan
 }
 
 /// Rides the lift under the player to a floor it stops at: the player steps out at its
-/// bank there.
+/// bank there. A stop that asks for a zone card, where you board or where you ride to,
+/// wants the deeper of the two.
 pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
     let (here, link, plan) = link_under(st, b)
         .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
@@ -363,6 +419,13 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     if !st.net.lifts_answer(b, now) {
         return Err("lifts locked down".to_string());
     }
+    let card = crate::venues::ride_card(&plan, link, here, level);
+    if crate::credentials::opens_stop(st, b, card).is_none() {
+        return Err(format!(
+            "the lift wants a {} card",
+            crate::venues::zone_name(&plan, card)
+        ));
+    }
     let city = st.city.as_ref().ok_or("no city")?;
     st.interiors
         .ensure(city, b, level)
@@ -373,7 +436,7 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
 }
 
 /// Takes the stair, escalator, ladder or crawl under the player to its next stop up or
-/// down, landing on its landing there.
+/// down, landing on its landing there. A crawl wants a crawler.
 pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     let b = match st.player.as_ref().map(|p| p.place) {
         Some(Place::Floor { building, .. }) => building,
@@ -389,6 +452,9 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     let (level, link, plan) = link_under(st, b)
         .filter(|(_, link, plan)| plan.links[*link].kind != LinkKind::Lift)
         .ok_or_else(nothing)?;
+    if plan.links[link].kind == LinkKind::Crawl && !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
     let (next, at) = plan
         .next_stop(link, level, up)
         .and_then(|next| Some((next, plan.links[link].stop(next)?.at)))

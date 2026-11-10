@@ -7,6 +7,7 @@ use crate::render::map::{MapRef, TileMap};
 use crate::render::mark::{mark_items, mark_person, mark_tile};
 use crate::ui::chrome::{DIM, TEXT, frame, put, solid};
 use crate::ui::hud::capitalised;
+use citygen::venue::LockKind;
 use citygen::{
     City, ConnectorKind, Feature, FloorPlan, LinkKind, Place, Pos, Rect as TileRect, StratumKind,
     Terrain, Tile,
@@ -196,6 +197,33 @@ fn fixture_at(
                 });
             }
             let (plan, floor) = st.interiors.floor(building, level)?;
+            // A venue's lock: whether it opens for you from where you stand.
+            if let Some(lock) = floor.lock_at(pos) {
+                let from = (st.player.as_ref())
+                    .filter(|p| p.place == place)
+                    .map_or(lock.at, |p| p.pos);
+                let state = match crate::credentials::opens_lock(st, building, level, lock, from) {
+                    Some(_) => "unlocked",
+                    None => "locked",
+                };
+                let reader = match lock.kind {
+                    LockKind::Card => "card",
+                    LockKind::Keypad => "keypad",
+                    LockKind::Grille => "grille",
+                };
+                return Some(Fixture {
+                    name: capitalised(&crate::venues::lock_label(plan, lock)),
+                    second: Some(format!("{reader} · {state}")),
+                    key: "zone_door",
+                });
+            }
+            if crate::venues::grille_at(plan, level, pos) {
+                return Some(Fixture {
+                    name: "Grille".into(),
+                    second: Some(format!("a crawl, Tech {}", crate::venues::crawl_tech())),
+                    key: "grille",
+                });
+            }
             if let Some(r) = floor
                 .door_of(pos)
                 .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
@@ -248,7 +276,8 @@ fn fixture_at(
                     LinkKind::Lift => "lift",
                     LinkKind::Stair => "stairwell",
                     LinkKind::Escalator => "escalator",
-                    LinkKind::Ladder | LinkKind::Crawl => "ladder",
+                    LinkKind::Ladder => "ladder",
+                    LinkKind::Crawl => "grille",
                 },
             })
         }

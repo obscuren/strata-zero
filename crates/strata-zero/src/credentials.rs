@@ -1,11 +1,12 @@
-//! Credentials: keycards in the pack, door codes in the journal, and the one
-//! question a locked flat asks. Cards are items; codes are knowledge; the Net's
-//! lock crack is still the third way in.
+//! Credentials: keycards in the pack (a flat's, or a venue zone's), door codes in the
+//! journal, and the question a locked flat, a zone lock or a carded lift stop asks. Cards
+//! are items; codes are knowledge; the Net's lock crack is still the third way in.
 
 use crate::app::AppState;
-use citygen::{BuildingId, Place, Pos, Role};
+use citygen::venue::Ways;
+use citygen::{BuildingId, DoorLock, Place, Pos, Role};
 use game::{Item, ItemId, ItemKind};
-use sim::HouseholdId;
+use sim::{HouseholdId, OccupantRole};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The player's own front-door card.
@@ -51,6 +52,30 @@ pub struct Mail {
     pub job: Option<crate::jobs::JobId>,
     /// The story step whose mail this is: reading it ends that step.
     pub story: Option<crate::runs::ids::StepRef>,
+}
+
+/// A zone's card for a venue: `keycard:{b}:zone{z}`. Run-made, so saved with the run.
+pub fn zone_card_id(b: BuildingId, zone: u8) -> ItemId {
+    ItemId::new(&format!("keycard:{}:zone{zone}", b.index()))
+}
+
+/// The building and zone a zone card opens for, if the item is one.
+pub fn parse_zone_card(id: &ItemId) -> Option<(BuildingId, u8)> {
+    let rest = id.0.strip_prefix("keycard:")?;
+    let (b, z) = rest.split_once(':')?;
+    Some((
+        BuildingId(b.parse().ok()?),
+        z.strip_prefix("zone")?.parse().ok()?,
+    ))
+}
+
+/// The deepest zone card for `b` in the pack.
+pub fn zone_card_held(st: &AppState, b: BuildingId) -> Option<u8> {
+    (st.character.inventory.iter())
+        .filter_map(|s| parse_zone_card(&s.item))
+        .filter(|(cb, _)| *cb == b)
+        .map(|(_, z)| z)
+        .max()
 }
 
 /// The room number a building's street doors share one code under; no room has it.
@@ -185,6 +210,23 @@ impl Journal {
     }
 }
 
+/// "{zone} door" for a lock number; a venue room's number reads its `room_label` ("B1-04",
+/// not "flat 9104"); any other number, `flat_label`.
+pub fn door_label(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
+    venue_door(st, b, level, number).unwrap_or_else(|| flat_label(st, b, level, number))
+}
+
+/// What a venue's door is called by its number, as the session has the building's plan: a
+/// lock's "{zone} door", a room's `room_label`; None for any other number.
+pub fn venue_door(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<String> {
+    if let Some(label) = crate::venues::lock_name(st, b, level, number) {
+        return Some(label);
+    }
+    let x = st.interiors.plan_of(b)?.venue.as_deref()?.level(level)?;
+    (number > 0 && x.rooms.iter().any(|r| r.number == number))
+        .then(|| citygen::venue::room_label(number))
+}
+
 /// "Mara Voss's flat 1204", or "flat 1204" with nobody named.
 pub fn flat_label(st: &AppState, b: BuildingId, level: i32, number: u16) -> String {
     match owner_name(st, b, level, number) {
@@ -252,7 +294,7 @@ fn open(
     });
     let label = match owner_name(st, b, level, number) {
         Some(n) => format!("`{n}`'s flat {number}"),
-        None => format!("flat {number}"),
+        None => door_label(st, b, level, number),
     };
     st.say(format!("{label} · the keypad reads OPEN"));
     Verdict::Open
@@ -302,6 +344,8 @@ pub enum How {
     Cracked,
     Keycard,
     Code(u16),
+    /// No key asked: a one-way lock from its free side, a lift stop with no card.
+    Free,
 }
 
 /// Whether the player gets through this flat's door, and how: the Net's lock crack,
@@ -325,6 +369,46 @@ pub fn opens(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<Ho
     st.journal
         .code_for(b, level, number)
         .map(|c| How::Code(c.code))
+}
+
+/// Whether the player gets through a zone lock stepping from `from`, and how: free from its
+/// free side, the Net's lock crack (a lock with Net), a zone card at its zone or deeper
+/// (Card), the journal's code (Code), in that order.
+pub fn opens_lock(
+    st: &AppState,
+    b: BuildingId,
+    level: i32,
+    lock: &DoorLock,
+    from: Pos,
+) -> Option<How> {
+    if lock.free_from == Some(from) {
+        return Some(How::Free);
+    }
+    if lock.ways.has(Ways::NET) && st.net.unlocked(b, st.net.now(st)) {
+        return Some(How::Cracked);
+    }
+    if lock.ways.has(Ways::CARD) && zone_card_held(st, b).is_some_and(|z| z >= lock.zone) {
+        return Some(How::Keycard);
+    }
+    if !lock.ways.has(Ways::CODE) {
+        return None;
+    }
+    st.journal
+        .code_for(b, level, lock.number)
+        .map(|c| How::Code(c.code))
+}
+
+/// A lift stop's card: none asked, the Net's crack, or a zone card at `card` or deeper.
+pub fn opens_stop(st: &AppState, b: BuildingId, card: u8) -> Option<How> {
+    if card == 0 {
+        return Some(How::Free);
+    }
+    if st.net.unlocked(b, st.net.now(st)) {
+        return Some(How::Cracked);
+    }
+    zone_card_held(st, b)
+        .filter(|z| *z >= card)
+        .map(|_| How::Keycard)
 }
 
 /// A keycard's catalogue entry.
@@ -387,13 +471,43 @@ pub fn stock(st: &mut AppState, b: BuildingId) {
     }
 }
 
-/// Everything a residential building needs once the player can reach it: its homes,
-/// its keycards in the catalogue, and the lost card in its lobby.
+/// Puts a venue's zone cards in the catalogue, once: "Keycard · {building}, {zone}", one
+/// for each zone above public.
+pub fn stock_zone_cards(st: &mut AppState, b: BuildingId) {
+    let Some(zones) = (st.interiors.plan_of(b))
+        .and_then(|p| p.venue.as_deref())
+        .map(|v| v.zones.clone())
+    else {
+        return;
+    };
+    let building = crate::net::building_name(st, b);
+    for (z, zone) in zones.iter().enumerate().skip(1) {
+        let id = zone_card_id(b, z as u8);
+        if st.content.item(&id).is_some() {
+            continue;
+        }
+        st.content.items.push(card(
+            id,
+            format!("Keycard · {building}, {zone}"),
+            format!(
+                "A plastic rectangle with a chip and a lanyard, {building} printed on it \
+                 and {zone} under that. It opens the {zone} doors and lifts there, and \
+                 every door a lesser card would."
+            ),
+        ));
+    }
+}
+
+/// Everything a building needs once the player can reach it: a venue's zone cards in the
+/// catalogue, and for a residential one its homes, its keycards in the catalogue and the
+/// lost card in its lobby.
 pub fn prepare(st: &mut AppState, b: BuildingId) {
     let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_ref()) else {
         return;
     };
-    if !st.interiors.ensure_homes(city, world, b) {
+    let lived_in = st.interiors.ensure_homes(city, world, b);
+    stock_zone_cards(st, b);
+    if !lived_in {
         return;
     }
     stock(st, b);
@@ -462,22 +576,46 @@ pub fn drop_lost_card(st: &mut AppState, b: BuildingId) {
     st.journal.lost_cards.insert(b);
 }
 
-/// What a person has on them: their flat's keycard, unless it is the lost one.
+/// What a person has on them: their flat's keycard, unless it is the lost one, and at
+/// work in a venue the card of the zone they stand in.
 pub fn carries(st: &AppState, person: sim::PersonId) -> Vec<ItemId> {
-    let Some(world) = st.world.as_ref() else {
-        return Vec::new();
-    };
-    let p = &world.people()[person.0 as usize];
-    let Some(b) = p.home else {
-        return Vec::new();
-    };
-    let Some(homes) = st.interiors.homes_of(b) else {
-        return Vec::new();
-    };
+    home_card(st, person)
+        .into_iter()
+        .chain(staff_card(st, person))
+        .collect()
+}
+
+/// A person's flat's keycard, unless it is the lost one.
+fn home_card(st: &AppState, person: sim::PersonId) -> Option<ItemId> {
+    let p = st.world.as_ref()?.people().get(person.0 as usize)?;
+    let b = p.home?;
+    let homes = st.interiors.homes_of(b)?;
     if homes.flat_of(p.household).is_none() || lost_household(st, b) == Some(p.household) {
-        return Vec::new();
+        return None;
     }
-    vec![keycard_id(b, p.household)]
+    Some(keycard_id(b, p.household))
+}
+
+/// The zone card of a person at work in a venue: the zone of the room they stand in, above
+/// public.
+fn staff_card(st: &AppState, person: sim::PersonId) -> Option<ItemId> {
+    let world = st.world.as_ref()?;
+    let sim::Whereabouts::Inside(b) = world.people().get(person.0 as usize)?.whereabouts else {
+        return None;
+    };
+    let working =
+        (world.inside(b).iter()).any(|o| o.id == person && o.role == OccupantRole::Working);
+    if !working {
+        return None;
+    }
+    let (Place::Floor { building, level }, pos) = crate::interiors::drawn_at(st, person)? else {
+        return None;
+    };
+    let plan = crate::interiors::plan_now(st, building)?;
+    plan.venue.as_ref()?;
+    let floor = crate::interiors::floor_now(st, &plan, level)?;
+    let zone = floor.room_at(pos)?.zone;
+    (zone > 0).then(|| zone_card_id(building, zone))
 }
 
 /// A server copy on a residential building: every flat's code into the journal.
@@ -626,6 +764,9 @@ fn door_of(st: &AppState, c: &Code) -> String {
     let building = || crate::net::building_name(st, c.building);
     if c.number == STREET_DOOR {
         return format!("`{}`, street door", building());
+    }
+    if let Some(label) = crate::venues::lock_name(st, c.building, c.level, c.number) {
+        return format!("`{}`, {label}", building());
     }
     let room = st
         .interiors
