@@ -933,6 +933,9 @@ impl Content {
             if drawn {
                 return Err(bad("the item has a drawing of its own".into()));
             }
+            if !item.sockets.is_empty() {
+                return Err(bad("a picture places no sockets".into()));
+            }
             picture_ok(art).map_err(bad)?;
         }
         Ok(())
@@ -3058,7 +3061,16 @@ mod tests {
         };
         assert!(c.validate().is_ok());
         let art = c.picture(&jacket).unwrap().clone();
-        for on in ["origami", "ratchet_smg", "keyjack", "pawnshop_deck", "hushcan"] {
+        let on = [
+            "origami",
+            "ratchet_smg",
+            "keyjack",
+            "pawnshop_deck",
+            "hushcan",
+            "sticker_neko",
+            "grip_arm",
+        ];
+        for on in on {
             let mut stray = c.clone();
             stray.pictures.insert(ItemId::new(on), art.clone());
             assert!(invalid(&stray), "a picture on {on}");
