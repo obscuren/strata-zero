@@ -8,7 +8,7 @@ use crate::messages::Kind;
 use crate::screens::explore::MapScreen;
 use crate::screens::popup::{Pick, WorldAct};
 use crate::screens::testutil::key;
-use citygen::venue::{LOCK_NUMBERS, Ways, room_label};
+use citygen::venue::{LOCK_NUMBERS, WayInKind, Ways, room_label};
 use citygen::{BuildingKind, City, Floor, GenParams, Generator, Place, SizePreset};
 use crossterm::event::KeyCode;
 
@@ -686,4 +686,99 @@ fn a_lock_door_and_a_grille_say_what_they_are() {
     assert_eq!(card.header.as_deref(), Some("Grille"));
     assert_eq!(card.second, Some(format!("a crawl, Tech {}", crawl_tech())));
     assert_eq!(card.body.len(), 1, "a line of its own");
+}
+
+/// The first building of the first venue type's kind with a locked way in from the roof,
+/// planned: the building, the roof's city-map door, and the lock's level and lock.
+fn locked_roof_door(st: &mut AppState) -> (BuildingId, Pos, i32, DoorLock) {
+    let city = st.city.clone().unwrap();
+    let kind = VenuePack::builtin().types[0].builds[0];
+    (city.buildings.iter())
+        .filter(|x| x.kind == kind)
+        .find_map(|x| {
+            let v = st.interiors.plan(&city, x.id)?.venue.as_deref()?;
+            v.ways_in.iter().find_map(|w| match w.kind {
+                WayInKind::Door {
+                    stratum: StratumKind::Heights,
+                    door,
+                } => Some((x.id, door, w.level, w.lock?)),
+                _ => None,
+            })
+        })
+        .expect("a locked way in from the roof")
+}
+
+#[test]
+fn a_locked_way_in_holds_from_the_street_side_only() {
+    let mut st = state();
+    let (b, door, level, lock) = locked_roof_door(&mut st);
+    let zone = zone_name(plan(&st, b), lock.zone);
+    let roof = Place::Stratum(StratumKind::Heights);
+    put(&mut st, roof, door);
+    assert_eq!(
+        crate::interiors::enter(&mut st, b, (StratumKind::Heights, door)),
+        Err(format!("locked · {zone} door"))
+    );
+    assert_eq!(at(&st), (roof, door), "still on the roof");
+    let card = zone_card_id(b, lock.zone);
+    st.character.give(card.clone(), 1);
+    assert_eq!(
+        crate::interiors::enter(&mut st, b, (StratumKind::Heights, door)),
+        Ok(format!("{zone} door · the keycard opens it"))
+    );
+    let inside = Place::Floor { building: b, level };
+    assert_eq!(at(&st), (inside, lock.free_from.unwrap()));
+    // Out through it from inside needs nothing.
+    st.character.inventory.retain(|s| s.item != card);
+    step_onto_from(&mut st, inside, lock.free_from.unwrap(), lock.at);
+    assert_eq!(at(&st).0, roof);
+    assert!(!warned(&st));
+}
+
+#[test]
+fn the_track_takes_no_door_in_that_stays_shut() {
+    use crate::track::{Target, route};
+    let mut st = state();
+    let (b, door, _, lock) = locked_roof_door(&mut st);
+    let city = st.city.clone().unwrap();
+    let roof = Place::Stratum(StratumKind::Heights);
+    let beside = (door.neighbors4())
+        .find(|n| {
+            city.walkable(StratumKind::Heights, *n)
+                && city.tile(StratumKind::Heights, *n).unwrap().terrain != citygen::Terrain::Door
+        })
+        .expect("roof beside the door");
+    put(&mut st, roof, beside);
+    let target = Target::Building(b);
+    assert!(
+        route::leg(&st, target).map_or(true, |l| l.goal != door),
+        "not to the shut door"
+    );
+    st.character.give(zone_card_id(b, lock.zone), 1);
+    let leg = route::leg(&st, target).unwrap();
+    assert_eq!((leg.goal, leg.through), (door, route::Through::Door(b)));
+}
+
+#[test]
+fn standing_on_a_crawls_tile_lays_its_venue_out_once() {
+    let mut st = state();
+    let city = st.city.clone().unwrap();
+    let (b, w) = (city.buildings.iter())
+        .find_map(|x| {
+            let plan = FloorPlan::new(&city, x.id)?;
+            let w = *plan.crawls.first()?;
+            Some((x.id, w))
+        })
+        .expect("a venue with a crawl in");
+    assert!(st.interiors.plan_of(b).is_none(), "not planned yet");
+    put(&mut st, Place::Stratum(w.stratum), w.outside);
+    let mut s = MapScreen::walking(&mut st);
+    s.update(&mut st, &[]);
+    let first: *const FloorPlan = st.interiors.plan_of(b).expect("kept on the first frame");
+    s.update(&mut st, &[]);
+    assert!(
+        std::ptr::eq(first, st.interiors.plan_of(b).unwrap()),
+        "borrowed on the next"
+    );
+    assert_eq!(crawl_in_at(&st, w.stratum, w.outside), Some((b, 0)));
 }

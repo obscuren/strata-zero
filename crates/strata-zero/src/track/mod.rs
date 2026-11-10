@@ -289,15 +289,17 @@ pub fn tick(st: &mut AppState) {
     }
 }
 
-/// Keeps the plan of the building whose floor the target is on, so the next beat's
-/// `locate` borrows it instead of making it again: a venue's plan is a whole layout.
+/// Keeps the plan of the building the target is in or on a floor of, so the next beat's
+/// `locate` and the doors in borrow it instead of making it again: a venue's plan is a
+/// whole layout.
 fn keep_plan(st: &mut AppState) {
-    let Some(Target::Spot {
-        place: Place::Floor { building, .. },
-        ..
-    }) = st.track.as_ref().map(|t| t.walk.target)
-    else {
-        return;
+    let building = match st.track.as_ref().map(|t| t.walk.target) {
+        Some(Target::Spot {
+            place: Place::Floor { building, .. },
+            ..
+        })
+        | Some(Target::Building(building)) => building,
+        _ => return,
     };
     if let Some(city) = st.city.as_ref() {
         st.interiors.plan(city, building);

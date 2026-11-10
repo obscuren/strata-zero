@@ -1,11 +1,12 @@
 //! Venues in play: the Tech a crawl's grille wants, the grilles on a floor and the crawls
 //! in from the city, what a lock's number names, what a step onto a venue's door or grille
-//! meets, and how far a walk across a level gets past what the player can open now.
+//! meets, which doors in from the city stay shut to you, and how far a walk across a level
+//! gets past what the player can open now.
 
 use crate::app::AppState;
 use crate::credentials::{self, How};
-use citygen::venue::{LockKind, VenueFrame, VenueLayout, VenuePack};
-use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Pos, StratumKind};
+use citygen::venue::{LockKind, VenueFrame, VenueLayout, VenuePack, WayInKind};
+use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind};
 use std::collections::VecDeque;
 
 /// The Tech a crawl's grille wants.
@@ -38,28 +39,89 @@ pub fn grille_at(plan: &FloorPlan, level: i32, p: Pos) -> bool {
         || crawl_way_at(plan, level, p).is_some()
 }
 
+/// The closed buildings whose footprint holds or touches the city tile `p`, and whether a
+/// crawl may come in from `p` on `k` to each: a building the session has planned may, and
+/// an unplanned one only when a venue type builds its kind and its frame has a crawl there.
+fn crawl_candidates(
+    st: &AppState,
+    k: StratumKind,
+    p: Pos,
+) -> impl Iterator<Item = (BuildingId, bool)> + '_ {
+    let city = st.city.as_ref();
+    let pack = VenuePack::builtin();
+    (city.into_iter())
+        .flat_map(|c| c.buildings.iter())
+        .filter(move |b| b.kind.is_closed() && b.footprint.grow(1).contains(p))
+        .filter_map(move |b| {
+            if st.interiors.plan_of(b.id).is_some() {
+                return Some((b.id, true));
+            }
+            pack.for_kind(b.kind)?;
+            let frame = VenueFrame::of_building(city?, b.id)?;
+            (frame.crawls.iter())
+                .any(|c| c.stratum == k && c.outside == p)
+                .then_some((b.id, false))
+        })
+}
+
 /// The crawl in from the city tile `p` on stratum `k`: the closed building whose footprint
 /// holds or touches the tile and has one there, and which of its plan's crawls it is. A
 /// building the session hasn't planned is planned for it only when a venue type builds
 /// its kind and its frame has a crawl on that tile.
 pub fn crawl_in_at(st: &AppState, k: StratumKind, p: Pos) -> Option<(BuildingId, usize)> {
-    let city = st.city.as_ref()?;
-    let pack = VenuePack::builtin();
-    city.buildings
+    crawl_candidates(st, k, p).find_map(|(b, _)| {
+        let plan = crate::interiors::plan_now(st, b)?;
+        let way = (plan.crawls.iter()).position(|c| c.stratum == k && c.outside == p)?;
+        Some((b, way))
+    })
+}
+
+/// Keeps the plan of the building whose crawl comes in from the city tile you stand on, so
+/// Space and Look there borrow it instead of laying the venue out every frame.
+pub fn keep_crawl_plan(st: &mut AppState) {
+    let Some((Place::Stratum(k), p)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+        return;
+    };
+    let unplanned: Vec<BuildingId> = (crawl_candidates(st, k, p))
+        .filter(|(_, planned)| !planned)
+        .map(|(b, _)| b)
+        .collect();
+    if let Some(city) = st.city.as_ref() {
+        for b in unplanned {
+            st.interiors.plan(city, b);
+        }
+    }
+}
+
+/// The lock on the way in through the city-map door `door` on stratum `k` into building
+/// `b`, and the level it stands on; a building of a kind no venue type builds has none.
+pub fn way_in_lock(
+    st: &AppState,
+    b: BuildingId,
+    k: StratumKind,
+    door: Pos,
+) -> Option<(i32, DoorLock)> {
+    let kind = st.city.as_ref()?.building_opt(b)?.kind;
+    VenuePack::builtin().for_kind(kind)?;
+    let plan = crate::interiors::plan_now(st, b)?;
+    plan.venue
+        .as_deref()?
+        .ways_in
         .iter()
-        .filter(|b| b.kind.is_closed() && b.footprint.grow(1).contains(p))
-        .find_map(|b| {
-            if st.interiors.plan_of(b.id).is_none() {
-                pack.for_kind(b.kind)?;
-                let frame = VenueFrame::of_building(city, b.id)?;
-                if !(frame.crawls.iter()).any(|c| c.stratum == k && c.outside == p) {
-                    return None;
-                }
+        .find_map(|w| match w.kind {
+            WayInKind::Door { stratum, door: d } if stratum == k && d == door => {
+                Some((w.level, w.lock?))
             }
-            let plan = crate::interiors::plan_now(st, b.id)?;
-            let way = (plan.crawls.iter()).position(|c| c.stratum == k && c.outside == p)?;
-            Some((b.id, way))
+            _ => None,
         })
+}
+
+/// Whether the city-map door `door` on `k` into building `b` stays shut to you from the
+/// city: a way in whose lock doesn't open for you now.
+pub fn door_shut(st: &AppState, b: BuildingId, k: StratumKind, door: Pos) -> bool {
+    way_in_lock(st, b, k, door).is_some_and(|(level, lock)| {
+        credentials::opens_lock(st, b, level, &lock, lock.at).is_none()
+    })
 }
 
 /// A zone's name in a venue's plan: "staff". A plan with no layout has no zones.
@@ -117,6 +179,27 @@ pub enum Meets {
     Held(String),
 }
 
+/// What `lock` on `level` of `plan`'s building meets coming from tile `from`: it asks
+/// `credentials::opens_lock`, and says how it opened or that it holds.
+pub fn meets_lock(
+    st: &AppState,
+    plan: &FloorPlan,
+    level: i32,
+    lock: &DoorLock,
+    from: Pos,
+) -> Meets {
+    let label = lock_label(plan, lock);
+    match credentials::opens_lock(st, plan.building, level, lock, from) {
+        None => Meets::Held(match lock.kind {
+            LockKind::Keypad => format!("locked · {label}, keypad"),
+            _ => format!("locked · {label}"),
+        }),
+        Some(How::Keycard) => Meets::Through(Some(format!("{label} · the keycard opens it"))),
+        Some(How::Code(c)) => Meets::Through(Some(format!("{label} · you key in {c:04}"))),
+        Some(How::Cracked | How::Free) => Meets::Through(None),
+    }
+}
+
 /// What a step from `here` onto `target` on `level` of building `b` meets: a lock's door
 /// asks `credentials::opens_lock` from `here`, and a grille wants a crawler.
 pub fn step_onto(st: &AppState, b: BuildingId, level: i32, here: Pos, target: Pos) -> Meets {
@@ -124,16 +207,7 @@ pub fn step_onto(st: &AppState, b: BuildingId, level: i32, here: Pos, target: Po
         return Meets::Nothing;
     };
     if let Some(lock) = floor.lock_at(target) {
-        let label = lock_label(plan, lock);
-        return match credentials::opens_lock(st, b, level, lock, here) {
-            None => Meets::Held(match lock.kind {
-                LockKind::Keypad => format!("locked · {label}, keypad"),
-                _ => format!("locked · {label}"),
-            }),
-            Some(How::Keycard) => Meets::Through(Some(format!("{label} · the keycard opens it"))),
-            Some(How::Code(c)) => Meets::Through(Some(format!("{label} · you key in {c:04}"))),
-            Some(How::Cracked | How::Free) => Meets::Through(None),
-        };
+        return meets_lock(st, plan, level, lock, here);
     }
     if grille_at(plan, level, target) {
         return if can_crawl(st) {

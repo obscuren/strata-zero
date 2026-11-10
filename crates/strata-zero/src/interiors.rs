@@ -265,7 +265,8 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
 }
 
 /// Walks the player through a closed building's door on the city map, onto the
-/// doorstep inside; the floor is generated if this is its first visit.
+/// doorstep inside; the floor is generated if this is its first visit. A venue's way in
+/// into a deep zone asks its lock from the city side, as a step onto it does inside.
 pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
@@ -295,12 +296,25 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
         .copied()
         .ok_or("no way in here")?;
     let step = floor.doorstep(&exit);
+    let lock = floor.lock_at(exit.at).copied();
+    // From the city side: never its free side, which is the doorstep inside.
+    let opened = match (lock, st.interiors.plan_of(b)) {
+        (Some(lock), Some(plan)) => {
+            match crate::venues::meets_lock(st, plan, level, &lock, lock.at) {
+                crate::venues::Meets::Held(why) => return Err(why),
+                crate::venues::Meets::Through(line) => line,
+                crate::venues::Meets::Nothing => None,
+            }
+        }
+        _ => None,
+    };
     let name = building_name(city, b);
     crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, step);
-    Ok(match keyed {
-        Some(code) => format!("you key in {code:04}"),
-        None => format!("Entering `{name}`"),
+    Ok(match (keyed, opened) {
+        (Some(code), _) => format!("you key in {code:04}"),
+        (None, Some(line)) => line,
+        (None, None) => format!("Entering `{name}`"),
     })
 }
 

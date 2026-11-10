@@ -174,7 +174,7 @@ fn lead_on(st: &AppState, map: &MapRef, k: StratumKind, from: Pos, aim: Aim) -> 
         let found = if inside {
             Some((Vec::new(), from))
         } else {
-            towards(map, from, &goals_on(map, aim, k), true, &[])
+            towards(map, from, &goals_on(st, map, aim, k), true, &[])
         };
         if let Some((path, goal)) = found {
             return Some(Leg {
@@ -193,8 +193,8 @@ fn lead_on(st: &AppState, map: &MapRef, k: StratumKind, from: Pos, aim: Aim) -> 
 }
 
 /// The third way on from a stratum, off a rooftop with no ladder: the nearest closed
-/// building's door on `k` you can walk to whose building has another door that leads
-/// on. You go in and come out that way.
+/// building's door on `k` you can walk to and open whose building has another door that
+/// leads on. You go in and come out that way.
 fn through_a_building(
     st: &AppState,
     map: &MapRef,
@@ -229,6 +229,9 @@ fn through_a_building(
     doors.sort_by_key(|(d, p, _)| (*d, *p));
     let mut fields: Vec<(StratumKind, Grid<u32>)> = Vec::new();
     for (_, door, b) in doors {
+        if crate::venues::door_shut(st, b, k, door) {
+            continue;
+        }
         let others = city.portals(b).into_iter().filter(|w| *w != (k, door));
         let on = others.into_iter().any(|(s, q)| {
             if !fields.iter().any(|(x, _)| *x == s) {
@@ -263,8 +266,8 @@ fn spot_goals(ok: impl Fn(Pos) -> bool, pos: Pos, radius: i32) -> Vec<Pos> {
 }
 
 /// Where a walk on stratum `k` ends for an aim: the tile (or beside it), a building's
-/// doors there, or the tiles beside a walk-in.
-fn goals_on(map: &MapRef, aim: Aim, k: StratumKind) -> Vec<Pos> {
+/// doors there but those that stay shut to you, or the tiles beside a walk-in.
+fn goals_on(st: &AppState, map: &MapRef, aim: Aim, k: StratumKind) -> Vec<Pos> {
     let city = map.city();
     match aim {
         Aim::Tile { k: at, pos, radius } if at == k => {
@@ -282,7 +285,7 @@ fn goals_on(map: &MapRef, aim: Aim, k: StratumKind) -> Vec<Pos> {
         Aim::Building(b) => city
             .portals(b)
             .into_iter()
-            .filter(|(s, _)| *s == k)
+            .filter(|(s, p)| *s == k && !crate::venues::door_shut(st, b, k, *p))
             .map(|(_, p)| p)
             .collect(),
     }
@@ -605,7 +608,7 @@ fn ends(aim: Aim, k: StratumKind) -> Vec<Pos> {
 fn onward_field(st: &AppState, city: &City, j: StratumKind, t: StratumKind, aim: Aim) -> Grid<u32> {
     let map = MapRef::stratum_at(city, j, st.minute_of_day());
     let sources: Vec<Pos> = match toward(j, t) {
-        _ if j == t => goals_on(&map, aim, j),
+        _ if j == t => goals_on(st, &map, aim, j),
         Some(n) => {
             let on = onward_field(st, city, n, t, aim);
             links(city, j, n).filter(|p| reached(&on, *p)).collect()
@@ -621,7 +624,7 @@ fn lead_field(st: &AppState, city: &City, k: StratumKind, aim: Aim) -> Grid<u32>
     let map = MapRef::stratum_at(city, k, st.minute_of_day());
     let strata = strata_of(city, aim);
     let mut sources = if strata.contains(&k) {
-        goals_on(&map, aim, k)
+        goals_on(st, &map, aim, k)
     } else {
         Vec::new()
     };
@@ -1683,6 +1686,17 @@ mod tests {
             .collect();
         put(&mut st, HEIGHTS, here.beside());
         let there = spot(STREET, outside);
+        // A venue's roof door is a way in to a deep zone: shut without its card.
+        assert_eq!(leg(&st, there), Err(NoLeg::NoWay));
+        let city = st.city.clone().unwrap();
+        for &b in &on_it {
+            let zones =
+                (st.interiors.plan(&city, b)).and_then(|p| Some(p.venue.as_ref()?.zones.len()));
+            if let Some(n) = zones {
+                let card = crate::credentials::zone_card_id(b, (n - 1) as u8);
+                st.character.give(card, 1);
+            }
+        }
         let leg = leg(&st, there).unwrap();
         let Through::Door(b) = leg.through else {
             panic!("{leg:?}")
