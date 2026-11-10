@@ -1,8 +1,8 @@
 //! A venue's layout: its levels, laid out stage by stage from a type, a frame and a seed.
 
-use super::{PieceKind, Spine, VenueFrame, VenueType, levels, rooms, zones};
+use super::{PieceKind, Spine, VenueFrame, VenueType, levels, links, rooms, zones};
 use crate::geom::{Pos, Rect, Size};
-use crate::interior::{DoorLock, Role, RoomKind};
+use crate::interior::{DoorLock, LevelLink, Role, RoomKind};
 use crate::rng::hash64;
 use crate::tile::Furniture;
 use rand::SeedableRng;
@@ -22,6 +22,8 @@ pub struct VenueLayout {
     pub zones: Vec<String>,
     /// Lowest first.
     pub levels: Vec<LevelLayout>,
+    /// The links between its levels, in the type's order, each named from its def.
+    pub links: Vec<LevelLink>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,10 +133,12 @@ pub fn lay_out(t: &VenueType, frame: VenueFrame, seed: u64) -> Result<VenueLayou
         frame,
         zones: t.zones.clone(),
         levels: Vec::new(),
+        links: Vec::new(),
     };
     levels::place(t, &mut layout, &mut rng(levels::STAGE))?;
     zones::lay(t, &mut layout, &mut rng(zones::STAGE))?;
     rooms::lay(t, &mut layout, &mut rng(rooms::STAGE))?;
+    links::lay(t, &mut layout, &mut rng(links::STAGE))?;
     Ok(layout)
 }
 

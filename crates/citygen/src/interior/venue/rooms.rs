@@ -717,16 +717,7 @@ impl<'a> Stage<'a> {
     /// in for one that isn't free, none reserved, by a door, in the core or on a piece.
     /// A room with none of those free takes the free tile nearest its centre.
     fn spots(&mut self) {
-        let near = self.near_doors();
-        let core = self.x.core;
-        let pieces: Vec<Rect> = self.x.pieces.iter().map(|p| p.rect).collect();
-        let reserved = &self.reserved;
-        let free = |p: Pos| {
-            !reserved.contains(&p)
-                && !near.contains(&p)
-                && !core.is_some_and(|c| c.contains(p))
-                && !pieces.iter().any(|r| r.contains(p))
-        };
+        let taken = Taken::of(self.x);
         for r in &mut self.x.rooms {
             let inner = r.rect.inset(1);
             r.spots.clear();
@@ -747,16 +738,56 @@ impl<'a> Stage<'a> {
                     tiles.push(p);
                 }
             }
-            r.spots = tiles.into_iter().filter(|p| free(*p)).take(4).collect();
+            r.spots = tiles
+                .into_iter()
+                .filter(|p| taken.free(*p))
+                .take(4)
+                .collect();
             if r.spots.is_empty() {
-                let centre = inner.center();
-                r.spots.extend(
-                    inner
-                        .iter()
-                        .filter(|p| free(*p))
-                        .min_by_key(|p| (p.manhattan(centre), p.y, p.x)),
-                );
+                r.spots.extend(taken.nearest(r.rect));
             }
         }
+    }
+}
+
+/// What keeps a tile of a level from being a spot: reserved, a door or beside one, in
+/// the core, or on a piece.
+pub(super) struct Taken {
+    reserved: BTreeSet<Pos>,
+    near: BTreeSet<Pos>,
+    core: Option<Rect>,
+    pieces: Vec<Rect>,
+}
+
+impl Taken {
+    pub(super) fn of(x: &LevelLayout) -> Taken {
+        Taken {
+            reserved: x.reserved.iter().copied().collect(),
+            near: x
+                .doors
+                .iter()
+                .flat_map(|d| std::iter::once(d.at).chain(d.at.neighbors4()))
+                .collect(),
+            core: x.core,
+            pieces: x.pieces.iter().map(|p| p.rect).collect(),
+        }
+    }
+
+    /// Whether `p` can be a spot.
+    pub(super) fn free(&self, p: Pos) -> bool {
+        !self.reserved.contains(&p)
+            && !self.near.contains(&p)
+            && !self.core.is_some_and(|c| c.contains(p))
+            && !self.pieces.iter().any(|r| r.contains(p))
+    }
+
+    /// The free tile of a room's floor inset by 1 nearest its centre.
+    pub(super) fn nearest(&self, room: Rect) -> Option<Pos> {
+        let inner = room.inset(1);
+        let centre = inner.center();
+        inner
+            .iter()
+            .filter(|p| self.free(*p))
+            .min_by_key(|p| (p.manhattan(centre), p.y, p.x))
     }
 }
