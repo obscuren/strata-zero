@@ -1,7 +1,9 @@
 //! The ways-in stage: the frame's doors and crawls as the layout's ways in.
 //!
 //! A frame door on a level the layout has is that level's exit, coming into the room that
-//! holds its doorstep; one on a level it lacks is barred. The roof door stands on the
+//! holds its doorstep; one on a level it lacks is barred. A door into a zone above public,
+//! but the main street door (the frame's first), is locked as the border into that zone,
+//! always, and one-way: a way out without a key. The roof door stands on the
 //! floor east of a landing, its doorstep: east of a stair that kept the tile free, else
 //! east of another landing, else on the free floor nearest the level's first landing
 //! with free floor of its room west of it. Each of the type's crawls in from a stratum
@@ -18,9 +20,10 @@
 use super::links::{reserve, zone_on};
 use super::rooms::Taken;
 use super::zones::inward;
-use super::{LevelLayout, VenueLayout, VenueType, WayIn, WayInKind};
+use super::{LOCK_NUMBERS, LevelLayout, VenueLayout, VenueType, WayIn, WayInKind, Ways};
 use crate::geom::Pos;
-use crate::interior::{Exit, FloorPlan, LinkKind};
+use crate::interior::{DoorLock, Exit, FloorPlan, LinkKind};
+use crate::world::StratumKind;
 use rand_chacha::ChaCha8Rng;
 use std::collections::BTreeSet;
 
@@ -41,7 +44,8 @@ pub(super) fn lay(
     for x in &mut layout.levels {
         x.exits.clear();
     }
-    for d in layout.frame.doors.clone() {
+    let main = (layout.frame.doors.iter()).position(|d| d.stratum == StratumKind::Street);
+    for (k, d) in layout.frame.doors.clone().into_iter().enumerate() {
         let Some(i) = layout.levels.iter().position(|x| x.level == d.level) else {
             layout.barred.push((d.stratum, d.door));
             continue;
@@ -65,6 +69,12 @@ pub(super) fn lay(
         if d.at.is_none() {
             reserve(x, &[at]);
         }
+        let zone = x.rooms[room].zone;
+        let lock = if zone > 0 && Some(k) != main {
+            Some(door_lock(t, x, &layout.ways_in, zone, at, step)?)
+        } else {
+            None
+        };
         x.exits.push(Exit {
             at,
             stratum: d.stratum,
@@ -79,6 +89,7 @@ pub(super) fn lay(
                 stratum: d.stratum,
                 door: d.door,
             },
+            lock,
         });
     }
     for c in &t.crawls_in {
@@ -108,9 +119,44 @@ pub(super) fn lay(
                 stratum: c.stratum,
                 outside: f.outside,
             },
+            lock: None,
         });
     }
     Ok(())
+}
+
+/// The lock on a door at `at` on `x` into `zone`, above public: the type's border into
+/// the zone from the next shallower zone with one, one-way, opening from the doorstep
+/// `step` without a key, numbered on from the level's zone locks and the locks of the
+/// doors laid before it (`ways`).
+fn door_lock(
+    t: &VenueType,
+    x: &LevelLayout,
+    ways: &[WayIn],
+    zone: u8,
+    at: Pos,
+    step: Pos,
+) -> Result<DoorLock, String> {
+    let name = &t.zones[usize::from(zone)];
+    let b = (0..zone)
+        .rev()
+        .find_map(|z| t.border(z, zone))
+        .ok_or_else(|| format!("{}: no border into `{name}`", t.id))?;
+    let before = (ways.iter())
+        .filter(|w| w.level == x.level)
+        .filter_map(|w| w.lock);
+    let last = (x.doors.iter().filter_map(|d| d.fit))
+        .chain(before)
+        .map(|l| l.number)
+        .max();
+    Ok(DoorLock {
+        at,
+        number: last.map_or(LOCK_NUMBERS, |n| n + 1),
+        zone,
+        kind: b.lock,
+        ways: Ways::of(&b.ways),
+        free_from: Some(step),
+    })
 }
 
 /// The floor tile an exit at `at` steps into: in from the frame wall, or west of a door
@@ -129,6 +175,8 @@ fn doorstep(x: &LevelLayout, at: Pos) -> Pos {
 struct Open<'a> {
     x: &'a LevelLayout,
     taken: BTreeSet<Pos>,
+    /// The doors and the doorsteps in from the frame wall, and the tiles beside them.
+    by_doors: BTreeSet<Pos>,
 }
 
 impl<'a> Open<'a> {
@@ -136,17 +184,22 @@ impl<'a> Open<'a> {
     fn of(layout: &'a VenueLayout, i: usize) -> Open<'a> {
         let x = &layout.levels[i];
         let inner = x.size.rect().inset(1);
-        let steps = (layout.frame.doors.iter())
+        let steps: Vec<Pos> = (layout.frame.doors.iter())
             .filter(|d| d.level == x.level)
             .filter_map(|d| d.at)
-            .map(|at| inward(inner, at));
+            .map(|at| inward(inner, at))
+            .collect();
+        let doors = x.doors.iter().map(|d| d.at);
         let taken = (x.exits.iter().map(|e| e.at))
-            .chain(steps)
-            .chain(x.doors.iter().map(|d| d.at))
+            .chain(steps.iter().copied())
+            .chain(doors.clone())
             .chain(x.rooms.iter().flat_map(|r| r.spots.iter().copied()))
             .chain(layout.links.iter().flat_map(|k| k.tiles(x.level)))
             .collect();
-        Open { x, taken }
+        let by_doors = (steps.into_iter().chain(doors))
+            .flat_map(|p| std::iter::once(p).chain(p.neighbors4()))
+            .collect();
+        Open { x, taken, by_doors }
     }
 
     fn free(&self, p: Pos) -> bool {
@@ -181,8 +234,9 @@ fn roof_door(layout: &VenueLayout, i: usize) -> Option<Pos> {
 }
 
 /// Where a crawl in comes out on level `i`, and its room: the open floor nearest `near` of
-/// a room of `zone` that anyone may enter, clear of the reserved tiles and the tiles
-/// beside a door where the zone has such floor.
+/// a room of `zone` that anyone may enter, never beside a door or a doorstep, and clear of
+/// the reserved tiles where the zone has such floor (else beside a landing or the roof
+/// door).
 fn grille(layout: &VenueLayout, i: usize, zone: u8, near: Pos) -> Option<(usize, Pos)> {
     let x = &layout.levels[i];
     let (open, clear) = (Open::of(layout, i), Taken::of(x));
@@ -190,7 +244,7 @@ fn grille(layout: &VenueLayout, i: usize, zone: u8, near: Pos) -> Option<(usize,
         (x.rooms.iter().enumerate())
             .filter(|(_, r)| r.zone == zone && !r.private)
             .flat_map(|(i, r)| r.rect.iter().map(move |p| (i, p)))
-            .filter(|(_, p)| open.free(*p))
+            .filter(|(_, p)| open.free(*p) && !open.by_doors.contains(p))
     };
     let nearest = |(_, p): &(usize, Pos)| (p.manhattan(near), p.y, p.x);
     (floor().filter(|(_, p)| clear.free(*p)).min_by_key(nearest))
@@ -202,8 +256,8 @@ mod tests {
     use crate::geom::Pos;
     use crate::interior::venue::testutil::{cities, crowded, medium, test_type};
     use crate::interior::venue::{
-        LevelLayout, Serves, VenueFrame, VenueLayout, VenuePack, VenueType, WayIn, WayInKind,
-        lay_out,
+        LOCK_NUMBERS, LevelLayout, Serves, VenueFrame, VenueLayout, VenuePack, VenueType, WayIn,
+        WayInKind, Ways, lay_out,
     };
     use crate::interior::{Exit, LinkKind};
     use crate::world::{BuildingKind, StratumKind};
@@ -441,10 +495,30 @@ mod tests {
         }
     }
 
+    /// Whether `p` is a planned door on `x` or beside one; `open`: doorless joins count.
+    fn by_door(x: &LevelLayout, p: Pos, open: bool) -> bool {
+        (x.doors.iter())
+            .filter(|d| open || !d.open)
+            .any(|d| d.at == p || d.at.neighbors4().any(|n| n == p))
+    }
+
+    /// Whether a grille may stand on `p`: free floor, on no exit, off the doors and the
+    /// tiles beside them, and off the tiles beside a doorstep in from the frame wall.
+    fn grille_floor(l: &VenueLayout, x: &LevelLayout, p: Pos) -> bool {
+        let inner = x.size.rect().inset(1);
+        let steps = (x.exits.iter())
+            .filter(|e| !inner.contains(e.at))
+            .map(|e| doorstep(x, e.at));
+        free_floor(l, x, p)
+            && !x.exits.iter().any(|e| e.at == p)
+            && !by_door(x, p, true)
+            && !steps.into_iter().any(|s| s.neighbors4().any(|n| n == p))
+    }
+
     /// Each of the type's crawls in from a stratum the frame has a crawl from comes in on
     /// that crawl's level when the layout has it, onto free floor of a room of its zone
-    /// that anyone may enter, or not at all where the zone has none. The ways in it lays,
-    /// and how many it leaves out.
+    /// that anyone may enter, never beside a door, or not at all where the zone has no
+    /// floor for it. The ways in it lays, and how many it leaves out.
     fn assert_crawls(what: &str, t: &VenueType, l: &VenueLayout) -> (usize, usize) {
         let crawls: Vec<&WayIn> = (l.ways_in.iter())
             .filter(|w| matches!(w.kind, WayInKind::Crawl { .. }))
@@ -469,7 +543,7 @@ mod tests {
                 let floor = (x.rooms.iter())
                     .filter(|r| r.zone == zone && !r.private)
                     .flat_map(|r| r.rect.iter())
-                    .find(|p| free_floor(l, x, *p) && !x.exits.iter().any(|e| e.at == *p));
+                    .find(|p| grille_floor(l, x, *p));
                 assert_eq!(floor, None, "{what}: no crawl in from {:?}", c.stratum);
                 none += 1;
                 continue;
@@ -487,6 +561,7 @@ mod tests {
             assert!(r.rect.contains(w.at), "{what}: {w:?} out of {}", r.name);
             assert!(free_floor(l, x, w.at), "{what}: the grille on {:?}", w.at);
             assert!(!x.exits.iter().any(|e| e.at == w.at), "{what}: {w:?}");
+            assert!(!by_door(x, w.at, false), "{what}: {w:?} beside a door");
             let beside = w.at.neighbors4().filter(|p| free_floor(l, x, *p));
             for p in std::iter::once(w.at).chain(beside) {
                 assert!(x.reserved.contains(&p), "{what}: {p:?} by the grille");
@@ -510,14 +585,111 @@ mod tests {
                 "{what}"
             );
         }
-        // Elsewhere a crawl in is left out only where its zone has no floor for it: a few
-        // of the smallest buildings, laid out as a type that doesn't build them.
-        let (mut laid, mut none) = (0, 0);
+        // Every type over its own frame and the buildings of its kinds lays every crawl in;
+        // one is left out only where a building of a kind the type doesn't build has no
+        // floor for it in its zone.
+        let mut laid = 0;
         for (what, t, l) in sweep() {
-            let (a, b) = assert_crawls(&what, &t, &l);
-            (laid, none) = (laid + a, none + b);
+            let (a, none) = assert_crawls(&what, &t, &l);
+            laid += a;
+            let foreign = l.frame.building.is_some() && !t.builds.contains(&l.frame.kind);
+            assert!(foreign || none == 0, "{what}: {none} crawls in left out");
         }
-        assert!(none * 10 < laid, "{none} crawls in left out, {laid} laid");
+        assert!(laid > 0);
+    }
+
+    /// The zone a door way in comes into, and whether it is the frame's main street door
+    /// (its first street door).
+    fn door_zone(l: &VenueLayout, w: &WayIn) -> Option<(u8, bool)> {
+        let WayInKind::Door { stratum, door } = w.kind else {
+            return None;
+        };
+        let main = (l.frame.doors.iter()).find(|d| d.stratum == StratumKind::Street);
+        let main = main.is_some_and(|d| (d.stratum, d.door) == (stratum, door));
+        Some((l.level(w.level).unwrap().rooms[w.room].zone, main))
+    }
+
+    /// The lock a door into `zone` above public carries: the border into it from the next
+    /// shallower zone with one, at the door, one-way from its doorstep.
+    fn assert_door_lock(what: &str, t: &VenueType, l: &VenueLayout, w: &WayIn, zone: u8) {
+        let x = l.level(w.level).unwrap();
+        let b = (0..zone)
+            .rev()
+            .find_map(|z| t.border(z, zone))
+            .unwrap_or_else(|| panic!("{what}: no border into {zone}"));
+        let lock = w
+            .lock
+            .unwrap_or_else(|| panic!("{what}: {w:?} into {zone} is open"));
+        let want = (w.at, zone, b.lock, Ways::of(&b.ways));
+        assert_eq!((lock.at, lock.zone, lock.kind, lock.ways), want, "{what}");
+        assert_eq!(lock.free_from, Some(doorstep(x, w.at)), "{what}: {w:?}");
+    }
+
+    #[test]
+    fn a_hotels_roof_door_into_a_deep_zone_is_locked_but_from_inside() {
+        let t = VenuePack::builtin().for_kind(BuildingKind::Hotel).unwrap();
+        for seed in 0..6 {
+            let what = format!("seed {seed}");
+            let l = lay_out(t, VenueFrame::own(t), seed).unwrap();
+            let roof = (l.ways_in.iter())
+                .find(|w| matches!(w.kind, WayInKind::Door { stratum, .. } if stratum == StratumKind::Heights))
+                .unwrap_or_else(|| panic!("{what}: no roof door"));
+            let (zone, _) = door_zone(&l, roof).unwrap();
+            assert!(zone > 0, "{what}: the roof door comes into public");
+            assert_door_lock(&what, t, &l, roof, zone);
+        }
+    }
+
+    #[test]
+    fn a_door_into_public_carries_no_lock() {
+        let mut open = 0;
+        for (what, _, l) in sweep() {
+            for w in &l.ways_in {
+                match door_zone(&l, w) {
+                    Some((0, _)) => {
+                        open += 1;
+                        assert_eq!(w.lock, None, "{what}: {w:?}");
+                    }
+                    Some((_, true)) => assert_eq!(w.lock, None, "{what}: the main door {w:?}"),
+                    None => assert_eq!(w.lock, None, "{what}: the crawl {w:?}"),
+                    Some(_) => {}
+                }
+            }
+        }
+        assert!(open > 0);
+    }
+
+    #[test]
+    fn every_other_door_into_a_deep_zone_carries_its_borders_lock() {
+        let mut locked = 0;
+        for (what, t, l) in sweep() {
+            for w in &l.ways_in {
+                if let Some((zone, false)) = door_zone(&l, w)
+                    && zone > 0
+                {
+                    locked += 1;
+                    assert_door_lock(&what, &t, &l, w, zone);
+                }
+            }
+            // Its number follows the level's zone locks, one apart from every other.
+            for x in &l.levels {
+                let zones = x.doors.iter().filter_map(|d| d.fit).map(|f| f.number);
+                let doors = (l.ways_in.iter())
+                    .filter(|w| w.level == x.level)
+                    .filter_map(|w| w.lock)
+                    .map(|k| k.number);
+                let mut numbers: Vec<u16> = zones.chain(doors).collect();
+                let all = numbers.len();
+                assert!(numbers.iter().all(|n| *n >= LOCK_NUMBERS), "{what}");
+                numbers.sort();
+                numbers.dedup();
+                assert_eq!(numbers.len(), all, "{what}: level {}", x.level);
+                if let Some(last) = numbers.last() {
+                    assert_eq!(*last as usize, LOCK_NUMBERS as usize + all - 1, "{what}");
+                }
+            }
+        }
+        assert!(locked > 0);
     }
 
     #[test]

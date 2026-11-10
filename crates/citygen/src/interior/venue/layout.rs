@@ -70,6 +70,12 @@ pub struct WayIn {
     /// The floor tile: an exit's door, or a crawl's grille.
     pub at: Pos,
     pub kind: WayInKind,
+    /// The lock on the door itself, at `at`, where it comes into a zone above public
+    /// (but the main street door): the type's border into that zone from the next
+    /// shallower zone with one, locked in the plain building too, and one-way, opening
+    /// from its doorstep without a key. It numbers on from the level's zone locks. None
+    /// for a door into public, and for a crawl, whose grille is its own lock.
+    pub lock: Option<DoorLock>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
