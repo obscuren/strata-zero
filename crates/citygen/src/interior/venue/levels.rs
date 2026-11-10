@@ -38,7 +38,9 @@ pub(super) fn roles(t: &VenueType, top: i32) -> Vec<(i32, &LevelDef)> {
 
 /// Places the type's roles onto the frame's floors. A level at or above -1 is the
 /// frame's size; one below it is its role's `scale` of the frame, growing east and
-/// south. Each keeps its role's spine, for the zones stage to lay.
+/// south. Each keeps its role's spine, for the zones stage to lay. A frame that doesn't
+/// reach the Undercity gets the below roles all the same: its -1 has no Undercity door
+/// and no tunnel crawl, so nothing comes in below the street.
 pub(super) fn place(
     t: &VenueType,
     layout: &mut VenueLayout,
@@ -65,6 +67,7 @@ pub(super) fn place(
             pieces: Vec::new(),
             core: None,
             reserved: Vec::new(),
+            exits: Vec::new(),
         })
         .collect();
     Ok(())

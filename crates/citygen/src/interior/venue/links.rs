@@ -109,7 +109,7 @@ pub(super) fn lay(
         for (j, &k) in laid.iter().enumerate() {
             let (i, at) = (served[k], at[k].expect("a laid stop"));
             let x = &mut layout.levels[i];
-            reserve(x, def.kind, at);
+            reserve(x, &landing(def.kind, at));
             held[i].taken.extend(landing(def.kind, at));
             if grounds[k].roof {
                 roofed.insert(x.level);
@@ -165,7 +165,7 @@ fn serves(def: &LinkDef, x: &LevelLayout) -> bool {
 
 /// The zone a stop asking for `want` lands in on `x`: `want` when the level has it, else
 /// the next deeper zone it has, else its deepest.
-fn zone_on(x: &LevelLayout, want: u8) -> u8 {
+pub(super) fn zone_on(x: &LevelLayout, want: u8) -> u8 {
     let has: BTreeSet<u8> = x.bands.iter().map(|b| b.zone).collect();
     if has.contains(&want) {
         return want;
@@ -207,13 +207,12 @@ fn floor(x: &LevelLayout, p: Pos) -> bool {
         && !x.pieces.iter().any(|q| q.rect.contains(p))
 }
 
-/// Reserves a landing of `kind` at `at` on `x` and the floor beside it, and takes the
-/// spots there from their rooms. A room left with no spot takes the free tile nearest its
-/// centre, as the rooms stage gives one.
-fn reserve(x: &mut LevelLayout, kind: LinkKind, at: Pos) {
-    let near: BTreeSet<Pos> = landing(kind, at)
-        .into_iter()
-        .flat_map(|p| std::iter::once(p).chain(p.neighbors4()))
+/// Reserves `tiles` on `x` (a landing, a roof door, a grille) and the floor beside them,
+/// and takes the spots there from their rooms. A room left with no spot takes the free
+/// tile nearest its centre, as the rooms stage gives one.
+pub(super) fn reserve(x: &mut LevelLayout, tiles: &[Pos]) {
+    let near: BTreeSet<Pos> = (tiles.iter())
+        .flat_map(|p| std::iter::once(*p).chain(p.neighbors4()))
         .filter(|p| floor(x, *p))
         .collect();
     let mut reserved: BTreeSet<Pos> = x.reserved.iter().copied().collect();
@@ -414,55 +413,20 @@ fn escalate(grounds: &[Ground], rng: &mut ChaCha8Rng) -> Result<Vec<Pos>, usize>
 
 #[cfg(test)]
 mod tests {
-    use super::super::{levels, rooms, zones};
-    use super::{STAGE, lay};
     use crate::geom::Pos;
-    use crate::interior::venue::testutil::test_type;
+    use crate::interior::venue::testutil::{crowded, test_type};
     use crate::interior::venue::{
-        Alight, LevelLayout, LinkDef, LinkDir, PlannedRoom, Serves, VenueFrame, VenueLayout,
-        VenuePack, VenueType, lay_out,
+        Alight, LevelLayout, LinkDef, LinkDir, Serves, VenueFrame, VenueLayout, VenuePack,
+        VenueType, lay_out,
     };
     use crate::interior::{FloorPlan, LevelLink, LinkKind};
-    use crate::rng::hash64;
     use crate::world::StratumKind;
-    use rand::SeedableRng;
-    use rand_chacha::ChaCha8Rng;
     use std::collections::BTreeSet;
 
     fn layouts(t: &VenueType) -> Vec<(u64, VenueLayout)> {
         (0..20)
             .map(|s| (s, lay_out(t, VenueFrame::own(t), s).unwrap()))
             .collect()
-    }
-
-    /// `t` over its own frame from `seed`, laid as `lay_out` lays it, but with every room
-    /// on `level` that `shut` picks made private before the links, so no landing stands
-    /// in it.
-    fn crowded(
-        t: &VenueType,
-        seed: u64,
-        level: i32,
-        shut: impl Fn(&PlannedRoom) -> bool,
-    ) -> Result<VenueLayout, String> {
-        let rng = |stage: u64| ChaCha8Rng::seed_from_u64(hash64(seed, stage));
-        let mut l = VenueLayout {
-            type_id: t.id.clone(),
-            type_name: t.name.clone(),
-            seed,
-            frame: VenueFrame::own(t),
-            zones: t.zones.clone(),
-            levels: Vec::new(),
-            links: Vec::new(),
-        };
-        levels::place(t, &mut l, &mut rng(levels::STAGE))?;
-        zones::lay(t, &mut l, &mut rng(zones::STAGE))?;
-        rooms::lay(t, &mut l, &mut rng(rooms::STAGE))?;
-        let x = l.levels.iter_mut().find(|x| x.level == level).unwrap();
-        for r in x.rooms.iter_mut().filter(|r| shut(r)) {
-            r.private = true;
-        }
-        lay(t, &mut l, &mut rng(STAGE))?;
-        Ok(l)
     }
 
     /// The levels of `l` that `def` serves, lowest first.

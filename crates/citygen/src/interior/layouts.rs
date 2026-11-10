@@ -1,7 +1,7 @@
 //! Floor layouts: the frame every floor shares, then one builder per floor type.
 
 use super::floor::{Exit, Floor, Role, Room, RoomKind, Station};
-use super::plan::{FloorPlan, FloorType, SCALE};
+use super::plan::{FloorPlan, FloorType, LinkKind, SCALE};
 use crate::geom::{Pos, Rect, Size};
 use crate::lighting;
 use crate::pathing::{bfs_nearest, components};
@@ -241,11 +241,8 @@ impl<'a> Builder<'a> {
         for door in doors {
             let (at, landing) = if stratum == StratumKind::Heights {
                 // The roof door: a stair-house door beside the stairwell, landing on
-                // the roof's door tile. No stairwell, no stair-house.
-                let Some(stair) = self.plan.stair_on(self.level) else {
-                    continue;
-                };
-                (stair.offset(1, 0), door)
+                // the roof's door tile.
+                (self.roof_door(), door)
             } else {
                 (exit_tile(self.plan, door), outward(fp, door))
             };
@@ -305,6 +302,24 @@ impl<'a> Builder<'a> {
             self.doorsteps.push(step);
             self.exits.push(exit);
         }
+    }
+
+    /// Where the roof door stands, its doorstep west of it: east of the stairwell. With no
+    /// stair on the roof, east of the first other landing of one tile (a ladder's), else
+    /// east of where the stairwell stands beside the lift bank, the tile south of its
+    /// west tile, else of the anchor, so the door keeps clear of the walls a floor
+    /// lays around its shafts.
+    fn roof_door(&self) -> Pos {
+        let level = self.level;
+        let shaft = (self.plan.links.iter())
+            .filter(|l| l.kind != LinkKind::Lift)
+            .find_map(|l| l.stop(level))
+            .map(|s| s.at);
+        let well = shaft.unwrap_or_else(|| match self.plan.lift_on(level) {
+            Some(lift) => lift.offset(0, 1),
+            None => self.plan.anchor(level),
+        });
+        well.offset(1, 0)
     }
 
     /// On a clinic floor, where a door other than the front door may step in: plain

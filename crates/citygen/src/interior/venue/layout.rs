@@ -1,10 +1,11 @@
 //! A venue's layout: its levels, laid out stage by stage from a type, a frame and a seed.
 
-use super::{PieceKind, Spine, VenueFrame, VenueType, levels, links, rooms, zones};
+use super::{PieceKind, Spine, VenueFrame, VenueType, levels, links, rooms, ways, zones};
 use crate::geom::{Pos, Rect, Size};
-use crate::interior::{DoorLock, LevelLink, Role, RoomKind};
+use crate::interior::{DoorLock, Exit, LevelLink, Role, RoomKind};
 use crate::rng::hash64;
 use crate::tile::Furniture;
+use crate::world::StratumKind;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,12 @@ pub struct VenueLayout {
     pub levels: Vec<LevelLayout>,
     /// The links between its levels, in the type's order, each named from its def.
     pub links: Vec<LevelLink>,
+    /// The ways in from the city: an exit for each frame door on a level it has, in the
+    /// frame's order, then a grille for each of the type's crawls in that reaches a level
+    /// it has, in the type's order.
+    pub ways_in: Vec<WayIn>,
+    /// The frame's doors on levels it doesn't have, shut: (stratum, city-map door).
+    pub barred: Vec<(StratumKind, Pos)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +52,33 @@ pub struct LevelLayout {
     /// The solid block a `Ring` spine runs round, inside its band's spine room: no room,
     /// door, spot or landing uses it, and drawing walls it.
     pub core: Option<Rect>,
-    /// Tiles that take no wall, furniture or spot: doorsteps, landings and beside them.
+    /// Tiles that take no wall, furniture or spot: doorsteps, landings, the roof door, crawl
+    /// grilles and beside them.
     pub reserved: Vec<Pos>,
+    /// Its doors to the city, in the frame's order: each in the frame wall, but the roof
+    /// door, which stands on the floor east of a landing, its doorstep.
+    pub exits: Vec<Exit>,
+}
+
+/// A way in from the city: a door, or a crawl's grille.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WayIn {
+    pub level: i32,
+    /// The room it comes into, by index in the level's rooms: the one holding a door's
+    /// doorstep, or the grille.
+    pub room: usize,
+    /// The floor tile: an exit's door, or a crawl's grille.
+    pub at: Pos,
+    pub kind: WayInKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WayInKind {
+    /// The level's exit through the city-map door `door` onto `stratum`.
+    Door { stratum: StratumKind, door: Pos },
+    /// A crawl in from the city tile `outside` on `stratum`. Its grille is a lock only a
+    /// crawler passes.
+    Crawl { stratum: StratumKind, outside: Pos },
 }
 
 /// A band's strip of a level. A band behind another holds the wall between them as its
@@ -134,11 +166,14 @@ pub fn lay_out(t: &VenueType, frame: VenueFrame, seed: u64) -> Result<VenueLayou
         zones: t.zones.clone(),
         levels: Vec::new(),
         links: Vec::new(),
+        ways_in: Vec::new(),
+        barred: Vec::new(),
     };
     levels::place(t, &mut layout, &mut rng(levels::STAGE))?;
     zones::lay(t, &mut layout, &mut rng(zones::STAGE))?;
     rooms::lay(t, &mut layout, &mut rng(rooms::STAGE))?;
     links::lay(t, &mut layout, &mut rng(links::STAGE))?;
+    ways::lay(t, &mut layout, &mut rng(ways::STAGE))?;
     Ok(layout)
 }
 

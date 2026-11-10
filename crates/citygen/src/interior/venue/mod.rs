@@ -8,6 +8,7 @@ mod levels;
 mod links;
 mod rooms;
 mod types;
+mod ways;
 mod zones;
 
 pub use frame::*;

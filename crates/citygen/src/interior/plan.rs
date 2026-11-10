@@ -55,7 +55,8 @@ pub struct FloorPlan {
     /// The building's floors, the lowest first: from -1 with a basement, else from 0.
     pub levels: Vec<i32>,
     /// Which stratum each level with doors opens onto: the tunnel from -1, the street
-    /// from 0, the bridge floor onto the skyways, the top floor onto the roof.
+    /// from 0, the bridge floor onto the skyways, the top floor onto the roof. Each floor
+    /// listed has a door there.
     pub doors: Vec<LevelDoor>,
     /// How you move between levels.
     pub links: Vec<LevelLink>,
@@ -212,9 +213,15 @@ impl From<FloorPlanRead> for FloorPlan {
             r.levels
         };
         let doors = if r.doors.is_empty() {
+            // These saves don't say whether the city put a door by the basement: it opens
+            // onto the tunnel, as they read it then.
             let lowest = levels.first().copied().unwrap_or(0);
             let top = levels.last().copied().unwrap_or(0);
-            classic_doors(lowest, r.bridge, r.roof.then_some(top))
+            classic_doors(
+                (lowest == -1).then_some(-1),
+                r.bridge,
+                r.roof.then_some(top),
+            )
         } else {
             r.doors
         };
@@ -240,15 +247,14 @@ impl From<FloorPlanRead> for FloorPlan {
     }
 }
 
-/// The doors of a building whose lowest floor is `lowest`: the tunnel from a basement,
-/// the street from the ground floor, the skyways from the `bridge` floor and the roof
-/// from the `roof` floor.
-fn classic_doors(lowest: i32, bridge: Option<i32>, roof: Option<i32>) -> Vec<LevelDoor> {
+/// The doors of a building: the tunnel from the `tunnel` floor (its basement), the street
+/// from the ground floor, the skyways from the `bridge` floor and the roof from the
+/// `roof` floor.
+fn classic_doors(tunnel: Option<i32>, bridge: Option<i32>, roof: Option<i32>) -> Vec<LevelDoor> {
     let door = |level, stratum| LevelDoor { level, stratum };
-    let mut doors = Vec::new();
-    if lowest == -1 {
-        doors.push(door(-1, StratumKind::Undercity));
-    }
+    let mut doors: Vec<LevelDoor> = (tunnel.map(|l| door(l, StratumKind::Undercity)))
+        .into_iter()
+        .collect();
     doors.push(door(0, StratumKind::Street));
     doors.extend(bridge.map(|l| door(l, StratumKind::Skyways)));
     doors.extend(roof.map(|l| door(l, StratumKind::Heights)));
@@ -414,11 +420,11 @@ impl FloorPlan {
         };
         let cellar = clinic.is_some_and(|c| c.front.floors() == 2);
         let (lowest, top) = draw_storeys(b, cellar, &mut rng);
-        let has_bridge = city
-            .portals(id)
-            .iter()
-            .any(|(k, _)| *k == StratumKind::Skyways);
-        let bridge = has_bridge.then(|| bridge_level(top));
+        // A basement opens onto the tunnel, and a floor onto the skyways, only where the
+        // city put a door to it.
+        let has_door = |k: StratumKind| city.portals(id).iter().any(|(s, _)| *s == k);
+        let tunnel = (lowest == -1 && has_door(StratumKind::Undercity)).then_some(-1);
+        let bridge = has_door(StratumKind::Skyways).then(|| bridge_level(top));
         let roof = (b.span.hi == StratumKind::Heights).then_some(top);
         let total = top - lowest + 1;
         let (w, h) = (size.w as i32, size.h as i32);
@@ -464,7 +470,7 @@ impl FloorPlan {
             theme: city.district(b.district).theme,
             footprint: fp,
             size,
-            doors: classic_doors(lowest, bridge, roof),
+            doors: classic_doors(tunnel, bridge, roof),
             links: classic_links(&levels, lift, (total >= 2).then_some(stair)),
             levels,
             atrium,

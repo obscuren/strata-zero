@@ -21,8 +21,9 @@ pub fn generate_floor(city: &City, plan: &FloorPlan, level: i32) -> Floor {
 }
 
 /// The rules every floor keeps: one walkable piece that holds the shafts and the
-/// doorsteps, exits that are doors on the border with a clear doorstep, locked
-/// rooms with a door, nothing standing where people must pass.
+/// doorsteps, a door onto each stratum the plan says the floor opens onto, exits that
+/// are doors on the border with a clear doorstep, locked rooms with a door, nothing
+/// standing where people must pass.
 pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
     let size = floor.tiles.size();
     if size != plan.size {
@@ -55,6 +56,15 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
                     floor.level
                 ));
             }
+        }
+    }
+    // Each stratum the plan says the level's doors open onto has a door here.
+    for d in plan.doors.iter().filter(|d| d.level == floor.level) {
+        if !floor.exits.iter().any(|e| e.stratum == d.stratum) {
+            return Err(format!(
+                "floor {} has no door onto the {:?}",
+                floor.level, d.stratum
+            ));
         }
     }
     let frame = size.rect();
@@ -127,11 +137,15 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
             ));
         }
     }
-    // Every exit reaches a landing without crossing a locked room.
+    // Every exit reaches a landing without crossing a locked room: the roof door's
+    // doorstep is one.
     let landings = plan.landings(floor.level);
     if !landings.is_empty() {
         for e in &floor.exits {
             let step = floor.doorstep(e);
+            if landings.contains(&step) {
+                continue;
+            }
             let reached = crate::pathing::bfs_nearest(
                 size,
                 step,
@@ -280,7 +294,17 @@ mod tests {
             let plan = FloorPlan::classic(&c, b.id).unwrap();
             let bytes = rmp_serde::to_vec_named(&OldPlan::of(&plan)).unwrap();
             let back: FloorPlan = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(back, plan, "{:?}", b.id);
+            // An old save doesn't say whether the city put a door by the basement: its
+            // basement opens onto the tunnel.
+            let mut want = plan.clone();
+            if plan.lowest() == -1 && plan.door_level(StratumKind::Undercity).is_none() {
+                let tunnel = LevelDoor {
+                    level: -1,
+                    stratum: StratumKind::Undercity,
+                };
+                want.doors.insert(0, tunnel);
+            }
+            assert_eq!(back, want, "{:?}", b.id);
             let again: FloorPlan =
                 rmp_serde::from_slice(&rmp_serde::to_vec_named(&plan).unwrap()).unwrap();
             assert_eq!(again, plan);
@@ -410,14 +434,13 @@ mod tests {
             let plan = FloorPlan::classic(&c, b.id).unwrap();
             assert_eq!(plan.door_stratum(0), Some(StratumKind::Street));
             assert_eq!(plan.door_level(StratumKind::Street), Some(0));
+            let has = |k: StratumKind| c.portals(b.id).iter().any(|(s, _)| *s == k);
+            // A basement opens onto the tunnel only where the city put a door to it.
             assert_eq!(
                 plan.door_level(StratumKind::Undercity),
-                (plan.lowest() == -1).then_some(-1)
+                (plan.lowest() == -1 && has(StratumKind::Undercity)).then_some(-1)
             );
-            let skyways = c
-                .portals(b.id)
-                .iter()
-                .any(|(k, _)| *k == StratumKind::Skyways);
+            let skyways = has(StratumKind::Skyways);
             assert_eq!(plan.door_level(StratumKind::Skyways).is_some(), skyways);
             assert_eq!(
                 plan.door_level(StratumKind::Heights),
@@ -670,6 +693,65 @@ mod tests {
         }
         assert!(cellar.rooms.iter().any(|r| r.kind == RoomKind::Storage));
         assert!(cellar.stations.iter().any(|s| s.role == Role::Shelf));
+    }
+
+    #[test]
+    fn a_roof_no_stair_reaches_keeps_its_door_beside_a_landing() {
+        let c = city();
+        let towers = c
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed() && b.span.contains(StratumKind::Heights));
+        let mut roofs = 0;
+        for b in towers {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            // The roof reached by the lift alone, then by a ladder alone.
+            let mut lifted = plan.clone();
+            lifted.links.retain(|l| l.kind == LinkKind::Lift);
+            let mut laddered = plan.clone();
+            laddered.links.retain(|l| l.kind == LinkKind::Stair);
+            laddered.links[0].kind = LinkKind::Ladder;
+            for plan in [lifted, laddered] {
+                roofs += 1;
+                let kinds = (
+                    b.kind,
+                    plan.links.iter().map(|l| l.kind).collect::<Vec<_>>(),
+                );
+                let top = generate_floor(&c, &plan, plan.top());
+                validate_floor(&plan, &top).unwrap_or_else(|e| panic!("{kinds:?}: {e}"));
+                let roof = top
+                    .exits
+                    .iter()
+                    .find(|e| e.stratum == StratumKind::Heights)
+                    .unwrap_or_else(|| panic!("{kinds:?}: the roof door is gone"));
+                let landings = plan.landings(plan.top());
+                assert!(!landings.contains(&roof.at), "{kinds:?}: {roof:?}");
+                let step = top.doorstep(roof);
+                assert!(
+                    landings.contains(&step) || step.neighbors4().any(|p| landings.contains(&p)),
+                    "{kinds:?}: the roof door at {:?} stands by no landing",
+                    roof.at
+                );
+                assert_eq!(top.tiles[roof.at].terrain, Terrain::Door);
+            }
+        }
+        assert!(roofs > 0);
+    }
+
+    #[test]
+    fn a_floor_without_its_planned_door_fails_validation() {
+        let c = city();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind.is_closed() && b.span.contains(StratumKind::Heights))
+            .expect("a tower");
+        let plan = FloorPlan::classic(&c, b.id).unwrap();
+        let mut top = generate_floor(&c, &plan, plan.top());
+        validate_floor(&plan, &top).unwrap();
+        top.exits.retain(|e| e.stratum != StratumKind::Heights);
+        let e = validate_floor(&plan, &top).unwrap_err();
+        assert!(e.contains("Heights"), "{e}");
     }
 
     #[test]

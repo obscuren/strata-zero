@@ -297,7 +297,7 @@ fn level(
 }
 
 /// The tile inside the frame wall from a door on it.
-fn inward(inner: Rect, at: Pos) -> Pos {
+pub(super) fn inward(inner: Rect, at: Pos) -> Pos {
     if at.x < inner.x {
         at.offset(1, 0)
     } else if at.x >= inner.right() {
