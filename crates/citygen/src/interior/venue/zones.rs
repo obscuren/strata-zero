@@ -295,10 +295,14 @@ fn doorsteps(frame: &VenueFrame, level: i32, inner: Rect) -> Vec<Pos> {
 }
 
 /// The row each band starts at, from the front: the first at 0, each next at its running
-/// share of `depth`, moved up to `JITTER` points by the rng and off the `blocked` rows,
-/// every band `BAND_ROWS` deep or, on a level too shallow for that, an even share of it.
-/// A cut leaves its jitter only when no row in it is clear, and thins a band to
-/// `MIN_ROWS` only when no row is clear otherwise.
+/// share of `depth` moved up to `JITTER` points by the rng, on a row no doorstep holds
+/// (`blocked`). Full thickness is `BAND_ROWS` for every band, or on a level too shallow
+/// for that an even share of it. A cut takes the clear row nearest where the rng put it,
+/// trying in turn:
+/// 1. its jitter window, every band at full thickness;
+/// 2. anywhere every band keeps full thickness, when the window is all blocked;
+/// 3. only when every row at full thickness is blocked, the clear row nearest them,
+///    thinning a band to as little as `MIN_ROWS`.
 fn cuts(
     shares: &[i32],
     depth: i32,
@@ -318,14 +322,17 @@ fn cuts(
         let last = starts[i];
         let behind = n - 1 - i as i32;
         let room = |rows: i32| (last + rows, depth - behind * rows);
+        let full = room(thinnest);
         let near = (
-            row(running - JITTER).max(room(thinnest).0),
-            row(running + JITTER).min(room(thinnest).1),
+            row(running - JITTER).max(full.0),
+            row(running + JITTER).min(full.1),
         );
         let want = row(running + rng.random_range(-JITTER..=JITTER));
-        let cut = [near, room(thinnest), room(MIN_ROWS)]
-            .into_iter()
-            .find_map(|range| clear_row(want, range, blocked))
+        // A thinned band gives up no more rows than the doorsteps take.
+        let nearest_full = want.max(full.0).min(full.1);
+        let cut = clear_row(want, near, blocked)
+            .or_else(|| clear_row(want, full, blocked))
+            .or_else(|| clear_row(nearest_full, room(MIN_ROWS), blocked))
             .ok_or_else(|| format!("no row clear of the doorsteps for cut {}", i + 1))?;
         starts.push(cut);
     }
@@ -391,6 +398,7 @@ fn door_columns(width: i32, line: (i32, i32), count: usize, left: bool) -> Vec<i
 
 #[cfg(test)]
 mod tests {
+    use super::cuts;
     use crate::geom::{Dir, Pos, Rect};
     use crate::interior::RoomKind;
     use crate::interior::venue::testutil::{cities, test_type};
@@ -399,6 +407,9 @@ mod tests {
         VenueType, Ways, lay_out,
     };
     use crate::world::StratumKind;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+    use std::collections::BTreeSet;
 
     fn layouts(t: &VenueType) -> Vec<(u64, VenueLayout)> {
         (0..20)
@@ -477,6 +488,47 @@ mod tests {
             .unwrap()
     }
 
+    /// A level's bands tile its floor, none under 2 rows, and no reserved tile lies on a
+    /// cut. A band is under full thickness only when its cut found every row at full
+    /// thickness blocked by a doorstep: the cut behind it, or the back band's in front.
+    fn cuts_hold(front: Dir, x: &LevelLayout, what: &str) {
+        let inner = x.size.rect().inset(1);
+        let depth = depth(front, inner);
+        let n = x.bands.len() as i32;
+        let full = 5.min(depth / n);
+        let blocked: BTreeSet<i32> = x.reserved.iter().map(|p| deep(front, inner, *p)).collect();
+        let spans: Vec<(i32, i32)> = x.bands.iter().map(|b| rows(front, inner, b.rect)).collect();
+        let mut next = 0;
+        for (b, (start, thick)) in x.bands.iter().zip(&spans) {
+            assert_eq!(b.rect.intersection(inner), Some(b.rect), "{what}");
+            assert_eq!(*start, next, "{what}: the bands run on");
+            assert!(*thick >= 2, "{what}: a band {thick} rows deep");
+            next = start + thick;
+        }
+        assert_eq!(next, depth, "{what}");
+        let area: usize = x.bands.iter().map(|b| b.rect.area()).sum();
+        assert_eq!(area, inner.area(), "{what}: the bands tile the floor");
+        for (j, (_, thick)) in spans.iter().enumerate() {
+            if *thick >= full {
+                continue;
+            }
+            let i = if j + 1 < spans.len() { j + 1 } else { j };
+            let behind = n - i as i32;
+            let (lo, hi) = (spans[i - 1].0 + full, depth - behind * full);
+            assert!(
+                (lo..=hi).all(|r| blocked.contains(&r)),
+                "{what}: band {j} is {thick} rows, yet a row of {lo}..={hi} was clear"
+            );
+        }
+        for p in &x.reserved {
+            let i = x.bands.iter().position(|b| b.rect.contains(*p)).unwrap();
+            assert!(
+                i == 0 || deep(front, inner, *p) != spans[i].0,
+                "{what}: {p:?} on a cut"
+            );
+        }
+    }
+
     #[test]
     fn every_type_lays_its_zones_in_its_own_frame_and_its_buildings() {
         let cities = cities();
@@ -494,12 +546,11 @@ mod tests {
             });
             for f in std::iter::once(VenueFrame::own(&t)).chain(buildings) {
                 for seed in 0..5 {
-                    lay_out(&t, f.clone(), seed).unwrap_or_else(|e| {
-                        panic!(
-                            "{} in {:?} {:?}, seed {seed}: {e}",
-                            t.id, f.kind, f.footprint
-                        )
-                    });
+                    let what = format!("{} in {:?} {:?}, seed {seed}", t.id, f.kind, f.footprint);
+                    let l = lay_out(&t, f.clone(), seed).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    for x in &l.levels {
+                        cuts_hold(front(&l), x, &format!("{what}, level {}", x.level));
+                    }
                 }
             }
         }
@@ -774,5 +825,78 @@ mod tests {
         // 12 x 9: 7 rows deep, four bands of one row and a wall.
         let e = lay_out(&t, VenueFrame::own(&t), 1).unwrap_err();
         assert!(e.contains("level 0") && e.contains("too shallow"), "{e}");
+    }
+
+    #[test]
+    fn a_thinned_band_gives_up_only_the_rows_the_doorsteps_take() {
+        // 16 rows in three bands of five at full thickness. The first cut's full-thickness
+        // rows, 5 and 6, are blocked: it takes the clear row next to them, not the jitter's.
+        let blocked = BTreeSet::from([5, 6, 7]);
+        for seed in 0..20 {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let starts = cuts(&[15, 65, 20], 16, &blocked, &mut rng).unwrap();
+            assert_eq!(starts, vec![0, 4, 11], "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn a_cut_leaves_its_jitter_to_keep_full_thickness() {
+        // 22 rows in halves: the jitter's rows 9 to 13 are all blocked, so the cut goes
+        // just outside them, both bands keeping five rows or more.
+        let blocked = BTreeSet::from([9, 10, 11, 12, 13]);
+        let mut seen = BTreeSet::new();
+        for seed in 0..20 {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let starts = cuts(&[50, 50], 22, &blocked, &mut rng).unwrap();
+            assert!(starts[1] == 8 || starts[1] == 14, "seed {seed}: {starts:?}");
+            seen.insert(starts[1]);
+        }
+        assert_eq!(seen.len(), 2, "each side of the blocked rows");
+    }
+
+    #[test]
+    fn neighbouring_bands_of_one_zone_get_a_plain_door() {
+        let mut t = test_type();
+        let role = t.levels.middle.as_mut().unwrap();
+        // Its first two bands in one zone, the third in the second's: a plain cut, then a
+        // border.
+        let (first, second) = (role.bands[0].zone.clone(), role.bands[1].zone.clone());
+        role.bands[1].zone = first;
+        role.bands[2].zone = second;
+        let (name, doors) = (role.name.clone(), usize::from(role.bands[1].doors));
+        let mut seen = 0;
+        for (seed, l) in layouts(&t) {
+            for x in l.levels.iter().filter(|x| x.role == name) {
+                let what = format!("seed {seed} level {}", x.level);
+                let plain: Vec<_> = x
+                    .doors
+                    .iter()
+                    .filter(|d| across(x, d.at).1.0 == 1)
+                    .collect();
+                assert_eq!(plain.len(), doors, "{what}");
+                for d in &plain {
+                    assert!(!d.border && d.fit.is_none() && d.lock.is_none(), "{what}");
+                }
+                let ((_, f), (_, b)) = across(x, plain[0].at);
+                let (rf, rb) = (&x.rooms[plain[0].rooms.0], &x.rooms[plain[0].rooms.1]);
+                assert!(rf.rect.contains(f) && rb.rect.contains(b), "{what}");
+                assert_eq!((rf.zone, rb.zone), (x.bands[0].zone, x.bands[1].zone));
+                for r in [rf, rb] {
+                    assert!(r.kind == RoomKind::Corridor || x.spine == Spine::Hall);
+                }
+                // The plain doors take no lock number: the border's count from the first.
+                let numbers: Vec<u16> = x
+                    .doors
+                    .iter()
+                    .filter_map(|d| d.fit)
+                    .map(|l| l.number)
+                    .collect();
+                let want: Vec<u16> = (LOCK_NUMBERS..).take(numbers.len()).collect();
+                assert!(!numbers.is_empty(), "{what}");
+                assert_eq!(numbers, want, "{what}");
+                seen += 1;
+            }
+        }
+        assert!(seen > 0);
     }
 }
