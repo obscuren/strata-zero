@@ -490,6 +490,18 @@ Tests:
 - one sheet per type and size with the levels side by side, as the mock lays them out
   (the builder's call).
 
+**The DEVELOPER menu** (Jeff's ask, dev mode only).
+- On the title, NEW GAME (DEBUG) stays where it is. A DEVELOPER row takes the place of
+  NEW GAME · COMBAT and LOAD CITY, which move inside it.
+- DEVELOPER holds:
+  - one row per site type, from `sites.ron`;
+  - COMBAT, with its NET · STREET pick;
+  - LOAD CITY.
+- On a type's row you pick a size (SMALL · MEDIUM · LARGE) and PLAIN or MISSION.
+- Picking a site starts D'SHAWN, maxed out, in a fresh city. A building away from home
+  becomes that site, the copy starts if you picked MISSION, and you stand at its main
+  street door.
+
 **Console** (dev): `site <type> [size] [objective] [security] [seed]` at a building's
 door turns that building into the given site for testing, even another kind. A station
 can stand in any building this way. It starts a dev mission copy and flags the doors.

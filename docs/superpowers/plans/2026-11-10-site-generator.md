@@ -2302,10 +2302,10 @@ EOF
 
 ---
 
-### Task 17: The console's `site`, and shots of every type
+### Task 17: The console's `site`, the title's DEVELOPER menu, and shots of every type
 
 **Files:**
-- Modify: `crates/strata-zero/src/screens/console.rs` (`site`: `COMMANDS` grows to 44, `help`, `complete`), `venues.rs` (`dev_site`, `building_at_door`), `screens/shots.rs` (`site_shots`)
+- Modify: `crates/strata-zero/src/screens/console.rs` (`site`: `COMMANDS` grows to 44, `help`, `complete`), `venues.rs` (`dev_site`, `building_at_door`, `dev_start`), `screens/title.rs` (the DEVELOPER row and its menu), `screens/shots.rs` (`site_shots`)
 
 **Interfaces:**
 - Consumes: `begin`, `end`, `VenueFrame::of_building`, `VenueFrame::raised`, `lay_out`, `FloorPlan::of_layout`, `put_plan`, `holds`.
@@ -2317,7 +2317,22 @@ EOF
   /// Dev: lays type `type_id` on `b` (the building's frame, raised to the type's own top when it
   /// can't hold `inputs.size`), makes it the building's plan and begins a mission there.
   pub fn dev_site(st: &mut AppState, b: BuildingId, type_id: &str, inputs: MissionInputs) -> Result<String, String>;
+  /// Dev, from the title's DEVELOPER menu: in a state NEW GAME (DEBUG) has just made (D'SHAWN maxed,
+  /// a fresh city), picks the largest-footprint closed building away from home, lays `type_id` on it
+  /// at `size`, begins the mission copy when `mission` (else leaves the plain site), and stands the
+  /// player on the street outside its main street door.
+  pub fn dev_start(st: &mut AppState, type_id: &str, size: MissionSize, mission: bool) -> Result<BuildingId, String>;
   ```
+
+Jeff's ask, added after the plan was written: a DEVELOPER section on the title for testing levels. In dev mode only:
+- NEW GAME (DEBUG) stays where it is on the title.
+- A new DEVELOPER row takes the place of NEW GAME · COMBAT and LOAD CITY, which move inside it.
+- DEVELOPER opens a second menu in the title's own style; esc goes back. It holds:
+  - one row per builtin site type, labelled with the type's `name` from the pack (no type named in Rust);
+  - COMBAT, with its `NET · STREET` pick as today;
+  - LOAD CITY.
+- On a type's row, left/right picks the size (`SMALL · MEDIUM · LARGE`, drawn after the label as COMBAT draws `NET · STREET`), and up/down within the row's pick, or a second pick on the same row, chooses `PLAIN · MISSION` (the builder picks the keys; `?`/the row's hint says them).
+- Enter starts NEW GAME (DEBUG)'s start, then calls `dev_start`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2353,20 +2368,42 @@ fn site_raises_a_low_building_to_hold_the_size() {
 }
 ```
 
+In `title.rs` tests (update the existing row-list tests, which name COMBAT and LOAD CITY on the title):
+
+```rust
+#[test]
+fn developer_holds_the_test_starts() {
+    // Dev mode: the title's rows are NEW GAME (DEBUG) and DEVELOPER among the usual ones, and neither
+    // "NEW GAME · COMBAT" nor "LOAD CITY" is on the title. Opening DEVELOPER shows one row per builtin
+    // type (its name from the pack), then COMBAT with "NET · STREET", then LOAD CITY; esc goes back.
+    // Without dev mode: no DEVELOPER row (the existing "no debug rows" test also checks "DEVELOPER").
+}
+
+#[test]
+fn a_developer_site_row_starts_at_its_door() {
+    // DEVELOPER, the first type's row, size picked LARGE, MISSION: enter. The run is D'SHAWN's, the
+    // player stands on the street beside the main street door of a building whose plan is that type's
+    // venue, the door is Flagged, and a live copy exists at Large. With PLAIN instead: the same building
+    // kind of start, no live copy, the door not Flagged.
+}
+```
+
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke console::`
-Expected: FAIL (`unknown command site`).
+Run: `cargo test -p strata-zero --target-dir target/smoke console:: title::`
+Expected: FAIL (`unknown command site`; no DEVELOPER row).
 
 - [ ] **Step 3: Implement**
 
 `site <type id> [small|medium|large] [objective id] [security 0-255] [seed]`: size defaults to `small`, objective to the type's first, security to 128, seed to the tick; `site end` ends the copy at the focus building, else the only live copy. Help line: `site <type> [size] [objective] [security] [seed] | end`. `dev_site` refuses the home building, a building the player is inside, and an open building.
 
+The DEVELOPER row and menu in `title.rs` as above; the COMBAT start and LOAD CITY behave as today from inside it. `dev_start` reuses `dev_site` for the laying and the mission.
+
 `site_shots` (`#[test] #[ignore]`, `SHOT_DIR`): in `state_home()`, the largest-footprint closed building away from home; for each builtin type: `dev_site` at Small then `site end`, writing every level of the plain site (`site_{id}_plain_{label}`, the player on the level's first landing, `MapScreen::walking`, 120 x 40); then for each size, the copy's kept levels (`site_{id}_{size}_{label}`) and one sheet (`site_{id}_{size}_sheet`: each kept level's map drawn at 96 x 36 into one wide buffer, side by side, written by `write_svg`).
 
 - [ ] **Step 4: Run the tests and the shots**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke console::`
+Run: `cargo test -p strata-zero --target-dir target/smoke console:: title::`
 Expected: PASS.
 Run: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 Expected: PASS.
@@ -2378,7 +2415,7 @@ Expected: PASS, and `.svg` and `.png` for every type, size and level. Look at a 
 ```bash
 git add crates/strata-zero
 git commit -F - <<'EOF'
-console: site makes any building a venue's copy; shots of every type
+console: site makes any building a venue's copy; DEVELOPER on the title; shots of every type
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2389,7 +2426,7 @@ EOF
 ### Task 18: Docs, the manual and the checks
 
 **Files:**
-- Modify: `docs/saving.md` (a section "Sites and copies", and the `Interiors` line under "Elsewhere"), `docs/development.md` (the `flavor/` line names `sites.ron`), `manual/06-the-city-and-the-world.md` ("Buildings" and the map marks), `crates/strata-zero/src/interiors.rs` (the module doc: "Never saved; the seed brings them back" is wrong: plans and floors are saved whole)
+- Modify: `docs/saving.md` (a section "Sites and copies", and the `Interiors` line under "Elsewhere"), `docs/development.md` (the `flavor/` line names `sites.ron`; the title's dev starts now say NEW GAME (DEBUG) on the title and DEVELOPER holding the site starts, COMBAT and LOAD CITY; the `site` console command), `manual/06-the-city-and-the-world.md` ("Buildings" and the map marks), `crates/strata-zero/src/interiors.rs` (the module doc: "Never saved; the seed brings them back" is wrong: plans and floors are saved whole)
 
 **Interfaces:**
 - Consumes: the whole branch.
