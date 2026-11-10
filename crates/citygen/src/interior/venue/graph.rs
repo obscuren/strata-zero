@@ -270,12 +270,43 @@ impl VenueGraph {
         out
     }
 
+    /// Each node's edges in, by index.
+    fn into(&self) -> Vec<Vec<usize>> {
+        let mut into = vec![Vec::new(); self.nodes.len()];
+        for (i, e) in self.edges.iter().enumerate() {
+            into[e.to].push(i);
+        }
+        into
+    }
+
+    /// The nodes that get back to one of `to` over the edges means `means` holding `keys`
+    /// can pass.
+    fn back(&self, into: &[Vec<usize>], to: &[usize], means: Ways, keys: &Keys) -> Vec<bool> {
+        let mut back = vec![false; self.nodes.len()];
+        let mut queue: VecDeque<usize> = to.iter().copied().collect();
+        for &n in to {
+            back[n] = true;
+        }
+        while let Some(n) = queue.pop_front() {
+            for e in into[n].iter().map(|&i| &self.edges[i]) {
+                if !back[e.from] && passes(e.lock.as_ref(), means, keys) {
+                    back[e.from] = true;
+                    queue.push_back(e.from);
+                }
+            }
+        }
+        back
+    }
+
     /// Everything a way of means `means` holding `keys` reaches from `from`: a pass over
     /// the edges it can pass, then the cards and codes lying in the rooms it reached (and,
     /// with talk, the zone of each person it reached, who hands over their card), again
-    /// until a pass finds nothing new.
+    /// until a pass finds nothing new. A key counts only in a room it can get back to
+    /// `from` from, holding the keys so far: one picked up past a one-way door it can't
+    /// pass back through leaves it there. Keys only grow, so once it can get back, it
+    /// always can.
     pub fn reach(&self, from: &[usize], means: Ways, keys: Keys) -> Reach {
-        let out = self.out();
+        let (out, into) = (self.out(), self.into());
         let mut keys = keys;
         let mut nodes = vec![false; self.nodes.len()];
         for &n in from {
@@ -291,20 +322,22 @@ impl VenueGraph {
                     }
                 }
             }
+            let back = self.back(&into, from, means, &keys);
+            let taken = |n: usize| nodes[n] && back[n];
             let had = keys.clone();
             for &(n, zone) in &self.cards {
-                if nodes[n] {
+                if taken(n) {
                     keys.card = keys.card.max(zone);
                 }
             }
             for &(n, code) in &self.codes {
-                if nodes[n] {
+                if taken(n) {
                     keys.codes.insert(code);
                 }
             }
             if means.has(Ways::TALK) {
                 for &(n, zone) in &self.people {
-                    if nodes[n] {
+                    if taken(n) {
                         keys.talked = keys.talked.max(zone);
                         keys.card = keys.card.max(zone);
                     }
@@ -533,6 +566,47 @@ mod tests {
             let keys = g.route_in(m).unwrap_or_else(|| panic!("{name}"));
             assert!(!g.route_out(m, keys), "{name}: no way out");
         }
+    }
+
+    #[test]
+    fn a_key_counts_only_where_you_can_get_back_from_it() {
+        // The street (0) is open to D (1) and A (3); D to R (2) is free, R to D a card
+        // lock of zone 2; R holds a card of zone 1; A to the goal (4) is a zone 1 lock.
+        let card2 = lock(2, Ways::CARD);
+        let build = |back: Option<GraphLock>| {
+            let mut edges = both(0, 1, None).to_vec();
+            edges.extend(both(0, 3, None));
+            edges.extend([(1, 2, free(card2)), (2, 1, back)]);
+            edges.extend(both(3, 4, lock(1, Ways::CARD)));
+            let mut g = graph(5, &edges);
+            g.cards.push((2, 1));
+            g.goal = Some(4);
+            g
+        };
+        let stuck = build(card2);
+        assert_eq!(stuck.route_in(Ways::CARD), None, "R's card leaves you in R");
+        for (name, m) in PLAYS {
+            assert_eq!(stuck.route_in(m), None, "{name}");
+        }
+        let keys = build(free(card2)).route_in(Ways::CARD);
+        assert_eq!(keys.map(|k| k.card), Some(1), "back out of R with its card");
+    }
+
+    #[test]
+    fn a_key_past_the_goal_counts_only_where_you_can_get_back() {
+        // The goal (1) opens onto the street (0) through a zone 1 lock; the goal to R (2)
+        // is free, R to the goal a card lock of zone 2; R holds a card of zone 1.
+        let card2 = lock(2, Ways::CARD);
+        let build = |back: Option<GraphLock>| {
+            let mut edges = both(0, 1, lock(1, Ways::CARD)).to_vec();
+            edges.extend([(1, 2, free(card2)), (2, 1, back)]);
+            let mut g = graph(3, &edges);
+            g.cards.push((2, 1));
+            g.goal = Some(1);
+            g
+        };
+        assert!(!build(card2).route_out(Ways::CARD, Keys::default()));
+        assert!(build(free(card2)).route_out(Ways::CARD, Keys::default()));
     }
 
     #[test]
