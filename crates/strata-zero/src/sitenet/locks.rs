@@ -300,7 +300,7 @@ mod tests {
         let (one, _, card) = carded[0];
         let other = carded.iter().find(|c| c.0 != one).copied();
         let name = plan.links[one].name.clone().unwrap();
-        let node = (net_of(&st, b).unwrap().nodes.into_iter())
+        let node = (net_of(&st, b).unwrap().nodes.iter())
             .find(|n| n.kind == NodeKind::LiftCtrl && n.name == name)
             .unwrap()
             .node;

@@ -308,3 +308,44 @@ fn arc_trace_ping_and_the_ice_lines_keep_to_your_level() {
     assert!(!nodes.is_empty());
     assert_eq!(lit, nodes);
 }
+
+#[test]
+fn a_sites_net_is_worked_out_once_and_kept() {
+    let (st, b) = office_copy(190);
+    let first = net_of(&st, b).unwrap();
+    let again = net_of(&st, b).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "the one kept");
+}
+
+#[test]
+fn a_copy_starting_or_ending_drops_the_kept_net() {
+    let (mut st, b) = office_copy(190);
+    let copy = st.interiors.copy(b).unwrap().clone();
+    assert_eq!(net_of(&st, b).unwrap().security, 190, "the copy's, kept");
+    crate::venues::end(&mut st, b).unwrap();
+    let plain = net_of(&st, b).unwrap();
+    assert_ne!(plain.security, 190, "the plain building's own");
+    assert_eq!(plain.gap, None);
+    crate::venues::begin(&mut st, b, copy.inputs).unwrap();
+    assert!(
+        crate::venues::copy_live(&st, b),
+        "taken at once: you're out"
+    );
+    let net = net_of(&st, b).unwrap();
+    assert_eq!(net.security, 190, "the copy's again");
+    assert_eq!(
+        net.gap,
+        citygen::sitenet::gapped_level(copy.layer.as_ref()),
+        "its air gap"
+    );
+}
+
+#[test]
+fn forgetting_a_sites_net_drops_the_kept_one() {
+    let (mut st, b) = office_copy(190);
+    let kept = net_of(&st, b).unwrap();
+    forget(&mut st, b);
+    let again = net_of(&st, b).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&kept, &again), "worked out again");
+    assert_eq!(*kept, *again, "from the same plan and copy");
+}

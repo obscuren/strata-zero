@@ -39,9 +39,9 @@ pub(crate) fn port_in_reach(st: &AppState) -> Option<(BuildingId, SiteNodeInfo)>
         return None;
     };
     let net = super::net_of(st, b)?;
-    let port = (net.nodes.into_iter())
+    let port = (net.nodes.iter())
         .find(|n| n.node.level == level && is_port(n.kind) && at_port(n.node.at, n.net, p.pos))?;
-    Some((b, port))
+    Some((b, port.clone()))
 }
 
 /// The terminal or gate switch your body stands at on a site's floor (`at_port`): its
@@ -277,6 +277,50 @@ mod tests {
         let name = crate::net::building_name(&st, b);
         assert_eq!(line, format!("hop · `{name}`'s L hub"));
         assert_eq!(st.backdoors.route.as_ref().unwrap().relays, vec![b]);
+    }
+
+    #[test]
+    fn beside_a_sites_server_you_hop_to_your_other_lines() {
+        let (mut st, b) = office_copy(190);
+        let seed = st.city.as_ref().unwrap().seed;
+        let now = st.net.now(&st);
+        let home = st.home.unwrap().home.building;
+        let other = (st.city.as_ref().unwrap().buildings.iter())
+            .find(|x| x.kind.is_closed() && x.id != b && x.id != home)
+            .unwrap()
+            .id;
+        st.backdoors.plant_net(b, 99, seed, now);
+        st.backdoors.plant_net(other, 99, seed, now);
+        stand_at_the_rig(&mut st);
+        crate::net::land_at(&mut st, b).unwrap();
+        let rows_at = |st: &AppState, pos| {
+            let letters = &mut crate::interact::FREE_LETTERS.chars();
+            crate::interact::run_rows(st, b, pos, None, letters)
+        };
+        let here = st.player.as_ref().unwrap().pos;
+        let server = device(&st, b, NodeKind::Server);
+        assert!(
+            server.at.chebyshev(here) <= 1,
+            "G's hub is beside the server"
+        );
+        let rows = rows_at(&st, here);
+        let hops: Vec<_> = rows.iter().filter(|c| c.label == "Hop").collect();
+        let name = crate::net::building_name(&st, other);
+        assert_eq!(hops.len(), 1, "{rows:?}");
+        assert!(
+            hops[0].enabled && hops[0].thing.as_ref().is_some_and(|(t, _)| *t == name),
+            "{:?}",
+            hops[0]
+        );
+        // On another level's hub, away from the server: none.
+        let net = net_of(&st, b).unwrap();
+        let up = (net.levels.iter())
+            .find(|l| l.level != 0 && net.on_riser(l.level))
+            .expect("a level up the riser")
+            .level;
+        on_hub(&mut st, b, up);
+        let here = st.player.as_ref().unwrap().pos;
+        assert!(rows_at(&st, here).iter().all(|c| c.label != "Hop"));
     }
 
     #[test]

@@ -847,21 +847,25 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
 /// A held node's rows, green as its dock.
 const HELD: Color = crate::holds::HELD_FG;
 
-/// On the server of a construct you hold a backdoor on: `Hop: <building>` to every
-/// other backdoor's gate. A street run has no way home, so its rows are greyed.
+/// On the server of a construct you hold a backdoor on (a city node in today's, a device
+/// of a site's): `Hop: <building>` to every other backdoor's gate. A street run has no way
+/// home, so its rows are greyed.
 fn hop_rows(
     st: &AppState,
     b: citygen::BuildingId,
     pos: Pos,
     letters: &mut std::str::Chars,
 ) -> Vec<Choice> {
+    let server = citygen::NodeKind::Server;
     let on_server = st.constructs.get(b).is_some_and(|k| {
-        k.nodes.iter().any(|(id, p)| {
+        let city = k.nodes.iter().any(|(id, p)| {
             st.city
                 .as_ref()
-                .is_some_and(|c| c.net.node(*id).kind == citygen::NodeKind::Server)
+                .is_some_and(|c| c.net.node(*id).kind == server)
                 && p.chebyshev(pos) <= 1
-        })
+        });
+        let site = (k.devices.iter()).any(|d| d.kind == server && d.at.chebyshev(pos) <= 1);
+        city || site
     });
     if !on_server || st.backdoors.held(b).is_none() {
         return Vec::new();

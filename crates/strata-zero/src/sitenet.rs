@@ -1,15 +1,16 @@
 //! A site's own Net at play: which buildings are sites, the security that governs one, its
 //! construct made once and kept, and what its Net held dropped when a mission's copy
 //! begins or ends. The Net itself is worked out from the plan (and a live copy's layer)
-//! whenever it's needed (`citygen::sitenet`), never kept; the construct is kept and saved
-//! with the rest. Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`.
+//! when first needed (`citygen::sitenet`) and kept beside the plan, never saved; the
+//! construct is kept and saved with the rest. Spec
+//! `docs/superpowers/specs/2026-11-11-site-net-design.md`.
 
 use crate::app::AppState;
 use citygen::sitenet::{SiteNet, site_construct};
 use citygen::venue::{MissionLayer, VenuePack};
-use citygen::{BuildingId, FloorPlan, NetNode};
+use citygen::{BuildingId, NetNode};
 use game::HackTarget;
-use std::borrow::Cow;
+use std::sync::Arc;
 
 mod firewall;
 mod locks;
@@ -57,20 +58,21 @@ fn layer_of(st: &AppState, b: BuildingId) -> Option<&MissionLayer> {
         .and_then(|c| c.layer.as_ref())
 }
 
-/// Site `b`'s plan as the session has it and its Net worked out from it.
-fn worked_out(st: &AppState, b: BuildingId) -> Option<(Cow<'_, FloorPlan>, SiteNet)> {
+/// Site `b`'s Net worked out from its plan as the session has it, a live copy's layer and
+/// its security.
+fn work_out(st: &AppState, b: BuildingId) -> Option<SiteNet> {
     let city = st.city.as_ref()?;
     let plan = crate::interiors::plan_now(st, b)?;
     let layout = plan.venue.as_deref()?;
     let t = VenuePack::builtin().by_id(&layout.type_id);
-    let net = SiteNet::of(city, &plan, t, layer_of(st, b), security(st, b))?;
-    Some((plan, net))
+    SiteNet::of(city, &plan, t, layer_of(st, b), security(st, b))
 }
 
-/// Site `b`'s Net, worked out now from its plan, a live copy's layer and its security;
-/// never kept. None for a building that is no site.
-pub fn net_of(st: &AppState, b: BuildingId) -> Option<SiteNet> {
-    worked_out(st, b).map(|(_, net)| net)
+/// Site `b`'s Net, worked out from its plan, a live copy's layer and its security the
+/// first time it's asked and kept (`Interiors`, never saved) until its plan or its copy
+/// changes or `forget` drops it. None for a building that is no site.
+pub fn net_of(st: &AppState, b: BuildingId) -> Option<Arc<SiteNet>> {
+    st.interiors.site_net(b, || work_out(st, b))
 }
 
 /// Makes site `b`'s construct the first time it's needed and keeps it. Made over a
@@ -80,7 +82,8 @@ pub fn ensure_construct(st: &mut AppState, b: BuildingId) -> Result<(), String> 
     if st.constructs.site(b).is_some() {
         return Ok(());
     }
-    let (plan, net) = worked_out(st, b).ok_or("that building has no Net of its own")?;
+    let net = net_of(st, b).ok_or("that building has no Net of its own")?;
+    let plan = crate::interiors::plan_now(st, b).ok_or("that building has no Net of its own")?;
     let city = st.city.as_ref().ok_or("no city")?;
     let k = site_construct(city, &net, &plan, layer_of(st, b));
     drop(plan);
@@ -98,9 +101,10 @@ fn drop_ice(st: &mut AppState, b: BuildingId) {
 }
 
 /// Drops what the site's Net held: its hacks, a run in flight on one of its nodes, its
-/// holds, its feed, its broken locks, its construct and its ICE. A copy beginning or
-/// ending calls it, never while you're in the building.
+/// holds, its feed, its broken locks, its construct, its ICE and the Net kept from its
+/// plan. A copy beginning or ending calls it, never while you're in the building.
 pub fn forget(st: &mut AppState, b: BuildingId) {
+    st.interiors.drop_site_net(b);
     let ours = |n: NetNode| n.site().is_some_and(|s| s.building == b);
     st.net
         .hacks
