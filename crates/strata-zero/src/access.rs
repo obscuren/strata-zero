@@ -55,7 +55,8 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
     }
 }
 
-/// The ICE a construct runs, by its security.
+/// The strongest ICE a construct that is no site runs, by its security (a site's:
+/// `sitenet::ice`).
 pub fn ice_grade(security: u8) -> &'static str {
     if security >= BLACK_THRESHOLD {
         "black"
@@ -136,12 +137,17 @@ pub fn scan_row(st: &AppState, i: usize, b: BuildingId) -> String {
         return String::new();
     };
     let sec = security_of(st, b);
+    // A site's strongest piece by its own ICE rule; any other construct's by its security.
+    let ice = match crate::sitenet::is_site(st, b) {
+        true => (crate::sitenet::ice(st, b).top).map_or("none", citygen::IceGrade::label),
+        false => ice_grade(sec),
+    };
     format!(
         "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
         i + 1,
         building_name(st, b),
         citygen::kind_label(city, b).to_uppercase(),
-        ice_grade(sec).to_uppercase(),
+        ice.to_uppercase(),
         tier_on(st, b).label()
     )
 }

@@ -416,6 +416,22 @@ fn the_ice_follows_the_security_table() {
 }
 
 #[test]
+fn the_table_words_the_ice_a_construct_posts() {
+    let mut sites: Vec<_> = (copies(190).into_iter())
+        .map(|(c, p, t, layer)| (c, p, t, Some(layer)))
+        .collect();
+    sites.extend(plains().into_iter().map(|(c, p, t)| (c, p, t, None)));
+    for (c, p, t, layer) in &sites {
+        for s in [0, 99, 100, 159, 160, 199, 200, 229, 230, 255] {
+            let net = SiteNet::of(c, p, Some(t), layer.as_ref(), s).unwrap();
+            let vault = (net.nodes.iter()).any(|n| n.kind == NodeKind::DataVault);
+            let k = site_construct(c, &net, p, layer.as_ref());
+            assert_eq!(posted_ice(&k), table_ice(s, vault), "at {s}");
+        }
+    }
+}
+
+#[test]
 fn patrols_walk_their_own_level() {
     for (c, p, t, layer) in copies(210) {
         let k = make(c, &p, t, Some(&layer), 210);

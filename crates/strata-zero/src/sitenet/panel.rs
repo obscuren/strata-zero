@@ -10,6 +10,7 @@ use crate::render::netlook::{AMBER, BLACK_RED, ICE_BLUE, ROOM, WHITE, YOU};
 use crate::render::overlay::SIGNAL;
 use crate::ui::chrome::{DIM, FAINTER, PANEL_BG_RGB, TEXT};
 use crate::ui::hud::RULE_STYLE;
+use citygen::sitenet::{ice_on, posted_ice};
 use citygen::venue::{VenuePack, VenueType};
 use citygen::{
     BuildingId, Construct, FloorPlan, IceGrade, NetDevice, NodeKind, Place, Pos, SiteNode, Size,
@@ -190,19 +191,6 @@ fn rule() -> Line<'static> {
     Line::from(Span::styled("─".repeat(panel_w()), RULE_STYLE))
 }
 
-/// The strongest ICE posted on `level` of `k`.
-fn ice_on(k: &Construct, level: i32) -> Option<IceGrade> {
-    let rank = |g: IceGrade| match g {
-        IceGrade::White => 0,
-        IceGrade::Grey => 1,
-        IceGrade::Black => 2,
-    };
-    (k.guards.iter())
-        .filter(|g| !g.inert && k.level_at(g.post).is_some_and(|l| l.level == level))
-        .map(|g| g.grade)
-        .max_by_key(|g| rank(*g))
-}
-
 /// A grade's colour in the panel: the ICE's own, without its pulse.
 fn ice_text(g: IceGrade) -> Color {
     watch_tint(g).0.to_color()
@@ -254,14 +242,12 @@ pub fn panel_lines(st: &AppState, b: BuildingId) -> Vec<Line<'static>> {
         span(" SEC ", TEXT),
         bold(security.to_string(), WHITE.to_color()),
     ];
-    if let Some(g) = ice_on(k, 0) {
+    let ice = posted_ice(k);
+    if let Some(g) = ice.g {
         sec.push(span(format!(" · ICE {}", g.label()), TEXT));
     }
-    let vault = (k.devices.iter()).find(|d| d.kind == NodeKind::DataVault);
-    let guard =
-        vault.and_then(|d| (k.guards.iter()).find(|g| !g.inert && g.post.chebyshev(d.at) <= 1));
-    if let Some(g) = guard {
-        sec.push(span(format!(" · vault {}", g.grade.label()), TEXT));
+    if let Some(g) = ice.vault {
+        sec.push(span(format!(" · vault {}", g.label()), TEXT));
     }
     out.push(Line::from(sec));
     let broken = super::broken(st, b);

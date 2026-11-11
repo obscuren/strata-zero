@@ -6,9 +6,9 @@
 //! `docs/superpowers/specs/2026-11-11-site-net-design.md`.
 
 use crate::app::AppState;
-use citygen::sitenet::{SiteNet, site_construct};
+use citygen::sitenet::{SiteIce, SiteNet, posted_ice, site_construct, table_ice};
 use citygen::venue::{MissionLayer, VenuePack};
-use citygen::{BuildingId, NetNode};
+use citygen::{BuildingId, NetNode, NodeKind};
 use game::HackTarget;
 use std::sync::Arc;
 
@@ -45,6 +45,19 @@ pub fn security(st: &AppState, b: BuildingId) -> u8 {
             .and_then(|city| crate::render::netlook::security_of(city, b))
             .unwrap_or(0),
     }
+}
+
+/// Site `b`'s ICE as its card and HELIX's scan word it: read off its construct once made,
+/// else by the site's table at the security that governs it.
+pub fn ice(st: &AppState, b: BuildingId) -> SiteIce {
+    if let Some(k) = st.constructs.site(b) {
+        return posted_ice(k);
+    }
+    let s = security(st, b);
+    // Only a black stands beside the vault: below it, no Net is worked out to look.
+    let vault = s >= citygen::construct::BLACK_THRESHOLD
+        && net_of(st, b).is_some_and(|n| (n.nodes.iter()).any(|n| n.kind == NodeKind::DataVault));
+    table_ice(s, vault)
 }
 
 /// The live copy's layer on `b`, if a copy holds it.

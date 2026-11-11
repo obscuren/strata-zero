@@ -330,6 +330,68 @@ fn beat(k: &Construct, l: &NetLevel, floor: &Floor, start: Pos, taken: &BTreeSet
     out
 }
 
+/// A site's ICE as its card and a scan word it: the strongest piece on G's level, the
+/// piece beside the data vault, and the strongest anywhere on its Net.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteIce {
+    pub g: Option<IceGrade>,
+    pub vault: Option<IceGrade>,
+    pub top: Option<IceGrade>,
+}
+
+/// What `ice` posts at `security`, before a construct is made: on G's level the white
+/// beside its hub from `HUB_ICE`, the grey patrolling it from `GREY_THRESHOLD`; beside the
+/// data vault, on a site with one, the black from `BLACK_THRESHOLD`. The whites patrolling
+/// other levels from `ICE_THRESHOLD` are never stronger than G's.
+pub fn table_ice(security: u8, vault: bool) -> SiteIce {
+    let g = if security >= GREY_THRESHOLD {
+        Some(IceGrade::Grey)
+    } else if security >= HUB_ICE {
+        Some(IceGrade::White)
+    } else {
+        None
+    };
+    let vault = (vault && security >= BLACK_THRESHOLD).then_some(IceGrade::Black);
+    SiteIce {
+        g,
+        vault,
+        top: vault.or(g),
+    }
+}
+
+/// How hard a grade bites, for picking the strongest.
+fn rank(g: IceGrade) -> u8 {
+    match g {
+        IceGrade::White => 0,
+        IceGrade::Grey => 1,
+        IceGrade::Black => 2,
+    }
+}
+
+/// The strongest ICE posted on `level` of site construct `k`, lifted or standing.
+pub fn ice_on(k: &Construct, level: i32) -> Option<IceGrade> {
+    (k.guards.iter())
+        .filter(|g| !g.inert && k.level_at(g.post).is_some_and(|l| l.level == level))
+        .map(|g| g.grade)
+        .max_by_key(|g| rank(*g))
+}
+
+/// The ICE site construct `k` posts, read off its pieces (`table_ice` before it's made).
+pub fn posted_ice(k: &Construct) -> SiteIce {
+    let strongest = |near: Option<Pos>| {
+        (k.guards.iter())
+            .filter(|g| !g.inert && near.is_none_or(|at| g.post.chebyshev(at) <= 1))
+            .map(|g| g.grade)
+            .max_by_key(|g| rank(*g))
+    };
+    let vault = (k.devices.iter()).find(|d| d.kind == NodeKind::DataVault);
+    SiteIce {
+        g: ice_on(k, 0),
+        vault: vault.and_then(|d| strongest(Some(d.at))),
+        top: strongest(None),
+    }
+}
+
 /// The site's ICE by its security (Ruling 9): from `HUB_ICE` a white posted beside G's
 /// hub; from `ICE_THRESHOLD` a white patrolling each kept level but G at an odd place in
 /// the list lowest first; from `GREY_THRESHOLD` a grey patrolling every kept level

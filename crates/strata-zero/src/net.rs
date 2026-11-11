@@ -3815,19 +3815,23 @@ pub fn card_lines(
     {
         first.push(text(format!(" {a}")));
     }
-    let has_vault = city
-        .net
-        .nodes
-        .iter()
-        .any(|n| n.building == Some(b) && n.kind == NodeKind::DataVault);
-    let vault = (has_vault && security >= citygen::construct::GREY_THRESHOLD).then_some(
-        if security >= citygen::construct::BLACK_THRESHOLD {
-            IceGrade::Black
-        } else {
-            IceGrade::Grey
-        },
-    );
-    let ice = match (gate_ice(security), vault) {
+    // A site's by its own ICE rule; any other construct's by its gate and its vault.
+    let (gate, vault) = if site {
+        let ice = crate::sitenet::ice(st, b);
+        (ice.g, ice.vault)
+    } else {
+        let has_vault =
+            (city.net.nodes.iter()).any(|n| n.building == Some(b) && n.kind == NodeKind::DataVault);
+        let vault = (has_vault && security >= citygen::construct::GREY_THRESHOLD).then_some(
+            if security >= citygen::construct::BLACK_THRESHOLD {
+                IceGrade::Black
+            } else {
+                IceGrade::Grey
+            },
+        );
+        (gate_ice(security), vault)
+    };
+    let ice = match (gate, vault) {
         (None, _) => tier_word(tier).to_string(),
         (Some(g), None) => format!("gate {}", g.label()),
         (Some(g), Some(v)) => format!("gate {} · vault {}", g.label(), v.label()),

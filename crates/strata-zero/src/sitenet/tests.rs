@@ -318,6 +318,28 @@ fn a_sites_net_is_worked_out_once_and_kept() {
 }
 
 #[test]
+fn a_sites_card_and_scan_word_its_ice_by_the_sites_own_rule() {
+    // A white beside G's hub from 100; from 200 a grey over every level, G's too; from 230
+    // a black beside the data vault (the job's server room holds one).
+    for (security, card, scan) in [
+        (120, "gate white", "WHITE"),
+        (230, "gate grey · vault black", "BLACK"),
+    ] {
+        let (mut st, b) = office_copy(security);
+        let words = |st: &crate::app::AppState| {
+            let card = crate::net::card_lines(st, b, None)[1].to_string();
+            (card, crate::access::scan_row(st, 0, b))
+        };
+        let (c, row) = words(&st);
+        assert_eq!(c, format!(" SEC {security} · {card}"));
+        assert!(row.contains(&format!("ICE {scan:<5} ")), "{row:?}");
+        // Once its construct is made, the same words, read off its pieces.
+        ensure_construct(&mut st, b).unwrap();
+        assert_eq!(words(&st), (c, row), "at {security}");
+    }
+}
+
+#[test]
 fn a_site_entered_through_its_firewall_keeps_its_plan() {
     let (mut st, _) = office_plain();
     let city = st.city.clone().unwrap();
