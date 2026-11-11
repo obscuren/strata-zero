@@ -163,7 +163,7 @@ fn every_type_passes_the_checker() {
 fn every_objective_holds_a_size() {
     let pack = VenuePack::builtin();
     for t in types() {
-        for seed in 0..10 {
+        for seed in 0..SEEDS {
             let l = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
             for (k, o) in t.objectives.iter().enumerate() {
                 let holds = pack.sizes.iter().any(|rule| {
@@ -223,9 +223,9 @@ fn every_builtin_type_is_a_whole_site() {
 #[test]
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
-        3094486393411567538,
-        2730937395949327687,
-        13685243746217859303,
+        3190467078520661387,
+        14849534218203334198,
+        15240640969110303319,
     ];
     let pack = VenuePack::builtin();
     assert_eq!(

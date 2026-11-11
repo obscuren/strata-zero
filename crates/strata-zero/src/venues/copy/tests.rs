@@ -592,7 +592,7 @@ fn a_track_to_a_dropped_floor_finds_no_way() {
         .unwrap();
     let spot = Source::Spot {
         place: floor(b, x.level),
-        pos: x.rooms[0].spots[0],
+        pos: *x.rooms.iter().find_map(|r| r.spots.first()).unwrap(),
         radius: 1,
     };
     crate::track::set(&mut st, spot).unwrap();
