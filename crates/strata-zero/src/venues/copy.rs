@@ -9,7 +9,7 @@
 //! what you dropped there stays where it lies, and the codes you learned still work.
 
 use crate::app::AppState;
-use citygen::venue::{MissionInputs, MissionLayer, MissionSize, VenuePack, draw_copy_level};
+use citygen::venue::{MissionInputs, MissionLayer, VenuePack, draw_copy_level};
 use citygen::{BuildingId, Floor, FloorPlan, Place, Pos, StratumKind};
 use game::ItemId;
 
@@ -51,7 +51,7 @@ pub(crate) fn copy_floor(plan: &FloorPlan, copy: &MissionCopy, level: i32) -> Op
 }
 
 /// Whether the player stands on a floor of building `b`.
-fn inside(st: &AppState, b: BuildingId) -> bool {
+pub(super) fn inside(st: &AppState, b: BuildingId) -> bool {
     matches!(
         st.player.as_ref().map(|p| p.place),
         Some(Place::Floor { building, .. }) if building == b
@@ -65,10 +65,6 @@ pub fn copy_live(st: &AppState, b: BuildingId) -> bool {
 
 /// Takes a site for a mission. Err when it already holds one, isn't a venue, or can't hold
 /// the size.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the console's `site` and the jobs begin missions")
-)]
 pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<String, String> {
     if st.interiors.copy(b).is_some() {
         return Err("a job is already on there".to_string());
@@ -78,11 +74,7 @@ pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<
     let layout = plan.venue.as_deref().ok_or("that building is no venue")?;
     let pack = VenuePack::builtin();
     let t = (pack.by_id(&layout.type_id)).ok_or("that venue's type is gone from this build")?;
-    let size = match inputs.size {
-        MissionSize::Small => "small",
-        MissionSize::Medium => "medium",
-        MissionSize::Large => "large",
-    };
+    let size = inputs.size.label();
     let layer = MissionLayer::lay(layout, t, pack.size(inputs.size), inputs)
         .map_err(|_| format!("that building can't hold a {size} job"))?;
     let copy = MissionCopy {
@@ -103,10 +95,6 @@ pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<
 }
 
 /// Lets the site go; it happens at once when you're out, else when you are.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the console's `site` and the jobs end missions")
-)]
 pub fn end(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     let copy = (st.interiors.copy_mut(b)).ok_or("no job on there")?;
     copy.ending = true;

@@ -1,6 +1,6 @@
 //! Dev console commands: spawn and drop items, give credits, heal, xp, focus, count the
-//! people, jump the clock, clear a pile, show who sees you and how lit the map is, and
-//! free chrome from the ripperdoc's chair.
+//! people, jump the clock, clear a pile, show who sees you and how lit the map is, free
+//! chrome from the ripperdoc's chair, and make any building a venue's site for a mission.
 
 use crate::anim::effects::pulse;
 use crate::app::AppState;
@@ -12,12 +12,16 @@ use game::{At, ItemId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const COMMANDS: [&str; 43] = [
+const COMMANDS: [&str; 44] = [
     "spawn", "drop", "give", "heal", "xp", "focus", "sp", "pts", "talent", "tpts", "program",
     "heat", "alarm", "wake", "engage", "calm", "ice", "failsafe", "hp", "who", "clock", "tp",
     "clear", "help", "trace", "seize", "backdoor", "eyes", "light", "time", "job", "standing",
     "jobs", "target", "foe", "foes", "dummy", "throw", "live", "ripper", "story", "track", "wait",
+    "site",
 ];
+
+/// What `site` takes.
+const SITE_USAGE: &str = "site <type> [size] [objective] [security] [seed] | end";
 
 /// The screen a line that ran well opens over the map: the Wait window for `wait`.
 pub fn opens(st: &AppState, line: &str) -> Option<Box<dyn crate::app::Screen>> {
@@ -596,6 +600,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
         }
         "story" => story(st, &args),
         "track" => track(st, &args),
+        "site" => site(st, focus, &args),
         "jobs" => {
             if st.jobs.list.is_empty() {
                 return Ok("no jobs".to_string());
@@ -671,7 +676,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · clear · help"
+            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · site <type> [size] [objective] [security] [seed] | end · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -758,6 +763,90 @@ fn track(st: &mut AppState, args: &[&str]) -> Result<String, String> {
             }
         }
     }
+}
+
+/// `site`: lists the venue types; `<type> [size] [objective] [security] [seed]` makes the
+/// building whose door is at the focus that type's site and begins a mission's copy there
+/// (small, the type's first objective, security 128 and the tick by default); `end` ends
+/// the copy at the focus building, else the only one there is.
+fn site(st: &mut AppState, focus: At, args: &[&str]) -> Result<String, String> {
+    use citygen::venue::{MissionInputs, MissionSize, VenuePack};
+    let pack = VenuePack::builtin();
+    let ids = || {
+        (pack.types.iter())
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    match args {
+        [] => Ok(format!("site types: {}", ids())),
+        ["end"] => {
+            let here = crate::venues::building_at_door(st, focus)
+                .filter(|b| st.interiors.copy(*b).is_some());
+            let b = match here {
+                Some(b) => b,
+                None => match (st.interiors.copies()).map(|(b, _)| b).collect::<Vec<_>>()[..] {
+                    [b] => b,
+                    [] => return Err("no job on".to_string()),
+                    _ => return Err("several jobs on · stand at one's door".to_string()),
+                },
+            };
+            crate::venues::end(st, b)
+        }
+        [id, rest @ ..] if rest.len() <= 4 => {
+            let t = (pack.by_id(id)).ok_or_else(|| format!("no site type {id} · {}", ids()))?;
+            let size = match rest.first() {
+                Some(w) => MissionSize::parse(w).ok_or(SITE_USAGE)?,
+                None => MissionSize::Small,
+            };
+            let objective = match rest.get(1) {
+                Some(w) => (t.objectives.iter().position(|o| o.id == *w))
+                    .ok_or_else(|| format!("{id} has no objective {w}"))?,
+                None => 0,
+            };
+            let security = match rest.get(2) {
+                Some(w) => w.parse().map_err(|_| SITE_USAGE)?,
+                None => 128,
+            };
+            let seed = match rest.get(3) {
+                Some(w) => w.parse().map_err(|_| SITE_USAGE)?,
+                None => st.tick,
+            };
+            if matches!(focus.place, citygen::Place::Floor { .. }) {
+                return Err("step outside first".to_string());
+            }
+            let b =
+                crate::venues::building_at_door(st, focus).ok_or("stand at a building's door")?;
+            let inputs = MissionInputs {
+                size,
+                objective,
+                security,
+                seed,
+            };
+            crate::venues::dev_site(st, b, id, inputs)
+        }
+        _ => Err(SITE_USAGE.to_string()),
+    }
+}
+
+/// `site`'s completions: the type ids and `end`, a type's sizes, then its objectives.
+fn site_words(args: &[&str], word: &str) -> Vec<String> {
+    use citygen::venue::{MissionSize, VenuePack};
+    let pack = VenuePack::builtin();
+    let words: Vec<String> = match args {
+        [] => (pack.types.iter())
+            .map(|t| t.id.clone())
+            .chain(["end".to_string()])
+            .collect(),
+        [id] if pack.by_id(id).is_some() => (MissionSize::ALL.iter())
+            .map(|s| s.label().to_string())
+            .collect(),
+        [id, _] => (pack.by_id(id).into_iter())
+            .flat_map(|t| t.objectives.iter().map(|o| o.id.clone()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    words.into_iter().filter(|w| w.starts_with(word)).collect()
 }
 
 /// `story`: the cast, missions and scenes; `fire <mission>` runs its waiting step;
@@ -864,6 +953,8 @@ pub fn complete(st: &AppState, head: &str, word: &str) -> Vec<String> {
             .map(|i| i.id.0.clone())
             .filter(|id| id.starts_with(word))
             .collect()
+    } else if let ["site", args @ ..] = &head.split_whitespace().collect::<Vec<_>>()[..] {
+        site_words(args, word)
     } else if head.trim() == "story" {
         ["fire", "scene", "skip", "news", "feed", "call"]
             .iter()
@@ -1528,5 +1619,229 @@ mod tests {
         let until = crate::rest::now(&st) + 600;
         crate::rest::start(&mut st, crate::rest::Kind::Sleep, until);
         assert!(run(&mut st, at, "wait").is_err(), "not while resting");
+    }
+
+    const STREET: citygen::Place = citygen::Place::Stratum(StratumKind::Street);
+
+    /// You on the street beside building `b`'s first street door, as the console's focus.
+    fn beside_door(st: &mut AppState, b: citygen::BuildingId) -> At {
+        let city = st.city.clone().unwrap();
+        let fp = city.building(b).footprint;
+        let door = (city.portals(b).iter())
+            .find(|(k, _)| *k == StratumKind::Street)
+            .unwrap()
+            .1;
+        let pos = (door.neighbors4())
+            .find(|p| !fp.contains(*p) && city.walkable(StratumKind::Street, *p))
+            .unwrap();
+        st.player = Some(crate::walker::Player::at(STREET, pos));
+        At { place: STREET, pos }
+    }
+
+    /// The seed-6 city, dev mode on, you on the street beside its first office's street
+    /// door: the office and the focus.
+    fn at_an_office() -> (AppState, At, citygen::BuildingId) {
+        let mut st = city_state();
+        st.unlock_dev();
+        let b = (st.city.as_ref().unwrap().buildings.iter())
+            .find(|x| x.kind == citygen::BuildingKind::Office)
+            .unwrap()
+            .id;
+        let at = beside_door(&mut st, b);
+        (st, at, b)
+    }
+
+    /// The first builtin type's id, read from the pack.
+    fn first_type() -> String {
+        citygen::venue::VenuePack::builtin().types[0].id.clone()
+    }
+
+    /// Whether any of building `b`'s city-map doors shows flagged.
+    fn flagged(st: &AppState, b: citygen::BuildingId) -> bool {
+        let city = st.city.as_ref().unwrap();
+        (crate::venues::door_marks(st).into_iter()).any(|(k, p, m)| {
+            m == crate::venues::DoorMark::Flagged
+                && city.tile(k, p).and_then(|t| t.building) == Some(b)
+        })
+    }
+
+    /// Whether a guard posted to building `b` stands anywhere.
+    fn guarded(st: &AppState, b: citygen::BuildingId) -> bool {
+        (st.foes.iter()).any(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+    }
+
+    #[test]
+    fn site_turns_a_building_into_a_copy() {
+        let (mut st, at, b) = at_an_office();
+        let id = first_type();
+        let line = run(&mut st, at, &format!("site {id} small")).unwrap();
+        assert!(line.contains("a small job on"), "{line}");
+        let plan = st.interiors.plan_of(b).unwrap();
+        assert_eq!(plan.venue.as_deref().unwrap().type_id, id);
+        assert!(crate::venues::copy_live(&st, b));
+        assert!(flagged(&st, b), "its doors are flagged");
+        assert!(guarded(&st, b), "its guards stand at their posts");
+        assert_eq!(
+            run(&mut st, at, &format!("site {id} small")).unwrap_err(),
+            "a job is already on there"
+        );
+    }
+
+    #[test]
+    fn site_end_brings_it_back() {
+        let (mut st, at, b) = at_an_office();
+        assert_eq!(run(&mut st, at, "site end").unwrap_err(), "no job on");
+        run(&mut st, at, &format!("site {} small", first_type())).unwrap();
+        let line = run(&mut st, at, "site end").unwrap();
+        assert!(line.contains("is over"), "{line}");
+        assert!(st.interiors.copy(b).is_none());
+        assert!(!flagged(&st, b), "no door flagged");
+        assert!(!guarded(&st, b), "no guard posted there");
+        // Away from its door, the only job there is is the one ended.
+        run(&mut st, at, &format!("site {} small", first_type())).unwrap();
+        let away = At {
+            place: STREET,
+            pos: Pos::new(0, 0),
+        };
+        run(&mut st, away, "site end").unwrap();
+        assert!(st.interiors.copy(b).is_none());
+    }
+
+    #[test]
+    fn site_lists_types_and_completes_ids() {
+        let (mut st, at, _) = at_an_office();
+        let pack = citygen::venue::VenuePack::builtin();
+        let listed = run(&mut st, at, "site").unwrap();
+        let words = complete(&st, "site", "");
+        for t in &pack.types {
+            assert!(listed.contains(&t.id), "{listed}");
+            assert!(words.contains(&t.id), "{words:?}");
+        }
+        assert!(words.contains(&"end".to_string()), "{words:?}");
+        let id = first_type();
+        assert_eq!(
+            complete(&st, &format!("site {id}"), ""),
+            ["small", "medium", "large"]
+        );
+        assert_eq!(complete(&st, &format!("site {id} "), "me"), ["medium"]);
+        let objectives: Vec<String> = (pack.types[0].objectives.iter())
+            .map(|o| o.id.clone())
+            .collect();
+        assert_eq!(complete(&st, &format!("site {id} small"), ""), objectives);
+        assert_eq!(complete(&st, "", "sit"), ["site"]);
+        assert!(
+            run(&mut st, at, "help")
+                .unwrap()
+                .contains("site <type> [size] [objective] [security] [seed] | end")
+        );
+        assert!(
+            run(&mut st, at, "site nowhere")
+                .unwrap_err()
+                .contains("no site type nowhere")
+        );
+        assert_eq!(
+            run(&mut st, at, &format!("site {id} huge")).unwrap_err(),
+            "site <type> [size] [objective] [security] [seed] | end"
+        );
+        assert!(
+            (run(&mut st, at, &format!("site {id} small nothing")).unwrap_err())
+                .contains("no objective nothing")
+        );
+    }
+
+    #[test]
+    fn site_refuses_home_and_inside() {
+        let mut st = crate::jobs::testutil::state_home();
+        st.unlock_dev();
+        let home = st.home.unwrap().home.building;
+        let id = first_type();
+        let plan = st.interiors.plan_of(home).cloned();
+        let drawn = st.interiors.generated();
+        let at = beside_door(&mut st, home);
+        assert_eq!(
+            run(&mut st, at, &format!("site {id}")).unwrap_err(),
+            "not your own building"
+        );
+        assert_eq!(st.interiors.plan_of(home).cloned(), plan, "the home's plan");
+        assert_eq!(st.interiors.generated(), drawn, "and its floors");
+        // On a floor of another building.
+        let city = st.city.clone().unwrap();
+        let other = (city.buildings.iter())
+            .find(|x| x.kind == citygen::BuildingKind::Office)
+            .unwrap()
+            .id;
+        let door = city.portals(other)[0];
+        crate::interiors::enter(&mut st, other, door).unwrap();
+        let p = st.player.as_ref().unwrap();
+        let inside = At {
+            place: p.place,
+            pos: p.pos,
+        };
+        assert!(matches!(inside.place, citygen::Place::Floor { .. }));
+        assert_eq!(
+            run(&mut st, inside, &format!("site {id}")).unwrap_err(),
+            "step outside first"
+        );
+        assert_eq!(
+            crate::venues::dev_site(
+                &mut st,
+                other,
+                &id,
+                citygen::venue::MissionInputs {
+                    size: citygen::venue::MissionSize::Small,
+                    objective: 0,
+                    security: 128,
+                    seed: 0,
+                }
+            )
+            .unwrap_err(),
+            "step outside first"
+        );
+    }
+
+    #[test]
+    fn site_raises_a_low_building_to_hold_the_size() {
+        use citygen::venue::{MissionSize, VenueFrame, VenuePack, building_seed, lay_out};
+        let (mut st, ..) = at_an_office();
+        let city = st.city.clone().unwrap();
+        let pack = VenuePack::builtin();
+        // The tallest own frame first: a type and a building lower than its frame that
+        // holds a small job as the city made it but a large one only raised.
+        let mut types: Vec<_> = pack.types.iter().collect();
+        types.sort_by_key(|t| std::cmp::Reverse(t.frame.top));
+        let holds = |t, frame: VenueFrame, b, size| {
+            lay_out(t, frame, building_seed(city.seed, b))
+                .is_ok_and(|l| l.holds(t, pack.size(size)))
+        };
+        let (t, b, top) = (types.iter())
+            .find_map(|t| {
+                city.buildings.iter().find_map(|x| {
+                    let frame = VenueFrame::of_building(&city, x.id)?;
+                    let low = frame.storeys.1 < t.frame.top;
+                    let street =
+                        (city.portals(x.id).iter()).any(|(k, _)| *k == StratumKind::Street);
+                    (low && street
+                        && holds(t, frame.clone(), x.id, MissionSize::Small)
+                        && !holds(t, frame.clone(), x.id, MissionSize::Large)
+                        && holds(
+                            t,
+                            frame.clone().raised(t.frame.top),
+                            x.id,
+                            MissionSize::Large,
+                        ))
+                    .then_some((*t, x.id, frame.storeys.1))
+                })
+            })
+            .expect("a building that holds a large job only raised");
+        let at = beside_door(&mut st, b);
+        run(&mut st, at, &format!("site {} large", t.id)).unwrap();
+        assert_eq!(st.interiors.plan_of(b).unwrap().top(), t.frame.top);
+        run(&mut st, at, "site end").unwrap();
+        run(&mut st, at, &format!("site {} small", t.id)).unwrap();
+        assert_eq!(
+            st.interiors.plan_of(b).unwrap().top(),
+            top,
+            "as the city made it"
+        );
     }
 }

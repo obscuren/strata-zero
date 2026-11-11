@@ -2,20 +2,17 @@
 //! in from the city, what a lock's number names, what a step onto a venue's door or grille
 //! meets, which doors in from the city stay shut to you, how far a walk across a level
 //! gets past what the player can open now, and a mission's guards at their posts. A
-//! mission's copy of a venue is in `copy`.
+//! mission's copy of a venue is in `copy`, and the dev sites the console and the title
+//! lay are in `dev`.
 
 mod copy;
+mod dev;
 
 pub(crate) use copy::copy_floor;
-pub use copy::{DoorMark, MissionCopy, copy_live, door_mark_at, door_marks, note_at, tick};
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the console's `site` and the jobs begin missions"
-    )
-)]
-pub use copy::{begin, end};
+pub use copy::{
+    DoorMark, MissionCopy, begin, copy_live, door_mark_at, door_marks, end, note_at, tick,
+};
+pub use dev::{building_at_door, dev_site, dev_start};
 
 use crate::app::AppState;
 use crate::credentials::{self, How};

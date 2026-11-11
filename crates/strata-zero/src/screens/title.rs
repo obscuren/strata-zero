@@ -1,4 +1,7 @@
-//! The title screen: block-letter logo, animated menu.
+//! The title screen: block-letter logo, animated menu. In dev mode its DEVELOPER row opens
+//! the test starts (`developer`).
+
+mod developer;
 
 use crate::anim::effects::typewriter;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
@@ -11,7 +14,11 @@ use crate::screens::runs::{FAINT, RunsScreen};
 use crate::ui::chrome::{CYAN, DIM};
 use crate::ui::logo::{self, Logo};
 use crate::ui::menu::{Menu, MenuView};
+use citygen::venue::MissionSize;
 use crossterm::event::{KeyCode, KeyEvent};
+use developer::{Developer, Pick};
+#[cfg(test)]
+use developer::{PICKED, UNPICKED};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -37,12 +44,10 @@ enum Entry {
     NewGame,
     /// Dev mode: D'SHAWN, maxed out, into a fresh city.
     Debug,
-    /// Dev mode: D'SHAWN on the lot, on the street or the Net.
-    Combat,
+    /// Dev mode: the test starts, a menu of their own (the sites, COMBAT, LOAD CITY).
+    Developer,
     /// The runs still going.
     Load,
-    /// Dev mode: a city from its `.city` file, a run started over in it.
-    LoadCity,
     /// The runs that flatlined.
     Hall,
     /// The player's manual, on its cover.
@@ -51,8 +56,8 @@ enum Entry {
 }
 
 impl Entry {
-    /// The rows: CONTINUE when there is a run to go on with, the debug starts and LOAD
-    /// CITY only in dev mode.
+    /// The rows: CONTINUE when there is a run to go on with, the debug start and
+    /// DEVELOPER only in dev mode.
     fn rows(dev: bool, can_continue: bool) -> Vec<Entry> {
         let mut rows = Vec::new();
         if can_continue {
@@ -60,13 +65,9 @@ impl Entry {
         }
         rows.push(Entry::NewGame);
         if dev {
-            rows.extend([Entry::Debug, Entry::Combat]);
+            rows.extend([Entry::Debug, Entry::Developer]);
         }
-        rows.push(Entry::Load);
-        if dev {
-            rows.push(Entry::LoadCity);
-        }
-        rows.extend([Entry::Hall, Entry::Manual, Entry::Quit]);
+        rows.extend([Entry::Load, Entry::Hall, Entry::Manual, Entry::Quit]);
         rows
     }
 
@@ -75,9 +76,8 @@ impl Entry {
             Entry::Continue => "CONTINUE",
             Entry::NewGame => "NEW GAME",
             Entry::Debug => "NEW GAME (DEBUG)",
-            Entry::Combat => COMBAT_LABEL,
+            Entry::Developer => "DEVELOPER",
             Entry::Load => "LOAD GAME",
-            Entry::LoadCity => "LOAD CITY",
             Entry::Hall => "HALL OF FAME",
             Entry::Manual => "MANUAL",
             Entry::Quit => "QUIT",
@@ -96,17 +96,12 @@ pub fn logo_origin(area: Rect) -> (u16, u16) {
     )
 }
 
-const COMBAT_LABEL: &str = "NEW GAME · COMBAT";
-/// The pick in pink, the other in a grey that still reads.
-const PICKED: Color = Color::Rgb(255, 0, 200);
-const UNPICKED: Color = Color::Rgb(120, 125, 135);
-
 pub struct Title {
     menu: Menu,
     entries: Vec<Entry>,
     opened: u64,
-    /// The COMBAT start's map, picked with the arrows on its row.
-    combat: CombatMap,
+    /// DEVELOPER's menu while it's open, in the title's rows' place.
+    developer: Option<Developer>,
     /// Keys before this tick are dropped, and each one dropped pushes it on (see
     /// `after_splash`).
     quiet_until: u64,
@@ -196,6 +191,52 @@ impl Title {
         }
     }
 
+    /// A DEVELOPER site row: NEW GAME (DEBUG)'s start, then a building away from home laid
+    /// out as type `type_id` at `size`, its mission's copy begun when `mission`, and you on
+    /// the street at its main door. A map opened now opens there; the start's own would
+    /// stand where it woke you.
+    fn site_game(
+        &self,
+        st: &mut AppState,
+        type_id: &str,
+        size: MissionSize,
+        mission: bool,
+    ) -> ScreenCmd {
+        let ScreenCmd::Switch { fx, .. } = self.debug_game(st) else {
+            return ScreenCmd::Stay;
+        };
+        if let Err(why) = crate::venues::dev_start(st, type_id, size, mission) {
+            st.warn(why);
+        }
+        ScreenCmd::Switch {
+            to: Box::new(crate::screens::explore::MapScreen::walking(st)),
+            fx,
+        }
+    }
+
+    /// What DEVELOPER's row asks for: a start, LOAD CITY's list, or the title's own rows
+    /// back, typing themselves in again.
+    fn pick(&mut self, st: &mut AppState, pick: Pick) -> ScreenCmd {
+        match pick {
+            Pick::Site {
+                type_id,
+                size,
+                mission,
+            } => self.site_game(st, &type_id, size, mission),
+            Pick::Combat(CombatMap::Street) => self.combat_game(st),
+            Pick::Combat(CombatMap::Net) => self.net_game(st),
+            Pick::LoadCity => ScreenCmd::Push {
+                to: Box::new(Files::load(st)),
+                fx: TransitionKind::SlideUp,
+            },
+            Pick::Back => {
+                self.developer = None;
+                self.menu.opened = st.tick;
+                ScreenCmd::Stay
+            }
+        }
+    }
+
     /// The title for `st`: CONTINUE on it, under the cursor, while a run in its saves
     /// folder is still going; the debug starts while dev mode is on.
     pub fn new(st: &AppState, tick: u64) -> Self {
@@ -208,7 +249,7 @@ impl Title {
             ),
             entries,
             opened: tick,
-            combat: CombatMap::Street,
+            developer: None,
             quiet_until: 0,
             newest,
             error: None,
@@ -296,40 +337,6 @@ impl Title {
     fn selected(&self) -> Entry {
         self.entries[self.menu.selected]
     }
-
-    /// The COMBAT row's map pick, drawn after its label: `NET · STREET`, the pick
-    /// in pink, the other in grey.
-    fn draw_combat_pick(&self, area: Rect, menu_x: u16, menu_y: u16, tick: u64, f: &mut Frame) {
-        let Some(row) = self.entries.iter().position(|e| *e == Entry::Combat) else {
-            return;
-        };
-        if self.menu.entrance(row, tick) < 1.0 {
-            return;
-        }
-        let y = menu_y + row as u16;
-        let x = menu_x + 2 + COMBAT_LABEL.chars().count() as u16 + 2;
-        if y >= area.bottom() {
-            return;
-        }
-        let buf = f.buffer_mut();
-        let mut put = |x0: u16, s: &str, fg: Color, bold: bool| {
-            for (i, ch) in s.chars().enumerate() {
-                let cx = x0 + i as u16;
-                if cx >= area.right() {
-                    break;
-                }
-                let mut style = Style::default().fg(fg);
-                if bold {
-                    style = style.add_modifier(ratatui::style::Modifier::BOLD);
-                }
-                buf[(cx, y)].set_char(ch).set_style(style);
-            }
-        };
-        let net = self.combat == CombatMap::Net;
-        put(x, "NET", if net { PICKED } else { UNPICKED }, net);
-        put(x + 3, " · ", UNPICKED, false);
-        put(x + 6, "STREET", if net { UNPICKED } else { PICKED }, !net);
-    }
 }
 
 impl Screen for Title {
@@ -341,18 +348,19 @@ impl Screen for Title {
             return ScreenCmd::Stay;
         }
         for k in keys {
+            // DEVELOPER, while open, takes the keys.
+            if let Some(dev) = self.developer.as_mut() {
+                if let Some(pick) = dev.key(k) {
+                    let cmd = self.pick(st, pick);
+                    if !matches!(cmd, ScreenCmd::Stay) {
+                        return cmd;
+                    }
+                }
+                continue;
+            }
             match k.code {
                 KeyCode::Up | KeyCode::Char('k') => self.menu.up(),
                 KeyCode::Down | KeyCode::Char('j') => self.menu.down(),
-                // On the COMBAT row the arrows pick the map.
-                KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
-                    if self.selected() == Entry::Combat =>
-                {
-                    self.combat = match self.combat {
-                        CombatMap::Net => CombatMap::Street,
-                        CombatMap::Street => CombatMap::Net,
-                    };
-                }
                 KeyCode::Char('q') | KeyCode::Esc => return ScreenCmd::Quit,
                 KeyCode::Enter => {
                     let cmd = match self.selected() {
@@ -362,16 +370,12 @@ impl Screen for Title {
                             fx: TransitionKind::SlideUp,
                         },
                         Entry::Debug => self.debug_game(st),
-                        Entry::Combat => match self.combat {
-                            CombatMap::Street => self.combat_game(st),
-                            CombatMap::Net => self.net_game(st),
-                        },
+                        Entry::Developer => {
+                            self.developer = Some(Developer::new(st.tick));
+                            ScreenCmd::Stay
+                        }
                         Entry::Load => ScreenCmd::Push {
                             to: Box::new(RunsScreen::load(st)),
-                            fx: TransitionKind::SlideUp,
-                        },
-                        Entry::LoadCity => ScreenCmd::Push {
-                            to: Box::new(Files::load(st)),
                             fx: TransitionKind::SlideUp,
                         },
                         Entry::Hall => ScreenCmd::Push {
@@ -426,25 +430,29 @@ impl Screen for Title {
         );
 
         let menu_y = y + logo::ROWS + 4;
-        let menu_x = area.x + area.width / 2 - 6;
-        MenuView {
-            menu: &self.menu,
-            tick: st.tick,
-            accent: Rgb(0, 255, 230),
+        if let Some(dev) = self.developer.as_ref() {
+            dev.draw(area, menu_y, st.tick, f);
+        } else {
+            let menu_x = area.x + area.width / 2 - 6;
+            MenuView {
+                menu: &self.menu,
+                tick: st.tick,
+                accent: Rgb(0, 255, 230),
+            }
+            .render(
+                Rect::new(
+                    menu_x,
+                    menu_y,
+                    area.width.saturating_sub(menu_x - area.x),
+                    self.menu.items.len() as u16,
+                ),
+                f.buffer_mut(),
+            );
+            self.draw_run_line(area, menu_y, st.tick, f);
         }
-        .render(
-            Rect::new(
-                menu_x,
-                menu_y,
-                area.width.saturating_sub(menu_x - area.x),
-                self.menu.items.len() as u16,
-            ),
-            f.buffer_mut(),
-        );
-        self.draw_combat_pick(area, menu_x, menu_y, st.tick, f);
-        self.draw_run_line(area, menu_y, st.tick, f);
 
-        let hint = "↑↓ select · enter confirm · q quit";
+        let hint =
+            (self.developer.as_ref()).map_or("↑↓ select · enter confirm · q quit", Developer::hint);
         let hx = area.x + area.width.saturating_sub(hint.chars().count() as u16) / 2;
         f.render_widget(
             Paragraph::new(Span::styled(hint, Style::default().fg(FAINT))),
@@ -456,6 +464,31 @@ impl Screen for Title {
             ),
         );
     }
+}
+
+/// The COMBAT start on `map` from a dev's title, as its keys reach it: DEVELOPER, then its
+/// COMBAT row.
+#[cfg(test)]
+pub(crate) fn combat_start(st: &mut AppState, map: CombatMap) -> ScreenCmd {
+    use crate::screens::testutil::key;
+    let mut t = Title::new(st, 0);
+    let down_to = |t: &mut Title, st: &mut AppState, label: &str| {
+        let menu = |t: &Title| match t.developer.as_ref() {
+            Some(d) => (d.menu.items.clone(), d.menu.selected),
+            None => (t.menu.items.clone(), t.menu.selected),
+        };
+        let at = (menu(t).0.iter().position(|r| r == label)).expect("dev mode's rows");
+        while menu(t).1 != at {
+            t.update(st, &[key(KeyCode::Down)]);
+        }
+    };
+    down_to(&mut t, st, "DEVELOPER");
+    t.update(st, &[key(KeyCode::Enter)]);
+    down_to(&mut t, st, "COMBAT");
+    if map == CombatMap::Net {
+        t.update(st, &[key(KeyCode::Left)]);
+    }
+    t.update(st, &[key(KeyCode::Enter)])
 }
 
 #[cfg(test)]
@@ -500,9 +533,8 @@ mod tests {
             title.update(&mut st, &[key(KeyCode::Char('q'))]),
             ScreenCmd::Quit
         ));
-        // NEW GAME, the two debug starts, LOAD GAME, LOAD CITY, HALL OF FAME, MANUAL,
-        // QUIT.
-        title.update(&mut st, &[key(KeyCode::Down); 7]);
+        // NEW GAME, NEW GAME (DEBUG), DEVELOPER, LOAD GAME, HALL OF FAME, MANUAL, QUIT.
+        title.update(&mut st, &[key(KeyCode::Down); 6]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Quit
@@ -513,7 +545,7 @@ mod tests {
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
         ));
-        title.update(&mut st, &[key(KeyCode::Up); 6]);
+        title.update(&mut st, &[key(KeyCode::Up); 5]);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
@@ -559,13 +591,17 @@ mod tests {
             "{text}"
         );
         assert!(
-            !text.contains("DEBUG") && !text.contains("COMBAT") && !text.contains("STREET"),
+            !text.contains("DEBUG")
+                && !text.contains("DEVELOPER")
+                && !text.contains("COMBAT")
+                && !text.contains("STREET"),
             "{text}"
         );
         // The second row loads, the third is the hall, the fourth the manual, the fifth
         // quits; the arrows pick nothing.
         title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Left)]);
-        assert_eq!(title.combat, CombatMap::Street);
+        assert!(title.developer.is_none());
+        assert_eq!(title.selected(), Entry::Load);
         assert!(matches!(
             title.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Push { .. }
@@ -587,7 +623,7 @@ mod tests {
         st.set_dev(false);
         assert_eq!(Title::new(&st, 0).entries.len(), 5);
         st.set_dev(true);
-        assert_eq!(Title::new(&st, 0).entries.len(), 8);
+        assert_eq!(Title::new(&st, 0).entries.len(), 7);
     }
 
     #[test]
@@ -621,15 +657,15 @@ mod tests {
         let mut st = AppState::new();
         st.unlock_dev();
         let mut t = Title::new(&st, 0);
+        open_developer(&mut t, &mut st);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        st.tick = 60;
+        st.tick = 120;
         term.draw(|f| t.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
-        assert!(text.contains("NEW GAME · COMBAT"), "{text}");
+        assert!(text.contains("COMBAT"), "{text}");
         // Five hours of ticks already spent this session: the lot still opens at 18:15.
         st.tick = 90 * 300;
-        t.update(&mut st, &[key(KeyCode::Down)]);
-        t.update(&mut st, &[key(KeyCode::Down)]);
+        to_row(&mut t, &mut st, "COMBAT");
         let ScreenCmd::Switch {
             to: map,
             fx: TransitionKind::Glitch,
@@ -667,35 +703,36 @@ mod tests {
         let mut st = AppState::new();
         st.unlock_dev();
         let mut t = Title::new(&st, 0);
+        open_developer(&mut t, &mut st);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        st.tick = 60;
+        st.tick = 120;
         term.draw(|f| t.draw(&st, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
-        assert!(text.contains("NEW GAME · COMBAT  NET · STREET"), "{text}");
+        let row = text.lines().position(|l| l.contains("COMBAT")).unwrap();
+        assert!(
+            text.lines().nth(row).unwrap().contains("NET · STREET"),
+            "the pick on COMBAT's row: {text}"
+        );
         // STREET picked by default, in pink; NET in grey. Left flips them.
         let cell_of = |term: &Terminal<TestBackend>, word: &str| {
-            let buf = term.backend().buffer();
-            let row = text
-                .lines()
-                .position(|l| l.contains("NET · STREET"))
-                .unwrap() as u16;
-            let line = text.lines().nth(row as usize).unwrap();
-            let col = line.find(word).unwrap() as u16;
-            buf[(col, row)].fg
+            let line = text.lines().nth(row).unwrap();
+            let col = line[..line.find(word).unwrap()].chars().count() as u16;
+            term.backend().buffer()[(col, row as u16)].fg
         };
         assert_eq!(cell_of(&term, "STREET"), PICKED);
-        assert_eq!(cell_of(&term, "NET"), UNPICKED);
-        t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        assert_eq!(cell_of(&term, "NET "), UNPICKED);
+        let combat = |t: &Title| t.developer.as_ref().unwrap().combat;
+        to_row(&mut t, &mut st, "COMBAT");
         t.update(&mut st, &[key(KeyCode::Left)]);
-        assert_eq!(t.combat, CombatMap::Net);
+        assert_eq!(combat(&t), CombatMap::Net);
         term.draw(|f| t.draw(&st, f)).unwrap();
-        assert_eq!(cell_of(&term, "NET"), PICKED);
+        assert_eq!(cell_of(&term, "NET "), PICKED);
         assert_eq!(cell_of(&term, "STREET"), UNPICKED);
-        // The arrows do nothing on another row.
-        t.update(&mut st, &[key(KeyCode::Up)]);
-        t.update(&mut st, &[key(KeyCode::Right)]);
-        assert_eq!(t.combat, CombatMap::Net);
+        // The arrows pick nothing of COMBAT's on another row.
         t.update(&mut st, &[key(KeyCode::Down)]);
+        t.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(combat(&t), CombatMap::Net);
+        t.update(&mut st, &[key(KeyCode::Up)]);
         // NET: straight onto the lot's construct, no broadcast.
         let ScreenCmd::Switch { to: map, .. } = t.update(&mut st, &[key(KeyCode::Enter)]) else {
             panic!("straight to the map")
@@ -751,6 +788,176 @@ mod tests {
                 },
                 "a new game wakes up at home"
             );
+        }
+    }
+
+    /// DEVELOPER opened from the title.
+    fn open_developer(t: &mut Title, st: &mut AppState) {
+        let at = t
+            .entries
+            .iter()
+            .position(|e| *e == Entry::Developer)
+            .unwrap();
+        while t.menu.selected != at {
+            t.update(st, &[key(KeyCode::Down)]);
+        }
+        assert!(matches!(
+            t.update(st, &[key(KeyCode::Enter)]),
+            ScreenCmd::Stay
+        ));
+    }
+
+    /// DEVELOPER's row labelled `label` under the cursor.
+    fn to_row(t: &mut Title, st: &mut AppState, label: &str) {
+        let items = &t.developer.as_ref().unwrap().menu.items;
+        let at = items.iter().position(|r| r == label).unwrap();
+        while t.developer.as_ref().unwrap().menu.selected != at {
+            t.update(st, &[key(KeyCode::Down)]);
+        }
+    }
+
+    #[test]
+    fn developer_holds_the_test_starts() {
+        use citygen::venue::VenuePack;
+        let mut st = AppState::new();
+        st.unlock_dev();
+        let mut t = Title::new(&st, 0);
+        assert_eq!(
+            t.menu.items,
+            [
+                "NEW GAME",
+                "NEW GAME (DEBUG)",
+                "DEVELOPER",
+                "LOAD GAME",
+                "HALL OF FAME",
+                "MANUAL",
+                "QUIT"
+            ]
+        );
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        st.tick = 120;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("DEVELOPER"), "{text}");
+        assert!(
+            !text.contains("NEW GAME · COMBAT") && !text.contains("LOAD CITY"),
+            "{text}"
+        );
+        // DEVELOPER: a row per type, named from the pack, then COMBAT and LOAD CITY, under
+        // the logo in place of the title's own rows.
+        open_developer(&mut t, &mut st);
+        let mut rows: Vec<String> = (VenuePack::builtin().types.iter())
+            .map(|x| x.name.to_uppercase())
+            .collect();
+        rows.extend(["COMBAT".to_string(), "LOAD CITY".to_string()]);
+        assert_eq!(t.developer.as_ref().unwrap().menu.items, rows);
+        st.tick = 300;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains('█'), "the logo stays: {text}");
+        let lines: Vec<&str> = text.lines().collect();
+        let line_of = |label: &str| {
+            *lines
+                .iter()
+                .find(|l| l.contains(&format!(" {label} ")))
+                .unwrap_or_else(|| panic!("no row {label}: {text}"))
+        };
+        for name in &rows[..rows.len() - 2] {
+            let line = line_of(name);
+            assert!(
+                line.contains("SMALL · MEDIUM · LARGE") && line.contains("PLAIN · MISSION"),
+                "{line}"
+            );
+        }
+        assert!(line_of("COMBAT").contains("NET · STREET"));
+        assert!(!text.contains("HALL OF FAME"), "{text}");
+        assert!(text.contains("esc back"), "its keys under it: {text}");
+        assert!(
+            text.contains("←→ size") && text.contains("tab plain/mission"),
+            "{text}"
+        );
+        // The arrows and tab pick on a type's row.
+        let picks = |t: &Title| t.developer.as_ref().unwrap().sites[0];
+        assert_eq!(
+            picks(&t),
+            (citygen::venue::MissionSize::Small, true),
+            "SMALL and MISSION to start"
+        );
+        t.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Right)]);
+        t.update(&mut st, &[key(KeyCode::Tab)]);
+        assert_eq!(picks(&t), (citygen::venue::MissionSize::Large, false));
+        t.update(&mut st, &[key(KeyCode::Left)]);
+        assert_eq!(picks(&t).0, citygen::venue::MissionSize::Medium);
+        // Esc goes back to the title, on DEVELOPER.
+        assert!(matches!(
+            t.update(&mut st, &[key(KeyCode::Esc)]),
+            ScreenCmd::Stay
+        ));
+        assert!(t.developer.is_none());
+        assert_eq!(t.selected(), Entry::Developer);
+        st.tick = 600;
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        assert!(buffer_text(term.backend().buffer()).contains("HALL OF FAME"));
+        // A player's title has none of it.
+        assert!(!labels(&AppState::new()).contains(&"DEVELOPER".to_string()));
+    }
+
+    #[test]
+    fn a_developer_site_row_starts_at_its_door() {
+        use crate::venues::{DoorMark, door_mark_at};
+        use citygen::venue::{MissionSize, VenuePack};
+        use citygen::{Place, StratumKind};
+        let t0 = &VenuePack::builtin().types[0];
+        for mission in [true, false] {
+            let mut st = AppState::new();
+            st.unlock_dev();
+            let mut t = Title::new(&st, 0);
+            open_developer(&mut t, &mut st);
+            to_row(&mut t, &mut st, &t0.name.to_uppercase());
+            t.update(&mut st, &[key(KeyCode::Right), key(KeyCode::Right)]);
+            if !mission {
+                t.update(&mut st, &[key(KeyCode::Tab)]);
+            }
+            let ScreenCmd::Switch {
+                to: map,
+                fx: TransitionKind::Glitch,
+            } = t.update(&mut st, &[key(KeyCode::Enter)])
+            else {
+                panic!("straight into the city")
+            };
+            assert_eq!(st.character.handle, "D'SHAWN");
+            assert_eq!(st.character.level, 50);
+            assert!(st.run.is_some(), "a run of his own");
+            let p = st.player.as_ref().expect("on the street");
+            assert_eq!(p.place, Place::Stratum(StratumKind::Street));
+            // Beside a street door of a building laid out as the type, away from home.
+            let city = st.city.as_ref().unwrap();
+            let home = st.home.map(|h| h.home.building);
+            let (b, door) = (city.buildings.iter())
+                .filter(|x| Some(x.id) != home)
+                .find_map(|x| {
+                    let v = st.interiors.plan_of(x.id)?.venue.as_deref()?;
+                    let d = (v.frame.doors.iter()).find(|d| {
+                        d.stratum == StratumKind::Street && d.door.manhattan(p.pos) == 1
+                    })?;
+                    (v.type_id == t0.id).then_some((x.id, d.door))
+                })
+                .expect("beside the site's street door");
+            let mark = door_mark_at(&st, StratumKind::Street, door).map(|(_, m)| m);
+            let copy = st.interiors.copy(b).map(|c| (c.live, c.inputs.size));
+            if mission {
+                assert_eq!(mark, Some(DoorMark::Flagged));
+                assert_eq!(copy, Some((true, MissionSize::Large)));
+            } else {
+                assert_eq!(mark, None, "a plain site's door");
+                assert_eq!(copy, None);
+            }
+            // The map opens where you stand, not at home.
+            let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            term.draw(|f| map.draw(&st, f)).unwrap();
+            let text = buffer_text(term.backend().buffer());
+            let footer = text.lines().find(|l| l.contains(" on foot · ")).unwrap();
+            assert!(footer.contains(" · Street"), "{footer}");
         }
     }
 
@@ -827,16 +1034,15 @@ mod tests {
         crate::runs::file::rewrite_header(&path, &h).unwrap();
         std::fs::write(dir.0.join("broken.run"), b"not a run").unwrap();
         assert_eq!(labels(&st), rows);
-        // In dev mode the debug starts and LOAD CITY join them.
+        // In dev mode the debug start and DEVELOPER join them.
         st.unlock_dev();
         assert_eq!(
             labels(&st),
             [
                 "NEW GAME",
                 "NEW GAME (DEBUG)",
-                "NEW GAME · COMBAT",
+                "DEVELOPER",
                 "LOAD GAME",
-                "LOAD CITY",
                 "HALL OF FAME",
                 "MANUAL",
                 "QUIT"
@@ -1013,7 +1219,17 @@ mod tests {
             text.contains("HALL OF FAME") && text.contains("Nobody you ran has flatlined. Yet."),
             "{text}"
         );
-        let text = opens(&mut t, &mut st, "LOAD CITY");
+        // LOAD CITY, inside DEVELOPER.
+        open_developer(&mut t, &mut st);
+        to_row(&mut t, &mut st, "LOAD CITY");
+        let ScreenCmd::Push { to, .. } = t.update(&mut st, &[key(KeyCode::Enter)]) else {
+            panic!("LOAD CITY pushes its list")
+        };
+        let text = buffer_text(&crate::screens::shots::draw_stack(
+            &st,
+            &[&t, to.as_ref()],
+            (120, 40),
+        ));
         assert!(
             text.contains("enter load"),
             "the old list of cities: {text}"

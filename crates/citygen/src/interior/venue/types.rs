@@ -21,6 +21,25 @@ pub enum MissionSize {
     Large,
 }
 
+impl MissionSize {
+    /// Every size, smallest first.
+    pub const ALL: [MissionSize; 3] = [MissionSize::Small, MissionSize::Medium, MissionSize::Large];
+
+    /// The size as a word: "small".
+    pub fn label(self) -> &'static str {
+        match self {
+            MissionSize::Small => "small",
+            MissionSize::Medium => "medium",
+            MissionSize::Large => "large",
+        }
+    }
+
+    /// The size a word names: "small", "medium" or "large".
+    pub fn parse(word: &str) -> Option<MissionSize> {
+        MissionSize::ALL.into_iter().find(|s| s.label() == word)
+    }
+}
+
 /// A way past a lock, as the data names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Means {
@@ -355,7 +374,7 @@ impl VenuePack {
     /// Whether the pack is whole: a size rule for every size, every type whole, no id
     /// on two types and no building kind laid out by two types.
     pub fn check(&self) -> Result<(), String> {
-        for size in [MissionSize::Small, MissionSize::Medium, MissionSize::Large] {
+        for size in MissionSize::ALL {
             if !self.sizes.iter().any(|r| r.size == size) {
                 return Err(format!("sites: no size rule for {size:?}"));
             }
@@ -679,6 +698,23 @@ mod tests {
             t.check(&p.sizes)
                 .unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
+    }
+
+    #[test]
+    fn a_size_reads_as_its_word() {
+        assert_eq!(
+            MissionSize::ALL.map(MissionSize::label),
+            ["small", "medium", "large"]
+        );
+        for size in MissionSize::ALL {
+            assert_eq!(MissionSize::parse(size.label()), Some(size));
+        }
+        assert_eq!(MissionSize::parse("huge"), None);
+        assert_eq!(
+            MissionSize::parse("Small"),
+            None,
+            "the word as the console takes it"
+        );
     }
 
     #[test]

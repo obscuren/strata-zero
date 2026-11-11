@@ -443,13 +443,13 @@ mod tests {
         st.saves = Some(dir.0.clone());
         // The COMBAT start on the street, then on the Net.
         for net in [false, true] {
-            let mut t = crate::screens::title::Title::new(&st, 0);
-            t.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-            if net {
-                t.update(&mut st, &[key(KeyCode::Left)]);
-            }
-            let ScreenCmd::Switch { to: mut map, .. } = t.update(&mut st, &[key(KeyCode::Enter)])
-            else {
+            use crate::screens::title::{CombatMap, combat_start};
+            let on = if net {
+                CombatMap::Net
+            } else {
+                CombatMap::Street
+            };
+            let ScreenCmd::Switch { to: mut map, .. } = combat_start(&mut st, on) else {
                 panic!("straight to the lot")
             };
             assert!(st.city.as_ref().unwrap().is_lot());

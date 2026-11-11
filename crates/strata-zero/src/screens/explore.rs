@@ -5378,9 +5378,9 @@ mod tests {
     fn a_whole_street_fight() {
         let mut st = AppState::new();
         st.unlock_dev();
-        let mut title = crate::screens::title::Title::new(&st, 0);
-        title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-        let ScreenCmd::Switch { to: map, .. } = title.update(&mut st, &[key(KeyCode::Enter)])
+        let street = crate::screens::title::CombatMap::Street;
+        let ScreenCmd::Switch { to: map, .. } =
+            crate::screens::title::combat_start(&mut st, street)
         else {
             panic!("the lot")
         };
