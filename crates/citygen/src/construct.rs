@@ -278,6 +278,11 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
         NodeKind::Server => 6,
         NodeKind::DataVault => 7,
         NodeKind::Ice => 8,
+        NodeKind::GateSwitch
+        | NodeKind::Turret
+        | NodeKind::Container
+        | NodeKind::Hub
+        | NodeKind::Firewall => 5,
     };
     by_kind.sort_by_key(|(id, k)| (rank(*k), id.index()));
     let has_vault = by_kind.iter().any(|(_, k)| *k == NodeKind::DataVault);

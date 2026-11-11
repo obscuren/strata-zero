@@ -325,7 +325,7 @@ pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target
             HackTarget::Foe(i) => Some(Target::Guard(
                 st.foes.get(i).filter(|f| !f.down)?.ice.as_ref()?.grade,
             )),
-            HackTarget::Guard { .. } => None,
+            HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
     }
 }
@@ -339,7 +339,7 @@ pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
             HackTarget::Node(id) => Some(st.city.as_ref()?.net.node(id).cyber),
             HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
             HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
-            HackTarget::Guard { .. } => None,
+            HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
     }
 }
@@ -816,7 +816,7 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
             let k = st.constructs.get(building)?;
             Some(Target::Guard(k.guards.get(index)?.grade))
         }
-        HackTarget::Foe(_) => None,
+        HackTarget::Foe(_) | HackTarget::Site(_) => None,
     }
 }
 
@@ -916,7 +916,9 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
 fn node_of(target: HackTarget) -> Option<NodeId> {
     match target {
         HackTarget::Node(id) => Some(id),
-        HackTarget::Guard { .. } | HackTarget::Deck | HackTarget::Foe(_) => None,
+        HackTarget::Guard { .. } | HackTarget::Deck | HackTarget::Foe(_) | HackTarget::Site(_) => {
+            None
+        }
     }
 }
 
@@ -943,6 +945,13 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
         HackTarget::Guard { index, .. } => 1000 + index as u64,
         HackTarget::Deck => 2000,
         HackTarget::Foe(i) => 3000 + i as u64,
+        HackTarget::Site(n) => hash64(
+            4000,
+            hash64(
+                n.level as i64 as u64,
+                ((n.at.x as u64) << 32) | n.at.y as u32 as u64,
+            ),
+        ),
     };
     let roll = st.net.roll(st, seed);
     // A program on yourself never fails.
@@ -1285,6 +1294,7 @@ pub fn target_pos(st: &AppState, b: BuildingId, target: HackTarget) -> Option<Po
         HackTarget::Guard { index, .. } => st.constructs.get(b)?.guards.get(index).map(|g| g.pos),
         HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
         HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
+        HackTarget::Site(_) => None,
     }
 }
 
@@ -2938,6 +2948,7 @@ pub fn target_label(st: &AppState, target: HackTarget) -> Option<String> {
             .foes
             .get(i)
             .map_or_else(|| "ICE".to_string(), |f| f.name.clone()),
+        HackTarget::Site(_) => "node".to_string(),
     })
 }
 
