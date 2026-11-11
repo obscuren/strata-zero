@@ -142,7 +142,7 @@ the Finder or the Dock never sees it.
 The title's test starts:
 
 - **NEW GAME (DEBUG)**: D'SHAWN, maxed out, straight into a fresh city, a run of his
-  own.
+  own. He is never overburdened: he takes whatever he finds, however much he carries.
 - **DEVELOPER** opens a menu of its own in the title's rows' place (`esc` goes back):
   - a row per venue type in `flavor/sites.ron` (HOTEL, OFFICE, METRO STATION). `←` `→`
     pick its size, SMALL · MEDIUM · LARGE, and `tab` picks PLAIN or MISSION. `enter`
