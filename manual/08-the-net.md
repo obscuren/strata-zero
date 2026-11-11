@@ -114,11 +114,11 @@ Being dumped is worse: your FOCUS is gone and your deck has to cool for ten minu
 
 ## Backdoors
 
-A backdoor planted on a server lasts three days. From your rig, `j` lists your backdoors as well as your own block: pick one and you land at that building's gate. From a server you hold, you can **hop** to another backdoor's gate. Your rig keeps up to three.
+A backdoor planted on a server lasts as long as your rig's line sled holds: three days on the stock one. From your rig, `j` lists your backdoors as well as your own block: pick one and you land at that building's gate. From a server you hold, you can **hop** to another backdoor's gate. Your rig keeps as many as its relay sled holds: three on the stock one.
 
 A backdoor on a hotel's or office's server lands you on its `L` hub instead, past the firewall and beside the server, and so does a hop to it.
 
-If you're dumped on a run that started at your rig, a trace follows your hops home, burning each backdoor it passes. If it reaches your door, your rig is seized for a day and every backdoor burns.
+If you're dumped on a run that started at your rig, a trace follows your hops home, burning each backdoor it passes. If it reaches your door, your rig is seized for a day and every backdoor burns. A killswitch firewall wipes the rig instead: the backdoors burn, but nothing is seized. Jobs running on your backdoors end with them.
 
 ## A building's own Net
 

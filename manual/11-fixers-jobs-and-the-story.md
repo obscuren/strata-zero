@@ -30,6 +30,8 @@ Miss the deadline and the job fails. The fixer hears of it.
 
 Each fixer keeps count of you. A job done raises your standing, a job dropped lowers it, a job left late lowers it twice as far. As it rises, a fixer goes from new to known, trusted, and inner circle, and the better work opens up: copying first, then planting, then vaults. Let it sink far enough and they won't deal with you at all. After a raid on your rig, the fixers keep quiet for a day.
 
+Standing also pays in hardware for your rig, once each, across the whole run. A fixer who comes to know you pays a tier-two sled with the hand-in. The first fixer to trust you sends a Civitas cabinet, the second a Lotus tower, and the first to take you into the inner circle a Halcyon server frame. The first Plant you finish pays the `sniff` program and the first Copy pays `keepalive`. The hand-in line says what came. See the rig chapter for what they do.
+
 ## Your jobs on screen
 
 The JOBS pane (`F2`) shows the job you've taken, the fixer, the time left (in magenta when it's under an hour) and the next thing to do. The deck's JOBS tab has the whole route of a job, from where you are to the target, and back to the fixer, with the time you have on a bar.
