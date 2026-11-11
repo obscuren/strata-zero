@@ -95,6 +95,8 @@ pub struct AppState {
     pub free_chrome: bool,
     /// The ripperdoc's chair you are sitting in.
     pub chair: Option<crate::clinic::Chair>,
+    /// At the rig's desk: only there do sleds go in and out of the rig.
+    pub at_desk: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
     /// The console's `target`: a Street tile the free camera should jump to.
@@ -334,6 +336,7 @@ impl AppState {
             show_light: false,
             free_chrome: false,
             chair: None,
+            at_desk: false,
             look_at: None,
             jump_to: None,
             levelled: None,
@@ -543,6 +546,7 @@ impl AppState {
         self.deck_sheet = Default::default();
         self.deck_talents = Default::default();
         self.deck_part = 0;
+        self.at_desk = false;
     }
 
     /// Logs a plain result.

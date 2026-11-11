@@ -20,8 +20,6 @@ pub mod panel;
 pub mod picture;
 pub mod pixels;
 pub mod preview;
-// The desk (`screens/desk.rs`) draws the rack; until it does, only the tests do.
-#[cfg_attr(not(test), allow(dead_code))]
 pub mod rack;
 pub mod sidebar;
 pub mod skill_art;

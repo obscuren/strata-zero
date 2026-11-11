@@ -16,7 +16,8 @@ use ratatui::style::Color;
 
 /// Letters for take, ride and program rows: no verb letter, none of the window's
 /// own keys (`h j k l q`).
-pub const FREE_LETTERS: &str = "abcdefmnopsuvwyz";
+/// `o` is the rig's: it opens up on its desk.
+pub const FREE_LETTERS: &str = "abcdefmnpsuvwyz";
 
 /// One thing in reach and what can be done to it.
 #[derive(Clone, Debug)]
@@ -108,6 +109,18 @@ fn rig_reads(st: &AppState) -> Vec<Choice> {
             Some(Choice::on(keys.next()?, verb, name, CYAN, read))
         })
         .collect()
+}
+
+/// The rig's `o` row: it opens up on its desk, unless the law has it.
+fn open_up(st: &AppState) -> Choice {
+    if st.backdoors.seized(st.net.now(st)) {
+        return Choice {
+            thing: Some(("the rig".to_string(), AMBER)),
+            ..Choice::disabled('o', "Open up")
+        }
+        .tail(" · held as evidence");
+    }
+    Choice::on('o', "Open up", "the rig", AMBER, Pick::Desk)
 }
 
 /// A stack as rows and headers name it: "Copper coil ×2", the count only above one.
@@ -406,6 +419,7 @@ pub fn gather(
         }
         rows.push(Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn)));
         if matches!(origin, Some(HostId::Rig)) {
+            rows.push(open_up(st));
             rows.extend(rig_reads(st));
         }
         add(

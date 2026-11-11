@@ -73,12 +73,6 @@ impl RackArt {
     }
 }
 
-/// The rack's size in cells with `rows` cell rows to each of `bays` sleds, at full
-/// width with the full head unit and base.
-pub fn size(bays: usize, rows: u16) -> (u16, u16) {
-    (WIDTH, HEAD + bays as u16 * rows + BASE)
-}
-
 /// A sled's short model for its plate: its name without the trailing words in lower
 /// case that say what it is ("ZB-8 core" is `ZB-8`, "CU-1 copper line" `CU-1`),
 /// upper case.
@@ -537,9 +531,6 @@ mod tests {
                 }
             }
         }
-        let (w, h) = size(5, 3);
-        assert!(w <= 58 && h <= 24, "{w}x{h}");
-        assert!(size(3, 4).1 < size(5, 4).1);
     }
 
     #[test]

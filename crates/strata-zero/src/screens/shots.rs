@@ -733,6 +733,86 @@ fn the_rig_at_home() {
     shot("rig", &st, &map, &term);
 }
 
+/// The desk at home over the map, at 120x40 and 100x30: `keys` pressed at it first,
+/// then the card let type out.
+fn desk_shot(name: &str, st: &mut AppState, map: &MapScreen, keys: &[KeyCode]) {
+    use crate::screens::desk::Desk;
+    let mut desk = Desk::open(st);
+    for k in keys {
+        desk.update(st, &[key(*k)]);
+    }
+    st.tick += 40;
+    for (w, h) in [(120, 40), (100, 30)] {
+        shot_at(&format!("{name}_{w}x{h}"), st, map, &desk, (w, h));
+    }
+}
+
+/// The desk with the stock Zenbo, its core bay picked.
+#[test]
+#[ignore]
+fn desk_stock() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    desk_shot("desk_stock", &mut st, &map, &[]);
+}
+
+/// The Civitas cabinet fitted, a Sandbag and a Tripwire in the pack, the firewall bay
+/// picked with the list open.
+#[test]
+#[ignore]
+fn desk_civitas_firewall_list() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    st.character
+        .set_frame(&st.content, &ItemId::new("rack_civitas"));
+    for sled in ["sled_sandbag", "sled_tripwire"] {
+        st.character.give_item(&st.content, ItemId::new(sled), 1);
+    }
+    let keys = [
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Char(' '),
+    ];
+    desk_shot("desk_civitas_firewall_list", &mut st, &map, &keys);
+}
+
+/// The Halcyon server frame with every bay fitted, the last one at the desk.
+#[test]
+#[ignore]
+fn desk_halcyon_full() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    st.character
+        .set_frame(&st.content, &ItemId::new("rack_halcyon"));
+    let c = st.content.clone();
+    for (bay, sled) in [
+        (0, "sled_qstack"),
+        (1, "sled_tinman"),
+        (2, "sled_hydra"),
+        (3, "sled_darkfibre"),
+    ] {
+        let id = ItemId::new(sled);
+        let copy = st.character.new_copy(&c, &id);
+        st.character.rig_copy_mut(&c).fitted[bay] = Some(game::Stack {
+            item: id,
+            qty: 1,
+            copy: Some(copy),
+        });
+    }
+    st.character
+        .give_item(&c, ItemId::new("sled_killswitch"), 1);
+    let keys = [
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Char(' '),
+        KeyCode::Char(' '),
+    ];
+    desk_shot("desk_halcyon_full", &mut st, &map, &keys);
+}
+
 #[test]
 #[ignore]
 fn terminal_on_the_street() {
