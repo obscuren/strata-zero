@@ -73,16 +73,22 @@ pub fn net_of(st: &AppState, b: BuildingId) -> Option<Arc<SiteNet>> {
 
 /// Makes site `b`'s construct the first time it's needed and keeps it. Made over a
 /// construct from before (an old save's): that one's ICE and the hacks on its guards go
-/// with it (Ruling 13).
+/// with it (Ruling 13). The site's plan is kept first, as walking in keeps it, so the Net
+/// is worked out from it and every later ask on its Net borrows it instead of laying the
+/// venue out again.
 pub fn ensure_construct(st: &mut AppState, b: BuildingId) -> Result<(), String> {
     if st.constructs.site(b).is_some() {
         return Ok(());
     }
-    let net = net_of(st, b).ok_or("that building has no Net of its own")?;
-    let plan = crate::interiors::plan_now(st, b).ok_or("that building has no Net of its own")?;
+    let no_net = "that building has no Net of its own";
+    if !is_site(st, b) {
+        return Err(no_net.to_string());
+    }
     let city = st.city.as_ref().ok_or("no city")?;
-    let k = site_construct(city, &net, &plan, layer_of(st, b));
-    drop(plan);
+    st.interiors.plan(city, b).ok_or(no_net)?;
+    let net = net_of(st, b).ok_or(no_net)?;
+    let plan = st.interiors.plan_of(b).ok_or(no_net)?;
+    let k = site_construct(city, &net, plan, layer_of(st, b));
     drop_ice(st, b);
     st.constructs.put_site(k);
     Ok(())

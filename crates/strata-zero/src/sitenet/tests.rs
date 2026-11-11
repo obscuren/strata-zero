@@ -318,6 +318,33 @@ fn a_sites_net_is_worked_out_once_and_kept() {
 }
 
 #[test]
+fn a_site_entered_through_its_firewall_keeps_its_plan() {
+    let (mut st, _) = office_plain();
+    let city = st.city.clone().unwrap();
+    // A site nobody has walked into: no plan kept for it yet.
+    let b = (city.buildings.iter())
+        .filter(|x| x.kind.is_closed() && st.interiors.plan_of(x.id).is_none())
+        .map(|x| x.id)
+        .find(|b| is_site(&st, *b) && crate::constructs::city_gate(&city, *b).is_some())
+        .expect("a site nobody has walked into");
+    at_the_gate(&mut st, b);
+    let now = st.net.now(&st);
+    for lock in 0..broken(&st, b).len() {
+        st.net.break_lock(b, lock as u8, now);
+    }
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    assert!(
+        st.interiors.plan_of(b).is_some(),
+        "kept, as walking in keeps it"
+    );
+    // Every later ask borrows it: a step on its Net lays nothing out again.
+    assert!(matches!(
+        crate::interiors::plan_now(&st, b),
+        Some(std::borrow::Cow::Borrowed(_))
+    ));
+}
+
+#[test]
 fn a_copy_starting_or_ending_drops_the_kept_net() {
     let (mut st, b) = office_copy(190);
     let copy = st.interiors.copy(b).unwrap().clone();
