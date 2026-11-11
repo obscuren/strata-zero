@@ -205,8 +205,11 @@ impl Title {
         let ScreenCmd::Switch { fx, .. } = self.debug_game(st) else {
             return ScreenCmd::Stay;
         };
-        if let Err(why) = crate::venues::dev_start(st, type_id, size, mission) {
-            st.warn(why);
+        match crate::venues::dev_start(st, type_id, size, mission) {
+            // The start saved before the site was laid: saved again at the map's next
+            // frame, CONTINUE opens with it.
+            Ok(_) => st.save_due = true,
+            Err(why) => st.warn(why),
         }
         ScreenCmd::Switch {
             to: Box::new(crate::screens::explore::MapScreen::walking(st)),
@@ -909,8 +912,10 @@ mod tests {
         use citygen::{Place, StratumKind};
         let t0 = &VenuePack::builtin().types[0];
         for mission in [true, false] {
+            let dir = Dir::new("developer-site");
             let mut st = AppState::new();
             st.unlock_dev();
+            st.saves = Some(dir.0.clone());
             let mut t = Title::new(&st, 0);
             open_developer(&mut t, &mut st);
             to_row(&mut t, &mut st, &t0.name.to_uppercase());
@@ -958,6 +963,9 @@ mod tests {
             let text = buffer_text(term.backend().buffer());
             let footer = text.lines().find(|l| l.contains(" on foot · ")).unwrap();
             assert!(footer.contains(" · Street"), "{footer}");
+            // The start was saved before the site was laid: it's saved again at the map's
+            // next frame, so CONTINUE opens there with the site.
+            assert!(st.last_save.is_some() && st.save_due, "a save due");
         }
     }
 

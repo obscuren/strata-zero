@@ -200,12 +200,18 @@ fn fixture_at(
                 });
             }
             let (plan, floor) = st.interiors.floor(building, level)?;
-            // A venue's lock: whether it opens for you from where you stand.
+            // A venue's lock: whether it opens for you from where you stand. From its free
+            // side, the room behind it, it opens with no key.
             if let Some(lock) = floor.lock_at(pos) {
                 let from = (st.player.as_ref())
                     .filter(|p| p.place == place)
                     .map_or(lock.at, |p| p.pos);
+                let room = |p: Pos| crate::venues::room_of(plan, level, p);
+                let free_side = lock
+                    .free_from
+                    .is_some_and(|f| f == from || room(f).is_some_and(|r| room(from) == Some(r)));
                 let state = match crate::credentials::opens_lock(st, building, level, lock, from) {
+                    _ if free_side => "opens from here",
                     Some(_) => "unlocked",
                     None => "locked",
                 };

@@ -1,5 +1,5 @@
-//! Venues: buildings laid out from a type in `flavor/sites.ron` (a hotel, an office, a
-//! metro station), with zones, the locks between them and the links between levels.
+//! Venues: buildings laid out from a type in `flavor/sites.ron`, one for each of some kinds
+//! of building, with zones, the locks between them and the links between levels.
 //! The Rust never names a type: a new type is a change to the data.
 
 mod check;

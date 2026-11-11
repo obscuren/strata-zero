@@ -163,7 +163,7 @@ fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
 
 /// Ends the copy: a live one's guards and the cards still lying where it left them go,
 /// and the plain building comes back from the layout, its floors drawn again from the
-/// seed (the one you stand on at once).
+/// seed (the one you stand on at once, once the copy is gone).
 fn finish(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     if copy.live {
         st.foes
@@ -171,22 +171,23 @@ fn finish(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
         for (place, at, id) in &copy.left {
             st.ground.take(*place, *at, id, 1);
         }
+        // Put back whole, its floors dropped with the cut plan.
         let layout = st.interiors.plan_of(b).and_then(|p| p.venue.clone());
-        st.interiors.drop_floors(b);
         if let Some(layout) = layout {
             st.interiors.put_plan(FloorPlan {
                 building: b,
                 ..FloorPlan::of_layout(*layout)
             });
         }
-        let here = st.player.as_ref().map(|p| p.place);
-        if let (Some(Place::Floor { building, level }), Some(city)) = (here, st.city.as_ref())
-            && building == b
-        {
-            st.interiors.ensure(city, b, level);
-        }
     }
     st.interiors.set_copy(b, None);
+    let here = st.player.as_ref().map(|p| p.place);
+    if copy.live
+        && let (Some(Place::Floor { building, level }), Some(city)) = (here, st.city.as_ref())
+        && building == b
+    {
+        st.interiors.ensure(city, b, level);
+    }
     crate::track::rewalk(st);
 }
 

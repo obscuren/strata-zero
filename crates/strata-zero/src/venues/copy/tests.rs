@@ -413,11 +413,27 @@ fn a_copy_whose_type_is_gone_ends_and_says_so() {
     begin(&mut st, b, inputs(MissionSize::Small)).unwrap();
     let left = st.interiors.copy(b).unwrap().left.clone();
     walk_in(&mut st, b);
+    // On to a floor the layer has something on.
+    let copy = st.interiors.copy(b).unwrap().clone();
+    let v = st.interiors.plan_of(b).unwrap().venue.clone().unwrap();
+    let layer = copy.layer.as_ref().unwrap();
+    let (level, at) = (copy.kept.iter())
+        .find_map(|&level| {
+            let plain = draw_level(&v, level)?;
+            let laid = citygen::venue::draw_copy_level(&v, layer, level)?;
+            let at = plain.tiles.iter().find(|(_, t)| t.is_walkable())?.0;
+            (plain != laid).then_some((level, at))
+        })
+        .expect("a floor the layer marks");
+    let city = st.city.clone().unwrap();
+    st.interiors.ensure(&city, b, level).unwrap();
+    put(&mut st, floor(b, level), at);
     // A save from a build whose data had a type this one lacks.
     let mut plan = st.interiors.plan_of(b).unwrap().clone();
     let v = plan.venue.as_mut().unwrap();
     v.type_id = "no longer in the data".to_string();
     let levels: Vec<i32> = v.levels.iter().map(|x| x.level).collect();
+    let layout = (**v).clone();
     st.interiors.put_plan(plan);
     tick(&mut st);
     assert!(st.interiors.copy(b).is_none(), "ended at once, you inside");
@@ -431,7 +447,8 @@ fn a_copy_whose_type_is_gone_ends_and_says_so() {
     let Place::Floor { level, .. } = here else {
         panic!("inside: {here:?}");
     };
-    assert!(st.interiors.floor(b, level).is_some());
+    let plain = draw_level(&layout, level).unwrap();
+    assert_eq!(st.interiors.floor(b, level).map(|(_, f)| f), Some(&plain));
     let name = crate::net::building_name(&st, b);
     let line = format!("lost in the update · the job in {name}");
     assert!(st.log.iter().any(|e| e.text == line), "{line}");

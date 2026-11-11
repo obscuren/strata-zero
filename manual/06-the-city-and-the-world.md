@@ -43,12 +43,12 @@ There is more than one way between floors. A hotel has a guest lift and a servic
 
 A hotel or office is split into zones, from the public lobby to the staff's rooms and the secure ones deeper in. The doors between zones are locked.
 
-- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff at work wear their zone's card on a lanyard. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net).
+- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net).
 - Deeper doors have a keypad instead, worked as a flat's is: a code, the Keyjack or the Net opens it.
-- A few locks open from one side with no key, as a fire door does.
-- A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants, and the card counts where you get on as well as where you get off.
+- Getting out is free. Every zone door opens with no key from the deeper side, and a locked room opens from inside, so you can always leave a zone without a key, even once a crack runs out.
+- A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants. It asks only where you get off: riding away from a carded floor takes nothing.
 
-An office keeps its lifts and stairs behind the turnstiles in its lobby, for staff only. Getting upstairs takes a card or the Net at the turnstiles, or another way in.
+An office keeps its lifts and stairs behind the turnstiles in its lobby, for staff only. Its turnstiles have keypads: a code or the Keyjack gets you through, as do a card and the Net, or find another way in. Out through them is free.
 
 A hotel's or office's main street door is always open. Its other doors, from the Street, the Skyways, the roof or the Undercity, may open past the public rooms. Such a door is locked, with a keypad outside: a code, the Keyjack, a keycard for its zone or the Net opens it. From inside it always opens.
 
@@ -58,7 +58,7 @@ Hotels and offices have crawls: vents and ducts behind a grille (`☰`), running
 
 ### Keypads
 
-A locked flat has a keypad on its door, and so do the deeper doors of hotels and offices and their locked doors in: `space` next to it and `i Interact: Keypad` brings it up. Type the four digits and press `V`; `X` clears them, and `V` with nothing typed keys in the code your journal holds. A right code reads `OPEN` and goes into your journal. Three wrong codes lock the pad for half an hour, and it counts down `LOCKED` on its glass.
+A locked flat has a keypad on its door, and so do the deeper doors of hotels and offices, their locked rooms, an office's turnstiles and their locked doors in: `space` next to it and `i Interact: Keypad` brings it up. Type the four digits and press `V`; `X` clears them, and `V` with nothing typed keys in the code your journal holds. A right code reads `OPEN` and goes into your journal. Three wrong codes lock the pad for half an hour, and it counts down `LOCKED` on its glass.
 
 ### The Keyjack
 

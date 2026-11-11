@@ -76,12 +76,15 @@ fn has_node(st: &AppState, b: BuildingId, kind: NodeKind) -> bool {
     })
 }
 
-/// Whether `id`, at work in building `b`, is met there from the street with no key: their
+/// A venue's work floors, and those of them met from the city with no key.
+type MetFloors = Option<(Vec<i32>, Vec<i32>)>;
+
+/// Whether `id`, at work in building `b`, is met there from the city with no key: their
 /// work floor's every room with a station is reached so. A building that's no venue meets
 /// everyone. `met` keeps each building's floors once worked out.
 fn met_at_work(
     st: &AppState,
-    met: &mut BTreeMap<BuildingId, Option<(Vec<i32>, Vec<i32>)>>,
+    met: &mut BTreeMap<BuildingId, MetFloors>,
     b: BuildingId,
     id: PersonId,
 ) -> bool {

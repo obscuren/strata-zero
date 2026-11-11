@@ -650,6 +650,22 @@ fn a_lock_door_and_a_grille_say_what_they_are() {
     );
     assert_eq!(card.second.as_deref(), Some("card · locked"));
     assert_eq!(card.body.len(), 1, "a line of its own");
+    // From its free side, at the door or across the room behind it, it opens from here.
+    let free = lock.free_from.unwrap();
+    let p = plan(&st, b).clone();
+    let behind = room_of(&p, level, free).unwrap();
+    let far = (p.venue.as_deref().unwrap().level(level).unwrap().rooms[behind]
+        .rect
+        .iter())
+    .filter(|t| floor_of(&st, b, level).tiles[*t].is_walkable())
+    .max_by_key(|t| t.manhattan(free))
+    .unwrap();
+    for at in [free, far] {
+        put(&mut st, place, at);
+        let second = look(&mut st, lock.at).second;
+        assert_eq!(second.as_deref(), Some("card · opens from here"), "{at:?}");
+    }
+    put(&mut st, place, from);
     st.character.give(zone_card_id(b, lock.zone), 1);
     assert_eq!(
         look(&mut st, lock.at).second.as_deref(),

@@ -270,7 +270,7 @@ mod tests {
 
     /// Every builtin type and the test type over its own frame, seeds 0..5, and over the
     /// buildings of its kinds in the test cities; a type that builds no kind over every
-    /// hotel and office.
+    /// building of the `Hotel` and `Office` kinds of building.
     fn sweep() -> Vec<(String, VenueType, VenueLayout)> {
         let cities = cities();
         let mut v = Vec::new();

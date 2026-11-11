@@ -156,6 +156,16 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   true); `LevelLink.name`; `FrameDoor.enclosed`; `Foe.post`. The new `Terrain`,
   `Feature` and `RoomKind` variants join their enums at the end, so saved indices keep
   their meaning.
+- **The venue's own enums grow only at their end too.** A saved layout and a copy hold
+  `LinkKind`, `LockKind`, `Spine`, `PieceKind`, `WayInKind`, `MissionSize` and
+  `DeviceKind`: a new variant joins its enum at the end. A `Ways` is a set of bits, one
+  per means: a new means takes the next bit, and no bit changes its meaning.
+- **Getting out is free.** Every `DoorLock` a layout lays opens without a key from its
+  deeper side (`free_from`, set by the zones stage on every border lock, and on a way
+  in's doorstep), a locked room opens from inside, and a lift asks for a stop's card
+  only where you get off (`venues::ride_card`). The rule is in the code, so a saved
+  layout carries it with its locks; the checker refuses a layout, and a mission layer
+  won't lay, that leaves any room with no way out without a key.
 - **A mission's copy.** `Interiors.copies` (`#[serde(default)]`: older saves hold none)
   maps a building to its `venues::MissionCopy`: the mission's inputs (size, objective,
   security, seed), the levels it keeps, `live` (taken; false while it waits for you to
