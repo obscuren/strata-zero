@@ -7,7 +7,7 @@
 use crate::app::AppState;
 use crate::net::Hack;
 use citygen::venue::{WayInKind, Ways, switch_line};
-use citygen::{BuildingId, DoorLock, LinkKind, NodeId, NodeKind, SiteNode};
+use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, NodeId, NodeKind, SiteNode};
 use game::{HackTarget, Op, Target};
 
 /// The ops that hold a door or a line of turnstiles open.
@@ -115,10 +115,15 @@ fn spoofed_since(st: &AppState, b: BuildingId, link: usize, since: u64) -> bool 
     let Some(plan) = crate::interiors::plan_now(st, b) else {
         return false;
     };
-    let Some(k) = plan.links.get(link).filter(|k| k.kind == LinkKind::Lift) else {
-        return false;
-    };
-    spoofs.any(|s| (k.stops.iter()).any(|stop| (stop.level, stop.at) == (s.level, s.at)))
+    spoofs.any(|s| node_lift(&plan, s) == Some(link))
+}
+
+/// The lift a lift-control node of a site's Net works: the one in `plan` (the site's) with
+/// a stop on the node's tile.
+pub fn node_lift(plan: &FloorPlan, node: SiteNode) -> Option<usize> {
+    (plan.links.iter()).position(|k| {
+        k.kind == LinkKind::Lift && k.stop(node.level).is_some_and(|s| s.at == node.at)
+    })
 }
 
 /// A live Spoof on a lift-control node of site `b` that stands at a stop of lift `link`.
@@ -289,6 +294,21 @@ mod tests {
             shut += 1;
         }
         assert!(shut > 0, "a private room beside the cracked door");
+    }
+
+    #[test]
+    fn each_lift_control_node_works_the_lift_it_is_named_for() {
+        let (st, b) = office_copy(190);
+        let plan = st.interiors.plan_of(b).unwrap();
+        let net = net_of(&st, b).unwrap();
+        let mut lifts = 0;
+        for n in (net.nodes.iter()).filter(|n| n.kind == NodeKind::LiftCtrl) {
+            let link = node_lift(plan, n.node).expect("its lift");
+            assert_eq!(plan.links[link].kind, LinkKind::Lift);
+            assert_eq!(plan.links[link].name.as_ref(), Some(&n.name));
+            lifts += 1;
+        }
+        assert!(lifts > 0, "a lift on the site's Net");
     }
 
     #[test]

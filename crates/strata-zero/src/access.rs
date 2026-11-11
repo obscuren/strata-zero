@@ -5,9 +5,7 @@
 use crate::app::AppState;
 use crate::credentials;
 use citygen::construct::{BLACK_THRESHOLD, GREY_THRESHOLD, ICE_THRESHOLD};
-use citygen::{
-    BuildingId, City, DistrictId, LinkKind, NetNode, NodeKind, Place, Pos, SiteNode, StratumKind,
-};
+use citygen::{BuildingId, City, DistrictId, NetNode, NodeKind, Place, Pos, SiteNode, StratumKind};
 use game::{HackTarget, Op, Target};
 use sim::OccupantRole;
 
@@ -514,13 +512,8 @@ pub fn lift_state(st: &AppState, b: BuildingId) -> String {
     if crate::sitenet::is_site(st, b) {
         let lifts = riser_nodes(st, b, &[NodeKind::LiftCtrl]);
         let plan = crate::interiors::plan_now(st, b);
-        let link_of = |n: &SiteNode| {
-            (plan.as_ref()?.links.iter()).position(|k| {
-                k.kind == LinkKind::Lift && k.stop(n.level).is_some_and(|s| s.at == n.at)
-            })
-        };
         let answering = (lifts.iter())
-            .filter_map(|(n, _)| link_of(n))
+            .filter_map(|(n, _)| crate::sitenet::node_lift(plan.as_deref()?, *n))
             .filter(|link| crate::sitenet::lift_answers_you(st, b, *link))
             .count();
         return format!("lifts: {answering}/{} answering", lifts.len());
