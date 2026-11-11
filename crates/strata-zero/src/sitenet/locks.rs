@@ -126,6 +126,12 @@ pub fn lift_spoofed(st: &AppState, b: BuildingId, link: usize) -> bool {
     spoofed_since(st, b, link, 0)
 }
 
+/// Whether site `b`'s lift `link` answers you, its carded stops freed: a spoof on its own
+/// node that holds, landed since the alarm while there is one.
+pub fn lift_answers_you(st: &AppState, b: BuildingId, link: usize) -> bool {
+    lift_spoofed(st, b, link) && lift_answers(st, b, link)
+}
+
 /// Whether lift `link` of building `b` answers. Off alert, every lift answers; on alert,
 /// one spoofed since the alarm: on a site a spoof on the lift's own node, elsewhere one on
 /// the building's lift control on the city's Net (`NetState::lifts_answer`).

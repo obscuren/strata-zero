@@ -418,7 +418,7 @@ pub fn opens_stop(st: &AppState, b: BuildingId, link: usize, card: u8) -> Option
         return Some(How::Free);
     }
     let net = if crate::sitenet::is_site(st, b) {
-        crate::sitenet::lift_spoofed(st, b, link) && crate::sitenet::lift_answers(st, b, link)
+        crate::sitenet::lift_answers_you(st, b, link)
     } else {
         st.net.unlocked(b, st.net.now(st))
     };

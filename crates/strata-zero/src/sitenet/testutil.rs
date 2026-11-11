@@ -1,11 +1,15 @@
 //! Sites to test the Net of a site on: an office laid on a building away from home, plain
 //! or with the DEVELOPER start's mission copy, and D'SHAWN with the programs a run wants;
-//! and where to stand on its Net.
+//! where to stand on its Net; and HELIX shells on its host and its street.
 
 use crate::app::AppState;
+use crate::helix::bin::new_shell;
+use crate::helix::shell::{HostId, Shell};
+use crate::owners::Owner;
 use citygen::venue::{MissionInputs, MissionSize, VenuePack, WayIn, WayInKind, Ways};
 use citygen::{
-    BuildingId, BuildingKind, DoorLock, NetDevice, NodeKind, Place, Pos, SiteNode, StratumKind,
+    BuildingId, BuildingKind, DoorLock, NetDevice, NetNode, NodeKind, Place, Pos, SiteNode,
+    StratumKind,
 };
 use game::{HackTarget, ItemId, Op, Target};
 
@@ -126,6 +130,43 @@ pub(crate) fn hack(st: &mut AppState, node: SiteNode, kind: NodeKind, op: Op) {
         op,
         now,
     );
+}
+
+/// Site `b`'s server cracked now: root on its host for the hour.
+pub(crate) fn crack_server(st: &mut AppState, b: BuildingId) {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let server = (net.nodes.iter())
+        .find(|n| n.kind == NodeKind::Server)
+        .expect("its server")
+        .node;
+    hack(st, server, NodeKind::Server, Op::Crack);
+    assert_eq!(crate::access::tier_on(st, b), crate::access::Tier::Admin);
+}
+
+/// A shell logged in on site `b`'s host as a user: a terminal of it on the riser held from
+/// the Net, its construct made.
+pub(crate) fn shell_on(st: &mut AppState, b: BuildingId) -> Shell {
+    crate::sitenet::ensure_construct(st, b).unwrap();
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let terminal = (net.nodes.iter())
+        .find(|n| n.kind == NodeKind::Terminal && net.on_riser(n.node.level))
+        .expect("a terminal on the riser")
+        .node;
+    let now = st.net.now(st);
+    crate::holds::take(st, NetNode::Site(terminal), Owner::Building(b), now);
+    let sh = new_shell(st, HostId::Building(b));
+    assert_eq!(sh.user, "user", "a user's seat");
+    sh
+}
+
+/// A district terminal's shell in site `b`'s district, and the site's number in its
+/// `net` (as `scan` lists it and `ssh <n>` takes it).
+pub(crate) fn street_shell_listing(st: &mut AppState, b: BuildingId) -> (Shell, usize) {
+    let d = st.city.as_ref().expect("a city").building(b).district;
+    let n = (crate::access::scannable(st, d).iter())
+        .position(|x| *x == b)
+        .expect("the site on its district's net");
+    (new_shell(st, HostId::District(d)), n + 1)
 }
 
 /// Site `b`'s construct's first node of `kind`.
