@@ -3553,6 +3553,8 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // The map on top is no desk: however the desk left the stack, you're up from it.
+        st.at_desk = false;
         // A daze over: it ends.
         if st
             .missions

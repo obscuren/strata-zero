@@ -16,7 +16,7 @@ use crate::ui::rack::{self, RackArt};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{Action, CopyId, Host, Item, ItemId, Mod, STOCK_FRAME, STOCK_SLEDS, SocketKind};
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
@@ -104,16 +104,20 @@ impl Desk {
         }
     }
 
-    /// Space in the list: the pick goes in, what was there to the pack, the clock runs.
+    /// Space in the list: the pick goes in, what was there to the pack, the clock runs
+    /// and the list closes. A refusal is a warning, the list left open on the pick and
+    /// no time gone, whether it is a rack or a sled.
     fn fit(&mut self, st: &mut AppState, pick: usize) {
         let Some(p) = fits_here(st, self.row).into_iter().nth(pick) else {
             self.picker = None;
             return;
         };
-        match p {
+        let done = match p {
+            Pick::Frame(frame) if st.content.item(&frame).is_none() => {
+                Err(format!("`{frame}` is no rack"))
+            }
             Pick::Frame(frame) => {
                 let out = st.character.set_frame(&st.content, &frame);
-                run_clock(st);
                 let mut line = format!(
                     "you move the rig into the {} · {FIT_MINUTES}m",
                     name(st, &frame)
@@ -122,8 +126,7 @@ impl Desk {
                     let names: Vec<String> = out.iter().map(|id| name(st, id)).collect();
                     line.push_str(&format!(" · the {} to your pack", names.join(", the ")));
                 }
-                st.say(line);
-                self.row = self.row.min(Self::rows(st) - 1);
+                Ok(line)
             }
             Pick::Sled { item, copy } => {
                 let fit = Action::Fit {
@@ -131,17 +134,20 @@ impl Desk {
                     socket: self.row - 1,
                     piece: copy,
                 };
-                match perform(st, fit) {
-                    Ok(_) => {
-                        run_clock(st);
-                        st.say(format!("you seat the {} · {FIT_MINUTES}m", name(st, &item)));
-                    }
-                    Err(e) => return st.warn(e),
-                }
+                perform(st, fit)
+                    .map(|_| format!("you seat the {} · {FIT_MINUTES}m", name(st, &item)))
             }
+        };
+        match done {
+            Ok(line) => {
+                run_clock(st);
+                st.say(line);
+                self.row = self.row.min(Self::rows(st) - 1);
+                self.picker = None;
+                self.card = st.tick;
+            }
+            Err(e) => st.warn(e),
         }
-        self.picker = None;
-        self.card = st.tick;
     }
 
     /// `x` on a bay: its sled comes out to the pack, no asking.
@@ -438,12 +444,24 @@ fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, fg: Color, bg: Color, bold:
     }
 }
 
+/// Where the desk put things: the rack's stage, the rack's rects (`rack::draw`'s), the
+/// row each line of the BAYS list stands on (FRAME first) and the column the list ends
+/// before.
+#[derive(Debug, Default)]
+#[cfg_attr(not(test), allow(dead_code))] // the tests read where things went
+struct Drawn {
+    stage: Rect,
+    rects: Vec<Rect>,
+    rows: Vec<u16>,
+    list_end: u16,
+}
+
 /// The map pane as the desk: the header, the BAYS, the rack with the pick outlined, the
 /// desk's edge under it and the last word on its front.
-fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) {
+fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) -> Drawn {
     fill(buf, map, WALL);
     if map.width < 8 || map.height < 6 {
-        return;
+        return Drawn::default();
     }
     let art = RackArt::rig(st, d.row.checked_sub(1));
     let (frame, bays) = (art.frame.clone(), art.bays.clone());
@@ -473,148 +491,181 @@ fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) {
         let y = desk_y + 1 + u16::from(desk_h > 3);
         put(buf, x + 2, y, &e.text, fg, DESK_FRONT, false, right - 1);
     }
-    // BAYS: the frame, then each bay with its sled's short model or `empty`.
-    let tall = map.height >= 26;
-    let label_y = map.y + 3 + u16::from(tall);
-    put(buf, x + 2, label_y, "BAYS", AMBER_DIM, WALL, true, right);
-    let n = bays.len() as u16 + 1;
-    let step = if label_y + 2 + 2 * n <= desk_y { 2 } else { 1 };
-    let wide = map.width >= LIST_W + STAGE_MIN;
-    let list_full = if wide { LIST_W } else { LIST_NARROW };
-    let list_w = list_full.min(map.width) - 1;
-    let mut rows: Vec<(String, String, bool)> = vec![("FRAME".into(), rack_word(st, &frame), true)];
+    // The list keeps its own columns, a gap, then the rack's stage: the two never share
+    // a cell.
+    let wide = map.width >= LIST_W + 1 + STAGE_MIN;
+    let list_end = x + if wide { LIST_W } else { LIST_NARROW }.min(map.width);
+    let top = map.y + 3;
+    let stage = Rect::new(
+        list_end + 1,
+        top,
+        right.saturating_sub(list_end + 1),
+        desk_y.saturating_sub(top),
+    );
+    let rects = if stage.width > 0 && stage.height > 0 {
+        rack::draw(&art, st, stage, buf)
+    } else {
+        Vec::new()
+    };
+    // Each line of the list stands on its part's row in the drawing: FRAME on the head
+    // unit's LCD, a bay on its plate's writing.
+    let shown = |r: &Rect| r.width > 0 && r.height > 0;
+    let rows: Vec<u16> = if rects.len() == bays.len() + 1 && rects.iter().all(shown) {
+        let head = rects.get(1).map_or(rects[0].height, |b| b.y - rects[0].y);
+        std::iter::once(rects[0].y + u16::from(head >= 3))
+            .chain(rects[1..].iter().map(|r| r.y + u16::from(r.height >= 3)))
+            .collect()
+    } else {
+        (0..=bays.len() as u16).map(|i| top + 2 + i).collect()
+    };
+    let label_y = rows[0].saturating_sub(2).max(map.y + 2);
+    if label_y < rows[0] {
+        put(buf, x + 2, label_y, "BAYS", AMBER_DIM, WALL, true, list_end);
+    }
+    let mut lines: Vec<(String, String, bool)> =
+        vec![("FRAME".into(), rack_word(st, &frame), true)];
     for (kind, sled) in &bays {
         let model = sled
             .as_ref()
             .map(|id| rack::model(&name(st, id)))
             .unwrap_or_else(|| "empty".to_string());
-        rows.push((kind.label().to_uppercase(), model, sled.is_some()));
+        lines.push((kind.label().to_uppercase(), model, sled.is_some()));
     }
-    let mut end = label_y + 1;
-    for (i, (kind, model, held)) in rows.iter().enumerate() {
-        let y = label_y + 2 + i as u16 * step;
+    let mut end = label_y;
+    for (i, (kind, model, held)) in lines.iter().enumerate() {
+        let y = rows[i];
         if y >= desk_y {
             break;
         }
         end = y;
         let picked = i == d.row;
         let bg = if picked { AMBER_FAINT } else { WALL };
-        fill(buf, Rect::new(x + 1, y, list_w, 1), bg);
+        fill(buf, Rect::new(x + 1, y, list_end - x - 1, 1), bg);
         let mark = if picked { "▸ " } else { "  " };
         let fg = if picked { AMBER } else { AMBER2 };
-        put(
-            buf,
-            x + 2,
-            y,
-            &format!("{mark}{kind}"),
-            fg,
-            bg,
-            picked,
-            x + 1 + list_w,
-        );
+        let label = format!("{mark}{kind}");
+        put(buf, x + 2, y, &label, fg, bg, picked, list_end);
         let mfg = match (picked, held) {
             (true, _) => AMBER,
             (false, true) => AMBER_DIM,
             (false, false) => AMBER_FAINT,
         };
         if wide {
-            put(buf, x + 13, y, model, mfg, bg, false, x + 1 + list_w);
+            put(buf, x + 13, y, model, mfg, bg, false, list_end);
         }
     }
-    // No firewall bay: the rack says so under the list, where there is room.
-    if !bays.iter().any(|(k, _)| *k == SocketKind::Firewall) && end + 5 < desk_y {
-        let y = end + 2;
+    // No firewall bay: the list says so under its rows, where there is room.
+    if !bays.iter().any(|(k, _)| *k == SocketKind::Firewall) && end + 4 < desk_y {
+        let rule = "─".repeat(usize::from(list_end - x).saturating_sub(4));
         put(
             buf,
             x + 2,
-            y,
-            &"─".repeat(16),
+            end + 2,
+            &rule,
             AMBER_FAINT,
             WALL,
             false,
-            x + 1 + list_w,
+            list_end,
         );
         put(
             buf,
             x + 4,
-            y + 1,
+            end + 3,
             "FIREWALL",
             AMBER_FAINT,
             WALL,
             false,
-            x + 1 + list_w,
+            list_end,
         );
         put(
             buf,
             x + 4,
-            y + 2,
-            "no bay on",
+            end + 4,
+            "no bay",
             AMBER_FAINT,
             WALL,
             false,
-            x + 1 + list_w,
-        );
-        put(
-            buf,
-            x + 4,
-            y + 3,
-            "this rack",
-            AMBER_FAINT,
-            WALL,
-            false,
-            x + 1 + list_w,
+            list_end,
         );
     }
-    // The rack, standing on the desk right of the list, and the pick outlined.
-    let top = map.y + 3;
-    if map.width <= list_full || desk_y <= top {
-        return;
+    // The pick outlined: the frame boxed round the whole rack on the wall's empty
+    // cells; a bay marked along the rails beside its plate, its corners on the rails
+    // above and below while the rails go on, so no plate, lamp or base is covered.
+    let clip = Rect::new(
+        stage.x.saturating_sub(1),
+        map.y + 2,
+        right.saturating_sub(stage.x.saturating_sub(1)),
+        desk_y.saturating_sub(map.y + 2),
+    );
+    match (d.row, rects.get(d.row)) {
+        (0, Some(r)) if shown(r) => frame_box(buf, *r, clip),
+        (_, Some(r)) if shown(r) => {
+            let rails = (rects[0].y, rects.last().map_or(r.bottom(), |b| b.bottom()));
+            bay_marks(buf, *r, rails, clip);
+        }
+        _ => {}
     }
-    let stage = Rect::new(x + list_full, top, map.width - list_full, desk_y - top);
-    let rects = rack::draw(&art, st, stage, buf);
-    let clip = Rect::new(x, map.y + 2, map.width, desk_y - (map.y + 2));
-    if let Some(r) = rects.get(d.row).filter(|r| r.width > 0 && r.height > 0) {
-        // A sled of one or two rows leaves its neighbours' writing be: no bottom edge
-        // under it (but the last, over the base), and none on top of a one-row one.
-        let last = d.row + 1 == rects.len();
-        let edges = match r.height {
-            _ if d.row == 0 => (true, true),
-            h if h >= 3 => (true, true),
-            2 => (true, last),
-            _ => (false, false),
-        };
-        dashed(buf, *r, edges, clip);
+    Drawn {
+        stage,
+        rects,
+        rows,
+        list_end,
     }
 }
 
-/// A dashed amber box one cell outside `r`, clipped to `clip`: its sides, and its top
-/// and bottom edges as `(top, bottom)` say.
-fn dashed(buf: &mut Buffer, r: Rect, (top, bottom): (bool, bool), clip: Rect) {
+/// Puts a piece of the outline at (x, y) inside `clip`, when `ok` takes the cell.
+fn mark(buf: &mut Buffer, clip: Rect, x: i32, y: i32, ch: char, ok: impl Fn(&Cell) -> bool) {
+    let (Ok(x), Ok(y)) = (u16::try_from(x), u16::try_from(y)) else {
+        return;
+    };
     let clip = clip.intersection(buf.area);
+    if clip.contains((x, y).into()) && ok(&buf[(x, y)]) {
+        buf[(x, y)].set_char(ch).set_fg(AMBER);
+    }
+}
+
+/// A cell nothing is drawn on: the bare wall.
+fn bare(c: &Cell) -> bool {
+    c.symbol() == " " && c.bg == WALL
+}
+
+/// A dashed amber box one cell outside the rack `r`, on bare wall only: where the loom
+/// or the desk is, it breaks off.
+fn frame_box(buf: &mut Buffer, r: Rect, clip: Rect) {
     let (x0, x1) = (i32::from(r.x) - 1, i32::from(r.right()));
     let (y0, y1) = (i32::from(r.y) - 1, i32::from(r.bottom()));
-    let mut set = |x: i32, y: i32, ch: char| {
-        if x < 0 || y < 0 {
-            return;
-        }
-        let (x, y) = (x as u16, y as u16);
-        if clip.contains((x, y).into()) {
-            buf[(x, y)].set_char(ch).set_fg(AMBER);
-        }
-    };
     for y in y0 + 1..y1 {
-        set(x0, y, '╎');
-        set(x1, y, '╎');
+        mark(buf, clip, x0, y, '╎', bare);
+        mark(buf, clip, x1, y, '╎', bare);
     }
-    for (on, y, l, rt) in [(top, y0, '┌', '┐'), (bottom, y1, '└', '┘')] {
-        if !on {
-            continue;
-        }
+    for (y, l, rt) in [(y0, '┌', '┐'), (y1, '└', '┘')] {
         for x in x0 + 1..x1 {
-            set(x, y, '╌');
+            mark(buf, clip, x, y, '╌', bare);
         }
-        set(x0, y, l);
-        set(x1, y, rt);
+        mark(buf, clip, x0, y, l, bare);
+        mark(buf, clip, x1, y, rt, bare);
+    }
+}
+
+/// A bay's marks, all on the rails either side of its plate `r`: a dashed line down
+/// each beside the plate, and corners on the rows above and below while those are still
+/// rails (`rails`, the rows they run), not the base.
+fn bay_marks(buf: &mut Buffer, r: Rect, (rail_top, rail_end): (u16, u16), clip: Rect) {
+    let (x0, x1) = (i32::from(r.x) - 1, i32::from(r.right()));
+    let any = |_: &Cell| true;
+    for y in r.y..r.bottom() {
+        mark(buf, clip, x0, i32::from(y), '╎', any);
+        mark(buf, clip, x1, i32::from(y), '╎', any);
+    }
+    if r.y > rail_top {
+        let y = i32::from(r.y) - 1;
+        mark(buf, clip, x0, y, '┌', any);
+        mark(buf, clip, x1, y, '┐', any);
+    }
+    if r.bottom() < rail_end {
+        let y = i32::from(r.bottom());
+        mark(buf, clip, x0, y, '└', any);
+        mark(buf, clip, x1, y, '┘', any);
     }
 }
 
@@ -1040,6 +1091,162 @@ mod tests {
             said.contains("Zenbo half-rack") && said.contains("Tinman 2X core"),
             "{said}"
         );
+    }
+
+    /// The three racks the shots show: the stock Zenbo, the Civitas with its firewall
+    /// bay empty, and the Halcyon with every bay fitted.
+    fn racks() -> Vec<(&'static str, AppState)> {
+        let stock = AppState::new();
+        let mut civitas = AppState::new();
+        civitas
+            .character
+            .set_frame(&civitas.content, &ItemId::new("rack_civitas"));
+        let mut halcyon = AppState::new();
+        let c = halcyon.content.clone();
+        halcyon
+            .character
+            .set_frame(&c, &ItemId::new("rack_halcyon"));
+        let sleds = [
+            "sled_qstack",
+            "sled_tinman",
+            "sled_hydra",
+            "sled_darkfibre",
+            "sled_killswitch",
+        ];
+        for (bay, sled) in sleds.into_iter().enumerate() {
+            let id = ItemId::new(sled);
+            let copy = halcyon.character.new_copy(&c, &id);
+            halcyon.character.rig_copy_mut(&c).fitted[bay] = Some(game::Stack {
+                item: id,
+                qty: 1,
+                copy: Some(copy),
+            });
+        }
+        vec![("zenbo", stock), ("civitas", civitas), ("halcyon", halcyon)]
+    }
+
+    /// The desk's map pane on a `w` by `h` screen with `row` picked, and where it put
+    /// things.
+    fn pane(st: &AppState, row: usize, (w, h): (u16, u16)) -> (Buffer, Drawn, Rect) {
+        let map = crate::screens::explore::layout(Rect::new(0, 0, w, h), false).map;
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        let d = Desk {
+            row,
+            picker: None,
+            card: 0,
+        };
+        let drawn = draw_desk(&d, st, &mut buf, map);
+        (buf, drawn, map)
+    }
+
+    const OUTLINE: [&str; 6] = ["╎", "╌", "┌", "┐", "└", "┘"];
+
+    #[test]
+    fn the_outline_covers_no_part_of_the_rack() {
+        for (frame, st) in racks() {
+            let rows = st.character.rig_fitted(&st.content).len() + 1;
+            for size in [(100, 30), (120, 40)] {
+                for row in 0..rows {
+                    let at = format!("{frame} {}x{} row {row}", size.0, size.1);
+                    let (picked, drawn, map) = pane(&st, row, size);
+                    // The rack alone on the bare wall, as the desk draws it.
+                    let mut bare_rack = Buffer::empty(picked.area);
+                    fill(&mut bare_rack, map, WALL);
+                    rack::draw(
+                        &RackArt::rig(&st, row.checked_sub(1)),
+                        &st,
+                        drawn.stage,
+                        &mut bare_rack,
+                    );
+                    let rects = &drawn.rects;
+                    let rails = |x: u16, y: u16| {
+                        let b = rects[1];
+                        (x + 1 == b.x || x == b.right())
+                            && y >= rects[0].y
+                            && y < rects.last().unwrap().bottom()
+                    };
+                    let mut marks = 0;
+                    for y in map.y..map.bottom() {
+                        for x in drawn.list_end..map.right() {
+                            let (a, b) = (&picked[(x, y)], &bare_rack[(x, y)]);
+                            if !OUTLINE.contains(&a.symbol()) || OUTLINE.contains(&b.symbol()) {
+                                continue;
+                            }
+                            marks += 1;
+                            let wall = b.symbol() == " " && b.bg == WALL;
+                            assert!(
+                                wall || (row > 0 && rails(x, y)),
+                                "{at}: outline on ({x},{y}) {:?} over {:?}:\n{}",
+                                a.symbol(),
+                                b.symbol(),
+                                buffer_text(&picked)
+                            );
+                        }
+                    }
+                    assert!(marks >= 4, "{at}: the pick is outlined");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_list_lines_up_with_its_sleds_and_keeps_off_the_rack() {
+        for (frame, st) in racks() {
+            let bays = st.character.rig_fitted(&st.content);
+            for size in [(100, 30), (120, 40)] {
+                let at = format!("{frame} {}x{}", size.0, size.1);
+                let (buf, drawn, map) = pane(&st, 1, size);
+                let rects = &drawn.rects;
+                assert!(rects[0].x > drawn.list_end, "{at}: a gap before the rack");
+                for (i, (kind, _)) in bays.iter().enumerate() {
+                    let (y, plate) = (drawn.rows[i + 1], rects[i + 1]);
+                    assert!(
+                        plate.y <= y && y < plate.bottom(),
+                        "{at}: {kind:?} row {y} by {plate:?}"
+                    );
+                    let line: String = (map.x..drawn.list_end)
+                        .map(|x| buf[(x, y)].symbol())
+                        .collect();
+                    assert!(line.contains(&kind.label().to_uppercase()), "{at}: {line}");
+                }
+                // Nothing of the list in its gap, under the header: only the wall, the
+                // desk, or the frame's outline.
+                for y in map.y + 2..map.bottom() {
+                    let c = &buf[(drawn.list_end, y)];
+                    assert!(
+                        c.symbol() == " " || c.symbol() == "▀" || OUTLINE.contains(&c.symbol()),
+                        "{at}: {:?} in the gap at row {y}\n{}",
+                        c.symbol(),
+                        buffer_text(&buf)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_refused_fit_leaves_the_list_open() {
+        let mut st = state_home();
+        st.character.rig_copy_mut(&st.content.clone());
+        st.character.frames.push(ItemId::new("rack_nonesuch"));
+        let mut d = Desk::open(&st);
+        d.row = 0;
+        let from = st.net.now(&st);
+        press(&mut d, &mut st, KeyCode::Char(' '));
+        press(&mut d, &mut st, KeyCode::Char(' '));
+        assert_eq!(d.picker, Some(0), "the list stays open");
+        assert_eq!(st.net.now(&st), from, "no time gone");
+        assert_eq!(st.character.rig_frame(), ItemId::new("rack_zenbo"));
+        assert_eq!(st.log.latest().map(|e| e.kind), Some(Kind::Warn));
+    }
+
+    #[test]
+    fn the_map_on_top_gets_you_up_from_the_desk() {
+        let mut st = state_home();
+        let mut map = crate::screens::explore::MapScreen::walking(&mut st);
+        st.at_desk = true;
+        map.update(&mut st, &[]);
+        assert!(!st.at_desk);
     }
 
     #[test]
