@@ -1012,12 +1012,14 @@ fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)
         Some("held")
     } else if d.kind == NodeKind::DoorLock {
         Some(door_state(st, building, d))
+    } else if d.kind == NodeKind::Container {
+        Some(match crate::sitenet::container_open(st, d.node) {
+            true => "cracked",
+            false => "locked",
+        })
     } else if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
         Some("cracked")
-    } else if matches!(
-        d.kind,
-        NodeKind::DoorLock | NodeKind::GateSwitch | NodeKind::Container
-    ) {
+    } else if d.kind == NodeKind::GateSwitch {
         Some("locked")
     } else {
         None

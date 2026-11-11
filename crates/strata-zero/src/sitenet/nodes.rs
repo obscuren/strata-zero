@@ -92,11 +92,8 @@ pub fn city_landed(
     }
 }
 
-/// A container's lock cracked, for #96: a live crack on its node, which an alarm drops.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a mission's containers open with it from #96 on")
-)]
+/// A container's lock cracked: a live crack on its node, which an alarm drops. The Look
+/// reads it; a mission's containers open with it from #96 on.
 pub fn container_open(st: &AppState, node: SiteNode) -> bool {
     super::hacked(st, node, &[Op::Crack])
 }
@@ -153,11 +150,16 @@ mod tests {
     fn a_container_cracks_and_its_lock_stays_open() {
         let (mut st, b) = office_copy(230);
         let c = beside_device(&mut st, b, NodeKind::Container);
+        let place = st.player.as_ref().unwrap().place;
+        let look = |st: &AppState| look_second(st, place, c.at);
+        assert_eq!(look(&st).as_deref(), Some("container lock · locked"));
         let line = crate::net::tests::crack_to_landing(&mut st, HackTarget::Site(c.node));
         assert!(line.last().unwrap().ends_with("cracked"), "{line:?}");
         assert!(container_open(&st, c.node));
+        assert_eq!(look(&st).as_deref(), Some("container lock · cracked"));
         crate::net::lock_down(&mut st, b);
         assert!(!container_open(&st, c.node), "an alarm drops it");
+        assert_eq!(look(&st).as_deref(), Some("container lock · locked"));
     }
 
     #[test]
