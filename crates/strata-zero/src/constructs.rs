@@ -36,6 +36,29 @@ impl Constructs {
         self.made.insert(k.building, k);
     }
 
+    /// A site's construct, once made: none while the building has none, or keeps one from
+    /// before its Net (an old save's).
+    pub fn site(&self, b: BuildingId) -> Option<&Construct> {
+        self.made.get(&b).filter(|k| k.is_site())
+    }
+
+    /// A site's construct, kept under its building over any construct it had before.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the engine makes a site's construct from Task 8 on"
+        )
+    )]
+    pub fn put_site(&mut self, k: Construct) {
+        self.made.insert(k.building, k);
+    }
+
+    /// Drops building `b`'s construct: made again when next needed.
+    pub fn drop(&mut self, b: BuildingId) {
+        self.made.remove(&b);
+    }
+
     #[cfg(test)]
     pub fn generated(&self) -> usize {
         self.made.len()

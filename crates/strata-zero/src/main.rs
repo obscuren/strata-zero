@@ -45,6 +45,7 @@ mod runs;
 mod save;
 mod screens;
 mod sheet;
+mod sitenet;
 mod term;
 mod track;
 mod ui;

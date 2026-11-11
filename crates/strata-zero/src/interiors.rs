@@ -14,6 +14,7 @@ use citygen::{
 };
 use sim::{HouseholdId, Occupant, OccupantRole, PersonId, Whereabouts, World};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -30,6 +31,10 @@ pub struct Interiors {
     /// saves, so it defaults: they hold none.
     #[serde(default)]
     copies: BTreeMap<BuildingId, crate::venues::MissionCopy>,
+    /// Whether each building asked about with no plan yet would be laid out as a venue:
+    /// a cache, made from the city when first asked (saving rule 16), never saved.
+    #[serde(skip)]
+    venues: RefCell<BTreeMap<BuildingId, bool>>,
 }
 
 /// Which household lives in which flat of one building: stable, in or out.
@@ -154,6 +159,23 @@ impl Interiors {
 
     pub fn plan_of(&self, b: BuildingId) -> Option<&FloorPlan> {
         self.plans.get(&b)
+    }
+
+    /// Whether building `b`'s plan is a venue's: the session's plan when it holds one (an
+    /// old save's hotel kept on the classic builder is none), else whether the seed lays
+    /// it out as one, a kind a venue type builds whose layout lays (worked out once).
+    pub fn is_venue(&self, city: &City, b: BuildingId) -> bool {
+        if let Some(plan) = self.plans.get(&b) {
+            return plan.venue.is_some();
+        }
+        let built = (city.building_opt(b)).is_some_and(|x| {
+            citygen::venue::VenuePack::builtin()
+                .for_kind(x.kind)
+                .is_some()
+        });
+        built
+            && *(self.venues.borrow_mut().entry(b))
+                .or_insert_with(|| FloorPlan::new(city, b).is_some_and(|plan| plan.venue.is_some()))
     }
 
     /// Replaces a building's plan and drops the floors made from the old one.

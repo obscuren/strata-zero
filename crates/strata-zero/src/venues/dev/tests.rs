@@ -94,3 +94,29 @@ fn a_mission_that_wont_lay_tries_other_seeds_and_objectives() {
     // Inputs that lay come back as they are.
     assert_eq!(laid_inputs(&layout, t, found), Some(found));
 }
+
+#[test]
+fn a_site_net_start_keeps_to_the_server_room() {
+    let mut st = AppState::new();
+    st.enter_city(new_game_cities().remove(0));
+    let b = dev_site_net(&mut st, crate::venues::SITE_NET_SECURITY).unwrap();
+    let t = (VenuePack::builtin().for_kind(citygen::BuildingKind::Office)).unwrap();
+    let v = st.interiors.plan_of(b).unwrap().venue.as_deref().unwrap();
+    assert_eq!(v.type_id, t.id, "the office type");
+    let copy = st.interiors.copy(b).unwrap();
+    assert!(copy.live && copy.inputs.size == MissionSize::Medium);
+    assert_eq!(copy.inputs.security, crate::venues::SITE_NET_SECURITY);
+    let server = |o: &citygen::venue::ObjectiveDef| {
+        t.room(&o.room)
+            .is_some_and(|r| r.kind == citygen::RoomKind::Server)
+    };
+    let first = t.objectives.iter().position(server);
+    assert_eq!(Some(copy.inputs.objective), first, "its first server room");
+    let p = st.player.as_ref().unwrap();
+    let at = game::At {
+        place: p.place,
+        pos: p.pos,
+    };
+    assert_eq!(at.place, Place::Stratum(StratumKind::Street));
+    assert_eq!(building_at_door(&st, at), Some(b), "at its door");
+}

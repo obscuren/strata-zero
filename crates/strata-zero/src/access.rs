@@ -5,7 +5,7 @@
 use crate::app::AppState;
 use crate::credentials;
 use citygen::construct::{BLACK_THRESHOLD, GREY_THRESHOLD, ICE_THRESHOLD};
-use citygen::{BuildingId, City, DistrictId, NodeKind, Place, Pos, StratumKind, SubnetOwner};
+use citygen::{BuildingId, City, DistrictId, NodeKind, Place, Pos, StratumKind};
 use game::{HackTarget, Op, Target};
 use sim::OccupantRole;
 
@@ -99,17 +99,13 @@ fn building_name(st: &AppState, b: BuildingId) -> String {
     building_label(st, b)
 }
 
-fn security(city: &City, b: BuildingId) -> u8 {
-    city.net
-        .subnets
-        .iter()
-        .find(|s| s.owner == SubnetOwner::Building(b))
-        .map(|s| s.security)
-        .unwrap_or(0)
-}
-
+/// A building's security: its subnet's, but a site's governing security
+/// (`sitenet::security`, a live copy's own), so the scan and a backdoor's odds read the
+/// copy's.
 pub fn security_of(st: &AppState, b: BuildingId) -> u8 {
-    st.city.as_ref().map_or(0, |c| security(c, b))
+    // Only a site holds a copy, so a building that is none reads its subnet's here, and
+    // asking costs no venue's layout.
+    crate::sitenet::security(st, b)
 }
 
 // ---- the world actions: what the HELIX/OS devices and programs call ----
@@ -137,7 +133,7 @@ pub fn scan_row(st: &AppState, i: usize, b: BuildingId) -> String {
     let Some(city) = st.city.as_ref() else {
         return String::new();
     };
-    let sec = security(city, b);
+    let sec = security_of(st, b);
     format!(
         "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
         i + 1,
