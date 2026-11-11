@@ -29,11 +29,16 @@ pub fn body_lines(st: &AppState) -> Vec<String> {
         }
         Place::Floor { building: b, level } => {
             let label = FloorPlan::label(level);
-            let port = (st.constructs.site(b).into_iter())
-                .flat_map(|k| k.devices.iter())
-                .find(|d| {
-                    d.node.level == level && super::is_port(d.kind) && d.node.at.chebyshev(at) <= 1
-                });
+            // The device it stands at, on its own side (`at_port`): the tile in front of it
+            // is its grid tile, back on the floor.
+            let port = st.constructs.site(b).and_then(|k| {
+                k.devices.iter().find(|d| {
+                    d.node.level == level
+                        && super::is_port(d.kind)
+                        && (k.to_floor(d.at))
+                            .is_some_and(|(_, front)| super::at_port(d.node.at, front, at))
+                })
+            });
             let here = match port {
                 Some(d) => format!("{label} · at the {}", d.name),
                 None => label.clone(),
@@ -79,6 +84,31 @@ mod tests {
             lines[1].contains(" guards on L · nearest ") || lines[1] == "nobody on L",
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_body_behind_a_terminals_wall_is_not_at_it() {
+        let (mut st, b) = office_copy(190);
+        let terminal = stand_behind_a_terminal(&mut st, b);
+        let behind = st.player.as_ref().unwrap().pos;
+        let front = crate::sitenet::net_of(&st, b)
+            .unwrap()
+            .node(terminal)
+            .unwrap()
+            .net;
+        let floor = Place::Floor {
+            building: b,
+            level: terminal.level,
+        };
+        crate::constructs::land(&mut st, floor, front);
+        crate::net::jack_in_here(&mut st).unwrap();
+        let label = citygen::FloorPlan::label(terminal.level);
+        assert!(
+            body_lines(&st)[0].starts_with(&format!("{label} · at the ")),
+            "in front"
+        );
+        st.player.as_mut().unwrap().body = Some((floor, behind));
+        assert_eq!(body_lines(&st)[0], label, "behind its wall: at nothing");
     }
 
     #[test]

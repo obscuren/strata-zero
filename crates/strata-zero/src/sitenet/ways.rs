@@ -13,6 +13,13 @@ pub(super) fn is_port(kind: NodeKind) -> bool {
     matches!(kind, NodeKind::Terminal | NodeKind::GateSwitch)
 }
 
+/// Whether you, at `you`, stand at the terminal or switch set in wall tile `wall` with the
+/// floor tile `front` before it (Ruling 19): beside the wall tile and beside the tile in
+/// front of it, on its own side, never through its wall from the room or corridor behind.
+pub(super) fn at_port(wall: Pos, front: Pos, you: Pos) -> bool {
+    wall.chebyshev(you) <= 1 && front.chebyshev(you) <= 1
+}
+
 /// The terminals and switches drawn on a site's floor, by their wall tiles.
 pub fn floor_devices(st: &AppState, b: BuildingId, level: i32) -> Vec<(Pos, NodeKind)> {
     let Some(net) = super::net_of(st, b) else {
@@ -24,8 +31,8 @@ pub fn floor_devices(st: &AppState, b: BuildingId, level: i32) -> Vec<(Pos, Node
         .collect()
 }
 
-/// The terminal or gate switch your body stands beside on a site's floor (Chebyshev 1 of
-/// its wall tile, Ruling 19), as the site's Net has it: its building and its node.
+/// The terminal or gate switch your body stands at on a site's floor (`at_port`: beside
+/// its wall tile, on its own side), as the site's Net has it: its building and its node.
 pub(crate) fn port_in_reach(st: &AppState) -> Option<(BuildingId, SiteNodeInfo)> {
     let p = st.player.as_ref()?;
     let Place::Floor { building: b, level } = p.place else {
@@ -33,17 +40,17 @@ pub(crate) fn port_in_reach(st: &AppState) -> Option<(BuildingId, SiteNodeInfo)>
     };
     let net = super::net_of(st, b)?;
     let port = (net.nodes.into_iter())
-        .find(|n| n.node.level == level && is_port(n.kind) && n.node.at.chebyshev(p.pos) <= 1)?;
+        .find(|n| n.node.level == level && is_port(n.kind) && at_port(n.node.at, n.net, p.pos))?;
     Some((b, port))
 }
 
-/// The terminal or gate switch your body stands beside on a site's floor: its building,
-/// level, node and name.
+/// The terminal or gate switch your body stands at on a site's floor (`at_port`): its
+/// building, level, node and name.
 pub fn device_in_reach(st: &AppState) -> Option<(BuildingId, i32, SiteNode, String)> {
     port_in_reach(st).map(|(b, n)| (b, n.node.level, n.node, n.name))
 }
 
-/// Jacks in at the terminal or gate switch beside you on a site's floor, unless the port
+/// Jacks in at the terminal or gate switch you stand at on a site's floor, unless the port
 /// refuses (`net::jack_in_refusal`: an alarm locks them): your body stays where it stands,
 /// you on that level of its Net on the device's node (beside it when ICE stands there),
 /// its construct made the first time.
@@ -169,6 +176,39 @@ mod tests {
         );
         stand_beside_a_camera(&mut st, b);
         assert!(device_in_reach(&st).is_none());
+    }
+
+    #[test]
+    fn a_terminal_is_reached_from_its_own_side_not_through_its_wall() {
+        let (mut st, b) = office_copy(190);
+        let terminal = stand_behind_a_terminal(&mut st, b);
+        assert_eq!(device_in_reach(&st), None);
+        let subjects = crate::interact::gather(&st, &|_, _| None);
+        assert!(
+            !(subjects.iter().flat_map(|s| s.choices.iter()))
+                .any(|c| matches!(c.pick, Pick::World(WorldAct::JackIn))),
+            "no Jack in through the wall"
+        );
+        assert_eq!(
+            jack_in_on_floor(&mut st).unwrap_err(),
+            "no terminal within reach"
+        );
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        // In front of it, it's a way in.
+        let front = net_of(&st, b).unwrap().node(terminal).unwrap().net;
+        crate::constructs::land(
+            &mut st,
+            Place::Floor {
+                building: b,
+                level: terminal.level,
+            },
+            front,
+        );
+        assert_eq!(device_in_reach(&st).map(|d| d.2), Some(terminal));
+        crate::net::jack_in_here(&mut st).unwrap();
+        let p = st.player.as_ref().unwrap();
+        let k = st.constructs.site(b).unwrap();
+        assert_eq!(k.device_at(p.pos).map(|d| d.node), Some(terminal));
     }
 
     #[test]

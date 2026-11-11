@@ -381,6 +381,33 @@ pub(crate) fn stand_beside_a_camera(st: &mut AppState, b: BuildingId) -> SiteNod
     panic!("no camera of {b:?} with a tile beside it away from its ports");
 }
 
+/// You on foot behind the wall of a terminal of site `b`: beside its wall tile, in the next
+/// room or the corridor, not beside the floor tile in front of it, and on the far side of
+/// every other terminal and switch near too. The terminal's node.
+pub(crate) fn stand_behind_a_terminal(st: &mut AppState, b: BuildingId) -> SiteNode {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let ports: Vec<(SiteNode, Pos)> = (net.nodes.iter())
+        .filter(|n| matches!(n.kind, NodeKind::Terminal | NodeKind::GateSwitch))
+        .map(|n| (n.node, n.net))
+        .collect();
+    for &(node, _) in ports
+        .iter()
+        .filter(|(n, _)| net.node(*n).unwrap().kind == NodeKind::Terminal)
+    {
+        let behind = |p: &Pos| {
+            !(ports.iter()).any(|(d, front)| {
+                d.level == node.level && d.at.chebyshev(*p) <= 1 && front.chebyshev(*p) <= 1
+            })
+        };
+        let tiles = floor_tiles_beside(st, b, node.level, node.at);
+        if let Some(at) = tiles.into_iter().find(behind) {
+            stand_on_floor(st, b, node.level, at);
+            return node;
+        }
+    }
+    panic!("no terminal of {b:?} with a floor tile behind its wall");
+}
+
 /// You at home, on foot in the flat beside the rig.
 pub(crate) fn stand_at_the_rig(st: &mut AppState) {
     let h = st.home.expect("a home");
