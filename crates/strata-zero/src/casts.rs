@@ -41,10 +41,7 @@ pub(crate) fn book(st: &mut AppState, id: &AbilityId) -> Result<(), String> {
 }
 
 fn in_construct(st: &AppState) -> bool {
-    matches!(
-        st.player.as_ref().map(|p| p.place),
-        Some(Place::Construct(_))
-    )
+    st.player.as_ref().is_some_and(|p| p.place.in_construct())
 }
 
 /// One shape on a tile of your place, from now.
@@ -166,12 +163,12 @@ fn lock_on(st: &mut AppState, at: Pos, label: String) {
     });
 }
 
-/// The shot of a strike at a piece: the ability's shapes less the muzzle flash, in
-/// the net's tint, starting at tick `start`.
+/// The shot of a strike at a piece in the construct at `place` (yours): the ability's
+/// shapes less the muzzle flash, in the net's tint, starting at tick `start`.
 #[allow(clippy::too_many_arguments)]
 fn shoot_piece(
     st: &mut AppState,
-    b: BuildingId,
+    place: Place,
     fx: &[Fx],
     from: Pos,
     at: Pos,
@@ -187,7 +184,7 @@ fn shoot_piece(
     let from_len = st.fx.len();
     combat::play_shot(
         st,
-        Place::Construct(b),
+        place,
         &fx,
         from,
         at,
@@ -224,9 +221,12 @@ pub fn strike_ice(
     else {
         return Err(format!("{} is not a strike", ability.name));
     };
-    if push > 0 || st.player.as_ref().map(|p| p.place) != Some(Place::Construct(b)) {
+    let Some(place) = (st.player.as_ref())
+        .map(|p| p.place)
+        .filter(|p| push == 0 && p.construct() == Some(b))
+    else {
         return Err("not in here".to_string());
-    }
+    };
     if !net::piece_in_reach(st, b, i) {
         return Err("out of reach".to_string());
     }
@@ -253,7 +253,7 @@ pub fn strike_ice(
     );
     let hit = game::round_hits(combat::roll(st), chance);
     let impact = st.tick + combat::flight_ticks(&ability.fx, me, at);
-    shoot_piece(st, b, &ability.fx, me, at, hit, damage, st.tick);
+    shoot_piece(st, place, &ability.fx, me, at, hit, damage, st.tick);
     let now = st.net.now(st);
     let name = ability.name.to_lowercase();
     if !hit {
@@ -299,7 +299,7 @@ pub fn strike_ice(
         };
         shoot_piece(
             st,
-            b,
+            place,
             &ability.fx,
             last,
             target,

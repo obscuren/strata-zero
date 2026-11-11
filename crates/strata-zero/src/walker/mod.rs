@@ -98,7 +98,7 @@ impl Player {
             Place::Stratum(StratumKind::Undercity) => RADIUS_UNDER,
             Place::Stratum(StratumKind::Net) => RADIUS_NET,
             Place::Stratum(_) => RADIUS_STREET,
-            Place::Floor { .. } | Place::Construct(_) => RADIUS_INSIDE,
+            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } => RADIUS_INSIDE,
         }
     }
 
@@ -117,12 +117,10 @@ impl Player {
         self.body.is_some()
     }
 
-    /// The Net has no light rule: on its stratum and in a construct every tile is seen.
+    /// The Net has no light rule: on its stratum and in a construct (a site's Net too)
+    /// every tile is seen.
     pub fn sees_all(&self) -> bool {
-        matches!(
-            self.place,
-            Place::Stratum(StratumKind::Net) | Place::Construct(_)
-        )
+        self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct()
     }
 
     /// The port of a terminal on this tile or an 8-neighbour that serves this stratum.

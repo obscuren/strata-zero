@@ -317,14 +317,32 @@ pub enum Place {
     },
     /// Inside a building's construct, behind its gate on the Net.
     Construct(BuildingId),
+    /// On a level of a site's own Net: the level's band of the building's construct.
+    SiteNet {
+        building: BuildingId,
+        level: i32,
+    },
 }
 
 impl Place {
     pub fn stratum(self) -> Option<StratumKind> {
         match self {
             Place::Stratum(k) => Some(k),
-            Place::Floor { .. } | Place::Construct(_) => None,
+            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } => None,
         }
+    }
+
+    /// The building whose construct this is: an old construct or a site's Net.
+    pub fn construct(self) -> Option<BuildingId> {
+        match self {
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(b),
+            Place::Stratum(_) | Place::Floor { .. } => None,
+        }
+    }
+
+    /// Inside a building's construct, of either kind.
+    pub fn in_construct(self) -> bool {
+        self.construct().is_some()
     }
 
     pub fn is_street(self) -> bool {
@@ -649,5 +667,43 @@ mod tests {
             Some((Some(StratumKind::Skyways), None))
         );
         assert_eq!(c.serves_from(StratumKind::Undercity), None);
+    }
+
+    #[test]
+    fn a_site_net_is_a_construct_of_its_building() {
+        let p = Place::SiteNet {
+            building: BuildingId(3),
+            level: -1,
+        };
+        assert_eq!(
+            (p.construct(), p.in_construct(), p.stratum()),
+            (Some(BuildingId(3)), true, None)
+        );
+        assert_eq!(
+            Place::Construct(BuildingId(3)).construct(),
+            Some(BuildingId(3))
+        );
+        assert_eq!(
+            Place::Floor {
+                building: BuildingId(3),
+                level: 0
+            }
+            .construct(),
+            None
+        );
+        for p in [
+            p,
+            Place::Construct(BuildingId(1)),
+            Place::Stratum(StratumKind::Net),
+            Place::Floor {
+                building: BuildingId(2),
+                level: 4,
+            },
+        ] {
+            assert_eq!(
+                rmp_serde::from_slice::<Place>(&rmp_serde::to_vec_named(&p).unwrap()).unwrap(),
+                p
+            );
+        }
     }
 }

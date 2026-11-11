@@ -890,7 +890,7 @@ impl MapScreen {
             return Vec::new();
         };
         match p.place {
-            Place::Construct(b) => {
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                 let Some(k) = st.constructs.get(b) else {
                     return Vec::new();
                 };
@@ -919,7 +919,7 @@ impl MapScreen {
     fn enemy_at(st: &AppState, at: Pos) -> Option<Enemy> {
         let p = st.player.as_ref()?;
         match p.place {
-            Place::Construct(b) => st
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => st
                 .constructs
                 .get(b)
                 .and_then(|k| k.guard_at(at))
@@ -935,10 +935,7 @@ impl MapScreen {
             Enemy::Ice(i) => st
                 .player
                 .as_ref()
-                .and_then(|p| match p.place {
-                    Place::Construct(b) => st.net.ice.get(&b),
-                    _ => None,
-                })
+                .and_then(|p| st.net.ice.get(&p.place.construct()?))
                 .and_then(|states| states.get(i))
                 .is_some_and(|ice| matches!(ice.mode, crate::net::IceMode::Awake { .. })),
         }
@@ -984,7 +981,7 @@ impl MapScreen {
                 (format!("{head}{odds} "), lit)
             }
             Enemy::Ice(i) => {
-                let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+                let Some(b) = st.player.as_ref().and_then(|p| p.place.construct()) else {
                     return (String::new(), None);
                 };
                 let Some((name, left, at)) = crate::net::ice_card(st, b, i) else {
@@ -1007,10 +1004,7 @@ impl MapScreen {
     }
 
     fn net_place(place: Place) -> bool {
-        matches!(
-            place,
-            Place::Construct(_) | Place::Stratum(StratumKind::Net)
-        )
+        place.in_construct() || place == Place::Stratum(StratumKind::Net)
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
@@ -1254,7 +1248,7 @@ impl MapScreen {
                     }
                     Some(Enemy::Ice(i)) => {
                         self.last_enemy = Some(Enemy::Ice(i));
-                        let Place::Construct(b) = place else {
+                        let Some(b) = place.construct() else {
                             return Some(ScreenCmd::Stay);
                         };
                         match crate::combat::attack_ice(st, b, i) {
@@ -1306,7 +1300,11 @@ impl MapScreen {
                 self.last_enemy = enemy;
                 crate::combat::strike(st, id, foe)
             }
-            (Active(A::Strike { .. }), Some(Enemy::Ice(i)), Place::Construct(b)) => {
+            (
+                Active(A::Strike { .. }),
+                Some(Enemy::Ice(i)),
+                Place::Construct(b) | Place::SiteNet { building: b, .. },
+            ) => {
                 self.last_enemy = enemy;
                 crate::casts::strike_ice(st, id, b, i)
             }
@@ -1395,7 +1393,7 @@ impl MapScreen {
         tethered: bool,
     ) -> hud::Footer<'a> {
         let place = match (jacked, st.player.as_ref().map(|p| p.place)) {
-            (true, Some(Place::Construct(b))) => {
+            (true, Some(Place::Construct(b) | Place::SiteNet { building: b, .. })) => {
                 let district = city
                     .building_opt(b)
                     .map(|bl| city.district(bl.district).name.clone())
@@ -1420,7 +1418,7 @@ impl MapScreen {
         let now = st.net.now(st);
         let trace = match (jacked, st.player.as_ref()) {
             (true, Some(p)) => Some(match p.place {
-                Place::Construct(b) => {
+                Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                     let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
                     let mut t = format!("TRACE {} {heat}", crate::net::trace_bar(heat));
                     if let Some(until) = st
@@ -1456,7 +1454,9 @@ impl MapScreen {
             st.net.run.as_ref(),
             st.player.as_ref().map(|p| p.place),
         ) {
-            (true, Some(run), Some(Place::Construct(b))) if !tethered => {
+            (true, Some(run), Some(Place::Construct(b) | Place::SiteNet { building: b, .. }))
+                if !tethered =>
+            {
                 crate::net::run_readout(st, b, run)
             }
             (true, Some(run), Some(Place::Stratum(StratumKind::Net))) if !tethered => {
@@ -1466,7 +1466,7 @@ impl MapScreen {
         };
         let ice = match (jacked, st.player.as_ref()) {
             (true, Some(p)) => match p.place {
-                Place::Construct(b) => {
+                Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                     let vis = p.vis();
                     crate::net::ice_lines(st, b, |q| {
                         vis.get(q)
@@ -1754,7 +1754,7 @@ impl MapScreen {
             (Place::Stratum(_), Some(c)) if c.is_lot() => c.name.clone(),
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
-            (Place::Construct(_), _) => "construct".to_string(),
+            (Place::Construct(_) | Place::SiteNet { .. }, _) => "construct".to_string(),
         }
     }
 
@@ -1945,7 +1945,7 @@ impl MapScreen {
         if let Some(scene) = crate::net::scene_of(place)
             && st.character.deck(&st.content).is_some()
         {
-            let inside = matches!(place, Place::Construct(_));
+            let inside = place.in_construct();
             let here = match (inside, subjects.as_slice()) {
                 (false, [s]) => Some(s),
                 _ => None,
@@ -2254,7 +2254,7 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
-        let popup = if let Place::Construct(b) = place {
+        let popup = if let Some(b) = place.construct() {
             let mut letters = FREE_LETTERS.chars();
             let rows: Vec<Choice> = interact::run_rows(st, b, pos, None, &mut letters)
                 .into_iter()
@@ -2506,6 +2506,8 @@ impl MapScreen {
             }
             // The gate in and out of a construct comes with the construct cache.
             Place::Construct(_) => None,
+            // A site's Net is left by its own ways (Tasks 10 and 11).
+            Place::SiteNet { .. } => None,
         }
     }
 
@@ -2686,6 +2688,8 @@ impl MapScreen {
                 self.follow_player(st);
                 Some(ScreenCmd::Stay)
             }
+            // A site's Net is left through its firewall's gate (Task 11).
+            Place::SiteNet { .. } => None,
             _ => None,
         }
     }
@@ -2855,7 +2859,7 @@ impl MapScreen {
     pub fn aim_path(&self, st: &AppState) -> Option<(Vec<Pos>, usize)> {
         let aim = self.aim?;
         let player = st.player.as_ref()?;
-        let Place::Construct(b) = player.place else {
+        let Some(b) = player.place.construct() else {
             let path = self.street_path(st, player.pos, aim)?;
             let lit = match st.net.engaged.as_ref() {
                 Some(e) => e.moves as usize,
@@ -2970,7 +2974,9 @@ impl MapScreen {
             self.street_walk_step(st, next);
             return;
         }
-        let Some((Place::Construct(b), _)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+        let Some((place, b)) =
+            (st.player.as_ref()).and_then(|p| Some((p.place, p.place.construct()?)))
+        else {
             self.walking = None;
             return;
         };
@@ -3011,7 +3017,7 @@ impl MapScreen {
                 city,
                 &st.interiors,
                 &st.constructs,
-                Place::Construct(b),
+                place,
                 st.minute_of_day(),
             )
             && let Some(player) = st.player.as_mut()
@@ -3051,10 +3057,7 @@ impl MapScreen {
             st.say("feed closed");
         }
         if k.code == KeyCode::Char('.') {
-            let inside = st
-                .player
-                .as_ref()
-                .is_some_and(|p| matches!(p.place, Place::Construct(_)));
+            let inside = st.player.as_ref().is_some_and(|p| p.place.in_construct());
             if st.net.engaged.is_some() {
                 // Only your own turn ends on the key; the others' run on the pace.
                 if crate::net::your_turn(st) {
@@ -3114,10 +3117,7 @@ impl MapScreen {
             // An aim on another tile: space confirms the walk, as enter does.
             if let Some(aim) = self.aim
                 && st.player.as_ref().is_some_and(|p| p.pos != aim)
-                && matches!(
-                    st.player.as_ref().map(|p| p.place),
-                    Some(Place::Construct(_))
-                )
+                && st.player.as_ref().is_some_and(|p| p.place.in_construct())
             {
                 return Some(self.start_walk(st, aim));
             }
@@ -3163,7 +3163,7 @@ impl MapScreen {
                 }
                 (Some(_), Some(_)) if crate::net::hunting(st) => st.warn("still hunted"),
                 (Some(_), Some(_)) => crate::net::disengage(st),
-                (Some(place @ Place::Construct(_)), None) => crate::net::engage(st, place, true),
+                (Some(place), None) if place.in_construct() => crate::net::engage(st, place, true),
                 (Some(place), None) if !crate::foes::in_memory(st).is_empty() => {
                     crate::net::engage(st, place, true)
                 }
@@ -3240,10 +3240,7 @@ impl MapScreen {
         }
         // The aim: `g` starts it anywhere in a construct, the arrows move it while it
         // is up or while the board is on turns, enter walks it, esc drops it.
-        let inside = match st.player.as_ref().map(|p| (p.place, p.pos)) {
-            Some((Place::Construct(b), pos)) => Some((b, pos)),
-            _ => None,
-        };
+        let inside = (st.player.as_ref()).and_then(|p| Some((p.place.construct()?, p.pos)));
         // On foot on turns: `g` aims a path over the street, the arrows move the aim
         // while it is up, enter walks it; a plain arrow steps and spends a move.
         if inside.is_none()
@@ -3702,10 +3699,7 @@ impl Screen for MapScreen {
         if let (Some(_), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
             world.set_blocker(standing);
         }
-        let inside = match st.player.as_ref().map(|p| p.place) {
-            Some(Place::Construct(b)) => Some(b),
-            _ => None,
-        };
+        let inside = st.player.as_ref().and_then(|p| p.place.construct());
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
         let resting = st.rest.is_some();
         if resting {
@@ -3980,7 +3974,7 @@ impl Screen for MapScreen {
             },
             home: st.home.map(|h| h.home.building),
             watch: match self.place {
-                Place::Construct(b) => st
+                Place::Construct(b) | Place::SiteNet { building: b, .. } => st
                     .constructs
                     .get(b)
                     .map(crate::net::watched)
@@ -3992,10 +3986,7 @@ impl Screen for MapScreen {
             view: &net_view,
             keep,
         };
-        if matches!(
-            self.place,
-            Place::Stratum(StratumKind::Net) | Place::Construct(_)
-        ) {
+        if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
             overlays.push(&net_look);
         }
         // The cord: the way back to where you jacked in (Settings can hide it), walked
@@ -4114,9 +4105,11 @@ impl Screen for MapScreen {
             overlays.push(o);
         }
         let ghost = match self.place {
-            Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
-                steps: crate::net::ghost_steps(st, b),
-            }),
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                Some(crate::render::ghost::GhostOverlay {
+                    steps: crate::net::ghost_steps(st, b),
+                })
+            }
             _ => None,
         };
         if let Some(o) = ghost.as_ref() {
@@ -4275,7 +4268,9 @@ impl Screen for MapScreen {
         }
         // A decoy floods the ad board's room.
         let flood = match self.place {
-            Place::Construct(b) => crate::holds::decoy_room(st, b),
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                crate::holds::decoy_room(st, b)
+            }
             _ => Vec::new(),
         };
         let flood_blocks = crate::render::path::BlockOverlay {
@@ -4607,7 +4602,9 @@ impl Screen for MapScreen {
         }
         .unwrap_or_else(|| crate::look::location(st, self.place, cursor));
         let alert_building = match self.place {
-            Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
+            Place::Construct(b)
+            | Place::SiteNet { building: b, .. }
+            | Place::Floor { building: b, .. } => Some(b),
             Place::Stratum(_) => None,
         };
         if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
@@ -4617,16 +4614,14 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure = if matches!(
-            self.place,
-            Place::Stratum(StratumKind::Net) | Place::Construct(_)
-        ) {
-            crate::exposure::net_text(self.place, crate::net::hunted(st))
-        } else if matches!(self.place, Place::Stratum(_)) {
-            crate::exposure::text(&crate::exposure::of(st))
-        } else {
-            String::new()
-        };
+        let exposure =
+            if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
+                crate::exposure::net_text(self.place, crate::net::hunted(st))
+            } else if matches!(self.place, Place::Stratum(_)) {
+                crate::exposure::text(&crate::exposure::of(st))
+            } else {
+                String::new()
+            };
         f.render_widget(
             Paragraph::new(hud::exposure_row(&exposure, rw)),
             r.band_r[2],
@@ -4687,7 +4682,9 @@ impl Screen for MapScreen {
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
             card: match (self.place, st.player.as_ref()) {
-                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                (Place::Construct(b) | Place::SiteNet { building: b, .. }, Some(p))
+                    if p.place == self.place =>
+                {
                     crate::net::card_lines(st, b, None)
                 }
                 (Place::Stratum(StratumKind::Net), Some(p)) if p.place == self.place => st
@@ -4722,7 +4719,9 @@ impl Screen for MapScreen {
             },
             beyond: beyond.as_ref(),
             ice_lines: match (self.place, st.player.as_ref()) {
-                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                (Place::Construct(b) | Place::SiteNet { building: b, .. }, Some(p))
+                    if p.place == self.place =>
+                {
                     let vis = p.vis();
                     crate::net::ice_lines(st, b, |q| {
                         vis.get(q)

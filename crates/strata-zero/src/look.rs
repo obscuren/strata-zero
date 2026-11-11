@@ -359,7 +359,7 @@ fn fixture_at(
                 key,
             })
         }
-        Place::Construct(_) => None,
+        Place::Construct(_) | Place::SiteNet { .. } => None,
     }
 }
 
@@ -916,7 +916,7 @@ pub fn look_card(
                 None => ground(&location, mark(), tile, own, &mut card),
             },
         }
-    } else if let Place::Construct(b) = place
+    } else if let Some(b) = place.construct()
         && let Some(i) = st.constructs.get(b).and_then(|k| k.guard_at(pos))
     {
         let g = &st.constructs.get(b).expect("checked").guards[i];

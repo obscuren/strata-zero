@@ -115,7 +115,9 @@ pub fn net_self(st: &AppState) -> Option<Pos> {
     let p = st.player.as_ref()?;
     match p.place {
         Place::Stratum(StratumKind::Net) => Some(p.pos),
-        Place::Construct(b) => crate::constructs::city_gate(st.city.as_ref()?, b),
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+            crate::constructs::city_gate(st.city.as_ref()?, b)
+        }
         _ => None,
     }
 }

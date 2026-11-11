@@ -2,7 +2,6 @@
 //! it a game minute at a time.
 
 use crate::app::AppState;
-use citygen::Place;
 
 /// How many requested paths turn into trips per tick of the clock run: a frame's worth on
 /// the street, and 360 a game minute however the clock runs.
@@ -27,10 +26,7 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     crate::bots::tick(st);
     // The Net's clock: traces cool, hacks expire, alerts end.
     let now = st.net.now(st);
-    let inside = match st.player.as_ref().map(|p| p.place) {
-        Some(Place::Construct(b)) => Some(b),
-        _ => None,
-    };
+    let inside = st.player.as_ref().and_then(|p| p.place.construct());
     let roots = st.backdoors.roots();
     st.net.minute(now, inside, &mut st.constructs, &roots);
     crate::net::tick_backdoors(st);

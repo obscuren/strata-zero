@@ -250,7 +250,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     if out.is_empty() && v.map.stratum() == Some(StratumKind::Net) && v.outside.is_empty() {
         out.push(dim(" open grid"));
     }
-    if let citygen::Place::Construct(b) = v.map.place() {
+    if let Some(b) = v.map.place().construct() {
         for (i, line) in crate::net::trace_lines(v.net, b, v.now)
             .into_iter()
             .enumerate()
@@ -280,7 +280,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         out.extend(v.outside.iter().cloned());
         return out;
     }
-    if let citygen::Place::Construct(_) = v.map.place() {
+    if v.map.place().in_construct() {
         if let Some(t) = v.map.tile(v.focus) {
             match t.feature {
                 Some(Feature::Node(k)) => {

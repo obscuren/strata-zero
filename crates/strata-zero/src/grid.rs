@@ -444,7 +444,7 @@ fn record(st: &mut AppState) {
     let net = Place::Stratum(StratumKind::Net);
     match (last, here) {
         // Through a gate: the trail goes, a tracer waits at that gate.
-        (Some((from, at)), Some((Place::Construct(_), _))) if from == net => {
+        (Some((from, at)), Some((inside, _))) if from == net && inside.in_construct() => {
             st.net.grid.trail.clear();
             for f in &mut st.foes {
                 if let Some(GridIce {

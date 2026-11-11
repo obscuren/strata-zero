@@ -54,7 +54,7 @@ fn worked_out(st: &AppState, b: BuildingId) -> Option<(Cow<'_, FloorPlan>, SiteN
 /// never kept. None for a building that is no site.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the site's map and panel read it from Task 8 on")
+    expect(dead_code, reason = "HELIX and the panel read it from Task 13 on")
 )]
 pub fn net_of(st: &AppState, b: BuildingId) -> Option<SiteNet> {
     worked_out(st, b).map(|(_, net)| net)
@@ -67,7 +67,7 @@ pub fn net_of(st: &AppState, b: BuildingId) -> Option<SiteNet> {
     not(test),
     expect(
         dead_code,
-        reason = "the engine enters a site's construct from Task 8 on"
+        reason = "the ways in (the firewall, a floor's terminal) make it from Task 11 on"
     )
 )]
 pub fn ensure_construct(st: &mut AppState, b: BuildingId) -> Result<(), String> {
@@ -91,13 +91,19 @@ fn drop_ice(st: &mut AppState, b: BuildingId) {
         .retain(|h| !matches!(h.target, HackTarget::Guard { building, .. } if building == b));
 }
 
-/// Drops what the site's Net held: its hacks and holds, its feed, its broken locks, its
-/// construct and its ICE. A copy beginning or ending calls it.
+/// Drops what the site's Net held: its hacks, a run in flight on one of its nodes, its
+/// holds, its feed, its broken locks, its construct and its ICE. A copy beginning or
+/// ending calls it, never while you're in the building.
 pub fn forget(st: &mut AppState, b: BuildingId) {
     let ours = |n: NetNode| n.site().is_some_and(|s| s.building == b);
     st.net
         .hacks
         .retain(|h| !matches!(h.target, HackTarget::Site(s) if s.building == b));
+    if (st.net.run.as_ref())
+        .is_some_and(|r| matches!(r.target, HackTarget::Site(s) if s.building == b))
+    {
+        st.net.run = None;
+    }
     st.net.holds.retain(|h| !ours(h.node));
     if st.net.feed.is_some_and(ours) {
         st.net.feed = None;

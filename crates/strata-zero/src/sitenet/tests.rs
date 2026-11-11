@@ -1,6 +1,7 @@
 use super::testutil::*;
 use super::*;
-use citygen::{NodeKind, Place, Pos, StratumKind};
+use crate::render::map::MapRef;
+use citygen::{NodeKind, Place, Pos, StratumKind, Terrain};
 use game::{HackTarget, Op};
 
 #[test]
@@ -120,4 +121,114 @@ fn a_copy_waits_while_you_are_on_its_net() {
         st.constructs.site(b).is_some(),
         "nothing is dropped under you"
     );
+}
+
+#[test]
+fn a_site_place_maps_to_its_construct_and_scene() {
+    let (mut st, b) = office_copy(190);
+    on_hub(&mut st, b, 0);
+    let place = st.player.as_ref().unwrap().place;
+    assert_eq!(
+        place,
+        Place::SiteNet {
+            building: b,
+            level: 0
+        }
+    );
+    assert_eq!(
+        crate::net::scene_of(place),
+        Some(crate::net::Scene::Inside(b))
+    );
+    let city = st.city.as_ref().unwrap();
+    let map = MapRef::for_place(city, &st.interiors, &st.constructs, place, 0).unwrap();
+    assert_eq!(map.place(), place);
+    assert!(st.player.as_ref().unwrap().sees_all());
+}
+
+#[test]
+fn ice_on_a_sites_floor_sees_you_in_line() {
+    let (mut st, b) = office_copy(210);
+    on_hub(&mut st, b, 0);
+    let k = st.constructs.site(b).unwrap();
+    let g = (k.guards.iter())
+        .find(|g| k.level_at(g.pos).unwrap().level == 0)
+        .unwrap();
+    let open = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        .into_iter()
+        .map(|(dx, dy)| g.pos.offset(dx, dy))
+        .find(|q| k.tiles[*q].terrain == Terrain::NetFloor && k.tiles[*q].feature.is_none())
+        .expect("an open tile beside the piece");
+    assert!(crate::net::sees(k, g.pos, g.grade, open, false));
+    let walled = (k.tiles.iter())
+        .find(|(q, t)| {
+            t.terrain == Terrain::NetFloor
+                && q.y == g.pos.y
+                && !crate::net::line_clear_in(k, g.pos, *q)
+        })
+        .map(|(q, _)| q);
+    if let Some(q) = walled {
+        assert!(!crate::net::sees(k, g.pos, g.grade, q, false));
+    }
+}
+
+#[test]
+fn only_your_levels_ice_takes_turns() {
+    let (mut st, b) = office_copy(210);
+    on_hub(&mut st, b, 0);
+    let place = st.player.as_ref().unwrap().place;
+    let k = st.constructs.site(b).unwrap();
+    for a in crate::net::initiative(&st, place) {
+        if let crate::net::Actor::Ice(i) = a {
+            assert_eq!(k.level_at(k.guards[i].pos).unwrap().level, 0);
+        }
+    }
+}
+
+#[test]
+fn a_copy_waits_while_you_stand_on_its_net() {
+    let (mut st, b) = office_copy(190);
+    on_hub(&mut st, b, 0);
+    crate::venues::end(&mut st, b).unwrap();
+    assert!(st.interiors.copy(b).is_some() && st.constructs.site(b).is_some());
+}
+
+#[test]
+fn forgetting_a_sites_net_drops_a_run_on_its_node() {
+    let (mut st, b) = office_copy(190);
+    ensure_construct(&mut st, b).unwrap();
+    let door = (st.constructs.site(b).unwrap().devices.iter())
+        .find(|d| d.kind == NodeKind::DoorLock)
+        .unwrap()
+        .node;
+    let run = |target| game::Run {
+        program: game::ItemId::new("crack"),
+        target,
+        done: 1,
+        work: 3,
+    };
+    st.net.run = Some(run(HackTarget::Deck));
+    forget(&mut st, b);
+    assert_eq!(st.net.run, Some(run(HackTarget::Deck)), "not the site's");
+    st.net.run = Some(run(HackTarget::Site(door)));
+    forget(&mut st, b);
+    assert_eq!(st.net.run, None);
+}
+
+#[test]
+fn a_lost_copy_leaves_the_net_you_stand_on() {
+    let (mut st, b) = office_copy(190);
+    on_hub(&mut st, b, 0);
+    let made = st.constructs.site(b).unwrap().clone();
+    // As a save from before copies kept their layer reads.
+    st.interiors.copy_mut(b).unwrap().layer = None;
+    crate::venues::tick(&mut st);
+    assert!(st.interiors.copy(b).is_none(), "lost at once");
+    assert_eq!(
+        st.constructs.site(b),
+        Some(&made),
+        "nothing dropped under you"
+    );
+    let place = st.player.as_ref().unwrap().place;
+    let city = st.city.as_ref().unwrap();
+    assert!(MapRef::for_place(city, &st.interiors, &st.constructs, place, 0).is_some());
 }

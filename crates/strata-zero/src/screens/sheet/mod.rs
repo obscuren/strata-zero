@@ -177,9 +177,7 @@ impl Reading {
         };
         let note = match (num, own.map(|o| o + added)) {
             (_, Some(sum)) if sum == value => None,
-            (Num::Move, Some(_)) if matches!(place, Some(Place::Construct(_))) => {
-                Some(Note::Construct)
-            }
+            (Num::Move, Some(_)) if place.is_some_and(Place::in_construct) => Some(Note::Construct),
             (_, Some(sum)) if sum > value => Some(Note::Capped),
             (_, Some(_)) => Some(Note::Floor),
             (Num::Sight, None) if added != 0 => Some(Note::NoBody),

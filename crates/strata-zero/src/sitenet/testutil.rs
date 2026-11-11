@@ -3,7 +3,7 @@
 
 use crate::app::AppState;
 use citygen::venue::{MissionInputs, MissionSize, VenuePack};
-use citygen::{BuildingId, BuildingKind, NodeKind, SiteNode};
+use citygen::{BuildingId, BuildingKind, NodeKind, Place, SiteNode};
 use game::{HackTarget, ItemId, Op, Target};
 
 /// `jobs::testutil::state_home`'s city, D'SHAWN in dev mode with crack, spoof, blind, copy
@@ -47,6 +47,21 @@ pub(crate) fn office_copy(security: u8) -> (AppState, BuildingId) {
     let mut st = runner_home();
     let b = crate::venues::dev_site_net(&mut st, security).unwrap();
     (st, b)
+}
+
+/// You on level `level`'s hub of site `b`'s Net, its construct made, jacked in from the
+/// street where you stand (the body left there, outside the building).
+pub(crate) fn on_hub(st: &mut AppState, b: BuildingId, level: i32) {
+    crate::sitenet::ensure_construct(st, b).unwrap();
+    let hub = (st.constructs.site(b))
+        .and_then(|k| k.net_level(level))
+        .expect("a kept level")
+        .hub;
+    let p = st.player.as_mut().expect("you");
+    assert!(p.place.is_street(), "on the street to jack in");
+    p.body = Some((p.place, p.pos));
+    st.net.beat = st.clock_tick();
+    crate::constructs::land(st, Place::SiteNet { building: b, level }, hub);
 }
 
 /// A hack of `op` landed on site node `node` (a `kind`), now.

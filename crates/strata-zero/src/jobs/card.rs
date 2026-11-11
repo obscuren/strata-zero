@@ -243,7 +243,7 @@ fn you_text(st: &AppState) -> String {
             crate::net::building_name(st, building),
             FloorPlan::label(level)
         ),
-        Place::Construct(_) => "you · jacked in".to_string(),
+        Place::Construct(_) | Place::SiteNet { .. } => "you · jacked in".to_string(),
     }
 }
 

@@ -212,7 +212,7 @@ pub fn standing(st: &AppState, stratum: StratumKind) -> Option<Standing> {
             landing: pos,
         }),
         Place::Floor { building, level } => way_out(st, building, level, pos, stratum),
-        Place::Construct(_) => None,
+        Place::Construct(_) | Place::SiteNet { .. } => None,
     };
     on(p.place, p.pos).or_else(|| p.body.and_then(|(place, pos)| on(place, pos)))
 }

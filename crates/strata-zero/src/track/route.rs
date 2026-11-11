@@ -122,10 +122,7 @@ pub fn leg(st: &AppState, target: Target) -> Result<Leg, NoLeg> {
 /// from where you stand: the map's walk from your building's way out.
 pub fn leg_from(st: &AppState, place: Place, from: Pos, target: Target) -> Result<Leg, NoLeg> {
     let city = st.city.as_ref().ok_or(NoLeg::NoWay)?;
-    if matches!(
-        place,
-        Place::Construct(_) | Place::Stratum(StratumKind::Net)
-    ) {
+    if place.in_construct() || place == Place::Stratum(StratumKind::Net) {
         return Err(NoLeg::JackedIn);
     }
     // No way to a floor its building's plan lacks: one a mission's copy doesn't keep.
@@ -151,7 +148,7 @@ pub fn leg_from(st: &AppState, place: Place, from: Pos, target: Target) -> Resul
     match place {
         Place::Stratum(k) => on_stratum(st, &map, k, from, target),
         Place::Floor { building, level } => on_floor(st, &map, building, level, from, target),
-        Place::Construct(_) => Err(NoLeg::JackedIn),
+        Place::Construct(_) | Place::SiteNet { .. } => Err(NoLeg::JackedIn),
     }
 }
 

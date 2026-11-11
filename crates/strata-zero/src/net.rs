@@ -113,12 +113,9 @@ impl Engagement {
         self.order.get(self.turn).copied().unwrap_or(Actor::You)
     }
 
-    /// The construct on turns, when it is one.
+    /// The construct on turns, when it is one (a site's Net too).
     pub fn construct(&self) -> Option<BuildingId> {
-        match self.place {
-            Place::Construct(b) => Some(b),
-            _ => None,
-        }
+        self.place.construct()
     }
 }
 
@@ -217,10 +214,11 @@ pub enum Scene {
     Outside,
 }
 
-/// The scene of a place: a construct's inside, the open Net; none off the Net.
+/// The scene of a place: a construct's inside (a site's Net is its building's), the open
+/// Net; none off the Net.
 pub fn scene_of(place: Place) -> Option<Scene> {
     match place {
-        Place::Construct(b) => Some(Scene::Inside(b)),
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(Scene::Inside(b)),
         Place::Stratum(StratumKind::Net) => Some(Scene::Outside),
         _ => None,
     }
@@ -794,10 +792,12 @@ fn name_in(city: Option<&City>, b: BuildingId) -> String {
         })
 }
 
-/// The building whose construct or floor the player is in.
+/// The building whose construct (a site's Net too) or floor the player is in.
 pub fn building_here(st: &AppState) -> Option<BuildingId> {
     match st.player.as_ref()?.place {
-        Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
+        Place::Construct(b)
+        | Place::SiteNet { building: b, .. }
+        | Place::Floor { building: b, .. } => Some(b),
         Place::Stratum(_) => None,
     }
 }
@@ -826,10 +826,10 @@ pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
 
 /// Starts a program against a target in the construct the player stands in.
 pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Result<String, String> {
-    let Some((scene, pos)) = st
+    let Some((scene, place, pos)) = st
         .player
         .as_ref()
-        .and_then(|p| Some((scene_of(p.place)?, p.pos)))
+        .and_then(|p| Some((scene_of(p.place)?, p.place, p.pos)))
     else {
         return Err("not on the Net".to_string());
     };
@@ -891,7 +891,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     });
     // Pointing a program at a piece is picking the fight.
     match (target, scene) {
-        (HackTarget::Guard { .. }, Scene::Inside(b)) => engage(st, Place::Construct(b), false),
+        (HackTarget::Guard { .. }, Scene::Inside(_)) => engage(st, place, false),
         (HackTarget::Foe(i), Scene::Outside) => {
             if let Some(f) = st.foes.get_mut(i) {
                 f.mode = crate::foes::FoeMode::Hunting { seen: pos, lost: 0 };
@@ -1407,12 +1407,11 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     st.net.alarm(b, now);
     let roots = st.backdoors.roots();
     st.net.sync_guards(&mut st.constructs, b, now, &roots);
-    if let Some(p) = st
-        .player
-        .as_ref()
-        .filter(|p| p.place == Place::Construct(b))
-    {
-        let pos = p.pos;
+    // Inside: where you stand in its construct (on a site's Net, your level).
+    let inside = (st.player.as_ref())
+        .filter(|p| p.place.construct() == Some(b))
+        .map(|p| (p.place, p.pos));
+    if let Some((_, pos)) = inside {
         if let Some(k) = st.constructs.get(b) {
             st.net.ice_of(k);
         }
@@ -1420,14 +1419,11 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     }
     // Inside with ICE standing, the board goes to turns; with every piece broken
     // there is nobody to fight and the beat runs on.
-    if st
-        .player
-        .as_ref()
-        .is_some_and(|p| p.place == Place::Construct(b))
-        && any_awake(st, b)
+    if let Some((place, _)) = inside
+        && any_awake(st, place)
     {
-        engage(st, Place::Construct(b), false);
-        seat_standing(st, b);
+        engage(st, place, false);
+        seat_standing(st, place);
     }
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
@@ -1718,13 +1714,14 @@ pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     Ok(format!("hop · `{}`'s gate", building_name(st, b)))
 }
 
-/// Whether a piece at `from` sees a player: on the spine, in its row or column,
-/// within its sight (halved under a mask), with no wall between.
+/// Whether a piece at `from` sees a player: on the spine (any open tile of a site's
+/// Net), in its row or column, within its sight (halved under a mask), with no wall
+/// between.
 pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool) -> bool {
     let Some(t) = k.tiles.get(player) else {
         return false;
     };
-    if !matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+    if !in_view(k, t.terrain) {
         return false;
     }
     if from.x != player.x && from.y != player.y {
@@ -1741,9 +1738,20 @@ pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool
     line_clear_in(k, from, player)
 }
 
-/// The spine each standing piece would see you on: lane and gate tiles in its row or
-/// column within its sight, with no wall between, its own tile left out. Where two
-/// watch one tile the darker grade has it (black over grey over white).
+/// Where ICE sees you in a construct: on its spine, the lane and gate tiles; on a site's
+/// Net, any open tile, its floor standing in for the spine (Ruling 10).
+fn in_view(k: &Construct, terrain: Terrain) -> bool {
+    if k.is_site() {
+        terrain != Terrain::NetWall
+    } else {
+        matches!(terrain, Terrain::NetLane | Terrain::NetGate)
+    }
+}
+
+/// The spine each standing piece would see you on: lane and gate tiles (a site's open
+/// tiles) in its row or column within its sight, with no wall between, its own tile
+/// left out. Where two watch one tile the darker grade has it (black over grey over
+/// white).
 pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
     let rank = |g: IceGrade| match g {
         IceGrade::White => 0,
@@ -1763,7 +1771,7 @@ pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
                 if t.terrain == Terrain::NetWall {
                     break;
                 }
-                if matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+                if in_view(k, t.terrain) {
                     let e = out.entry(p).or_insert(g.grade);
                     if rank(g.grade) > rank(*e) {
                         *e = g.grade;
@@ -1820,33 +1828,42 @@ pub fn path_to(k: &Construct, from: Pos, to: Pos) -> Option<Vec<Pos>> {
 }
 
 /// The ICE's turn in the construct the player stands in: every standing piece
-/// looks, then acts: walks its beat asleep, hunts awake, hits beside the player.
+/// looks, then acts: walks its beat asleep, hunts awake, hits beside the player. On a
+/// site's Net only your level's pieces take it.
 pub fn ice_turn(st: &mut AppState) {
     let Some(player) = st.player.as_ref() else {
         return;
     };
-    let Place::Construct(b) = player.place else {
+    let place = player.place;
+    let Some(b) = place.construct() else {
         return;
     };
     mask_wears(st, b);
     let Some(k) = st.constructs.get(b) else {
         return;
     };
-    let n = k.guards.len();
+    let ours: Vec<usize> = (0..k.guards.len())
+        .filter(|&i| on_level(k, place, k.guards[i].pos))
+        .collect();
     st.net.ice_of(k);
-    for i in 0..n {
+    for i in ours {
         if !ice_look(st, b, i) {
             continue;
         }
         ice_step(st, b, i, true, true);
-        if st.net.death.is_some()
-            || st
-                .player
-                .as_ref()
-                .is_none_or(|p| p.place != Place::Construct(b))
-        {
+        if st.net.death.is_some() || st.player.as_ref().is_none_or(|p| p.place != place) {
             return;
         }
+    }
+}
+
+/// Whether a piece standing at `p` is in play at `place`: on a site's Net only your
+/// level's ICE takes turns with you and counts as awake (Ruling 10); in any other
+/// construct, all of it.
+pub fn on_level(k: &Construct, place: Place, p: Pos) -> bool {
+    match place {
+        Place::SiteNet { level, .. } => k.level_at(p).is_some_and(|l| l.level == level),
+        _ => true,
     }
 }
 
@@ -2007,15 +2024,19 @@ pub fn ice_step(st: &mut AppState, b: BuildingId, i: usize, can_move: bool, can_
     }
 }
 
-/// Any standing piece of the construct awake.
-pub fn any_awake(st: &AppState, b: BuildingId) -> bool {
+/// Any standing piece of the construct at `place` awake: on a site's Net, of your level.
+pub fn any_awake(st: &AppState, place: Place) -> bool {
+    let Some(b) = place.construct() else {
+        return false;
+    };
     let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
         return false;
     };
-    k.guards
-        .iter()
-        .zip(states)
-        .any(|(g, i)| k.guard_at(g.pos).is_some() && matches!(i.mode, IceMode::Awake { .. }))
+    k.guards.iter().zip(states).any(|(g, i)| {
+        k.guard_at(g.pos).is_some()
+            && on_level(k, place, g.pos)
+            && matches!(i.mode, IceMode::Awake { .. })
+    })
 }
 
 /// A piece's turn: the tiles it may walk and the hits it may land, by grade.
@@ -2028,12 +2049,13 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
 }
 
 /// The order of an engagement. In a construct: you by your Net, each standing
-/// piece by its grade. On foot: you by your Reflex, each standing foe in your sight
-/// memory by its own. Higher first, ties to you, then by index.
+/// piece by its grade (on a site's Net, each of your level's). On foot: you by your
+/// Reflex, each standing foe in your sight memory by its own. Higher first, ties to
+/// you, then by index.
 pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     let mut scored: Vec<(i32, u16, Actor)> = Vec::new();
     match place {
-        Place::Construct(b) => {
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => {
             scored.push((
                 st.character.attribute(&st.content, game::Attribute::Net) as i32,
                 0,
@@ -2041,7 +2063,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             ));
             if let Some(k) = st.constructs.get(b) {
                 for (i, g) in k.guards.iter().enumerate() {
-                    if k.guard_at(g.pos).is_none() {
+                    if k.guard_at(g.pos).is_none() || !on_level(k, place, g.pos) {
                         continue;
                     }
                     let score = match g.grade {
@@ -2082,7 +2104,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
 /// least one; in a construct your avatar isn't your meat, and walks `BASE_MOVE`.
 pub fn you_move(st: &AppState, place: Place) -> u8 {
     match place {
-        Place::Construct(_) => BASE_MOVE,
+        Place::Construct(_) | Place::SiteNet { .. } => BASE_MOVE,
         _ => {
             let moves = BASE_MOVE as i32 + st.character.move_bonus(&st.content);
             moves.clamp(1, u8::MAX as i32) as u8
@@ -2093,10 +2115,10 @@ pub fn you_move(st: &AppState, place: Place) -> u8 {
 fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
     match (actor, place) {
         (Actor::You, _) => (you_move(st, place), BASE_AP),
-        (Actor::Ice(i), Place::Construct(b)) => st
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => st
             .constructs
             .get(b)
-            .and_then(|k| k.guards.get(i))
+            .and_then(|k| k.guards.get(i).filter(|g| on_level(k, place, g.pos)))
             .map(|g| budgets(g.grade))
             .unwrap_or((0, 0)),
         (Actor::Ice(_), _) => (0, 0),
@@ -2114,7 +2136,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     if st.net.engaged.is_some() {
         return;
     }
-    if let Place::Construct(b) = place
+    if let Some(b) = place.construct()
         && let Some(k) = st.constructs.get(b)
     {
         st.net.ice_of(k);
@@ -2136,7 +2158,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     });
     let line = if manual {
         "engaged".to_string()
-    } else if let Place::Construct(_) = place {
+    } else if place.in_construct() {
         "ENGAGED · the ICE is on you".to_string()
     } else {
         let name = crate::foes::in_memory(st)
@@ -2179,7 +2201,7 @@ pub fn seat_foes(st: &mut AppState) {
 /// hunting foe on foot.
 pub fn hunting(st: &AppState) -> bool {
     match st.net.engaged.as_ref().map(|e| e.place) {
-        Some(Place::Construct(b)) => any_awake(st, b),
+        Some(place) if place.in_construct() => any_awake(st, place),
         Some(place) => crate::foes::any_hunting(st, place),
         None => false,
     }
@@ -2190,24 +2212,28 @@ pub fn engaged_on_foot(st: &AppState) -> bool {
     st.net
         .engaged
         .as_ref()
-        .is_some_and(|e| !matches!(e.place, Place::Construct(_)))
+        .is_some_and(|e| !e.place.in_construct())
 }
 
-/// Every standing piece of the construct that the order does not hold yet takes
-/// its place at the end: a piece that stood again mid-fight.
-pub fn seat_standing(st: &mut AppState, b: BuildingId) {
+/// Every standing piece of the construct at `place` (on a site's Net, of your level)
+/// that the order does not hold yet takes its place at the end: a piece that stood
+/// again mid-fight.
+pub fn seat_standing(st: &mut AppState, place: Place) {
+    let Some(b) = place.construct() else {
+        return;
+    };
     let standing: Vec<usize> = match st.constructs.get(b) {
         Some(k) => k
             .guards
             .iter()
             .enumerate()
-            .filter(|(_, g)| k.guard_at(g.pos).is_some())
+            .filter(|(_, g)| k.guard_at(g.pos).is_some() && on_level(k, place, g.pos))
             .map(|(i, _)| i)
             .collect(),
         None => return,
     };
     if let Some(e) = st.net.engaged.as_mut()
-        && e.place == Place::Construct(b)
+        && e.place == place
     {
         for i in standing {
             if !e.order.contains(&Actor::Ice(i)) {
@@ -2338,10 +2364,10 @@ pub fn end_turn(st: &mut AppState) {
         turn = 0;
         round += 1;
         match place {
-            Place::Construct(b) => {
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                 // A round passed: a held mask wears (and may dump you through the
                 // trace), and any piece that stood again since takes its seat.
-                seat_standing(st, b);
+                seat_standing(st, place);
                 mask_wears(st, b);
             }
             Place::Stratum(StratumKind::Net) => {
@@ -2399,7 +2425,9 @@ fn start_turn(st: &mut AppState) {
         return;
     };
     let acts = match (e.actor(), e.place) {
-        (Actor::Ice(i), Place::Construct(b)) => ice_look(st, b, i),
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
+            ice_look(st, b, i)
+        }
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
         (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
         (Actor::Ice(_), _) => false,
@@ -2425,7 +2453,9 @@ pub fn pace(st: &mut AppState) {
     let place = e.place;
     let (moves, ap) = (e.moves, e.ap);
     let step = match (actor, place) {
-        (Actor::Ice(i), Place::Construct(b)) => ice_step(st, b, i, moves > 0, ap > 0),
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
+            ice_step(st, b, i, moves > 0, ap > 0)
+        }
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
         (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
         _ => Step::Nothing,
@@ -2441,7 +2471,7 @@ pub fn pace(st: &mut AppState) {
             e.moves = e.moves.saturating_sub(1);
             // A step may bring it into sight of you; it looks again.
             match (actor, place) {
-                (Actor::Ice(i), Place::Construct(b)) => {
+                (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
                     ice_look(st, b, i);
                 }
                 (Actor::Foe(i), _) => {
@@ -2892,17 +2922,17 @@ pub fn beat(st: &mut AppState) {
         return;
     }
     // On foot and calm, fuses burn down on the beat.
-    if st.net.engaged.is_none()
-        && st
-            .player
-            .as_ref()
-            .is_some_and(|p| !matches!(p.place, Place::Construct(_)))
-    {
+    if st.net.engaged.is_none() && st.player.as_ref().is_some_and(|p| !p.place.in_construct()) {
         crate::blast::tick_live(st);
     }
     // The roll may have tripped the alarm or dumped you: the fight (or the street)
     // takes over from here, nothing acts outside the pace.
-    let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+    let Some(place) = st
+        .player
+        .as_ref()
+        .map(|p| p.place)
+        .filter(|p| p.in_construct())
+    else {
         return;
     };
     if st.net.engaged.is_some() {
@@ -2910,14 +2940,11 @@ pub fn beat(st: &mut AppState) {
     }
     ice_turn(st);
     crate::holds::decoy_beat(st);
-    if st
-        .player
-        .as_ref()
-        .is_some_and(|p| p.place == Place::Construct(b))
+    if st.player.as_ref().is_some_and(|p| p.place == place)
         && st.net.death.is_none()
-        && any_awake(st, b)
+        && any_awake(st, place)
     {
-        engage(st, Place::Construct(b), false);
+        engage(st, place, false);
     }
 }
 
@@ -3069,7 +3096,7 @@ pub fn hunted(st: &AppState) -> bool {
     if p.place == Place::Stratum(StratumKind::Net) {
         return crate::grid::hunted(st);
     }
-    let Place::Construct(b) = p.place else {
+    let Some(b) = p.place.construct() else {
         return false;
     };
     let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
@@ -3078,6 +3105,7 @@ pub fn hunted(st: &AppState) -> bool {
     let vis = p.vis();
     k.guards.iter().zip(states).any(|(g, i)| {
         g.standing
+            && on_level(k, p.place, g.pos)
             && matches!(i.mode, IceMode::Awake { .. })
             && vis
                 .get(g.pos)

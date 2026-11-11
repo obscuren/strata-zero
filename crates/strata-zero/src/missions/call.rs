@@ -6,7 +6,6 @@ use super::{Call, cast, face, person_of, role_name};
 use crate::app::AppState;
 use crate::ui::chrome::{DIM, MAGENTA, TEXT, put};
 use crate::ui::sidebar::wrap_text;
-use citygen::Place;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -112,11 +111,7 @@ pub fn quiet(st: &AppState) -> bool {
 
 /// A fight is on or the player is in a construct: no call, and no scene either.
 pub fn busy(st: &AppState) -> bool {
-    st.net.engaged.is_some()
-        || st
-            .player
-            .as_ref()
-            .is_some_and(|p| matches!(p.place, Place::Construct(_)))
+    st.net.engaged.is_some() || st.player.as_ref().is_some_and(|p| p.place.in_construct())
 }
 
 /// The next queued call comes up, ringing from now, when none is up and nothing keeps

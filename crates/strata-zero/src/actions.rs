@@ -265,7 +265,7 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         };
         // Inside a construct the deck's pulses have teeth: a ping lights every node
         // and an arc trace stuns the ICE it reaches; both warm the trace.
-        if let Place::Construct(b) = place {
+        if let Some(b) = place.construct() {
             match ability.kind {
                 AbilityKind::Active(Active::Ping { .. }) => {
                     targets = crate::net::construct_nodes(st, b);

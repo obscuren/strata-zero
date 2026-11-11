@@ -224,7 +224,7 @@ pub fn tick(st: &mut AppState) {
         .net
         .decoy
         .as_ref()
-        .is_some_and(|d| here != Some(Place::Construct(d.building)))
+        .is_some_and(|d| here.and_then(Place::construct) != Some(d.building))
     {
         st.net.decoy = None;
     }
@@ -274,7 +274,7 @@ pub fn node_pos(st: &AppState, place: Place, node: NetNode) -> Option<Pos> {
         Place::Stratum(StratumKind::Net) => {
             Some(st.city.as_ref()?.net.nodes.get(id.index())?.cyber)
         }
-        Place::Construct(b) => st
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => st
             .constructs
             .get(b)?
             .nodes
@@ -340,7 +340,7 @@ fn decoy_ok(st: &AppState, building: Option<BuildingId>) -> bool {
     let (Some(b), Some(p)) = (building, st.player.as_ref()) else {
         return false;
     };
-    p.place == Place::Construct(b)
+    p.place.construct() == Some(b)
         && st
             .constructs
             .get(b)
@@ -473,7 +473,7 @@ fn lights_out(st: &mut AppState, node: NodeId, now: u64) -> Result<String, Strin
 
 /// The ad board floods its room: every standing piece asleep goes to look.
 fn decoy(st: &mut AppState, node: NodeId, at: Pos) -> Result<String, String> {
-    let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+    let Some(b) = st.player.as_ref().and_then(|p| p.place.construct()) else {
         return Err("a decoy works inside its construct".to_string());
     };
     spend(st, NetNode::City(node), Verb::Decoy);

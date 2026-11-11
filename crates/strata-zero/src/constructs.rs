@@ -47,7 +47,7 @@ impl Constructs {
         not(test),
         expect(
             dead_code,
-            reason = "the engine makes a site's construct from Task 8 on"
+            reason = "the ways in (the firewall, a floor's terminal) make it from Task 11 on"
         )
     )]
     pub fn put_site(&mut self, k: Construct) {

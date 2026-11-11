@@ -289,7 +289,7 @@ pub fn detonate(
 /// The engagement lets you act: your turn, the act half, an action point left.
 fn throw_allowed(st: &AppState) -> Result<(), String> {
     match st.net.engaged.as_ref() {
-        Some(e) if !matches!(e.place, Place::Construct(_)) => {
+        Some(e) if !e.place.in_construct() => {
             if e.actor() != crate::net::Actor::You {
                 Err("not your turn".into())
             } else if e.phase == crate::net::Phase::Move {

@@ -46,15 +46,16 @@ pub(crate) fn copy_floor(plan: &FloorPlan, copy: &MissionCopy, level: i32) -> Op
     draw_copy_level(plan.venue.as_deref()?, copy.layer.as_ref()?, level)
 }
 
-/// Whether the player is in building `b`: on a floor of it, in its construct, or jacked
-/// in with the body waiting on a floor of it. A copy waits for them to be out.
+/// Whether the player is in building `b`: on a floor of it, in its construct (an old one
+/// or its own Net), or jacked in with the body waiting on a floor of it. A copy waits for
+/// them to be out.
 pub(super) fn inside(st: &AppState, b: BuildingId) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
     };
     let on_floor = |place| matches!(place, Place::Floor { building, .. } if building == b);
     on_floor(p.place)
-        || p.place == Place::Construct(b)
+        || p.place.construct() == Some(b)
         || p.body.is_some_and(|(place, _)| on_floor(place))
 }
 
@@ -170,10 +171,14 @@ fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
 /// Ends the copy: a live one's guards and the cards still lying where it left them go,
 /// the site's Net as it had it is dropped, and the plain building comes back from the
 /// layout, its floors drawn again from the seed (the one you stand on at once, once the
-/// copy is gone). One that never went live changed nothing.
+/// copy is gone). One that never went live changed nothing. A copy lost while you're
+/// inside (`lose` doesn't wait) leaves the site's Net as it stands: nothing is dropped
+/// under you.
 fn finish(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     if copy.live {
-        crate::sitenet::forget(st, b);
+        if !inside(st, b) {
+            crate::sitenet::forget(st, b);
+        }
         st.foes
             .retain(|f| f.post.as_ref().is_none_or(|p| p.building != b));
         for (place, at, id) in &copy.left {

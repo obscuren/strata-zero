@@ -391,7 +391,7 @@ fn in_building(st: &AppState, place: Place, pos: Pos, b: BuildingId) -> bool {
                     && x.span.contains(k)
                     && x.footprint.grow(1).contains(pos)
             }),
-        Place::Construct(_) => false,
+        Place::Construct(_) | Place::SiteNet { .. } => false,
     }
 }
 
@@ -445,12 +445,8 @@ pub fn next_now(st: &AppState) -> Option<&str> {
 
 /// You are in the net, where no leg is made: in a construct or on its grid.
 pub fn jacked_in(st: &AppState) -> bool {
-    st.player.as_ref().is_some_and(|p| {
-        matches!(
-            p.place,
-            Place::Construct(_) | Place::Stratum(StratumKind::Net)
-        )
-    })
+    (st.player.as_ref())
+        .is_some_and(|p| p.place.in_construct() || p.place == Place::Stratum(StratumKind::Net))
 }
 
 /// The pulses on the track's leg.
@@ -692,9 +688,9 @@ pub(crate) fn district_at(st: &AppState, place: Place, pos: Pos) -> Option<Strin
     let city = st.city.as_ref()?;
     let id = match place {
         Place::Stratum(k) => city.tile(k, pos)?.district?,
-        Place::Floor { building, .. } | Place::Construct(building) => {
-            city.building_opt(building)?.district
-        }
+        Place::Floor { building, .. }
+        | Place::Construct(building)
+        | Place::SiteNet { building, .. } => city.building_opt(building)?.district,
     };
     city.district_opt(id).map(|d| d.name.clone())
 }

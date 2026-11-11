@@ -157,7 +157,7 @@ pub fn gather(
         return Vec::new();
     };
     let (place, pos) = (player.place, player.pos);
-    if matches!(place, Place::Construct(_)) {
+    if place.in_construct() {
         return Vec::new();
     }
     let Some(map) = MapRef::for_place(
