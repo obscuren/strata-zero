@@ -35,6 +35,9 @@ pub struct RigJobs {
     pub running: Vec<Job>,
     pub heat: BTreeMap<BuildingId, u32>,
     pub report: Vec<String>,
+    /// How much of the report `ps` has shown: the lines past it are new to you. The
+    /// morning mail empties the report and sets it back to 0.
+    pub seen: usize,
     pub programs: BTreeSet<String>,
     pub worked_since_boot: u32,
     pub warned: BTreeSet<BuildingId>,
@@ -60,6 +63,7 @@ impl Default for RigJobs {
             running: Vec::new(),
             heat: BTreeMap::new(),
             report: Vec::new(),
+            seen: 0,
             programs: ["sift", "rent"].iter().map(|s| s.to_string()).collect(),
             worked_since_boot: 0,
             warned: BTreeSet::new(),
@@ -419,21 +423,7 @@ fn morning_mail(st: &mut AppState, jobs: &mut RigJobs, morning: u64) {
         return;
     }
     let at = morning_at(morning);
-    // report lines read `kind · target · what`; a job's lines go together
-    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for line in &jobs.report {
-        let mut parts = line.splitn(3, " · ");
-        let head = match (parts.next(), parts.next()) {
-            (Some(a), Some(b)) => format!("{a} · {b}"),
-            (Some(a), None) => a.to_string(),
-            _ => continue,
-        };
-        let rest = parts.next().unwrap_or("").to_string();
-        match groups.iter_mut().find(|(h, _)| *h == head) {
-            Some((_, lines)) => lines.push(rest),
-            None => groups.push((head, vec![rest])),
-        }
-    }
+    let groups = grouped(&jobs.report);
     let mut body = Vec::new();
     for (head, lines) in &groups {
         if !body.is_empty() {
@@ -468,6 +458,45 @@ fn morning_mail(st: &mut AppState, jobs: &mut RigJobs, morning: u64) {
         story: None,
     });
     jobs.report.clear();
+    jobs.seen = 0;
+}
+
+/// Report lines read `kind · target · what`; a job's lines go together, under the
+/// job's `kind · target`.
+fn grouped(lines: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for line in lines {
+        let mut parts = line.splitn(3, " · ");
+        let head = match (parts.next(), parts.next()) {
+            (Some(a), Some(b)) => format!("{a} · {b}"),
+            (Some(a), None) => a.to_string(),
+            _ => continue,
+        };
+        let rest = parts.next().unwrap_or("").to_string();
+        match groups.iter_mut().find(|(h, _)| *h == head) {
+            Some((_, lines)) => lines.push(rest),
+            None => groups.push((head, vec![rest])),
+        }
+    }
+    groups
+}
+
+/// The report's lines `ps` hasn't shown yet, a job's together as the mail has them
+/// (`sift · paydata shard`, then `└ code 4471 · …`); they count as seen now.
+pub fn unseen(jobs: &mut RigJobs) -> Vec<String> {
+    let from = jobs.seen.min(jobs.report.len());
+    jobs.seen = jobs.report.len();
+    let mut out = Vec::new();
+    for (head, lines) in grouped(&jobs.report[from..]) {
+        out.push(head);
+        out.extend(
+            lines
+                .iter()
+                .filter(|l| !l.is_empty())
+                .map(|l| format!("└ {l}")),
+        );
+    }
+    out
 }
 
 /// An hour of the clock at `at`: each building with jobs on it takes their noise (the

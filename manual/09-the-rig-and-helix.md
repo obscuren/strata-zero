@@ -40,7 +40,7 @@ There, `door release`, `lift answer`, `cam loop` and `alarm off` want root, the 
 | `route` | your backdoors, hop by hop |
 | `burn` | give up a backdoor |
 | `run` | start a job on the rig |
-| `ps` | the jobs running, and the seats |
+| `ps` | the jobs running, the seats, and what finished since you last looked |
 | `kill` | stop a job |
 
 ## Working on the rig
@@ -114,7 +114,7 @@ A job doesn't use its backdoor, so it never springs a honeypot, but a line that 
 
 ### The morning mail
 
-At 06:00 each day with something to say, a mail arrives from `cron`: what each job found, grouped by job, with the day's warnings and ends. The finds are already in your journal and on your map. When you sit down at the rig, the boot says how many jobs ran while you were out; type `ps`.
+At 06:00 each day with something to say, a mail arrives from `cron`: what each job found, grouped by job, with the day's warnings and ends. The finds are already in your journal and on your map. When you sit down at the rig, the boot says how many jobs ran while you were out; type `ps`. Under its table `ps` lists what the jobs found and how they ended since you last looked, each line once; the morning mail still carries the night.
 
 ## Mail
 

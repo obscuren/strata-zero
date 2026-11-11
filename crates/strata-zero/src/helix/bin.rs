@@ -379,7 +379,8 @@ impl AppIo<'_> {
         }
     }
 
-    /// `ps`: the rig's jobs, and how many seats of its core they fill.
+    /// `ps`: the rig's jobs, how many seats of its core they fill, and what the jobs
+    /// did since you last looked.
     fn ps(&mut self) -> Vec<String> {
         use crate::rig::jobs::{self, JobKind};
         let now = self.st.net.now(self.st);
@@ -417,6 +418,11 @@ impl AppIo<'_> {
             self.st.backdoors.jobs.running.len(),
             crate::rig::of(self.st).seats
         ));
+        let done = jobs::unseen(&mut self.st.backdoors.jobs);
+        if !done.is_empty() {
+            out.push(String::new());
+            out.extend(done);
+        }
         out
     }
 
@@ -1859,9 +1865,43 @@ mod tests {
         let k = text(&go(&mut st, &mut sh, "kill 1"));
         assert_eq!(k, "killed 1 · rent · spare cycles");
         let ps = text(&go(&mut st, &mut sh, "ps"));
-        assert!(ps.ends_with("ZB-8 core · 0 of 1 seats busy"), "{ps}");
+        assert!(
+            ps.ends_with("ZB-8 core · 0 of 1 seats busy\n\nrent · spare cycles\n└ killed"),
+            "{ps}"
+        );
         let bad = go(&mut st, &mut sh, "kill 1");
         assert_eq!((text(&bad).as_str(), bad.status), ("kill: no job 1", 1));
+    }
+
+    #[test]
+    fn ps_shows_what_finished_since_you_last_looked_once() {
+        let (mut st, mut sh) = rig();
+        st.character.give(game::ItemId::new("paydata"), 1);
+        let t0 = st.net.now(&st);
+        let ran = go(&mut st, &mut sh, "run sift");
+        assert_eq!(ran.status, 0, "{}", text(&ran));
+        // 22:00 and six hours: done at 04:00, before the morning mail
+        crate::rig::jobs::advance(&mut st, t0 + 6 * 60);
+        assert!(st.journal.mails.iter().all(|m| m.from != "cron"));
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(ps.contains("ZB-8 core · 0 of 1 seats busy"), "{ps}");
+        assert!(ps.contains("\nsift · paydata shard\n"), "{ps}");
+        assert!(ps.contains("└ code "), "{ps}");
+        assert!(
+            ps.contains("└ done · the shard is back in your pack, sifted"),
+            "{ps}"
+        );
+        let again = text(&go(&mut st, &mut sh, "ps"));
+        assert!(!again.contains("sift"), "shown once: {again}");
+        assert!(again.ends_with("ZB-8 core · 0 of 1 seats busy"), "{again}");
+        // the morning mail still carries the night, and the mark goes with it
+        crate::rig::jobs::advance(&mut st, t0 + 9 * 60);
+        assert!(st.journal.mails.iter().any(|m| m.from == "cron"));
+        assert_eq!(st.backdoors.jobs.seen, 0);
+        go(&mut st, &mut sh, "run rent");
+        go(&mut st, &mut sh, "kill 2");
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(ps.contains("rent · spare cycles\n└ killed"), "{ps}");
     }
 
     #[test]
