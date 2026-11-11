@@ -4,8 +4,11 @@
 //! here is worked out from the city and the site's plan as they are, so a city from an old
 //! save gets it too, and the same plan always gives the same Net.
 
+mod build;
 pub mod firewall;
 mod riser;
+
+pub use build::*;
 
 use crate::geom::{Pos, Size};
 use crate::ids::BuildingId;

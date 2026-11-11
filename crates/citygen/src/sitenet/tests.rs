@@ -1,9 +1,13 @@
 use super::*;
+use crate::construct::{Construct, Guard};
+use crate::geom::{Grid, Rect};
+use crate::ids::NodeId;
 use crate::interior::venue::testutil;
 use crate::interior::venue::{
     MissionInputs, MissionSize, VenuePack, Ways, draw_copy_level, line_switches, terminals,
 };
 use crate::interior::{LinkKind, RoomKind};
+use crate::tile::{Feature, IceGrade, Terrain, Tile};
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -301,5 +305,305 @@ fn no_two_nodes_share_a_tile() {
         for n in &net.nodes {
             assert_eq!(net.node(n.node), Some(n));
         }
+    }
+}
+
+/// The site's construct of a plan, from its Net at security `s`.
+fn make(c: &City, p: &FloorPlan, t: &VenueType, layer: Option<&MissionLayer>, s: u8) -> Construct {
+    site_construct(c, &SiteNet::of(c, p, Some(t), layer, s).unwrap(), p, layer)
+}
+
+#[test]
+fn a_site_construct_is_its_floors_tile_for_tile() {
+    for (c, p, t, layer) in copies(190) {
+        let k = make(c, &p, t, Some(&layer), 190);
+        validate_site_construct(&k).unwrap();
+        assert_eq!(
+            k.levels.iter().map(|l| l.level).collect::<Vec<_>>(),
+            p.levels.iter().rev().copied().collect::<Vec<_>>(),
+            "the highest on top"
+        );
+        for l in &k.levels {
+            let floor = draw_level(p.venue.as_deref().unwrap(), l.level).unwrap();
+            for (fp, ft) in floor.tiles.iter() {
+                let q = k.on_level(l.level, fp).unwrap();
+                let nt = k.tiles[q];
+                match ft.terrain {
+                    _ if q == k.entry => assert_eq!(nt.terrain, Terrain::NetGate),
+                    Terrain::Wall | Terrain::Window => {
+                        assert_eq!(nt.terrain, Terrain::NetWall, "{} {fp:?}", l.level)
+                    }
+                    Terrain::Floor => assert!(
+                        matches!(nt.terrain, Terrain::NetFloor | Terrain::NetGate),
+                        "{fp:?}"
+                    ),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_door_with_a_net_lock_is_its_node_and_one_without_is_wall() {
+    for (c, p, t, layer) in copies(190) {
+        let k = make(c, &p, t, Some(&layer), 190);
+        let v = p.venue.as_deref().unwrap();
+        for &level in &p.levels {
+            let floor = draw_copy_level(v, &layer, level).unwrap();
+            for lock in &floor.locks {
+                let q = k.on_level(level, lock.at).unwrap();
+                if !lock.ways.has(Ways::NET) {
+                    assert_eq!(k.tiles[q].terrain, Terrain::NetWall);
+                } else if v.gate_line_at(level, lock.at).is_none() {
+                    assert_eq!(k.device_at(q).map(|d| d.kind), Some(NodeKind::DoorLock));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_ice_follows_the_security_table() {
+    use crate::tile::IceGrade::*;
+    let (c, p, t, layer) = copies(190).remove(0);
+    let grades = |s: u8| -> Vec<(i32, IceGrade, bool)> {
+        let k = make(c, &p, t, Some(&layer), s);
+        k.guards
+            .iter()
+            .map(|g| {
+                (
+                    k.level_at(g.post).unwrap().level,
+                    g.grade,
+                    g.beat.is_empty(),
+                )
+            })
+            .collect()
+    };
+    assert!(grades(99).is_empty());
+    assert_eq!(grades(100), vec![(0, White, true)]);
+    let s160 = grades(160);
+    let others: Vec<i32> = (p.levels.iter().copied().filter(|l| *l != 0))
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(
+        (s160.iter())
+            .filter(|g| g.1 == White && !g.2)
+            .map(|g| g.0)
+            .collect::<BTreeSet<_>>(),
+        others.into_iter().collect()
+    );
+    let s200 = grades(200);
+    assert!(
+        p.levels
+            .iter()
+            .all(|l| s200.iter().any(|g| g.0 == *l && g.1 == Grey && !g.2))
+    );
+    assert!(s200.contains(&(0, White, true)));
+    let s230 = grades(230);
+    assert_eq!(
+        s230.iter().filter(|g| g.1 == Black).count(),
+        usize::from(
+            SiteNet::of(c, &p, Some(t), Some(&layer), 230)
+                .unwrap()
+                .nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::DataVault)
+        )
+    );
+}
+
+#[test]
+fn patrols_walk_their_own_level() {
+    for (c, p, t, layer) in copies(210) {
+        let k = make(c, &p, t, Some(&layer), 210);
+        for g in &k.guards {
+            let band = k.level_at(g.post).unwrap().area;
+            assert!(k.device_at(g.post).is_none(), "no piece posts on a node");
+            for w in g.beat.windows(2) {
+                assert_eq!(w[0].manhattan(w[1]), 1);
+            }
+            // The terrain, not `is_walkable`: the piece's own ICE stands on its first tile.
+            assert!(
+                g.beat
+                    .iter()
+                    .all(|q| band.contains(*q) && k.tiles[*q].terrain == Terrain::NetFloor)
+            );
+        }
+    }
+}
+
+#[test]
+fn no_open_tile_touches_another_level() {
+    for (c, p, t) in plains() {
+        let net = SiteNet::of(c, &p, Some(t), None, 120).unwrap();
+        let k = site_construct(c, &net, &p, None);
+        for (q, tile) in k
+            .tiles
+            .iter()
+            .filter(|(_, x)| x.terrain != Terrain::NetWall)
+        {
+            let mine = k.level_at(q).map(|l| l.level);
+            assert!(mine.is_some(), "{q:?} stands in no level");
+            assert!(
+                q.neighbors8().all(|n| k
+                    .tiles
+                    .get(n)
+                    .is_none_or(|x| x.terrain == Terrain::NetWall)
+                    || k.level_at(n).map(|l| l.level) == mine),
+                "{tile:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_gate_is_lock_zero_on_gs_wall() {
+    for (c, p, t) in plains() {
+        let net = SiteNet::of(c, &p, Some(t), None, 120).unwrap();
+        let k = site_construct(c, &net, &p, None);
+        assert_eq!(k.tiles[k.entry].terrain, Terrain::NetGate);
+        assert_eq!(
+            k.device_at(k.entry).map(|d| d.node),
+            Some(SiteNode::firewall(p.building, 0))
+        );
+        assert_eq!(k.level_at(k.entry).map(|l| l.level), Some(0));
+    }
+}
+
+#[test]
+fn ice_stepping_off_a_node_puts_the_node_back() {
+    let (c, p, t, layer) = copies(210).remove(0);
+    let mut k = make(c, &p, t, Some(&layer), 210);
+    let d = k
+        .devices
+        .iter()
+        .find(|d| d.kind == NodeKind::DoorLock)
+        .unwrap()
+        .clone();
+    let from = k.guards[0].pos;
+    k.move_guard(0, d.at);
+    k.move_guard(0, from);
+    assert_eq!(
+        k.tiles[d.at].feature,
+        Some(Feature::Node(NodeKind::DoorLock))
+    );
+}
+
+#[test]
+fn an_old_construct_reads_with_no_levels() {
+    #[derive(serde::Serialize)]
+    struct Old<'a> {
+        building: BuildingId,
+        security: u8,
+        size: Size,
+        tiles: &'a Grid<Tile>,
+        light: &'a Grid<u8>,
+        entry: Pos,
+        rooms: Vec<Rect>,
+        nodes: Vec<(NodeId, Pos)>,
+        guards: Vec<Guard>,
+    }
+    let k = crate::construct::lot_construct();
+    let old = Old {
+        building: k.building,
+        security: k.security,
+        size: k.size,
+        tiles: &k.tiles,
+        light: &k.light,
+        entry: k.entry,
+        rooms: k.rooms.clone(),
+        nodes: k.nodes.clone(),
+        guards: k.guards.clone(),
+    };
+    let back: Construct = rmp_serde::from_slice(&rmp_serde::to_vec_named(&old).unwrap()).unwrap();
+    assert!(!back.is_site() && back.devices.is_empty());
+    assert_eq!(back, k);
+}
+
+#[test]
+fn whites_patrol_every_other_level_but_g_and_g_keeps_its_post() {
+    let mut patrols = 0;
+    for (c, p, t, layer) in copies(190) {
+        let k = make(c, &p, t, Some(&layer), 190);
+        let others: BTreeSet<i32> = (p.levels.iter().copied().filter(|l| *l != 0))
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 1)
+            .map(|(_, l)| l)
+            .collect();
+        let walking: BTreeSet<i32> = (k.guards.iter())
+            .filter(|g| g.grade == IceGrade::White && g.beat.len() >= 2)
+            .map(|g| k.level_at(g.post).unwrap().level)
+            .collect();
+        assert_eq!(walking, others, "{} {:?}", t.id, p.levels);
+        let posted: Vec<i32> = (k.guards.iter())
+            .filter(|g| g.beat.is_empty())
+            .map(|g| k.level_at(g.post).unwrap().level)
+            .collect();
+        assert_eq!(posted, vec![0], "only the white at G's hub keeps its post");
+        patrols += others.len();
+    }
+    assert!(patrols > 0, "no copy keeps two levels besides G");
+}
+
+#[test]
+fn a_door_to_the_city_is_net_wall_and_the_ways_between_levels_net_floor() {
+    for (c, p, t) in plains() {
+        let k = make(c, &p, t, None, 120);
+        for &level in &p.levels {
+            let floor = draw_level(p.venue.as_deref().unwrap(), level).unwrap();
+            for e in &floor.exits {
+                let q = k.on_level(level, e.at).unwrap();
+                assert_eq!(k.tiles[q].terrain, Terrain::NetWall, "{} {level}", t.id);
+            }
+            for (fp, ft) in floor.tiles.iter() {
+                if matches!(
+                    ft.terrain,
+                    Terrain::Lift
+                        | Terrain::Stair
+                        | Terrain::Escalator
+                        | Terrain::Ladder
+                        | Terrain::Track
+                ) {
+                    let q = k.on_level(level, fp).unwrap();
+                    assert_eq!(k.tiles[q].terrain, Terrain::NetFloor, "{} {fp:?}", t.id);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn every_site_construct_keeps_its_rules_and_comes_out_the_same() {
+    for s in [99, 100, 160, 200, 230] {
+        for (c, p, t) in plains() {
+            let net = SiteNet::of(c, &p, Some(t), None, s).unwrap();
+            let k = site_construct(c, &net, &p, None);
+            validate_site_construct(&k).unwrap_or_else(|e| panic!("{} at {s}: {e}", t.id));
+            assert_eq!(k, site_construct(c, &net, &p, None), "{} at {s}", t.id);
+        }
+        for (c, p, t, layer) in copies(s) {
+            let k = make(c, &p, t, Some(&layer), s);
+            validate_site_construct(&k).unwrap_or_else(|e| panic!("{} copy at {s}: {e}", t.id));
+            assert_eq!(k, make(c, &p, t, Some(&layer), s), "{} copy at {s}", t.id);
+        }
+    }
+}
+
+#[test]
+fn a_site_with_no_gate_on_the_citys_net_still_has_its_gate_inside() {
+    for (c, p, t) in plains() {
+        let mut net = SiteNet::of(c, &p, Some(t), None, 120).unwrap();
+        net.firewall.clear();
+        net.nodes.retain(|n| n.kind != NodeKind::Firewall);
+        let k = site_construct(c, &net, &p, None);
+        validate_site_construct(&k).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        assert!(k.device_at(k.entry).is_none());
+        let (level, at) = k.to_floor(k.entry).unwrap();
+        let area = k.net_level(0).unwrap().area;
+        assert_eq!(level, 0);
+        assert!(at.x == 0 || at.y == 0 || at.x == area.w - 1 || at.y == area.h - 1);
     }
 }
