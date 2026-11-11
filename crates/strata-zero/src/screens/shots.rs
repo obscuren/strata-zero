@@ -499,6 +499,36 @@ fn keyjack_copy(st: &AppState) -> game::CopyId {
         .expect("a Keyjack in the pack")
 }
 
+/// The four racks as the desk draws them, at the map pane's size on 120x40 and on
+/// 100x30, and the stock rig with its relay pulled.
+#[test]
+#[ignore]
+fn rig_racks() {
+    use crate::ui::rack::{self, RackArt};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    let draw = |st: &AppState, art: &RackArt, name: &str, (w, h): (u16, u16)| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, w + 2, h + 2));
+        for c in &mut buf.content {
+            c.set_bg(Color::Rgb(0x0a, 0x09, 0x0c));
+        }
+        rack::draw(art, st, Rect::new(1, 1, w, h), &mut buf);
+        write_svg(&dir, name, st, &buf, false);
+    };
+    let mut pulled = RackArt::rig(&st, None);
+    pulled.bays[1].1 = None;
+    draw(&st, &pulled, "rack_zenbo_pulled", (78, 28));
+    for frame in ["rack_zenbo", "rack_civitas", "rack_lotus", "rack_halcyon"] {
+        st.character.set_frame(&st.content, &ItemId::new(frame));
+        let art = RackArt::rig(&st, None);
+        for size in [(78, 28), (58, 22), (58, 14), (58, 10)] {
+            draw(&st, &art, &format!("{frame}_{}x{}", size.0, size.1), size);
+        }
+    }
+}
+
 /// The four rig sleds large, each at a tier: a stock core, a tier-two relay, a
 /// tier-three line and a firewall.
 #[test]

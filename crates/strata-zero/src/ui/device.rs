@@ -155,7 +155,15 @@ impl Look {
                     .home
                     .and_then(|r| city.building_opt(r.home.building))
                     .map(|b| b.district);
-                Look::named(st, "street", district, 0x5160)
+                // The rig wears its rack's head unit: a Zenbo's street plastic until
+                // a better frame is fitted.
+                let frame = st.character.rig_frame();
+                let theme = st
+                    .content
+                    .item(&frame)
+                    .and_then(|i| i.frame.as_ref())
+                    .map_or("street", |f| f.theme.as_str());
+                Look::named(st, theme, district, 0x5160)
             }
         }
     }
@@ -617,6 +625,22 @@ mod tests {
             );
         }
         assert_eq!(Look::pick(&st, Device::Rig).name, "street");
+    }
+
+    #[test]
+    fn the_rig_wears_its_racks_theme() {
+        let mut st = state();
+        let rig = Look::pick(&st, Device::Rig);
+        assert_eq!(
+            (rig.name.as_str(), rig.style.maker.as_str()),
+            ("street", "ZENBO")
+        );
+        let halcyon = game::ItemId::new("rack_halcyon");
+        st.character.set_frame(&st.content, &halcyon);
+        let rig = Look::pick(&st, Device::Rig);
+        assert_eq!(rig.name, "megacorp");
+        assert_eq!(rig.style.maker, "HALCYON");
+        assert_eq!(rig.terminal_badge(), "HALCYON NODE 9");
     }
 
     #[test]
