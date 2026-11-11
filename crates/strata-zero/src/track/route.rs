@@ -339,27 +339,28 @@ fn on_floor(
     }
 }
 
-/// What stands open to you in one building now: whether its lifts answer, each lift
-/// stop's card, and on each level the doors between one landing and another.
+/// What stands open to you in one building now: whether each of its lifts answers, by
+/// link, each lift stop's card, and on each level the doors between one landing and
+/// another.
 struct Access<'a> {
     st: &'a AppState,
     plan: &'a FloorPlan,
-    lifts: bool,
+    lifts: Vec<bool>,
 }
 
 impl Access<'_> {
-    /// The levels link `link` takes you to from `level` in one go: a lift's rides when the
-    /// lifts answer, but a ride to a stop whose card you lack; a stair's, an escalator's or
+    /// The levels link `link` takes you to from `level` in one go: a lift's rides when it
+    /// answers, but a ride to a stop whose card you lack; a stair's, an escalator's or
     /// a ladder's next stop up and down; none by a crawl, or where you can't get on.
     fn hops(&self, link: usize, level: i32) -> Vec<i32> {
         let plan = self.plan;
         match plan.links[link].kind {
             LinkKind::Crawl => Vec::new(),
-            LinkKind::Lift if !self.lifts => Vec::new(),
+            LinkKind::Lift if !self.lifts[link] => Vec::new(),
             LinkKind::Lift => (plan.rides(link, level).into_iter())
                 .filter(|&to| {
                     let card = crate::venues::ride_card(plan, link, to);
-                    crate::credentials::opens_stop(self.st, plan.building, card).is_some()
+                    crate::credentials::opens_stop(self.st, plan.building, link, card).is_some()
                 })
                 .collect(),
             _ => [true, false]
@@ -434,7 +435,9 @@ fn to_level(
     from: Pos,
     exits: &[Pos],
 ) -> Result<Leg, NoLeg> {
-    let lifts = st.net.lifts_answer(plan.building, st.net.now(st));
+    let lifts = (0..plan.links.len())
+        .map(|link| crate::sitenet::lift_answers(st, plan.building, link))
+        .collect();
     let access = Access { st, plan, lifts };
     let legs = legs_to(&access, to);
     // Each hop from here that leads on to `to`, by the rides and climbs it takes in all,

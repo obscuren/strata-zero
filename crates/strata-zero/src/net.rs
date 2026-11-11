@@ -582,7 +582,8 @@ impl NetState {
         (event, false)
     }
 
-    fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
+    /// The hacks still holding at minute `now`.
+    pub(crate) fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
         self.hacks
             .iter()
             .filter(move |h| h.until.is_none_or(|u| now < u))
@@ -617,26 +618,35 @@ impl NetState {
         })
     }
 
-    /// Whether the building's private rooms stand open: a lock cracked or spoofed,
-    /// and no alert.
+    /// Whether the building's private rooms stand open: a lock on the city's Net cracked
+    /// or spoofed, and no alert. A site's own nodes never open a whole building: each
+    /// opens its own device (`sitenet::lock_open`).
     pub fn unlocked(&self, b: BuildingId, now: u64) -> bool {
         !self.alert(b, now)
             && self.live(now).any(|h| {
                 h.building == b
+                    && matches!(h.target, HackTarget::Node(_))
                     && matches!(h.op, Op::Crack | Op::Spoof)
                     && h.kind == Target::Node(NodeKind::DoorLock)
             })
     }
 
+    /// The minute building `b`'s alarm went off, while it is on alert.
+    pub fn alarm_since(&self, b: BuildingId, now: u64) -> Option<u64> {
+        let t = self.traces.get(&b).filter(|t| t.alert(now))?;
+        Some(t.alert_until.unwrap_or(0).saturating_sub(ALERT_MINUTES))
+    }
+
     /// Whether the lifts answer: always off alert; on alert only with a spoof on the
-    /// lift control that landed after the alarm.
+    /// lift control on the city's Net that landed after the alarm. A site's lifts each
+    /// answer to their own node (`sitenet::lift_answers`).
     pub fn lifts_answer(&self, b: BuildingId, now: u64) -> bool {
-        let Some(t) = self.traces.get(&b).filter(|t| t.alert(now)) else {
+        let Some(since) = self.alarm_since(b, now) else {
             return true;
         };
-        let since = t.alert_until.unwrap_or(0).saturating_sub(ALERT_MINUTES);
         self.live(now).any(|h| {
             h.building == b
+                && matches!(h.target, HackTarget::Node(_))
                 && h.op == Op::Spoof
                 && h.kind == Target::Node(NodeKind::LiftCtrl)
                 && h.at >= since
@@ -4619,6 +4629,45 @@ pub(crate) mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_sites_own_nodes_never_open_a_whole_building() {
+        let mut net = NetState::default();
+        let node = |x: i32| {
+            HackTarget::Site(citygen::SiteNode {
+                building: b(1),
+                level: 0,
+                at: Pos::new(x, 4),
+            })
+        };
+        net.land(
+            b(1),
+            node(3),
+            Target::Node(NodeKind::DoorLock),
+            Op::Crack,
+            10,
+        );
+        net.land(
+            b(1),
+            node(5),
+            Target::Node(NodeKind::DoorLock),
+            Op::Spoof,
+            10,
+        );
+        assert!(!net.unlocked(b(1), 10), "a site's door opens alone");
+        net.trace(b(1)).add(game::ALARM_HEAT, 20);
+        net.alarm(b(1), 20);
+        net.land(
+            b(1),
+            node(7),
+            Target::Node(NodeKind::LiftCtrl),
+            Op::Spoof,
+            25,
+        );
+        assert!(!net.lifts_answer(b(1), 25), "a site's lift answers alone");
+        assert_eq!(net.alarm_since(b(1), 25), Some(20));
+        assert_eq!(net.alarm_since(b(2), 25), None);
     }
 
     #[test]

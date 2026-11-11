@@ -89,21 +89,28 @@ fn far_rooms(st: &mut AppState, b: BuildingId) -> Vec<(i32, Pos)> {
         .collect()
 }
 
-/// The Net's crack on building `b`'s door locks, landed now.
+/// The ops that hold a site's door, switch or lift open.
+const HELD: [game::Op; 2] = [game::Op::Crack, game::Op::Spoof];
+
+/// The Net's hacks on site `b`'s own nodes, landed now: a crack on every door lock and gate
+/// switch and a spoof on every lift, each opening its own device.
 fn crack(st: &mut AppState, b: BuildingId) {
-    let node = (st.city.as_ref().unwrap().net.nodes.iter())
-        .find(|n| n.building == Some(b) && n.kind == citygen::NodeKind::DoorLock)
-        .map(|n| n.id)
-        .expect("a door lock on the building's Net");
+    use citygen::NodeKind;
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
     let now = st.net.now(st);
-    st.net.land(
-        b,
-        game::HackTarget::Node(node),
-        game::Target::Node(citygen::NodeKind::DoorLock),
-        game::Op::Crack,
-        now,
-    );
-    assert!(st.net.unlocked(b, now));
+    let mut landed = 0;
+    for n in &net.nodes {
+        let op = match n.kind {
+            NodeKind::DoorLock | NodeKind::GateSwitch => game::Op::Crack,
+            NodeKind::LiftCtrl => game::Op::Spoof,
+            _ => continue,
+        };
+        let target = game::HackTarget::Site(n.node);
+        st.net.land(b, target, game::Target::Node(n.kind), op, now);
+        assert!(crate::sitenet::hacked(st, n.node, &HELD));
+        landed += 1;
+    }
+    assert!(landed > 0, "a lock on {b:?}'s Net");
 }
 
 #[test]
@@ -144,7 +151,11 @@ fn a_cracked_in_runner_walks_out_when_the_crack_lapses() {
             for h in st.net.hacks.iter_mut().filter(|h| h.building == b) {
                 h.until = Some(now);
             }
-            assert!(!st.net.unlocked(b, now));
+            let net = crate::sitenet::net_of(&st, b).unwrap();
+            assert!(
+                !(net.nodes.iter()).any(|n| crate::sitenet::hacked(&st, n.node, &HELD)),
+                "every hack lapsed"
+            );
             assert_eq!(crate::credentials::zone_card_held(&st, b), None);
             // And you walk out, back onto the street.
             walk_track(&mut st, landing, 12);

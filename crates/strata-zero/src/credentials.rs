@@ -348,10 +348,16 @@ pub enum How {
     Free,
 }
 
-/// Whether the player gets through this flat's door, and how: the Net's lock crack,
-/// a keycard in the pack, or the code in the journal, in that order.
+/// Whether the player gets through this flat's door, and how: the Net's lock crack (on a
+/// site, a hack on the door's own node), a keycard in the pack, or the code in the
+/// journal, in that order.
 pub fn opens(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<How> {
-    if st.net.unlocked(b, st.net.now(st)) {
+    let net = if crate::sitenet::is_site(st, b) {
+        crate::sitenet::room_open(st, b, level, number)
+    } else {
+        st.net.unlocked(b, st.net.now(st))
+    };
+    if net {
         return Some(How::Cracked);
     }
     let held = st
@@ -372,8 +378,9 @@ pub fn opens(st: &AppState, b: BuildingId, level: i32, number: u16) -> Option<Ho
 }
 
 /// Whether the player gets through a zone lock stepping from `from`, and how: free from its
-/// free side, the Net's lock crack (a lock with Net), a zone card at its zone or deeper
-/// (Card), the journal's code (Code), in that order.
+/// free side, the Net's lock crack (a lock with Net; on a site, a hack on its own node,
+/// `sitenet::lock_open`), a zone card at its zone or deeper (Card), the journal's code
+/// (Code), in that order.
 pub fn opens_lock(
     st: &AppState,
     b: BuildingId,
@@ -384,7 +391,12 @@ pub fn opens_lock(
     if lock.free_from == Some(from) {
         return Some(How::Free);
     }
-    if lock.ways.has(Ways::NET) && st.net.unlocked(b, st.net.now(st)) {
+    let net = if crate::sitenet::is_site(st, b) {
+        crate::sitenet::lock_open(st, b, level, lock)
+    } else {
+        lock.ways.has(Ways::NET) && st.net.unlocked(b, st.net.now(st))
+    };
+    if net {
         return Some(How::Cracked);
     }
     if lock.ways.has(Ways::CARD) && zone_card_held(st, b).is_some_and(|z| z >= lock.zone) {
@@ -398,12 +410,19 @@ pub fn opens_lock(
         .map(|c| How::Code(c.code))
 }
 
-/// A lift stop's card: none asked, the Net's crack, or a zone card at `card` or deeper.
-pub fn opens_stop(st: &AppState, b: BuildingId, card: u8) -> Option<How> {
+/// A stop of lift `link` asking `card`: none asked, the Net (on a site, a spoof on the
+/// lift's own node that it answers to; elsewhere the building's lock crack), or a zone
+/// card at `card` or deeper.
+pub fn opens_stop(st: &AppState, b: BuildingId, link: usize, card: u8) -> Option<How> {
     if card == 0 {
         return Some(How::Free);
     }
-    if st.net.unlocked(b, st.net.now(st)) {
+    let net = if crate::sitenet::is_site(st, b) {
+        crate::sitenet::lift_spoofed(st, b, link) && crate::sitenet::lift_answers(st, b, link)
+    } else {
+        st.net.unlocked(b, st.net.now(st))
+    };
+    if net {
         return Some(How::Cracked);
     }
     zone_card_held(st, b)

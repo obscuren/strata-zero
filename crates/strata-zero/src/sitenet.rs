@@ -11,6 +11,9 @@ use citygen::{BuildingId, FloorPlan, NetNode};
 use game::HackTarget;
 use std::borrow::Cow;
 
+mod locks;
+pub use locks::*;
+
 /// Whether building `b` is a site: its plan is a venue's (Ruling 14). The session's plan
 /// when it holds one, so an old save's hotel kept on the classic builder is none; else a
 /// kind a venue type builds whose layout lays.

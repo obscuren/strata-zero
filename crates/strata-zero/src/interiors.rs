@@ -502,12 +502,11 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
         .filter(|_| plan.rides(link, here).contains(&level))
         .ok_or("the lift doesn't stop there")?
         .at;
-    let now = st.net.now(st);
-    if !st.net.lifts_answer(b, now) {
+    if !crate::sitenet::lift_answers(st, b, link) {
         return Err("lifts locked down".to_string());
     }
     let card = crate::venues::ride_card(&plan, link, level);
-    if crate::credentials::opens_stop(st, b, card).is_none() {
+    if crate::credentials::opens_stop(st, b, link, card).is_none() {
         return Err(format!(
             "the lift wants a {} card",
             crate::venues::zone_name(&plan, card)

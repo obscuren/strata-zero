@@ -321,30 +321,39 @@ fn a_net_crack_opens_only_locks_the_net_reaches() {
     let (mut st, b) = first_venue();
     let (level, lock) = lock_where(&mut st, b, |l| l.ways.has(Ways::NET));
     let from = outside_of(floor_of(&st, b, level), &lock);
-    let node = (st.city.as_ref().unwrap().net.nodes.iter())
-        .find(|n| n.building == Some(b) && n.kind == citygen::NodeKind::DoorLock)
-        .map(|n| n.id)
-        .expect("a door lock on the building's Net");
+    // A venue is a site: the crack lands on the door's own node.
+    let node = citygen::SiteNode {
+        building: b,
+        level,
+        at: lock.at,
+    };
+    let net = crate::sitenet::net_of(&st, b).expect("a site's Net");
+    assert!(
+        (net.node(node)).is_some_and(|n| n.kind == citygen::NodeKind::DoorLock),
+        "the door's own node"
+    );
     let now = st.net.now(&st);
     st.net.land(
         b,
-        game::HackTarget::Node(node),
+        game::HackTarget::Site(node),
         game::Target::Node(citygen::NodeKind::DoorLock),
         game::Op::Crack,
         now,
     );
-    assert!(st.net.unlocked(b, now));
+    assert!(!st.net.unlocked(b, now), "not the whole building");
     assert_eq!(opens_lock(&st, b, level, &lock, from), Some(How::Cracked));
     let no_net = DoorLock {
         ways: Ways::CARD,
         ..card_lock(1)
     };
     assert_eq!(opens_lock(&st, b, level, &no_net, from), None);
-    // The crack opens a carded lift stop too.
-    assert_eq!(
-        crate::credentials::opens_stop(&st, b, 3),
-        Some(How::Cracked)
-    );
+    // Another lock the Net reaches stays shut, and so does a carded lift stop.
+    assert_ne!(card_lock(1).at, lock.at);
+    assert_eq!(opens_lock(&st, b, level, &card_lock(1), from), None);
+    let lift = (plan(&st, b).links.iter())
+        .position(|l| l.kind == LinkKind::Lift)
+        .expect("a lift");
+    assert_eq!(crate::credentials::opens_stop(&st, b, lift, 3), None);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! A gate line in a building of the city: its turnstiles take a code and the Keyjack as
 //! well as a card, and who works behind it isn't met without a key. A station's paid
-//! gate opens to a crack until an alarm locks the building down.
+//! gate opens to a crack on its line's switch until an alarm locks the building down.
 
 use super::*;
 use citygen::venue::{MissionSize, PieceKind};
@@ -109,15 +109,25 @@ fn a_stations_paid_gate_opens_to_a_crack_until_an_alarm_locks_it_down() {
         step_onto_from(&mut st, place, from, lock.at);
         assert_eq!(at(&st), (place, from), "shut before the crack");
         assert_eq!(last(&st), Some("locked · paid door"));
-        let node = (st.city.as_ref().unwrap().net.nodes.iter())
-            .find(|n| n.building == Some(b) && n.kind == citygen::NodeKind::DoorLock)
-            .map(|n| n.id)
-            .expect("a door lock on the building's Net");
+        // A venue is a site: the crack lands on the line's switch, which works the line.
+        let Place::Floor { level, .. } = place else {
+            unreachable!()
+        };
+        let v = plan(&st, b).venue.clone().unwrap();
+        let line = v.gate_line_at(level, lock.at).expect("the gate's line");
+        let switch = (citygen::venue::line_switches(&v, level).into_iter())
+            .find(|s| s.piece == line)
+            .expect("the line's switch");
+        let node = citygen::SiteNode {
+            building: b,
+            level,
+            at: switch.at,
+        };
         let now = st.net.now(&st);
         st.net.land(
             b,
-            game::HackTarget::Node(node),
-            game::Target::Node(citygen::NodeKind::DoorLock),
+            game::HackTarget::Site(node),
+            game::Target::Node(citygen::NodeKind::GateSwitch),
             game::Op::Crack,
             now,
         );
