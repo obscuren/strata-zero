@@ -339,6 +339,40 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
     Ok(())
 }
 
+/// A frame is a rack: an item of the frame kind with its head unit, no slot and no
+/// weight (it stands in the flat, never carried), and bays that are only the rig's
+/// four kinds with at least one core, relay and line. The rig's bays are on frames
+/// alone, and nothing else is a frame.
+fn frame_ok(i: &Item) -> Result<(), String> {
+    if i.kind != ItemKind::Frame {
+        if i.frame.is_some() {
+            return Err("a frame head on something that is not a frame".into());
+        }
+        if i.sockets.iter().any(|k| k.is_rig()) {
+            return Err("rig bays are on frames only".into());
+        }
+        return Ok(());
+    }
+    if i.frame.is_none() {
+        return Err("no frame head".into());
+    }
+    if i.slot.is_some() {
+        return Err("a frame has no slot; it is never carried".into());
+    }
+    if i.weight != 0.0 {
+        return Err("a frame weighs nothing".into());
+    }
+    if let Some(k) = i.sockets.iter().find(|k| !k.is_rig()) {
+        return Err(format!("a frame has rig bays only, not a {}", k.fits()));
+    }
+    for want in [SocketKind::Core, SocketKind::Relay, SocketKind::Line] {
+        if !i.sockets.contains(&want) {
+            return Err(format!("a frame has at least one {}", want.fits()));
+        }
+    }
+    Ok(())
+}
+
 /// A bot is an item of the bot kind with a bot and nothing that makes it chrome or
 /// hardware; it docks in a bay, draws in characters that always render (box-drawing
 /// and block), and moves at least a tile a turn. Nothing else is one.
@@ -504,6 +538,12 @@ impl Content {
                 id: i.id.0.clone(),
                 why,
             })?;
+            if let Err(why) = frame_ok(i) {
+                return Err(ContentError::SocketsInvalid {
+                    id: i.id.0.clone(),
+                    why,
+                });
+            }
             if let Err(why) = chrome_ok(i) {
                 return Err(ContentError::ChromeInvalid {
                     id: i.id.0.clone(),
@@ -530,7 +570,7 @@ impl Content {
                     .ok_or_else(|| bad("no art".into()))?;
                 implant_art_ok(art).map_err(bad)?;
             }
-            if !i.sockets.is_empty() && i.implant.is_none() {
+            if !i.sockets.is_empty() && i.implant.is_none() && i.kind != ItemKind::Frame {
                 // Only a drawing can place sockets, and each kind must sit where it is
                 // drawn. Chrome's sockets are checked with the rest of the chrome.
                 let drawn = i.drawn_sockets();
@@ -2443,6 +2483,228 @@ mod tests {
                 matches!(bad.validate(), Err(ContentError::HardwareInvalid { .. })),
                 "{id}"
             );
+        }
+    }
+
+    #[test]
+    fn every_frame_is_valid() {
+        use SocketKind::{Core, Firewall, Line, Relay};
+        let c = Content::load().unwrap();
+        for (id, sockets, theme, head, base) in [
+            (
+                "rack_zenbo",
+                vec![Core, Relay, Line],
+                "street",
+                "ZENBO 64  REDY",
+                FrameBase::Crate,
+            ),
+            (
+                "rack_civitas",
+                vec![Core, Relay, Line, Firewall],
+                "municipal",
+                "CIVITAS KIOSK  READY",
+                FrameBase::Plinth,
+            ),
+            (
+                "rack_lotus",
+                vec![Core, Core, Relay, Line],
+                "neon",
+                "LOTUS  ALL LIT",
+                FrameBase::Foot,
+            ),
+            (
+                "rack_halcyon",
+                vec![Core, Core, Relay, Line, Firewall],
+                "megacorp",
+                "HALCYON NODE 9  OK",
+                FrameBase::Rails,
+            ),
+        ] {
+            let i = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(i.kind, ItemKind::Frame, "{id}");
+            assert_eq!((i.slot, i.weight), (None, 0.0), "{id}");
+            assert_eq!(i.sockets, sockets, "{id}");
+            let f = i.frame.as_ref().unwrap();
+            assert_eq!(
+                (f.theme.as_str(), f.head.as_str(), f.base),
+                (theme, head, base)
+            );
+        }
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn every_sled_has_its_mods() {
+        use SocketKind::{Core, Firewall, Line, Relay};
+        let c = Content::load().unwrap();
+        for (id, fits, mods, value) in [
+            ("sled_zb8", Core, vec![Mod::Seats(1)], 60),
+            ("sled_tinman", Core, vec![Mod::Seats(2)], 640),
+            (
+                "sled_qstack",
+                Core,
+                vec![Mod::Seats(3), Mod::Speed(150)],
+                1600,
+            ),
+            ("sled_r3", Relay, vec![Mod::Lines(3)], 60),
+            ("sled_switchback", Relay, vec![Mod::Lines(5)], 500),
+            ("sled_hydra", Relay, vec![Mod::Lines(8)], 1400),
+            ("sled_cu1", Line, vec![Mod::Hold(3)], 60),
+            ("sled_longwire", Line, vec![Mod::Hold(5)], 450),
+            ("sled_darkfibre", Line, vec![Mod::Hold(7)], 1300),
+            ("sled_sandbag", Firewall, vec![Mod::Firewall(1)], 500),
+            ("sled_tripwire", Firewall, vec![Mod::Firewall(2)], 1100),
+            ("sled_killswitch", Firewall, vec![Mod::Firewall(3)], 2000),
+        ] {
+            let i = c.item(&ItemId::new(id)).unwrap();
+            assert_eq!(
+                (i.kind, i.weight, i.value),
+                (ItemKind::Hardware, 0.4, value),
+                "{id}"
+            );
+            let h = i.hardware.as_ref().unwrap();
+            assert_eq!((h.fits, &h.mods), (fits, &mods), "{id}");
+            assert_eq!(h.look.kind(), fits, "{id}");
+            assert_eq!(i.fits_socket(), Some(fits), "{id}");
+        }
+    }
+
+    #[test]
+    fn rig_kinds_fit_only_frames() {
+        let c = Content::load().unwrap();
+        let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
+        for kind in [
+            SocketKind::Core,
+            SocketKind::Relay,
+            SocketKind::Line,
+            SocketKind::Firewall,
+        ] {
+            assert!(kind.is_rig());
+            assert!(!kind.needs_a_doc());
+        }
+        assert!(!SocketKind::Fuse.is_rig());
+
+        let mut bad = c.clone();
+        let i = at(&bad, "keyjack");
+        bad.items[i].sockets = vec![SocketKind::Relay];
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "rack_zenbo");
+        bad.items[i].sockets.push(SocketKind::Deck);
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+
+        for gone in [SocketKind::Core, SocketKind::Relay, SocketKind::Line] {
+            let mut bad = c.clone();
+            let i = at(&bad, "rack_zenbo");
+            bad.items[i].sockets.retain(|k| *k != gone);
+            assert!(
+                matches!(bad.validate(), Err(ContentError::SocketsInvalid { .. })),
+                "{gone:?}"
+            );
+        }
+
+        let mut bad = c.clone();
+        let i = at(&bad, "rack_zenbo");
+        bad.items[i].slot = Some(Slot::Torso);
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::SocketsInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "sled_r3");
+        bad.items[i].hardware.as_mut().unwrap().mods.clear();
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::HardwareInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn mod_lines_read() {
+        assert_eq!(Mod::Seats(2).line(), "seats 2");
+        assert_eq!(Mod::Speed(150).line(), "jobs \u{d7}1.5");
+        assert_eq!(Mod::Speed(200).line(), "jobs \u{d7}2");
+        assert_eq!(Mod::Lines(5).line(), "lines 5");
+        assert_eq!(Mod::Hold(5).line(), "holds 5 days");
+        assert_eq!(Mod::Firewall(1).line(), "sandbag");
+        assert_eq!(Mod::Firewall(2).line(), "tripwire");
+        assert_eq!(Mod::Firewall(3).line(), "killswitch");
+        assert_eq!(Mod::Seats(2).sticker(), "SEATS 2");
+        assert_eq!(SocketKind::Core.label(), "core");
+        assert_eq!(SocketKind::Relay.label(), "relay");
+        assert_eq!(SocketKind::Line.label(), "line");
+        assert_eq!(SocketKind::Firewall.label(), "firewall");
+    }
+
+    #[test]
+    fn the_sled_recipes_build() {
+        let c = Content::load().unwrap();
+        for (id, inputs, out) in [
+            (
+                "tinman_build",
+                vec![("scrap_servo", 1), ("copper_coil", 2)],
+                "sled_tinman",
+            ),
+            (
+                "switchback_build",
+                vec![("copper_coil", 2), ("dead_phone", 1)],
+                "sled_switchback",
+            ),
+            ("longwire_build", vec![("copper_coil", 3)], "sled_longwire"),
+            (
+                "sandbag_build",
+                vec![("scrap_servo", 1), ("dead_phone", 1)],
+                "sled_sandbag",
+            ),
+            (
+                "qstack_build",
+                vec![("vault_data", 1), ("scrap_servo", 2)],
+                "sled_qstack",
+            ),
+            (
+                "hydra_build",
+                vec![("vault_data", 1), ("copper_coil", 2)],
+                "sled_hydra",
+            ),
+            (
+                "darkfibre_build",
+                vec![("vault_data", 1), ("copper_coil", 3)],
+                "sled_darkfibre",
+            ),
+            (
+                "tripwire_build",
+                vec![("vault_data", 1), ("dead_phone", 2)],
+                "sled_tripwire",
+            ),
+            (
+                "killswitch_build",
+                vec![("vault_data", 2), ("scrap_servo", 1)],
+                "sled_killswitch",
+            ),
+        ] {
+            let r = c.recipe(&RecipeId::new(id)).unwrap();
+            assert_eq!(r.skill.0, "electronics", "{id}");
+            let got: Vec<(&str, u32)> = r.inputs.iter().map(|(i, n)| (i.0.as_str(), *n)).collect();
+            assert_eq!(got, inputs, "{id}");
+            assert_eq!((r.output.0.0.as_str(), r.output.1), (out, 1), "{id}");
+            assert!((2..=4).contains(&r.steps.len()), "{id}");
+            assert!(r.steps.iter().all(|s| s.chars().count() <= 16), "{id}");
+        }
+        for id in [
+            "prog_sniff",
+            "prog_keepalive",
+            "paydata_sifted",
+            "vault_data_sifted",
+        ] {
+            assert!(c.item(&ItemId::new(id)).is_some(), "{id}");
         }
     }
 

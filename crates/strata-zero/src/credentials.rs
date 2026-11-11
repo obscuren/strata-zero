@@ -455,6 +455,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         weapon: None,
         stickers: Vec::new(),
         bot: None,
+        frame: None,
     }
 }
 

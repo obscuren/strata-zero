@@ -23,7 +23,11 @@ pub fn large_size(look: HardwareLook) -> (u16, u16) {
         | HardwareLook::FuseStock
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
-        | HardwareLook::FuseWideband => (52, 18),
+        | HardwareLook::FuseWideband
+        | HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => (52, 18),
     }
 }
 
@@ -123,6 +127,11 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::large(p, look, mods),
+        // Task 5 draws the sleds; until then they wear the stock fuse.
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => fuse::large(p, HardwareLook::FuseStock, mods),
     }
 }
 
@@ -138,7 +147,14 @@ pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
         SocketKind::Rail => Some((0, 0, 24, 3)),
         SocketKind::Fuse => Some((2, 0, 13, 3)),
-        SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm | SocketKind::Bay => None,
+        SocketKind::Deck
+        | SocketKind::Hand
+        | SocketKind::Forearm
+        | SocketKind::Bay
+        | SocketKind::Core
+        | SocketKind::Relay
+        | SocketKind::Line
+        | SocketKind::Firewall => None,
     }
 }
 
@@ -166,6 +182,11 @@ pub fn draw_fitted(look: HardwareLook, place: &SocketPlace, p: &mut Pen) {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::fitted(&mut at, look),
+        // A rig's bays are drawn by the desk, not over a host's drawing.
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => {}
         HardwareLook::ColdfinI | HardwareLook::ColdfinII | HardwareLook::Sidecar => {}
     }
 }
@@ -402,7 +423,11 @@ fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
         | HardwareLook::FuseStock
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
-        | HardwareLook::FuseWideband => None,
+        | HardwareLook::FuseWideband
+        | HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => None,
     }
 }
 
@@ -472,6 +497,10 @@ pub fn tile(look: HardwareLook) -> Tile {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::tile(look),
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => fuse::tile(HardwareLook::FuseStock),
     }
 }
 
