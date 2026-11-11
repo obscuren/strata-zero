@@ -9,6 +9,7 @@ pub mod inside;
 pub mod mini;
 pub mod packets;
 pub mod plate;
+pub mod tower;
 
 use crate::anim::effects::pulse;
 use crate::render::map::{MapRef, TileMap};
@@ -144,7 +145,7 @@ pub fn node_colour(kind: NodeKind, wall: Rgb, security: Option<u8>, tick: u64) -
 }
 
 /// What the look needs besides the map: the clock, what you track, whose home it is,
-/// and the spine the ICE watches.
+/// the spine the ICE watches and, on a site's Net, its tower's view.
 #[derive(Clone, Debug, Default)]
 pub struct NetLookView {
     pub tick: u64,
@@ -155,6 +156,8 @@ pub struct NetLookView {
     pub tracked: Option<BuildingId>,
     pub home: Option<BuildingId>,
     pub watch: HashMap<Pos, IceGrade>,
+    /// On a site's Net, what its open tower draws besides the construct.
+    pub site: Option<tower::SiteView>,
 }
 
 pub struct NetLook<'a> {
@@ -206,7 +209,12 @@ impl Overlay for NetLook<'_> {
                 };
                 grid::draw(net, self.view, origin, area, buf, style)
             }
-            MapRef::Construct(m) => inside::draw(m, self.view, origin, area, buf, style),
+            MapRef::Construct(m) => match self.view.site.as_ref() {
+                Some(site) if m.construct.is_site() => {
+                    tower::draw(m, self.view, site, origin, area, buf, style)
+                }
+                _ => inside::draw(m, self.view, origin, area, buf, style),
+            },
             _ => {}
         }
     }

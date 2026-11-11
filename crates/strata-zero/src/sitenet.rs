@@ -21,10 +21,6 @@ mod ways;
 pub use firewall::*;
 pub use locks::*;
 pub use nodes::*;
-#[expect(
-    unused_imports,
-    reason = "the site's Net panel reads it from Task 15 on"
-)]
 pub use panel::*;
 pub use walk::*;
 pub use ways::*;

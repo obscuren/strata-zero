@@ -14,7 +14,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 /// The lattice left in the void round a construct.
-const LATTICE: Rgb = Rgb(13, 42, 36);
+pub(super) const LATTICE: Rgb = Rgb(13, 42, 36);
 
 /// A piece's colour for its watch, without the pulse, and how strongly it tints.
 pub fn watch_tint(grade: IceGrade) -> (Rgb, f32) {
@@ -44,7 +44,7 @@ pub fn edge(k: &Construct, p: Pos) -> bool {
         && p.neighbors8().any(|q| open(k, q))
 }
 
-fn mask(p: Pos, joins: impl Fn(Pos) -> bool) -> usize {
+pub(super) fn mask(p: Pos, joins: impl Fn(Pos) -> bool) -> usize {
     [(0, -1, 1), (1, 0, 2), (0, 1, 4), (-1, 0, 8)]
         .into_iter()
         .filter(|(dx, dy, _)| joins(p.offset(*dx, *dy)))

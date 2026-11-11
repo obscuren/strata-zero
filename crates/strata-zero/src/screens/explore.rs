@@ -227,6 +227,11 @@ pub(crate) fn dir_for(code: KeyCode) -> Option<Dir> {
 /// NEAR's places in HERE off the city's cells.
 const NEAR_ROWS: usize = 4;
 
+/// Whether grid tile `p` of site construct `k` stands on level `level`.
+fn on_level(k: &citygen::Construct, level: i32, p: Pos) -> bool {
+    k.level_at(p).is_some_and(|l| l.level == level)
+}
+
 /// Whether `place`'s map carries on past the city's edge: the street and the Net, with a
 /// world out there.
 fn carries_on(st: &AppState, place: Place) -> bool {
@@ -2794,21 +2799,34 @@ impl MapScreen {
     }
 
     /// Puts the camera on a tile of the current place at once: snapped, clamped to
-    /// that place's map (a small map sits centred; the street and the Net carry on
-    /// past the city's edge, unclamped), and settled, so a new map never slides into
-    /// view.
-    fn jump_to(&mut self, st: &AppState, pos: Pos) {
+    /// that place's map (a small map sits centred; a site's Net is kept to its tower; the
+    /// street and the Net carry on past the city's edge, unclamped), and settled, so a new
+    /// map never slides into view.
+    pub(crate) fn jump_to(&mut self, st: &AppState, pos: Pos) {
         self.cam.snap(pos);
         if let Some(city) = st.city.as_ref() {
             let view = self.last_map.get();
             if view.width > 0 && view.height > 0 {
                 if !carries_on(st, self.place) {
-                    let size = TileMap::size(&self.map(st, city));
-                    self.cam.clamp(size, view.width, view.height);
+                    self.cam
+                        .clamp_to(self.cam_bounds(st, city), view.width, view.height);
                 }
                 self.cam.settle();
             }
         }
+    }
+
+    /// What the camera keeps the view inside on this place: on a site's Net the open
+    /// tower round the level you're on, its labels and the words beside it; elsewhere the
+    /// map's own tiles.
+    fn cam_bounds(&self, st: &AppState, city: &citygen::City) -> TileRect {
+        if let Place::SiteNet { building, level } = self.place
+            && let Some(k) = st.constructs.site(building)
+        {
+            return crate::render::netlook::tower::bounds(k, level);
+        }
+        let size = TileMap::size(&self.map(st, city));
+        TileRect::new(0, 0, size.w as i32, size.h as i32)
     }
 
     /// The stream built under the view and round you wherever the city doesn't own the
@@ -3760,9 +3778,9 @@ impl Screen for MapScreen {
             let bounds = st
                 .city
                 .as_ref()
-                .map(|c| TileMap::size(&self.map(st, c)))
-                .unwrap_or(size);
-            self.cam.clamp(bounds, map.width, map.height);
+                .map(|c| self.cam_bounds(st, c))
+                .unwrap_or(TileRect::new(0, 0, size.w as i32, size.h as i32));
+            self.cam.clamp_to(bounds, map.width, map.height);
         }
         self.cam.update();
         // The city lives: a minute step when the clock turns, a few paths per frame,
@@ -4049,12 +4067,26 @@ impl Screen for MapScreen {
             },
             home: st.home.map(|h| h.home.building),
             watch: match self.place {
-                Place::Construct(b) | Place::SiteNet { building: b, .. } => st
+                Place::Construct(b) => st
                     .constructs
                     .get(b)
                     .map(crate::net::watched)
                     .unwrap_or_default(),
+                // On a site's Net the tower folds the other levels: the open one's watch.
+                Place::SiteNet { building, level } => (st.constructs.site(building))
+                    .map(|k| {
+                        let mut watch = crate::net::watched(k);
+                        watch.retain(|p, _| on_level(k, level, *p));
+                        watch
+                    })
+                    .unwrap_or_default(),
                 _ => Default::default(),
+            },
+            site: match self.place {
+                Place::SiteNet { building, level } => {
+                    Some(crate::sitenet::site_view(st, building, level))
+                }
+                _ => None,
             },
         };
         let net_look = crate::render::netlook::NetLook {
@@ -4192,10 +4224,16 @@ impl Screen for MapScreen {
             overlays.push(o);
         }
         let ghost = match self.place {
-            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
-                Some(crate::render::ghost::GhostOverlay {
-                    steps: crate::net::ghost_steps(st, b),
-                })
+            Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
+                steps: crate::net::ghost_steps(st, b),
+            }),
+            // The open level's alone: the tower folds the others (Ruling 22).
+            Place::SiteNet { building, level } => {
+                let mut steps = crate::net::ghost_steps(st, building);
+                if let Some(k) = st.constructs.site(building) {
+                    steps.retain(|(p, _)| on_level(k, level, *p));
+                }
+                Some(crate::render::ghost::GhostOverlay { steps })
             }
             _ => None,
         };
@@ -4769,9 +4807,10 @@ impl Screen for MapScreen {
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
             card: match (self.place, st.player.as_ref()) {
-                (Place::Construct(b) | Place::SiteNet { building: b, .. }, Some(p))
-                    if p.place == self.place =>
-                {
+                (Place::SiteNet { building, .. }, Some(p)) if p.place == self.place => {
+                    crate::sitenet::panel_lines(st, building)
+                }
+                (Place::Construct(b), Some(p)) if p.place == self.place => {
                     crate::net::card_lines(st, b, None)
                 }
                 (Place::Stratum(StratumKind::Net), Some(p)) if p.place == self.place => st

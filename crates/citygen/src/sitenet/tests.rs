@@ -607,3 +607,44 @@ fn a_site_with_no_gate_on_the_citys_net_still_has_its_gate_inside() {
         assert!(at.x == 0 || at.y == 0 || at.x == area.w - 1 || at.y == area.h - 1);
     }
 }
+
+#[test]
+fn each_level_knows_its_fold_the_lifts_through_its_slab_and_its_turnstiles() {
+    let (mut lifts, mut turnstiles) = (0, 0);
+    for (c, p, t, layer) in copies(190) {
+        let net = SiteNet::of(c, &p, Some(t), Some(&layer), 190).unwrap();
+        let v = p.venue.as_deref().unwrap();
+        for (i, l) in net.levels.iter().enumerate() {
+            let x = v.level(l.level).unwrap();
+            assert_eq!(l.fold, fold_row(x));
+            assert!(
+                (1..l.size.h as i32 - 1).contains(&l.fold),
+                "{} {}",
+                t.id,
+                l.level
+            );
+            // Each lift through its slab stops here and on the next kept level below.
+            let below = i.checked_sub(1).map(|j| net.levels[j].level);
+            for &lx in &l.lifts {
+                assert!(p.links.iter().any(|k| {
+                    k.kind == LinkKind::Lift
+                        && (k.stops.iter()).any(|s| s.level == l.level && s.at.x == lx)
+                        && (k.stops.iter()).any(|s| Some(s.level) == below)
+                }));
+            }
+            // Each turnstile stands in a gate line, with that line's switch.
+            let switches = line_switches(v, l.level);
+            for &(at, switch) in &l.turnstiles {
+                let piece = v.gate_line_at(l.level, at).expect("in a gate line");
+                let want = switches.iter().find(|s| s.piece == piece).map(|s| s.at);
+                assert_eq!(switch, want, "{} {} {at:?}", t.id, l.level);
+            }
+            lifts += l.lifts.len();
+            turnstiles += l.turnstiles.len();
+        }
+    }
+    assert!(
+        lifts > 0 && turnstiles > 0,
+        "lifts {lifts} turnstiles {turnstiles}"
+    );
+}

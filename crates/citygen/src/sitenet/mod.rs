@@ -13,8 +13,8 @@ pub use build::*;
 use crate::geom::{Pos, Size};
 use crate::ids::BuildingId;
 use crate::interior::venue::{
-    DeviceKind, LevelLayout, MissionLayer, PlannedRoom, VenueLayout, VenueType, Ways, draw_level,
-    line_switches, room_label, terminals,
+    DeviceKind, LevelLayout, LineSwitch, MissionLayer, PieceKind, PlannedRoom, VenueLayout,
+    VenueType, Ways, draw_level, line_switches, room_label, terminals,
 };
 use crate::interior::{DoorLock, FloorPlan, LinkKind, RoomKind};
 use crate::net::{NodeKind, SiteNode};
@@ -72,6 +72,39 @@ pub struct SiteLevel {
     /// floor's centre.
     pub shaft: Pos,
     pub hub: Pos,
+    /// The floor row the open tower folds this level at (Ruling 22): `fold_row`.
+    pub fold: i32,
+    /// The x of each lift's bank on this level whose lift stops on the next kept level
+    /// below too: the shafts through the slab under it.
+    pub lifts: Vec<i32>,
+    /// Its turnstiles, each with the wall tile of the switch that works its line.
+    pub turnstiles: Vec<(Pos, Option<Pos>)>,
+}
+
+/// The floor row a folded level is cut at (Ruling 22): the first row of its second band
+/// (a band behind another holds the wall between them as its first row, counted from the
+/// front), where its bands run front to back down the floor; with one band, or bands side
+/// by side, its middle row.
+pub fn fold_row(x: &LevelLayout) -> i32 {
+    match x.bands.as_slice() {
+        [front, behind, ..] if behind.rect.y >= front.rect.bottom() => behind.rect.y,
+        [front, behind, ..] if behind.rect.bottom() <= front.rect.y => behind.rect.bottom() - 1,
+        _ => x.size.h as i32 / 2,
+    }
+}
+
+/// Level `x`'s turnstiles, each gate line's doors with the wall tile of its switch.
+fn turnstiles(x: &LevelLayout, switches: &[LineSwitch]) -> Vec<(Pos, Option<Pos>)> {
+    (0..x.pieces.len())
+        .filter(|&i| x.pieces[i].kind == PieceKind::GateLine)
+        .flat_map(|i| {
+            let switch = switches.iter().find(|s| s.piece == i).map(|s| s.at);
+            let line = x.pieces[i].rect;
+            (x.doors.iter())
+                .filter(move |d| line.contains(d.at))
+                .map(move |d| (d.at, switch))
+        })
+        .collect()
 }
 
 /// A node of a site's Net.
@@ -189,7 +222,22 @@ impl SiteNet {
                 size: floor.tiles.size(),
                 shaft: bank.first().copied().unwrap_or(hub),
                 hub,
+                fold: fold_row(x),
+                lifts: Vec::new(),
+                turnstiles: turnstiles(x, &switches),
             });
+        }
+        // Each level's lifts that run on down to the next kept level: through its slab.
+        for i in 0..net.levels.len() {
+            let level = net.levels[i].level;
+            let Some(below) = i.checked_sub(1).map(|j| net.levels[j].level) else {
+                continue;
+            };
+            net.levels[i].lifts = (plan.links.iter())
+                .filter(|k| k.kind == LinkKind::Lift && k.stops.iter().any(|s| s.level == below))
+                .filter_map(|k| k.stops.iter().find(|s| s.level == level))
+                .map(|s| s.at.x)
+                .collect();
         }
         for (i, &(_, inside)) in net.firewall.iter().enumerate() {
             let lock = SiteNode::firewall(building, i as u8);

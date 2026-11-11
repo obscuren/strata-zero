@@ -1,18 +1,415 @@
-//! The site's Net panel beside the tower (look D): its BODY lines, where your body stands
-//! and who is near it (Ruling 19). Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`,
-//! "The panel".
+//! The site's Net panel beside the tower (look D), and what the tower draws besides the
+//! construct: the building and its firewall, the job, the levels, what you hold, and your
+//! BODY, where it stands and who is near it (Rulings 19 to 23). Spec
+//! `docs/superpowers/specs/2026-11-11-site-net-design.md`, "The look: the open tower".
 
 use crate::app::AppState;
-use citygen::{FloorPlan, Place};
+use crate::render::netlook::inside::watch_tint;
+use crate::render::netlook::tower::SiteView;
+use crate::render::netlook::{AMBER, BLACK_RED, ICE_BLUE, ROOM, WHITE, YOU};
+use crate::render::overlay::SIGNAL;
+use crate::ui::chrome::{DIM, FAINTER, PANEL_BG_RGB, TEXT};
+use crate::ui::hud::RULE_STYLE;
+use citygen::venue::{VenuePack, VenueType};
+use citygen::{
+    BuildingId, Construct, FloorPlan, IceGrade, NetDevice, NodeKind, Place, Pos, SiteNode, Size,
+    Terrain,
+};
+use game::{HackTarget, Op};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+
+/// Words in the panel quieter than its text.
+const QUIET: Color = Color::Rgb(138, 147, 163);
+/// The longest role a LEVELS row shows.
+const ROLE_W: usize = 15;
+
+/// The node your body is jacked in at on site `b`: the terminal or switch it stands at on
+/// its floor, on its own side (`at_port`), from where it stands and the construct's
+/// devices (Ruling 23).
+fn port(st: &AppState, b: BuildingId) -> Option<&NetDevice> {
+    let (Place::Floor { building, level }, at) = st.player.as_ref()?.body? else {
+        return None;
+    };
+    let k = st.constructs.site(b).filter(|_| building == b)?;
+    // The tile in front of a device is its grid tile, back on the floor.
+    k.devices.iter().find(|d| {
+        d.node.level == level
+            && super::is_port(d.kind)
+            && (k.to_floor(d.at)).is_some_and(|(_, front)| super::at_port(d.node.at, front, at))
+    })
+}
+
+/// The nodes of site `b` with a live hack or hold on them: hacks first, in the order they
+/// landed, then holds.
+fn worked(st: &AppState, b: BuildingId) -> impl Iterator<Item = SiteNode> + '_ {
+    let now = st.net.now(st);
+    let hacks = (st.net.live(now)).filter_map(move |h| match h.target {
+        HackTarget::Site(s) if s.building == b => Some(s),
+        _ => None,
+    });
+    let holds = (st.net.holds.iter())
+        .filter(move |h| now < h.until)
+        .filter_map(|h| h.node.site())
+        .filter(move |s| s.building == b);
+    hacks.chain(holds)
+}
+
+/// The cord on level `level` of `k` (Ruling 23): the shortest way over the level's open
+/// tiles from the node you jacked in at to you, ends and all, when both are on it.
+fn cord(st: &AppState, k: &Construct, level: i32, jacked: Option<Pos>) -> Vec<Pos> {
+    let (Some(from), Some(p), Some(l)) = (jacked, st.player.as_ref(), k.net_level(level)) else {
+        return Vec::new();
+    };
+    let here = Place::SiteNet {
+        building: k.building,
+        level,
+    };
+    let area = l.area;
+    if p.place != here || !area.contains(from) || !area.contains(p.pos) {
+        return Vec::new();
+    }
+    let size = Size {
+        w: area.w as u32,
+        h: area.h as u32,
+    };
+    let local = |q: Pos| Pos::new(q.x - area.x, q.y - area.y);
+    let open = |q: Pos| {
+        (k.tiles.get(q.offset(area.x, area.y))).is_some_and(|t| t.terrain != Terrain::NetWall)
+    };
+    citygen::pathing::astar(size, local(from), local(p.pos), |_, to| {
+        open(to).then_some(1)
+    })
+    .map(|path| path.into_iter().map(|q| q.offset(area.x, area.y)).collect())
+    .unwrap_or_default()
+}
+
+/// What the open tower of site `b` draws besides its construct, with level `level` open:
+/// what you hold, where you jacked in and the cord from it, the firewall's locks, the levels
+/// you can reach, and from the site's Net each level's fold, the lifts through its slab and
+/// its turnstiles. Worked out each frame from the kept Net (`net_of`) and the construct.
+pub fn site_view(st: &AppState, b: BuildingId, level: i32) -> SiteView {
+    let Some(k) = st.constructs.site(b) else {
+        return SiteView {
+            open: level,
+            ..SiteView::default()
+        };
+    };
+    let mut held: Vec<Pos> = worked(st, b)
+        .filter_map(|n| k.device(n).map(|d| d.at))
+        .collect();
+    held.sort_by_key(|p| (p.y, p.x));
+    held.dedup();
+    let jacked = port(st, b).map(|d| d.at);
+    let mut view = SiteView {
+        open: level,
+        cord: cord(st, k, level, jacked),
+        jacked,
+        broken: super::broken(st, b),
+        reach: vec![level],
+        ..SiteView::default()
+    };
+    if let Some(net) = super::net_of(st, b) {
+        view.reach = (net.levels.iter())
+            .map(|l| l.level)
+            .filter(|l| net.reaches(level, *l))
+            .collect();
+        for l in &net.levels {
+            view.folds.push((l.level, l.fold));
+            view.lifts.extend(l.lifts.iter().map(|x| (l.level, *x)));
+            for &(at, switch) in &l.turnstiles {
+                let Some(tile) = k.on_level(l.level, at) else {
+                    continue;
+                };
+                let open = switch
+                    .map(|s| SiteNode {
+                        building: b,
+                        level: l.level,
+                        at: s,
+                    })
+                    .and_then(|s| k.device(s))
+                    .is_some_and(|d| held.contains(&d.at));
+                view.gates.push((tile, open));
+            }
+        }
+    }
+    view.held = held;
+    view
+}
+
+/// The venue type site `b` is laid out as: its plan's, else the type for its kind.
+fn site_type(st: &AppState, b: BuildingId) -> Option<&'static VenueType> {
+    let pack = VenuePack::builtin();
+    match (st.interiors.plan_of(b)).and_then(|p| p.venue.as_deref()) {
+        Some(v) => pack.by_id(&v.type_id),
+        None => pack.for_kind(st.city.as_ref()?.building_opt(b)?.kind),
+    }
+}
+
+/// The job's line (Ruling 20): the live copy's objective, `{objective name} · {level}`, and
+/// under it, when that level is gapped, `{level} has its own Net: jack in there`. None on a
+/// plain site.
+pub fn job_lines(st: &AppState, b: BuildingId) -> Vec<String> {
+    let Some(layer) = super::layer_of(st, b) else {
+        return Vec::new();
+    };
+    let Some(def) = site_type(st, b).and_then(|t| t.objectives.get(layer.inputs.objective)) else {
+        return Vec::new();
+    };
+    let level = layer.objective.level;
+    let label = FloorPlan::label(level);
+    let mut out = vec![format!("{} · {label}", def.name)];
+    if super::net_of(st, b).is_some_and(|n| n.gap == Some(level)) {
+        out.push(format!("{label} has its own Net: jack in there"));
+    }
+    out
+}
+
+/// The panel's width: the sidebar's.
+fn panel_w() -> usize {
+    crate::ui::sidebar::width(0) as usize
+}
+
+/// `s` cut to `n` characters.
+fn cut(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+fn span(s: impl Into<String>, fg: Color) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(fg))
+}
+
+fn bold(s: impl Into<String>, fg: Color) -> Span<'static> {
+    Span::styled(
+        s.into(),
+        Style::default().fg(fg).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn rule() -> Line<'static> {
+    Line::from(Span::styled("─".repeat(panel_w()), RULE_STYLE))
+}
+
+/// The strongest ICE posted on `level` of `k`.
+fn ice_on(k: &Construct, level: i32) -> Option<IceGrade> {
+    let rank = |g: IceGrade| match g {
+        IceGrade::White => 0,
+        IceGrade::Grey => 1,
+        IceGrade::Black => 2,
+    };
+    (k.guards.iter())
+        .filter(|g| !g.inert && k.level_at(g.post).is_some_and(|l| l.level == level))
+        .map(|g| g.grade)
+        .max_by_key(|g| rank(*g))
+}
+
+/// A grade's colour in the panel: the ICE's own, without its pulse.
+fn ice_text(g: IceGrade) -> Color {
+    watch_tint(g).0.to_color()
+}
+
+/// What a hack or hold on a node does, as HELD says it.
+fn held_word(kind: NodeKind, op: Op) -> Option<&'static str> {
+    Some(match op {
+        Op::Crack if kind == NodeKind::Server => "root",
+        Op::Crack => "cracked",
+        Op::Spoof => "spoofed",
+        Op::Copy => "copied",
+        Op::Blind => "blind",
+        Op::Backdoor => "root",
+        _ => return None,
+    })
+}
+
+/// The site's Net panel (look D), HERE's lines on its Net: the building, its security and
+/// ICE, its firewall's locks; the job (Ruling 20); LEVELS, a row each with its nodes, its
+/// ICE, the server, the vault and you, or why it's out of reach; HELD, what you hold and
+/// what each does; BODY, where your body stands and who is near it. Counts in digits.
+pub fn panel_lines(st: &AppState, b: BuildingId) -> Vec<Line<'static>> {
+    let (Some(city), Some(k)) = (st.city.as_ref(), st.constructs.site(b)) else {
+        return Vec::new();
+    };
+    let Some(building) = city.building_opt(b) else {
+        return Vec::new();
+    };
+    let w = panel_w();
+    let here = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::SiteNet { building, level }) if building == b => Some(level),
+        _ => None,
+    };
+    let net = super::net_of(st, b);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    // The building.
+    let kind = citygen::kind_label(city, b);
+    let name = building.name.as_deref().unwrap_or(kind).to_uppercase();
+    let type_name = site_type(st, b).map_or(kind, |t| t.name.as_str());
+    let name = cut(&name, w - 1);
+    let mut head = vec![Span::raw(" "), bold(name.clone(), BLACK_RED.to_color())];
+    if name.chars().count() + 4 + type_name.chars().count() <= w {
+        head.push(span(format!(" · {type_name}"), TEXT));
+    }
+    out.push(Line::from(head));
+    let security = super::security(st, b);
+    let mut sec = vec![
+        span(" SEC ", TEXT),
+        bold(security.to_string(), WHITE.to_color()),
+    ];
+    if let Some(g) = ice_on(k, 0) {
+        sec.push(span(format!(" · ICE {}", g.label()), TEXT));
+    }
+    let vault = (k.devices.iter()).find(|d| d.kind == NodeKind::DataVault);
+    let guard =
+        vault.and_then(|d| (k.guards.iter()).find(|g| !g.inert && g.post.chebyshev(d.at) <= 1));
+    if let Some(g) = guard {
+        sec.push(span(format!(" · vault {}", g.grade.label()), TEXT));
+    }
+    out.push(Line::from(sec));
+    let broken = super::broken(st, b);
+    let down = broken.iter().filter(|x| **x).count();
+    let mut fw = vec![span(" FIREWALL ", BLACK_RED.to_color())];
+    for x in &broken {
+        fw.push(match x {
+            true => bold("▯", SIGNAL.to_color()),
+            false => bold("▮", BLACK_RED.to_color()),
+        });
+    }
+    fw.push(span(
+        format!(" {down}/{}", broken.len()),
+        BLACK_RED.to_color(),
+    ));
+    out.push(Line::from(fw));
+    out.push(rule());
+    // The job.
+    let job = job_lines(st, b);
+    if let Some((first, rest)) = job.split_first() {
+        out.push(Line::from(vec![
+            span(" JOB ", DIM),
+            span(cut(first, w - 5), AMBER.to_color()),
+        ]));
+        for line in rest {
+            out.push(Line::from(span(
+                format!("     {}", cut(line, w - 5)),
+                QUIET,
+            )));
+        }
+        out.push(rule());
+    }
+    // A row a level.
+    out.push(Line::from(span(" LEVELS", DIM)));
+    let from = here.unwrap_or(0);
+    let reaches = |l: i32| net.as_ref().is_none_or(|n| n.reaches(from, l));
+    for l in &k.levels {
+        let yours = here == Some(l.level);
+        let bg = match yours {
+            true => PANEL_BG_RGB.mix(ROOM, 0.12).to_color(),
+            false => Color::Reset,
+        };
+        let on = |s: Span<'static>| match yours {
+            true => s.patch_style(Style::default().bg(bg)),
+            false => s,
+        };
+        let mut row = vec![
+            span(" ", TEXT),
+            bold(if yours { "▸" } else { " " }, ROOM.to_color()),
+            span(" ", TEXT),
+        ];
+        let reach = reaches(l.level);
+        let label = format!("{:<4}", FloorPlan::label(l.level));
+        row.push(bold(label, if reach { WHITE.to_color() } else { FAINTER }));
+        let role = format!("{:<w$}", cut(&l.name, ROLE_W), w = ROLE_W + 1);
+        let role_fg = match (yours, reach) {
+            (true, _) => TEXT,
+            (false, true) => QUIET,
+            (false, false) => FAINTER,
+        };
+        row.push(span(role, role_fg));
+        if !reach {
+            row.push(match l.gapped {
+                true => bold("AIR GAP", BLACK_RED.to_color()),
+                false => span("out of reach", FAINTER),
+            });
+        } else {
+            let ours = (k.devices.iter()).filter(|d| d.node.level == l.level);
+            let n = ours.clone().filter(|d| d.kind != NodeKind::Hub).count();
+            row.push(span(format!("▪{n:<3}"), ICE_BLUE.to_color()));
+            match ice_on(k, l.level) {
+                Some(g) => row.push(span(format!(" ◈ {:<6}", g.label()), ice_text(g))),
+                None => row.push(span(" ".repeat(9), TEXT)),
+            }
+            let mut marks = vec![span(" ", TEXT)];
+            if ours.clone().any(|d| d.kind == NodeKind::Server) {
+                marks.push(bold("◆", WHITE.to_color()));
+            }
+            if ours.clone().any(|d| d.kind == NodeKind::DataVault) {
+                marks.push(bold("⌗", AMBER.to_color()));
+            }
+            if yours {
+                marks.push(bold("@", YOU.to_color()));
+            }
+            if marks.len() > 1 {
+                row.extend(marks);
+            }
+        }
+        let used: usize = row.iter().map(|s| s.content.chars().count()).sum();
+        row.push(span(" ".repeat(w.saturating_sub(used)), TEXT));
+        out.push(Line::from(row.into_iter().map(on).collect::<Vec<_>>()));
+    }
+    out.push(rule());
+    // What you hold, a row a node and what each does.
+    out.push(Line::from(span(" HELD", DIM)));
+    let now = st.net.now(st);
+    let mut rows: Vec<(char, String, &'static str)> = Vec::new();
+    for d in &k.devices {
+        let mut words: Vec<&'static str> = Vec::new();
+        if let Some(h) = crate::holds::held(st, citygen::NetNode::Site(d.node), now) {
+            words.push(match h.used.contains(&crate::holds::Verb::Loop) {
+                true => "looped",
+                false => "held",
+            });
+        }
+        let hacks = (st.net.live(now)).filter(|h| h.target == HackTarget::Site(d.node));
+        words.extend(hacks.filter_map(|h| held_word(d.kind, h.op)));
+        let glyph = match d.kind {
+            NodeKind::DoorLock => '▯',
+            NodeKind::Terminal => '◇',
+            NodeKind::Server => '◆',
+            NodeKind::DataVault => '⌗',
+            _ => '▪',
+        };
+        for word in words {
+            if !rows.iter().any(|r| r.1 == d.name && r.2 == word) {
+                rows.push((glyph, d.name.clone(), word));
+            }
+        }
+    }
+    if rows.is_empty() {
+        out.push(Line::from(span("  none", FAINTER)));
+    }
+    for (glyph, name, word) in rows {
+        let room = w.saturating_sub(4 + 3 + word.chars().count());
+        out.push(Line::from(vec![
+            span("  ", TEXT),
+            bold(glyph.to_string(), SIGNAL.to_color()),
+            span(format!(" {}", cut(&name, room)), TEXT),
+            span(format!(" · {word}"), SIGNAL.to_color()),
+        ]));
+    }
+    out.push(rule());
+    // Your body.
+    let body = body_lines(st);
+    let mut body = body.iter();
+    let first = body.next().map_or(String::new(), |s| cut(s, w - 6));
+    out.push(Line::from(vec![span(" BODY ", DIM), span(first, TEXT)]));
+    for line in body {
+        out.push(Line::from(span(format!("   {}", cut(line, w - 3)), QUIET)));
+    }
+    out
+}
 
 /// BODY: where your body stands and who is near it (Ruling 19). On a site's floor,
 /// `L · at the lobby kiosk`, then `3 guards on L · nearest 4 tiles` (the guards posted to
 /// the building on that floor, not down) or `nobody on L`; at home `home · at the rig`; at
 /// a street port `{district} · at the port`. None while you're not jacked in.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the site's Net panel draws it from Task 15 on")
-)]
 pub fn body_lines(st: &AppState) -> Vec<String> {
     let Some((place, at)) = st.player.as_ref().and_then(|p| p.body) else {
         return Vec::new();
@@ -29,17 +426,7 @@ pub fn body_lines(st: &AppState) -> Vec<String> {
         }
         Place::Floor { building: b, level } => {
             let label = FloorPlan::label(level);
-            // The device it stands at, on its own side (`at_port`): the tile in front of it
-            // is its grid tile, back on the floor.
-            let port = st.constructs.site(b).and_then(|k| {
-                k.devices.iter().find(|d| {
-                    d.node.level == level
-                        && super::is_port(d.kind)
-                        && (k.to_floor(d.at))
-                            .is_some_and(|(_, front)| super::at_port(d.node.at, front, at))
-                })
-            });
-            let here = match port {
+            let here = match port(st, b) {
                 Some(d) => format!("{label} · at the {}", d.name),
                 None => label.clone(),
             };
@@ -68,7 +455,8 @@ mod tests {
     use super::super::testutil::*;
     use super::*;
     use crate::foes::{Foe, Post};
-    use citygen::{Place, Pos, StratumKind};
+    use citygen::{NodeKind, Place, Pos, StratumKind};
+    use game::Op;
 
     #[test]
     fn the_body_line_says_where_it_stands_and_who_is_near() {
@@ -163,5 +551,83 @@ mod tests {
         crate::net::jack_in_here(&mut st).unwrap();
         let district = crate::net::district_name(&city, at);
         assert_eq!(body_lines(&st), vec![format!("{district} · at the port")]);
+    }
+
+    #[test]
+    fn the_panel_says_the_building_the_firewall_and_the_levels_in_digits() {
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let lines: Vec<String> = panel_lines(&st, b).iter().map(|l| l.to_string()).collect();
+        assert!(lines.iter().any(|l| l.contains("SEC 190")), "{lines:#?}");
+        assert!(lines.iter().any(|l| l.trim() == "FIREWALL ▮▮▮ 0/3"));
+        assert!(
+            (lines.iter()).any(|l| l.contains("B1 has its own Net: jack in there")),
+            "{lines:#?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("LEVELS")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("B1") && l.contains("AIR GAP"))
+        );
+        assert!(lines.iter().any(|l| l.contains("BODY")));
+        // Every line fits the panel: none wraps.
+        let w = crate::ui::sidebar::width(0) as usize;
+        assert!(lines.iter().all(|l| l.chars().count() <= w), "{lines:#?}");
+    }
+
+    #[test]
+    fn the_panel_lists_what_you_hold_and_the_broken_locks() {
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let door = device(&st, b, NodeKind::DoorLock);
+        hack(&mut st, door.node, NodeKind::DoorLock, Op::Spoof);
+        let now = st.net.now(&st);
+        st.net.break_lock(b, 0, now);
+        let lines: Vec<String> = panel_lines(&st, b).iter().map(|l| l.to_string()).collect();
+        assert!(
+            lines.iter().any(|l| l.trim() == "FIREWALL ▯▮▮ 1/3"),
+            "{lines:#?}"
+        );
+        let held = format!("▯ {} · spoofed", door.name);
+        assert!(lines.iter().any(|l| l.contains(&held)), "{lines:#?}");
+        let view = site_view(&st, b, 0);
+        assert!(view.held.contains(&door.at));
+        assert_eq!(view.broken, vec![true, false, false]);
+    }
+
+    #[test]
+    fn a_plain_site_has_no_job_line() {
+        let (st, b) = office_plain();
+        assert!(job_lines(&st, b).is_empty());
+        let (st, b) = office_copy(190);
+        let job = job_lines(&st, b);
+        assert!(job[0].ends_with(" · B1"), "{job:?}");
+        assert_eq!(job[1], "B1 has its own Net: jack in there");
+    }
+
+    #[test]
+    fn the_view_reaches_the_riser_and_cords_you_to_your_port() {
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let gap = crate::sitenet::net_of(&st, b).unwrap().gap.unwrap();
+        let view = site_view(&st, b, 0);
+        assert_eq!(view.open, 0);
+        assert!(view.reach.contains(&0) && !view.reach.contains(&gap));
+        assert_eq!(view.jacked, None, "jacked in from the street");
+        assert!(view.cord.is_empty());
+        // Jacked in at the kiosk, then walked off: the cord runs from it to you.
+        crate::net::jack_out(&mut st).unwrap();
+        stand_beside_the_kiosk(&mut st, b);
+        crate::net::jack_in_here(&mut st).unwrap();
+        let kiosk = st.player.as_ref().unwrap().pos;
+        let view = site_view(&st, b, 0);
+        assert_eq!(view.jacked, Some(kiosk));
+        on_hub(&mut st, b, 0);
+        let you = st.player.as_ref().unwrap().pos;
+        let view = site_view(&st, b, 0);
+        assert_eq!(view.cord.first(), Some(&kiosk));
+        assert_eq!(view.cord.last(), Some(&you));
+        assert!(view.cord.windows(2).all(|w| w[0].manhattan(w[1]) == 1));
     }
 }
