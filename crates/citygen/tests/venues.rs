@@ -1,11 +1,13 @@
 //! Every venue type laid out over many seeds, in its own frame and in the city's
-//! buildings, through the checker; and one site per type pinned.
+//! buildings, through the checker; what every builtin type offers and every objective
+//! holds; and one site per type pinned.
 
 use citygen::venue::{
-    MissionInputs, MissionLayer, VenueFrame, VenueLayout, VenuePack, VenueType, lay_out,
+    MissionInputs, MissionLayer, PieceKind, VenueFrame, VenueLayout, VenuePack, VenueType, lay_out,
     validate_copy, validate_venue, venue_fingerprint,
 };
-use citygen::{BuildingId, City, GenParams, Generator, SizePreset};
+use citygen::{BuildingId, City, FloorPlan, GenParams, Generator, LinkKind, Pos, SizePreset};
+use std::collections::BTreeSet;
 
 const SEEDS: u64 = 50;
 
@@ -80,6 +82,32 @@ fn copies(t: &VenueType, l: &VenueLayout, seed: u64, what: &str) {
     }
 }
 
+/// Every cut between two bands holds its band's `doors`: a door on a cut stands on the
+/// back band's first row, beside the band in front, and a gate line's row of doors is
+/// one.
+fn cuts_keep_their_doors(t: &VenueType, l: &VenueLayout, what: &str) {
+    for x in &l.levels {
+        let def = t.role(&x.role).unwrap();
+        for (i, band) in def.bands.iter().enumerate().skip(1) {
+            let (front, back) = (x.bands[i - 1].rect, x.bands[i].rect);
+            let on: Vec<Pos> = (x.doors.iter().map(|d| d.at))
+                .filter(|p| back.contains(*p) && p.neighbors4().any(|q| front.contains(q)))
+                .collect();
+            let gate = |p: &Pos| {
+                (x.pieces.iter()).any(|g| g.kind == PieceKind::GateLine && g.rect.contains(*p))
+            };
+            let doors = on.iter().filter(|p| !gate(p)).count() + usize::from(on.iter().any(gate));
+            assert_eq!(
+                doors,
+                usize::from(band.doors.max(1)),
+                "{} {what}: {} cut {i}, doors at {on:?}",
+                t.id,
+                FloorPlan::label(x.level)
+            );
+        }
+    }
+}
+
 #[test]
 fn every_type_passes_the_checker() {
     let pack = VenuePack::builtin();
@@ -89,6 +117,7 @@ fn every_type_passes_the_checker() {
             let l = lay_out(&t, VenueFrame::own(&t), seed)
                 .unwrap_or_else(|e| panic!("{} own {seed}: {e}", t.id));
             validate_venue(&l).unwrap_or_else(|e| panic!("{} own {seed}: {e}", t.id));
+            cuts_keep_their_doors(&t, &l, &format!("own {seed}"));
             for rule in &pack.sizes {
                 assert!(l.holds(&t, rule), "{} own {seed} {:?}", t.id, rule.size);
             }
@@ -122,7 +151,69 @@ fn every_type_passes_the_checker() {
             let l =
                 lay_out(&t, f, seed).unwrap_or_else(|e| panic!("{} building {seed}: {e}", t.id));
             validate_venue(&l).unwrap_or_else(|e| panic!("{} building {seed}: {e}", t.id));
+            cuts_keep_their_doors(&t, &l, &format!("building {seed}"));
             copies(&t, &l, seed, "building");
+        }
+    }
+}
+
+/// Every objective of every type holds some size on the type's own frame, at every seed:
+/// a mission for it lays and its copy passes the checks.
+#[test]
+fn every_objective_holds_a_size() {
+    let pack = VenuePack::builtin();
+    for t in types() {
+        for seed in 0..10 {
+            let l = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+            for (k, o) in t.objectives.iter().enumerate() {
+                let holds = pack.sizes.iter().any(|rule| {
+                    let inputs = MissionInputs {
+                        size: rule.size,
+                        objective: k,
+                        security: u8::MAX,
+                        seed,
+                    };
+                    MissionLayer::lay(&l, &t, rule, inputs)
+                        .is_ok_and(|layer| validate_copy(&l, &layer, rule).is_ok())
+                });
+                assert!(holds, "{} seed {seed}: {} holds no size", t.id, o.id);
+            }
+        }
+    }
+}
+
+/// What every builtin type offers, said without naming one.
+#[test]
+fn every_builtin_type_is_a_whole_site() {
+    let pack = VenuePack::builtin();
+    for t in &pack.types {
+        assert!(t.zones.len() >= 4, "{}", t.id);
+        assert!(t.objectives.len() >= 3, "{}", t.id);
+        let kinds: BTreeSet<_> = t.links.iter().map(|l| l.kind).collect();
+        assert!(
+            kinds.len() >= 3,
+            "{}: lifts, stairs and a crawl at least",
+            t.id
+        );
+        assert!(
+            t.links.iter().any(|l| l.kind == LinkKind::Crawl) || !t.crawls_in.is_empty(),
+            "{}",
+            t.id
+        );
+        assert!(
+            t.borders.iter().any(|b| b.one_way),
+            "{}: a way out harder than the way in",
+            t.id
+        );
+        let own = lay_out(t, VenueFrame::own(t), 0).unwrap();
+        assert!(own.levels.len() >= 6, "{}", t.id);
+        if t.builds.is_empty() {
+            // A type no building kind builds stands below the street.
+            assert!(
+                own.levels.iter().filter(|l| l.level < 0).count() >= 5,
+                "{}",
+                t.id
+            );
         }
     }
 }
@@ -132,9 +223,9 @@ fn every_type_passes_the_checker() {
 #[test]
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
-        8290420713075603439,
-        6841205988463130151,
-        11421204453678667725,
+        3094486393411567538,
+        2730937395949327687,
+        13685243746217859303,
     ];
     let pack = VenuePack::builtin();
     assert_eq!(

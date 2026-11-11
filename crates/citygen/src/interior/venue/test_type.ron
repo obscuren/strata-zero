@@ -52,7 +52,7 @@ Type(
         Room(name: "server room", kind: Server, size: ((4, 4), (6, 6)), private: true, furniture: [Machine]),
         Room(name: "plant room", kind: Plant, size: ((4, 4), (8, 6)), furniture: [Machine], stations: [Machine]),
         Room(name: "vault", kind: Storage, size: ((4, 3), (6, 5)), private: true, furniture: [Locker]),
-        Room(name: "open floor", kind: OpenPlan, size: ((8, 5), (14, 8)), furniture: [Desk, Desk, Desk], stations: [Desk, Desk]),
+        Room(name: "open floor", kind: OpenPlan, size: ((4, 4), (14, 8)), furniture: [Desk, Desk, Desk], stations: [Desk, Desk]),
         Room(name: "office", kind: Office, size: ((4, 4), (6, 5)), private: true, furniture: [Desk], stations: [Desk]),
         Room(name: "lounge", kind: Suite, size: ((6, 5), (10, 8)), furniture: [Couch, Table]),
     ],
