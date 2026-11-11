@@ -6,8 +6,8 @@
 
 use crate::app::AppState;
 use crate::net::Hack;
-use citygen::venue::{WayInKind, Ways, line_switches};
-use citygen::{BuildingId, DoorLock, LinkKind, NodeId, NodeKind, Pos, SiteNode};
+use citygen::venue::{WayInKind, Ways, switch_line};
+use citygen::{BuildingId, DoorLock, LinkKind, NodeId, NodeKind, SiteNode};
 use game::{HackTarget, Op, Target};
 
 /// The ops that hold a door or a line of turnstiles open.
@@ -57,13 +57,11 @@ pub fn lock_open(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> b
         return false;
     };
     if let Some(piece) = v.gate_line_at(level, lock.at) {
-        // The level is drawn for its switches only when one of them stands hacked.
-        let held: Vec<Pos> = site_hacks(st, b, NodeKind::GateSwitch, &OPENS)
+        // Each held switch's line is read off the layout (`switch_line`), the level drawn
+        // only where two lines' ends meet: the track asks this at every step of a route.
+        return site_hacks(st, b, NodeKind::GateSwitch, &OPENS)
             .filter(|(s, _)| s.level == level)
-            .map(|(s, _)| s.at)
-            .collect();
-        return !held.is_empty()
-            && (line_switches(v, level).iter()).any(|s| s.piece == piece && held.contains(&s.at));
+            .any(|(s, _)| switch_line(v, level, s.at) == Some(piece));
     }
     // A way in's lock: the city's door locks held now, before the city's nodes are searched.
     let now = st.net.now(st);
@@ -147,7 +145,7 @@ mod tests {
     use super::super::testutil::*;
     use super::super::*;
     use crate::credentials::How;
-    use citygen::venue::{LineSwitch, PieceKind, WayIn, WayInKind, Ways, line_switches};
+    use citygen::venue::{LineSwitch, PieceKind, WayInKind, Ways, line_switches};
     use citygen::{DoorLock, Floor, LinkKind, NodeKind, Pos, SiteNode};
     use game::{HackTarget, Op, Target};
 
@@ -251,53 +249,6 @@ mod tests {
                 Some((level, n1, n2))
             })
             .expect("two private rooms on a level")
-    }
-
-    /// A locked Street way in of `plan` with the Net's way, onto a level it keeps, at a
-    /// city-map door with a lock on the city's Net.
-    fn street_way_in(st: &AppState, b: BuildingId) -> Option<WayIn> {
-        let city = st.city.as_ref()?;
-        let plan = st.interiors.plan_of(b)?;
-        let v = plan.venue.as_deref()?;
-        (v.ways_in.iter())
-            .find(|w| {
-                let WayInKind::Door { stratum, door } = w.kind else {
-                    return false;
-                };
-                stratum == citygen::StratumKind::Street
-                    && plan.has_level(w.level)
-                    && w.lock.is_some_and(|l| l.ways.has(Ways::NET))
-                    && (city.net.node_at(stratum, door))
-                        .is_some_and(|n| n.kind == NodeKind::DoorLock)
-            })
-            .copied()
-    }
-
-    /// An office site whose plan has a locked Street way in: the plain office first, else
-    /// each closed office building of the city as it lays, its plan kept.
-    fn a_locked_street_way_in() -> (AppState, BuildingId, i32, WayIn) {
-        let (mut st, b) = office_plain();
-        if let Some(way) = street_way_in(&st, b) {
-            return (st, b, way.level, way);
-        }
-        let city = st.city.clone().unwrap();
-        let offices: Vec<BuildingId> = (city.buildings.iter())
-            .filter(|x| x.kind == citygen::BuildingKind::Office && x.kind.is_closed())
-            .map(|x| x.id)
-            .collect();
-        for b in offices {
-            if st
-                .interiors
-                .plan(&city, b)
-                .is_none_or(|p| p.venue.is_none())
-            {
-                continue;
-            }
-            if let Some(way) = street_way_in(&st, b) {
-                return (st, b, way.level, way);
-            }
-        }
-        panic!("no office with a locked street door on the city's Net");
     }
 
     #[test]

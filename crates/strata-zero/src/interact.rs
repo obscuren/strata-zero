@@ -721,7 +721,7 @@ pub fn run_rows_at(
             continue;
         };
         let colour = match target {
-            game::HackTarget::Node(_) => CYAN,
+            game::HackTarget::Node(_) | game::HackTarget::Site(_) => CYAN,
             game::HackTarget::Guard { .. } | game::HackTarget::Foe(_) => MAGENTA,
             _ => TEXT,
         };
@@ -797,15 +797,12 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
-    let (kind, building) = match node {
-        citygen::NetNode::City(id) => {
-            let n = city.net.node(id);
-            (n.kind, n.building)
-        }
-        citygen::NetNode::Site(s) => (
-            crate::holds::kind_of(st, node).unwrap_or(citygen::NodeKind::Camera),
-            Some(s.building),
-        ),
+    let Some(kind) = crate::holds::kind_of(st, node) else {
+        return Vec::new();
+    };
+    let building = match node {
+        citygen::NetNode::City(id) => city.net.nodes.get(id.index()).and_then(|n| n.building),
+        citygen::NetNode::Site(s) => Some(s.building),
     };
     let what = match building {
         Some(b) => format!("{} · {}", kind.label(), crate::net::building_name(st, b)),

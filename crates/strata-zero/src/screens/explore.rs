@@ -2506,8 +2506,20 @@ impl MapScreen {
             }
             // The gate in and out of a construct comes with the construct cache.
             Place::Construct(_) => None,
-            // A site's Net is left by its own ways (Tasks 10 and 11).
-            Place::SiteNet { .. } => None,
+            // On a site's Net a door's node or a turnstile, as its lock on the floor.
+            Place::SiteNet { .. } => match crate::sitenet::step_on_net(st, here, target) {
+                crate::venues::Meets::Held(why) => {
+                    st.warn(why);
+                    Some(ScreenCmd::Stay)
+                }
+                crate::venues::Meets::Through(line) => {
+                    if let Some(line) = line {
+                        st.say(line);
+                    }
+                    None
+                }
+                crate::venues::Meets::Nothing => None,
+            },
         }
     }
 
@@ -2799,9 +2811,15 @@ impl MapScreen {
         }
     }
 
-    /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else.
+    /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else;
+    /// on a site's Net, the riser from a hub.
     fn vertical(&mut self, st: &mut AppState, up: bool) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
+        if let Place::SiteNet { .. } = player.place {
+            let result = crate::sitenet::riser(st, up);
+            report(st, result);
+            return Some(ScreenCmd::Stay);
+        }
         let Place::Floor { building, level } = player.place else {
             return None;
         };
@@ -3004,6 +3022,14 @@ impl MapScreen {
         if !open {
             self.walking = None;
             st.warn("the way is blocked");
+            return;
+        }
+        // On a site's Net a door's node or a turnstile that holds ends the walk there.
+        if let (Place::SiteNet { .. }, Some(me)) = (place, here)
+            && let crate::venues::Meets::Held(why) = crate::sitenet::step_on_net(st, me, next)
+        {
+            self.walking = None;
+            st.warn(why);
             return;
         }
         if let Err(why) = crate::net::spend_move(st) {
@@ -12564,6 +12590,47 @@ mod tests {
             .find(|p| !k.tiles[*p].is_walkable())
             .unwrap();
         assert_eq!(crate::net::path_to(k, start, wall), None);
+    }
+
+    #[test]
+    fn on_a_sites_net_a_door_node_holds_a_step_and_a_walk_and_a_hub_rides_the_riser() {
+        use crate::sitenet::testutil::{across_a_door_node, hack, office_copy};
+        let (mut st, b) = office_copy(190);
+        let (locked, _, door) = across_a_door_node(&mut st, b);
+        let place = player(&st).0;
+        let mut s = MapScreen::walking(&mut st);
+        let d = Dir::CARDINAL
+            .into_iter()
+            .find(|d| locked.step(*d) == door.at)
+            .unwrap();
+        crate::constructs::land(&mut st, place, locked);
+        assert!(matches!(s.doorway(&mut st, d), Some(ScreenCmd::Stay)));
+        assert!(last(&st).is_some_and(|l| l.contains(&door.name)));
+        // A walk over the door stops before it.
+        s.walking = Some(Walk {
+            path: vec![door.at],
+            next_at: st.clock_tick(),
+        });
+        s.walk_step(&mut st);
+        assert_eq!(player(&st).1, locked);
+        assert!(s.walking.is_none());
+        hack(
+            &mut st,
+            door.node,
+            citygen::NodeKind::DoorLock,
+            game::Op::Crack,
+        );
+        assert!(s.doorway(&mut st, d).is_none(), "the step goes on");
+        // On the hub `>` rides the riser up.
+        let hub = st.constructs.site(b).unwrap().net_level(0).unwrap().hub;
+        let g = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        crate::constructs::land(&mut st, g, hub);
+        assert!(matches!(s.vertical(&mut st, true), Some(ScreenCmd::Stay)));
+        assert!(matches!(player(&st).0, Place::SiteNet { level, .. } if level > 0));
+        assert!(last(&st).is_some_and(|l| l.starts_with("Entering")));
     }
 
     #[test]

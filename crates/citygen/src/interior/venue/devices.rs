@@ -3,7 +3,7 @@
 //! Rust names no room or piece here: the rooms a type gives terminals are data
 //! (`VenueType.terminals`), the rest is by rule.
 
-use super::{LevelLayout, PieceKind, VenueLayout, VenueType, WayInKind};
+use super::{LevelLayout, PieceKind, PlannedDoor, VenueLayout, VenueType, WayInKind};
 use crate::geom::{Pos, Rect};
 use crate::interior::Floor;
 use crate::rng::hash64;
@@ -248,6 +248,35 @@ pub fn terminals(
     out
 }
 
+/// A gate line's turnstiles as its switch sees them: its first (lowest by (y, x)), and the
+/// tiles its switch may take, best first: past an end of the line, then (where a room's
+/// side walls stand there, the line spanning its room) in the wall between an end
+/// turnstile and the next. None for a piece that is no gate line, or holds no turnstile.
+fn switch_spots(x: &LevelLayout, piece: usize) -> Option<(&PlannedDoor, bool, [Pos; 4])> {
+    let g = x
+        .pieces
+        .get(piece)
+        .filter(|g| g.kind == PieceKind::GateLine)?;
+    let mut doors: Vec<&PlannedDoor> = x.doors.iter().filter(|d| g.rect.contains(d.at)).collect();
+    doors.sort_by_key(|d| (d.at.y, d.at.x));
+    let (first, last) = (*doors.first()?, *doors.last()?);
+    let horizontal = g.rect.w >= g.rect.h;
+    let step = |p: Pos, n: i32| {
+        if horizontal {
+            p.offset(n, 0)
+        } else {
+            p.offset(0, n)
+        }
+    };
+    let spots = [
+        step(first.at, -1),
+        step(last.at, 1),
+        step(first.at, 1),
+        step(last.at, -1),
+    ];
+    Some((first, horizontal, spots))
+}
+
 /// The switch of each gate line on `level`, in the level's piece order.
 pub fn line_switches(layout: &VenueLayout, level: i32) -> Vec<LineSwitch> {
     let Some(x) = layout.level(level) else {
@@ -258,22 +287,9 @@ pub fn line_switches(layout: &VenueLayout, level: i32) -> Vec<LineSwitch> {
     };
     let unfree = unfree(x, &floor);
     let mut out = Vec::new();
-    for (piece, g) in x.pieces.iter().enumerate() {
-        if g.kind != PieceKind::GateLine {
+    for piece in 0..x.pieces.len() {
+        let Some((first, horizontal, spots)) = switch_spots(x, piece) else {
             continue;
-        }
-        let mut doors: Vec<_> = x.doors.iter().filter(|d| g.rect.contains(d.at)).collect();
-        doors.sort_by_key(|d| (d.at.y, d.at.x));
-        let (Some(first), Some(last)) = (doors.first(), doors.last()) else {
-            continue;
-        };
-        let horizontal = g.rect.w >= g.rect.h;
-        let step = |p: Pos, n: i32| {
-            if horizontal {
-                p.offset(n, 0)
-            } else {
-                p.offset(0, n)
-            }
         };
         let across = |p: Pos, n: i32| {
             if horizontal {
@@ -302,17 +318,27 @@ pub fn line_switches(layout: &VenueLayout, level: i32) -> Vec<LineSwitch> {
                     front,
                 })
         };
-        // Past an end of the line; where a room's side walls stand there (the line spans
-        // its room), in the wall between the end turnstile and the next.
-        let found = try_at(step(first.at, -1))
-            .or_else(|| try_at(step(last.at, 1)))
-            .or_else(|| try_at(step(first.at, 1)))
-            .or_else(|| try_at(step(last.at, -1)));
-        if let Some(s) = found {
+        if let Some(s) = spots.into_iter().find_map(try_at) {
             out.push(s);
         }
     }
     out
+}
+
+/// The gate line on `level` (its piece) that the switch standing at `at` works, `at` being
+/// a switch's tile: the one line whose switch may take that tile, read off the layout; the
+/// level is drawn (`line_switches`) only where two lines' ends meet at it.
+pub fn switch_line(layout: &VenueLayout, level: i32, at: Pos) -> Option<usize> {
+    let x = layout.level(level)?;
+    let mut lines = (0..x.pieces.len())
+        .filter(|&i| switch_spots(x, i).is_some_and(|(_, _, spots)| spots.contains(&at)));
+    let first = lines.next()?;
+    if lines.next().is_none() {
+        return Some(first);
+    }
+    (line_switches(layout, level).into_iter())
+        .find(|s| s.at == at)
+        .map(|s| s.piece)
 }
 
 #[cfg(test)]
@@ -485,6 +511,25 @@ mod tests {
             }
         }
         assert!(lines_seen > 0);
+    }
+
+    #[test]
+    fn a_switchs_line_is_read_off_the_layout_as_the_pass_placed_it() {
+        let mut seen = 0;
+        for (layout, _) in sites() {
+            for x in &layout.levels {
+                for s in line_switches(&layout, x.level) {
+                    assert_eq!(switch_line(&layout, x.level, s.at), Some(s.piece));
+                    seen += 1;
+                }
+                let line = (x.pieces.iter()).find(|g| g.kind == PieceKind::GateLine);
+                if let Some(g) = line {
+                    let far = Pos::new(g.rect.x - 5, g.rect.y - 5);
+                    assert_eq!(switch_line(&layout, x.level, far), None);
+                }
+            }
+        }
+        assert!(seen > 0);
     }
 
     #[test]

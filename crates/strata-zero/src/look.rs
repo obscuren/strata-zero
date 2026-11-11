@@ -876,10 +876,16 @@ pub fn look_card(
                     );
                 }
             }
-            Feature::Node(k) => {
-                set_head(&mut card, capitalised(k.label()), glyph);
-                card.second = Some("node".to_string());
-            }
+            Feature::Node(k) => match site_device(st, place, pos) {
+                Some((name, second)) => {
+                    set_head(&mut card, capitalised(&name), glyph);
+                    card.second = Some(second);
+                }
+                None => {
+                    set_head(&mut card, capitalised(k.label()), glyph);
+                    card.second = Some("node".to_string());
+                }
+            },
             Feature::Ice(g) => {
                 set_head(&mut card, format!("{} ICE", capitalised(g.label())), glyph);
             }
@@ -991,6 +997,35 @@ pub fn look_card(
         card.also.clear();
     }
     card
+}
+
+/// A site's device on tile `pos` of its Net: its name, and its kind with what the Net
+/// holds of it now: `camera · held`, `door lock · cracked`, `door lock · locked`.
+fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)> {
+    use citygen::NodeKind;
+    let Place::SiteNet { building, .. } = place else {
+        return None;
+    };
+    let d = st.constructs.site(building)?.device_at(pos)?;
+    let now = st.net.now(st);
+    let state = if crate::holds::held(st, citygen::NetNode::Site(d.node), now).is_some() {
+        Some("held")
+    } else if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
+        Some("cracked")
+    } else if matches!(
+        d.kind,
+        NodeKind::DoorLock | NodeKind::GateSwitch | NodeKind::Container
+    ) {
+        Some("locked")
+    } else {
+        None
+    };
+    let kind = d.kind.label();
+    let second = match state {
+        Some(s) => format!("{kind} · {s}"),
+        None => kind.to_string(),
+    };
+    Some((d.name.clone(), second))
 }
 
 /// The bare ground `tile`, drawn as `glyph`: its name and `location`, where it is; or

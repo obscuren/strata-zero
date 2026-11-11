@@ -12,7 +12,11 @@ use game::HackTarget;
 use std::borrow::Cow;
 
 mod locks;
+mod nodes;
+mod walk;
 pub use locks::*;
+pub use nodes::*;
+pub use walk::*;
 
 /// Whether building `b` is a site: its plan is a venue's (Ruling 14). The session's plan
 /// when it holds one, so an old save's hotel kept on the classic builder is none; else a

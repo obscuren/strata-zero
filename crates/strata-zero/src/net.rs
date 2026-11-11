@@ -824,6 +824,9 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
             let k = st.constructs.get(building)?;
             Some(Target::Guard(k.guards.get(index)?.grade))
         }
+        HackTarget::Site(n) if n.building == b => {
+            Some(Target::Node(st.constructs.get(b)?.device(n)?.kind))
+        }
         HackTarget::Foe(_) | HackTarget::Site(_) => None,
     }
 }
@@ -1159,7 +1162,15 @@ fn land(
 ) -> String {
     st.net.land(b, target, kind, op, now);
     let name = building_name(st, b);
+    // A site's node says what it opens, before the arms every construct shares; so does a
+    // city node of a site that opens one device, not the building.
+    let site = match target {
+        HackTarget::Site(n) => crate::sitenet::landed(st, b, n, kind, op, now),
+        HackTarget::Node(id) => crate::sitenet::city_landed(st, b, id, kind, op),
+        _ => None,
+    };
     let line = match (op, kind) {
+        _ if site.is_some() => site.unwrap_or_default(),
         (Op::Crack, Target::Guard(_)) => "ICE cracked · the way is open".to_string(),
         (Op::Crack | Op::Spoof, Target::Node(NodeKind::DoorLock)) => {
             let verb = if op == Op::Crack {
@@ -1300,7 +1311,7 @@ pub fn target_pos(st: &AppState, b: BuildingId, target: HackTarget) -> Option<Po
         HackTarget::Guard { index, .. } => st.constructs.get(b)?.guards.get(index).map(|g| g.pos),
         HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
         HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
-        HackTarget::Site(_) => None,
+        HackTarget::Site(n) => st.constructs.get(b)?.device(n).map(|d| d.at),
     }
 }
 
@@ -2999,7 +3010,10 @@ pub fn target_label(st: &AppState, target: HackTarget) -> Option<String> {
             .foes
             .get(i)
             .map_or_else(|| "ICE".to_string(), |f| f.name.clone()),
-        HackTarget::Site(_) => "node".to_string(),
+        HackTarget::Site(n) => (st.constructs.get(n.building))
+            .and_then(|k| k.device(n))
+            .map_or("node", |d| d.kind.label())
+            .to_string(),
     })
 }
 
@@ -3195,7 +3209,8 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     Ok(line)
 }
 
-/// The node on or beside a tile in a construct, and the standing guard beside it.
+/// The node on or beside a tile in a construct (on a site's Net its devices', `door lock ·
+/// staff door`), and the standing guard beside it.
 pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let (Some(city), Some(k)) = (st.city.as_ref(), st.constructs.get(b)) else {
@@ -3206,6 +3221,12 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
             out.push((
                 HackTarget::Node(id),
                 city.net.node(id).kind.label().to_string(),
+            ));
+        }
+        if let Some(d) = k.device_at(p) {
+            out.push((
+                HackTarget::Site(d.node),
+                format!("{} · {}", d.kind.label(), d.name),
             ));
         }
     }

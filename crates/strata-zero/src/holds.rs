@@ -176,11 +176,14 @@ pub fn take(st: &mut AppState, node: NetNode, owner: Owner, now: u64) -> String 
 /// What kind a node is: a city node's from the city's Net; a site node's from its
 /// building's construct (its devices come with the site's Net).
 pub fn kind_of(st: &AppState, node: NetNode) -> Option<NodeKind> {
-    let id = node.city()?;
-    st.city
-        .as_ref()
-        .and_then(|c| c.net.nodes.get(id.index()))
-        .map(|n| n.kind)
+    match node {
+        NetNode::City(id) => st
+            .city
+            .as_ref()
+            .and_then(|c| c.net.nodes.get(id.index()))
+            .map(|n| n.kind),
+        NetNode::Site(n) => st.constructs.get(n.building)?.device(n).map(|d| d.kind),
+    }
 }
 
 /// The hold on a node, while it lasts.
@@ -266,10 +269,22 @@ fn relight_city(city: &mut citygen::City, net: &crate::net::NetState) {
 }
 
 /// Where a node is drawn on a place: on the open Net its tile there; inside a
-/// construct its tile in it.
+/// construct its tile in it; a site's node on its own level of the site's Net, at its
+/// device's tile.
 pub fn node_pos(st: &AppState, place: Place, node: NetNode) -> Option<Pos> {
-    // A site node has no tile until the site's Net places its devices.
-    let id = node.city()?;
+    let id = match node {
+        NetNode::City(id) => id,
+        NetNode::Site(n) => {
+            return match place {
+                Place::SiteNet { building, level }
+                    if (building, level) == (n.building, n.level) =>
+                {
+                    st.constructs.site(building)?.device(n).map(|d| d.at)
+                }
+                _ => None,
+            };
+        }
+    };
     match place {
         Place::Stratum(StratumKind::Net) => {
             Some(st.city.as_ref()?.net.nodes.get(id.index())?.cyber)
