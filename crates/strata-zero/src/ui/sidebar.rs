@@ -288,14 +288,18 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         if let Some(t) = v.map.tile(v.focus) {
             match t.feature {
                 Some(Feature::Node(k)) => {
-                    // The node under the focus, not any node of its kind.
-                    let id = match &v.map {
-                        MapRef::Construct(m) => m.construct.node_at(v.focus),
+                    // The node under the focus, not any node of its kind: on a site's Net
+                    // its device's, in any other construct its node on the city's Net.
+                    let node = match &v.map {
+                        MapRef::Construct(m) => match m.construct.device_at(v.focus) {
+                            Some(d) => Some(citygen::NetNode::Site(d.node)),
+                            None => m.construct.node_at(v.focus).map(citygen::NetNode::City),
+                        },
                         _ => None,
                     };
-                    let state = match id {
-                        Some(id) if v.net.blinded(citygen::NetNode::City(id), v.now) => " · blind",
-                        Some(id) if v.net.copied(game::HackTarget::Node(id), v.now) => " · copied",
+                    let state = match node {
+                        Some(n) if v.net.blinded(n, v.now) => " · blind",
+                        Some(n) if v.net.copied(game::HackTarget::from(n), v.now) => " · copied",
                         _ => "",
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));
@@ -708,6 +712,31 @@ mod tests {
         // A site's construct seen as any construct keeps the Net's cap.
         let other = view(&st, pos, citygen::Place::Construct(b));
         assert_eq!(here_cap(&other), NET_HERE_CAP);
+    }
+
+    #[test]
+    fn here_says_a_site_nodes_blind_or_copied() {
+        use crate::sitenet::testutil::{device, hack, on_hub};
+        use citygen::NodeKind;
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        on_hub(&mut st, b, 0);
+        let place = st.player.as_ref().unwrap().place;
+        let focus = |st: &AppState, at: Pos| {
+            let mut v = view(st, at, place);
+            v.now = st.net.now(st);
+            (here_lines(&v).iter())
+                .map(|l| l.to_string())
+                .find(|l| l.starts_with(" ◆ "))
+        };
+        let (cam, server) = (
+            device(&st, b, NodeKind::Camera),
+            device(&st, b, NodeKind::Server),
+        );
+        assert_eq!(focus(&st, cam.at).as_deref(), Some(" ◆ camera"));
+        hack(&mut st, cam.node, NodeKind::Camera, game::Op::Blind);
+        assert_eq!(focus(&st, cam.at).as_deref(), Some(" ◆ camera · blind"));
+        hack(&mut st, server.node, NodeKind::Server, game::Op::Copy);
+        assert_eq!(focus(&st, server.at).as_deref(), Some(" ◆ server · copied"));
     }
 
     #[test]
