@@ -239,8 +239,15 @@ pub enum Meets {
     Held(String),
 }
 
+/// Whether the building's alarm holds `lock` shut: one the Net could open, in a building
+/// on alert, which no crack opens until the alert ends.
+pub fn locked_down(st: &AppState, b: BuildingId, lock: &DoorLock) -> bool {
+    lock.ways.has(Ways::NET) && st.net.alert(b, st.net.now(st))
+}
+
 /// What `lock` on `level` of `plan`'s building meets coming from tile `from`: it asks
-/// `credentials::opens_lock`, and says how it opened or that it holds.
+/// `credentials::opens_lock`, and says how it opened or that it holds ("locked down" in
+/// an alarm).
 pub fn meets_lock(
     st: &AppState,
     plan: &FloorPlan,
@@ -250,10 +257,17 @@ pub fn meets_lock(
 ) -> Meets {
     let label = lock_label(plan, lock);
     match credentials::opens_lock(st, plan.building, level, lock, from) {
-        None => Meets::Held(match lock.kind {
-            LockKind::Keypad => format!("locked · {label}, keypad"),
-            _ => format!("locked · {label}"),
-        }),
+        None => {
+            let state = if locked_down(st, plan.building, lock) {
+                "locked down"
+            } else {
+                "locked"
+            };
+            Meets::Held(match lock.kind {
+                LockKind::Keypad => format!("{state} · {label}, keypad"),
+                _ => format!("{state} · {label}"),
+            })
+        }
         Some(How::Keycard) => Meets::Through(Some(format!("{label} · the keycard opens it"))),
         Some(How::Code(c)) => Meets::Through(Some(format!("{label} · you key in {c:04}"))),
         Some(How::Cracked | How::Free) => Meets::Through(None),

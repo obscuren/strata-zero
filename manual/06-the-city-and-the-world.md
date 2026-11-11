@@ -43,7 +43,7 @@ There is more than one way between floors. A hotel has a guest lift and a servic
 
 A hotel or office is split into zones, from the public lobby to the staff's rooms and the secure ones deeper in. The doors between zones are locked.
 
-- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net).
+- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net). An alarm ends that: until it's over, those doors say locked down, and only a card opens them.
 - Deeper doors have a keypad instead, worked as a flat's is: a code, the Keyjack or the Net opens it.
 - Getting out is free. Every zone door opens with no key from the deeper side, and a locked room opens from inside, so you can always leave a zone without a key, even once a crack runs out.
 - A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants. It asks only where you get off: riding away from a carded floor takes nothing.

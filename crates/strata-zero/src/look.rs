@@ -213,6 +213,7 @@ fn fixture_at(
                 let state = match crate::credentials::opens_lock(st, building, level, lock, from) {
                     _ if free_side => "opens from here",
                     Some(_) => "unlocked",
+                    None if crate::venues::locked_down(st, building, lock) => "locked down",
                     None => "locked",
                 };
                 let reader = match lock.kind {

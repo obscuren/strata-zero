@@ -666,6 +666,13 @@ fn a_lock_door_and_a_grille_say_what_they_are() {
         assert_eq!(second.as_deref(), Some("card · opens from here"), "{at:?}");
     }
     put(&mut st, place, from);
+    // In an alarm, a lock the Net could open is locked down.
+    let now = st.net.now(&st);
+    st.net.trace(b).alert_until = Some(now + 30);
+    assert_eq!(
+        look(&mut st, lock.at).second.as_deref(),
+        Some("card · locked down")
+    );
     st.character.give(zone_card_id(b, lock.zone), 1);
     assert_eq!(
         look(&mut st, lock.at).second.as_deref(),
