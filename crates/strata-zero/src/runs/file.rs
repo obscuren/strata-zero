@@ -354,6 +354,216 @@ mod tests {
         assert_eq!(crate::cameras::seeing(&st), vec![cam]);
     }
 
+    /// A site's construct comes back whole with the run, you on its Net where you stood:
+    /// its levels and devices, its ICE (where each piece stands, what's lifted, each
+    /// piece's state), the firewall's broken locks, and the hacks, holds and feed that name
+    /// its nodes. Its Net isn't saved, and is worked out again the same from the saved plan
+    /// and the copy's layer.
+    #[test]
+    fn a_site_construct_and_its_firewall_come_back() {
+        use crate::sitenet::testutil::{device, hack, office_copy, on_hub};
+        use citygen::{NetNode, NodeKind, Place};
+        use game::{HackTarget, Op};
+        let (mut a, b) = office_copy(210);
+        on_hub(&mut a, b, 0);
+        let now = a.net.now(&a);
+        a.net.break_lock(b, 1, now);
+        // A patrol a step along its beat, the white at G's hub lifted.
+        let walker = {
+            let k = a.constructs.get_mut(b).unwrap();
+            let i = (k.guards.iter())
+                .position(|g| g.beat.len() > 1)
+                .expect("a patrol at 210");
+            let to = k.guards[i].beat[1];
+            k.move_guard(i, to);
+            k.set_guard(0, false);
+            i
+        };
+        let k = a.constructs.site(b).unwrap().clone();
+        assert!(k.guards[walker].pos != k.guards[walker].post && !k.guards[0].standing);
+        a.net.ice_of(&k)[walker].step = 1;
+        // A door's lock cracked, a camera held and its feed open.
+        let door = device(&a, b, NodeKind::DoorLock).node;
+        hack(&mut a, door, NodeKind::DoorLock, Op::Crack);
+        let cam = NetNode::Site(device(&a, b, NodeKind::Camera).node);
+        crate::holds::take(&mut a, cam, crate::owners::Owner::Building(b), now);
+        a.net.feed = Some(cam);
+        let net = crate::sitenet::net_of(&a, b).expect("a site's Net");
+
+        let dir = Dir::new("site-net");
+        let a = running(a);
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        let back = st
+            .constructs
+            .site(b)
+            .expect("the site's construct comes back");
+        assert!(*back == k, "the construct comes back whole");
+        assert!(!back.levels.is_empty() && !back.devices.is_empty());
+        assert_eq!(back.guards[walker].pos, k.guards[walker].pos);
+        assert!(!back.guards[0].standing, "still lifted");
+        assert_eq!(st.net.firewalls, a.net.firewalls);
+        assert_eq!(
+            crate::sitenet::broken(&st, b),
+            crate::sitenet::broken(&a, b)
+        );
+        assert!(st.net.ice.contains_key(&b), "its ICE states");
+        assert_eq!(st.net.ice.get(&b), a.net.ice.get(&b));
+        assert!(
+            st.net
+                .hacks
+                .iter()
+                .any(|h| h.target == HackTarget::Site(door))
+        );
+        assert_eq!(st.net.hacks, a.net.hacks);
+        assert!(
+            crate::holds::held(&st, cam, now).is_some(),
+            "the camera still held"
+        );
+        assert_eq!(st.net.holds, a.net.holds);
+        assert_eq!(st.net.feed, Some(cam), "its feed open");
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            p.place,
+            Place::SiteNet {
+                building: b,
+                level: 0
+            }
+        );
+        assert_eq!(p.body, a.player.as_ref().unwrap().body, "the body outside");
+        assert_eq!(
+            crate::sitenet::net_of(&st, b).as_deref(),
+            Some(&*net),
+            "the Net worked out again the same"
+        );
+    }
+
+    /// A save standing in a site's old construct (one made before the site had a Net of
+    /// its own) opens and plays there, the old construct kept while you stand in it; out
+    /// through its gate, the gate in is the firewall's (Ruling 13).
+    #[test]
+    fn a_save_inside_a_sites_old_construct_carries_on_until_you_step_out() {
+        use citygen::{Place, StratumKind};
+        let (mut a, b) = crate::sitenet::testutil::office_plain();
+        assert!(crate::sitenet::is_site(&a, b));
+        let city = a.city.clone().unwrap();
+        // Today's construct, as an old save holds it.
+        let entry = a.constructs.ensure(&city, b).unwrap().entry;
+        let mut p = crate::walker::Player::at(Place::Construct(b), entry);
+        p.body = Some((
+            Place::Stratum(StratumKind::Street),
+            city.building(b).footprint.center(),
+        ));
+        a.player = Some(p);
+        let old = a.constructs.get(b).unwrap().clone();
+        assert!(!old.is_site());
+
+        let dir = Dir::new("old-construct");
+        let a = running(a);
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(b));
+        assert!(
+            st.constructs.get(b) == Some(&old),
+            "the old construct is kept"
+        );
+        let mut st = played(st, 12);
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Construct(b),
+            "it carries on"
+        );
+        assert!(
+            st.constructs.get(b).is_some_and(|k| !k.is_site()),
+            "still the old construct"
+        );
+        crate::constructs::leave_construct(&mut st).unwrap();
+        assert!(
+            crate::constructs::enter_construct(&mut st, b)
+                .unwrap_err()
+                .starts_with("FIREWALL")
+        );
+    }
+
+    /// `st` back on the map as a load puts it (`MapScreen::resumed`) and played `frames`
+    /// frames of the game's own loop, each drawn.
+    fn played(mut st: AppState, frames: usize) -> AppState {
+        use crate::app::Runner;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        st.show_fps = false;
+        let map = MapScreen::resumed(&mut st);
+        let mut runner = Runner::new(Box::new(map), st);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        for _ in 0..frames {
+            assert!(runner.frame(&mut term, &[]).unwrap(), "it plays");
+        }
+        runner.st
+    }
+
+    /// A copy lost while you stood on its Net leaves its construct as it stood (nothing is
+    /// dropped under you), so a save then holds a site's construct its plan and its copy
+    /// no longer make. It opens and plays there, jacking out works, and the construct
+    /// stays the building's, through the firewall too, until a copy on it next goes live.
+    #[test]
+    fn a_save_on_a_lost_copys_net_opens_and_plays() {
+        use crate::sitenet::testutil::{at_the_gate, office_copy, on_hub};
+        use citygen::Place;
+        let (mut a, b) = office_copy(190);
+        on_hub(&mut a, b, 0);
+        let made = a.constructs.site(b).unwrap().clone();
+        // As a save from before copies kept their layer reads: lost at once.
+        a.interiors.copy_mut(b).unwrap().layer = None;
+        crate::venues::tick(&mut a);
+        assert!(a.interiors.copy(b).is_none(), "lost");
+        assert!(a.constructs.site(b) == Some(&made), "left as it stood");
+
+        let dir = Dir::new("lost-copy");
+        let a = running(a);
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        assert!(
+            st.constructs.site(b) == Some(&made),
+            "it comes back as saved"
+        );
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::SiteNet {
+                building: b,
+                level: 0
+            }
+        );
+        let mut st = played(st, 12);
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::SiteNet {
+                building: b,
+                level: 0
+            },
+            "it plays on there"
+        );
+        crate::net::jack_out(&mut st).unwrap();
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            a.player.as_ref().unwrap().body.unwrap().0
+        );
+        assert!(
+            st.constructs.site(b) == Some(&made),
+            "kept till the next copy"
+        );
+        // Back in through the firewall, every lock broken: the same construct.
+        at_the_gate(&mut st, b);
+        let now = st.net.now(&st);
+        for lock in 0..crate::sitenet::broken(&st, b).len() {
+            st.net.break_lock(b, lock as u8, now);
+        }
+        crate::constructs::enter_construct(&mut st, b).unwrap();
+        assert!(matches!(
+            st.player.as_ref().unwrap().place,
+            Place::SiteNet { building, .. } if building == b
+        ));
+        assert!(st.constructs.site(b) == Some(&made));
+        let st = played(st, 6);
+        assert!(st.player.as_ref().unwrap().jacked_in());
+    }
+
     /// A district's lamps cut from its lamp grid are still out once the run is reopened,
     /// until the minute they were cut till: the street's dark isn't saved, but is made
     /// again from what is.
