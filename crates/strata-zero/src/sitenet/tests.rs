@@ -232,3 +232,79 @@ fn a_lost_copy_leaves_the_net_you_stand_on() {
     let city = st.city.as_ref().unwrap();
     assert!(MapRef::for_place(city, &st.interiors, &st.constructs, place, 0).is_some());
 }
+
+#[test]
+fn arc_trace_ping_and_the_ice_lines_keep_to_your_level() {
+    let (mut st, b) = office_copy(210);
+    on_hub(&mut st, b, 0);
+    let k = st.constructs.site(b).unwrap().clone();
+    let level = |p: Pos| k.level_at(p).unwrap().level;
+    st.net.ice_of(&k);
+    let fire = |st: &mut crate::app::AppState, id: &str| {
+        crate::actions::perform(st, game::Action::Fire(game::AbilityId::new(id)))
+    };
+    // Arc Trace reaches the band of another level, a few rows off: it stuns only yours.
+    let radius = match st
+        .character
+        .ability(&st.content, &game::AbilityId::new("arc_trace"))
+    {
+        Some(game::Ability {
+            kind: game::AbilityKind::Active(game::Active::Trace { radius }),
+            ..
+        }) => radius,
+        other => panic!("the deck's arc trace: {other:?}"),
+    };
+    // You at the open tile of your level nearest a piece of another level, in its reach.
+    let (at, away) = (k.tiles.iter())
+        .filter(|(p, t)| t.terrain == Terrain::NetFloor && t.feature.is_none() && level(*p) == 0)
+        .flat_map(|(p, _)| {
+            (k.guards.iter().enumerate())
+                .filter(move |(_, g)| level(g.pos) != 0 && g.pos.chebyshev(p) <= radius)
+                .map(move |(i, g)| (g.pos.chebyshev(p), p, i))
+        })
+        .min()
+        .map(|(_, p, i)| (p, i))
+        .expect("a piece of another level in the arc's reach");
+    st.player.as_mut().unwrap().pos = at;
+    fire(&mut st, "arc_trace").unwrap();
+    assert_eq!(st.net.ice[&b][away].stunned, 0, "another level's piece");
+    let stunned: Vec<usize> = (0..k.guards.len())
+        .filter(|&i| st.net.ice[&b][i].stunned > 0)
+        .collect();
+    assert!(!stunned.is_empty(), "your level's ICE in reach");
+    assert!(stunned.iter().all(|&i| level(k.guards[i].pos) == 0));
+    // The HERE lines list your level's pieces.
+    let ours = (k.guards.iter())
+        .filter(|g| k.guard_at(g.pos).is_some() && level(g.pos) == 0)
+        .count();
+    assert_eq!(
+        crate::net::ice_lines(
+            &st,
+            Place::SiteNet {
+                building: b,
+                level: 0
+            },
+            |_| true
+        )
+        .len(),
+        ours
+    );
+    // A ping lights your level's nodes, every one of them.
+    st.character
+        .talents
+        .insert(game::TalentId::new("handshake"), 1);
+    st.fx.clear();
+    fire(&mut st, "ping").unwrap();
+    let glow = (st.fx.iter())
+        .find(|f| matches!(f.fx, game::Fx::Glow { .. }))
+        .expect("the ping's glow");
+    let mut lit = glow.targets.clone();
+    lit.sort_by_key(|p| (p.y, p.x));
+    let mut nodes: Vec<Pos> = (k.devices.iter())
+        .map(|d| d.at)
+        .filter(|p| level(*p) == 0)
+        .collect();
+    nodes.sort_by_key(|p| (p.y, p.x));
+    assert!(!nodes.is_empty());
+    assert_eq!(lit, nodes);
+}

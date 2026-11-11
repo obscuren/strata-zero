@@ -1466,9 +1466,9 @@ impl MapScreen {
         };
         let ice = match (jacked, st.player.as_ref()) {
             (true, Some(p)) => match p.place {
-                Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                place if place.in_construct() => {
                     let vis = p.vis();
-                    crate::net::ice_lines(st, b, |q| {
+                    crate::net::ice_lines(st, place, |q| {
                         vis.get(q)
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
@@ -4719,11 +4719,9 @@ impl Screen for MapScreen {
             },
             beyond: beyond.as_ref(),
             ice_lines: match (self.place, st.player.as_ref()) {
-                (Place::Construct(b) | Place::SiteNet { building: b, .. }, Some(p))
-                    if p.place == self.place =>
-                {
+                (place, Some(p)) if place.in_construct() && p.place == place => {
                     let vis = p.vis();
-                    crate::net::ice_lines(st, b, |q| {
+                    crate::net::ice_lines(st, place, |q| {
                         vis.get(q)
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
@@ -10846,7 +10844,7 @@ mod tests {
             .find(|f| matches!(f.fx, game::Fx::Bolt { .. }))
             .unwrap();
         assert_eq!(bolt.targets.len(), 2);
-        let lines = crate::net::ice_lines(&st, b, |_| true);
+        let lines = crate::net::ice_lines(&st, Place::Construct(b), |_| true);
         assert!(lines.iter().any(|l| l.contains("· stunned 2")), "{lines:?}");
         // Two turns beside it and it does nothing; the third it hits.
         let hp = st.character.hp;
@@ -10965,7 +10963,7 @@ mod tests {
             ice.stunned = 0;
         }
         // Everything in view: the lines list both pieces however the walls lie.
-        let lines = crate::net::ice_lines(&st, b, |_| true);
+        let lines = crate::net::ice_lines(&st, Place::Construct(b), |_| true);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines.iter().all(|l| l.contains("hunting")));
         // Without the ability, no steps.

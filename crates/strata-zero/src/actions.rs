@@ -268,12 +268,12 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         if let Some(b) = place.construct() {
             match ability.kind {
                 AbilityKind::Active(Active::Ping { .. }) => {
-                    targets = crate::net::construct_nodes(st, b);
+                    targets = crate::net::construct_nodes(st, place);
                     message = format!("Ping: {} nodes answer", targets.len());
                     crate::net::noise_on(st, b, crate::net::PING_NOISE);
                 }
                 AbilityKind::Active(Active::Trace { radius }) => {
-                    targets = crate::net::stun_pieces(st, b, pos, radius);
+                    targets = crate::net::stun_pieces(st, place, pos, radius);
                     message = match targets.len() {
                         0 => "Arc Trace: nothing to arc to".to_string(),
                         1 => "Arc Trace: 1 piece stunned".to_string(),

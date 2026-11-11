@@ -2791,8 +2791,12 @@ pub(crate) fn hit_by(
     }
 }
 
-/// The HERE lines for the ICE of a construct the player can see.
-pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+/// The HERE lines for the ICE of the construct at `place` the player can see: on a site's
+/// Net, of your level.
+pub fn ice_lines(st: &AppState, place: Place, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+    let Some(b) = place.construct() else {
+        return Vec::new();
+    };
     let Some(k) = st.constructs.get(b) else {
         return Vec::new();
     };
@@ -2802,7 +2806,7 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
+        .filter(|(g, _)| k.guard_at(g.pos).is_some() && on_level(k, place, g.pos) && seen(g.pos))
         .map(|(g, i)| {
             let mode = match i.mode {
                 IceMode::Asleep => "asleep",
@@ -2823,24 +2827,38 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
         .collect()
 }
 
-/// Every node tile of a construct, for a ping's glow.
-pub fn construct_nodes(st: &AppState, b: BuildingId) -> Vec<Pos> {
-    st.constructs
-        .get(b)
-        .map(|k| k.nodes.iter().map(|(_, p)| *p).collect())
-        .unwrap_or_default()
+/// Every node tile of the construct at `place` (a site's devices on your level), for a
+/// ping's glow.
+pub fn construct_nodes(st: &AppState, place: Place) -> Vec<Pos> {
+    let Some(k) = place.construct().and_then(|b| st.constructs.get(b)) else {
+        return Vec::new();
+    };
+    let nodes = k.nodes.iter().map(|(_, p)| *p);
+    let devices = k.devices.iter().map(|d| d.at);
+    nodes
+        .chain(devices)
+        .filter(|p| on_level(k, place, *p))
+        .collect()
 }
 
-/// An arc trace inside a construct: every standing piece within `radius` of the
-/// origin is stunned for `STUN_TURNS`. Returns their tiles, for the bolts.
-pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -> Vec<Pos> {
-    let Some(k) = st.constructs.get(b).cloned() else {
+/// An arc trace inside the construct at `place`: every standing piece within `radius`
+/// of the origin (on a site's Net, of your level) is stunned for `STUN_TURNS`. Returns
+/// their tiles, for the bolts.
+pub fn stun_pieces(st: &mut AppState, place: Place, origin: Pos, radius: i32) -> Vec<Pos> {
+    let Some(k) = place
+        .construct()
+        .and_then(|b| st.constructs.get(b))
+        .cloned()
+    else {
         return Vec::new();
     };
     let states = st.net.ice_of(&k);
     let mut hit = Vec::new();
     for (i, g) in k.guards.iter().enumerate() {
-        if k.guard_at(g.pos).is_none() || g.pos.chebyshev(origin) > radius {
+        if k.guard_at(g.pos).is_none()
+            || !on_level(&k, place, g.pos)
+            || g.pos.chebyshev(origin) > radius
+        {
             continue;
         }
         if let Some(ice) = states.get_mut(i) {
@@ -4218,9 +4236,10 @@ pub(crate) mod tests {
         assert_eq!((st.character.hp, st.character.focus), (hp, focus));
         assert!(!logged(&st, "ICE hits"));
         assert!(
-            ice_lines(&st, b, |_| true).contains(&"◈ dummy ICE · asleep · 6/6".to_string()),
+            ice_lines(&st, Place::Construct(b), |_| true)
+                .contains(&"◈ dummy ICE · asleep · 6/6".to_string()),
             "{:?}",
-            ice_lines(&st, b, |_| true)
+            ice_lines(&st, Place::Construct(b), |_| true)
         );
     }
 
