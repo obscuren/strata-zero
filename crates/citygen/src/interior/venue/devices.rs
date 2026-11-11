@@ -38,8 +38,19 @@ pub struct LineSwitch {
 /// The tiles a device's floor tile may not be: reserved, a room's spot, a door or its
 /// doorstep, a station.
 fn unfree(x: &LevelLayout, floor: &Floor) -> BTreeSet<Pos> {
-    let mut v: BTreeSet<Pos> = x.reserved.iter().copied().collect();
-    v.extend(x.rooms.iter().flat_map(|r| r.spots.iter().copied()));
+    let mut v = held(x, floor);
+    v.extend(x.reserved.iter().copied());
+    v
+}
+
+/// `unfree` but for the reserved tiles: a room's spot, a door or its doorstep, a station.
+/// A site's hub and server stand off these (`sitenet`).
+pub(crate) fn held(x: &LevelLayout, floor: &Floor) -> BTreeSet<Pos> {
+    let mut v: BTreeSet<Pos> = x
+        .rooms
+        .iter()
+        .flat_map(|r| r.spots.iter().copied())
+        .collect();
     for d in x.doors.iter().filter(|d| !d.open) {
         v.insert(d.at);
         v.extend(d.at.neighbors4());
@@ -49,7 +60,7 @@ fn unfree(x: &LevelLayout, floor: &Floor) -> BTreeSet<Pos> {
 }
 
 /// Whether `p` is a free floor tile.
-fn free(floor: &Floor, unfree: &BTreeSet<Pos>, p: Pos) -> bool {
+pub(crate) fn free(floor: &Floor, unfree: &BTreeSet<Pos>, p: Pos) -> bool {
     !unfree.contains(&p)
         && floor
             .tiles
