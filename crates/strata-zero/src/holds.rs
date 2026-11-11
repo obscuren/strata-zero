@@ -209,10 +209,11 @@ pub fn looped(st: &AppState, node: NetNode, now: u64) -> bool {
 }
 
 /// The clock moves: holds run out, and with them a feed and a hijack; a district's
-/// lights come back on; a feed closes once you are off the Net; a decoy ends when you
-/// leave its construct. The cities and towns held as you left them keep the same clock:
-/// their holds, hijacks and lights out run out as the live city's do, so they look from
-/// outside as they will when you walk in again.
+/// lights come back on; a feed closes once you are off the Net, and a site camera's open
+/// feed keeps its floor drawn; a decoy ends when you leave its construct. The cities and
+/// towns held as you left them keep the same clock: their holds, hijacks and lights out
+/// run out as the live city's do, so they look from outside as they will when you walk
+/// in again.
 pub fn tick(st: &mut AppState) {
     let now = st.net.now(st);
     expire(&mut st.net, now);
@@ -221,6 +222,10 @@ pub fn tick(st: &mut AppState) {
         && (!jacked || held(st, f, now).is_none())
     {
         st.net.feed = None;
+    }
+    // The feed paints its floor each frame: drawn once and kept, not drawn afresh.
+    if let (Some(NetNode::Site(n)), Some(city)) = (st.net.feed, st.city.as_ref()) {
+        st.interiors.ensure(city, n.building, n.level);
     }
     let here = st.player.as_ref().map(|p| p.place);
     if st

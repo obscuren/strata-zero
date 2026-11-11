@@ -4124,11 +4124,13 @@ impl Screen for MapScreen {
         // and a live blast's shading.
         let scorch = ScorchOverlay { fx: &st.fx, vis };
         overlays.push(&scorch);
-        // On the street: the cones of cameras that see you, or that you hold.
-        let cones = if self.place == Place::Stratum(StratumKind::Street) {
-            crate::cameras::cones(st)
-        } else {
-            Vec::new()
+        // On the street or a site's floor: the cones of cameras that see you, or that you
+        // hold.
+        let cones = match self.place {
+            Place::Stratum(StratumKind::Street) | Place::Floor { .. } => {
+                crate::cameras::cones(st, self.place)
+            }
+            _ => Vec::new(),
         };
         let cone_overlay = crate::cameras::ConeOverlay { cones: &cones, vis };
         if !cones.is_empty() {

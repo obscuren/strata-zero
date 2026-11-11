@@ -52,7 +52,7 @@ pub fn security(st: &AppState, b: BuildingId) -> u8 {
 }
 
 /// The live copy's layer on `b`, if a copy holds it.
-fn layer_of(st: &AppState, b: BuildingId) -> Option<&MissionLayer> {
+pub(crate) fn layer_of(st: &AppState, b: BuildingId) -> Option<&MissionLayer> {
     (st.interiors.copy(b))
         .filter(|c| c.live)
         .and_then(|c| c.layer.as_ref())

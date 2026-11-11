@@ -1,15 +1,18 @@
 //! Sites to test the Net of a site on: an office laid on a building away from home, plain
 //! or with the DEVELOPER start's mission copy, and D'SHAWN with the programs a run wants;
-//! where to stand on its Net; and HELIX shells on its host and its street.
+//! where to stand on its Net and on its floors; and HELIX shells on its host and its
+//! street.
 
 use crate::app::AppState;
+use crate::cameras::Camera;
 use crate::helix::bin::new_shell;
 use crate::helix::shell::{HostId, Shell};
 use crate::owners::Owner;
-use citygen::venue::{MissionInputs, MissionSize, VenuePack, WayIn, WayInKind, Ways};
+use crate::render::map::{FloorMap, MapRef};
+use citygen::venue::{DeviceKind, MissionInputs, MissionSize, VenuePack, WayIn, WayInKind, Ways};
 use citygen::{
-    BuildingId, BuildingKind, DoorLock, NetDevice, NetNode, NodeKind, Place, Pos, SiteNode,
-    StratumKind,
+    BuildingId, BuildingKind, DoorLock, Floor, Grid, NetDevice, NetNode, NodeKind, Place, Pos,
+    SiteNode, Size, StratumKind, Terrain, Tile,
 };
 use game::{HackTarget, ItemId, Op, Target};
 
@@ -460,4 +463,72 @@ pub(crate) fn stand_at_the_rig(st: &mut AppState) {
         .find(|q| h.home.rect.contains(*q) && floor.tiles[*q].is_walkable())
         .expect("a tile beside the rig");
     stand_on(st, h.place(), at);
+}
+
+/// The game's clock a game minute on: the world's, which `NetState::now` reads, and the
+/// frame tick with it. Nothing else of the minute runs (no cooling, no cameras).
+pub(crate) fn next_minute(st: &mut AppState) {
+    st.tick += sim::TICKS_PER_MINUTE;
+    if let (Some(city), Some(w)) = (st.city.as_ref(), st.world.as_mut()) {
+        w.advance(city, w.tick() + sim::TICKS_PER_MINUTE);
+    }
+}
+
+/// A `w` by `h` floor walled round, floor inside, unlit.
+pub(crate) fn tiny_room(w: u32, h: u32) -> Floor {
+    let size = Size { w, h };
+    let mut tiles = Grid::filled(size, Tile::new(Terrain::Floor));
+    let (r, b) = (w as i32 - 1, h as i32 - 1);
+    for y in 0..=b {
+        for x in 0..=r {
+            if x == 0 || y == 0 || x == r || y == b {
+                tiles.set(Pos::new(x, y), Tile::new(Terrain::Wall));
+            }
+        }
+    }
+    Floor {
+        level: 0,
+        tiles,
+        light: Grid::filled(size, 0),
+        glow: Grid::filled(size, (0, 0, 0)),
+        rooms: Vec::new(),
+        exits: Vec::new(),
+        stations: Vec::new(),
+        locks: Vec::new(),
+    }
+}
+
+/// You on foot on a floor of site `b`'s live copy, in a camera's cone: on the first tile
+/// of its cone it sees by the floor's own light, trying the copy's cameras in turn. That
+/// camera.
+pub(crate) fn in_a_floor_cameras_cone(st: &mut AppState, b: BuildingId) -> Camera {
+    let mut levels: Vec<i32> = (crate::sitenet::layer_of(st, b).expect("a live copy"))
+        .devices
+        .iter()
+        .filter(|d| d.kind == DeviceKind::Camera)
+        .map(|d| d.level)
+        .collect();
+    levels.sort();
+    levels.dedup();
+    for level in levels {
+        let city = st.city.as_ref().expect("a city");
+        if st.interiors.ensure(city, b, level).is_none() {
+            continue;
+        }
+        let place = Place::Floor { building: b, level };
+        for cam in crate::cameras::floor_cameras(st, b, level) {
+            let city = st.city.as_ref().expect("a city");
+            let (plan, floor) = st.interiors.floor(b, level).expect("its floor");
+            let map = MapRef::Floor(FloorMap { city, plan, floor });
+            let spot = (crate::cameras::floor_cone(floor, &cam).into_iter())
+                .filter(|p| floor.tiles.get(*p).is_some_and(|t| t.is_walkable()))
+                .filter(|p| crate::foes::foe_at(st, place, *p).is_none())
+                .find(|p| crate::cameras::sees(&map, &cam, *p));
+            if let Some(at) = spot {
+                stand_on_floor(st, b, level, at);
+                return cam;
+            }
+        }
+    }
+    panic!("no camera of {b:?}'s copy sees a tile of its cone");
 }

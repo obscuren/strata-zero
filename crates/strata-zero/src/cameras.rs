@@ -3,10 +3,19 @@
 //! you count as an eye and its building's trace warms, up to the alarm line. A camera
 //! held from the Net can be looped (blind until the hold ends) or tapped (its feed on
 //! the Net). Spec `docs/superpowers/specs/2026-11-04-net-nodes-design.md`, "Camera".
+//!
+//! A mission copy's cameras watch their floors the same way: each faces away from the
+//! wall beside its spot and sees the same cone by the floor's own light, warming the
+//! site's trace. Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`, "Cameras on
+//! floors".
 
 use crate::app::AppState;
-use crate::render::map::{MapRef, TileMap};
-use citygen::{BuildingId, City, Dir, NetNode, NodeKind, Place, Pos, StratumKind, sight};
+use crate::render::map::{FloorMap, MapRef, TileMap};
+use citygen::venue::DeviceKind;
+use citygen::{
+    BuildingId, City, Dir, Floor, NetNode, NodeKind, Place, Pos, SiteNode, StratumKind, Terrain,
+    sight,
+};
 
 /// How deep a camera's cone reaches.
 pub const CONE_DEPTH: i32 = 8;
@@ -15,12 +24,13 @@ pub const DARK_REACH: i32 = 3;
 /// Heat a camera that sees you puts on its building's trace each game minute.
 pub const EYE_HEAT: u8 = 2;
 
-/// A street camera: its node, its building, its tile on the street and which way it
-/// faces.
+/// A camera: its node, its building, where it watches (the street, or a site's floor),
+/// its tile there and which way it faces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Camera {
     pub node: NetNode,
     pub building: BuildingId,
+    pub place: Place,
     pub at: Pos,
     pub facing: Dir,
 }
@@ -46,10 +56,90 @@ pub fn street_cameras(city: &City) -> impl Iterator<Item = Camera> + '_ {
             Some(Camera {
                 node: NetNode::City(n.id),
                 building: b,
+                place: Place::Stratum(StratumKind::Street),
                 at: n.anchor.1,
                 facing: facing(city, b, n.anchor.1)?,
             })
         })
+}
+
+/// Which way a camera on a floor looks (Ruling 16): away from the first wall beside its
+/// spot, in `Dir::CARDINAL` order; with none, toward the nearest of `locks` (the Net's
+/// door locks on its level; manhattan, then y, x) along the axis it lies further on (east
+/// or west on a tie); with none, south.
+pub fn floor_facing(floor: &Floor, at: Pos, locks: &[Pos]) -> Dir {
+    let wall = |p: Pos| {
+        floor
+            .tiles
+            .get(p)
+            .is_some_and(|t| matches!(t.terrain, Terrain::Wall | Terrain::Window))
+    };
+    if let Some(d) = Dir::CARDINAL.into_iter().find(|d| wall(at.step(*d))) {
+        return d.opposite();
+    }
+    let Some(lock) = (locks.iter()).min_by_key(|p| (p.manhattan(at), p.y, p.x)) else {
+        return Dir::S;
+    };
+    let (dx, dy) = (lock.x - at.x, lock.y - at.y);
+    match (dx.abs() >= dy.abs(), dx >= 0, dy >= 0) {
+        (true, true, _) => Dir::E,
+        (true, false, _) => Dir::W,
+        (false, _, true) => Dir::S,
+        (false, _, false) => Dir::N,
+    }
+}
+
+/// A live copy's cameras on `level` of `b`, each facing by Ruling 16; none for a building
+/// no live copy holds, or a level its plan doesn't keep.
+pub fn floor_cameras(st: &AppState, b: BuildingId, level: i32) -> Vec<Camera> {
+    let Some(layer) = crate::sitenet::layer_of(st, b) else {
+        return Vec::new();
+    };
+    let spots: Vec<Pos> = (layer.devices.iter())
+        .filter(|d| d.level == level && d.kind == DeviceKind::Camera)
+        .map(|d| d.at)
+        .collect();
+    if spots.is_empty() {
+        return Vec::new();
+    }
+    let Some(plan) = crate::interiors::plan_now(st, b) else {
+        return Vec::new();
+    };
+    let Some(floor) = crate::interiors::floor_now(st, &plan, level) else {
+        return Vec::new();
+    };
+    let locks: Vec<Pos> = crate::sitenet::net_of(st, b).map_or_else(Vec::new, |net| {
+        (net.nodes.iter())
+            .filter(|n| n.kind == NodeKind::DoorLock && n.node.level == level)
+            .map(|n| n.node.at)
+            .collect()
+    });
+    let place = Place::Floor { building: b, level };
+    (spots.into_iter())
+        .map(|at| Camera {
+            node: NetNode::Site(SiteNode {
+                building: b,
+                level,
+                at,
+            }),
+            building: b,
+            place,
+            at,
+            facing: floor_facing(&floor, at, &locks),
+        })
+        .collect()
+}
+
+/// The cameras watching `place`: the street's, or a site's floor's.
+fn cameras_at(st: &AppState, place: Place) -> Vec<Camera> {
+    match place {
+        Place::Stratum(StratumKind::Street) => st
+            .city
+            .as_ref()
+            .map_or_else(Vec::new, |city| street_cameras(city).collect()),
+        Place::Floor { building, level } => floor_cameras(st, building, level),
+        _ => Vec::new(),
+    }
 }
 
 /// Whether a tile lies in a camera's cone: up to `CONE_DEPTH` out, and at each step
@@ -64,10 +154,19 @@ pub fn in_cone(cam: &Camera, p: Pos) -> bool {
 
 /// The cone's tiles a camera has a clear line to, on the street.
 pub fn cone(city: &City, cam: &Camera) -> Vec<Pos> {
-    let blocks = |p: Pos| {
+    cone_by(cam, |p| {
         city.tile(StratumKind::Street, p)
             .is_none_or(|t| t.blocks_sight())
-    };
+    })
+}
+
+/// The cone's tiles a camera has a clear line to, on its floor.
+pub fn floor_cone(floor: &Floor, cam: &Camera) -> Vec<Pos> {
+    cone_by(cam, |p| floor.tiles.get(p).is_none_or(|t| t.blocks_sight()))
+}
+
+/// The cone's tiles that `blocks` leaves open, with a clear line from the camera.
+fn cone_by(cam: &Camera, blocks: impl Fn(Pos) -> bool) -> Vec<Pos> {
     let r = CONE_DEPTH;
     let mut out = Vec::new();
     for y in cam.at.y - r..=cam.at.y + r {
@@ -100,26 +199,37 @@ pub fn sees(map: &MapRef, cam: &Camera, p: Pos) -> bool {
         )
 }
 
-/// The live cameras that see you on foot on the street now; none jacked in (your
-/// body at a port is not watched) or anywhere else.
+/// The live cameras that see you on foot now: on the street its cameras, on a site's
+/// floor its copy's, each by the light where you stand; none jacked in (your body at a
+/// port is not watched) or anywhere else.
 pub fn seeing(st: &AppState) -> Vec<Camera> {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Vec::new();
     };
-    if p.place != Place::Stratum(StratumKind::Street) {
-        return Vec::new();
-    }
+    let map = match p.place {
+        Place::Stratum(StratumKind::Street) => {
+            MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day())
+        }
+        Place::Floor { building, level } => {
+            let Some((plan, floor)) = st.interiors.floor(building, level) else {
+                return Vec::new();
+            };
+            MapRef::Floor(FloorMap { city, plan, floor })
+        }
+        _ => return Vec::new(),
+    };
     let now = st.net.now(st);
-    let map = MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day());
-    street_cameras(city)
+    cameras_at(st, p.place)
+        .into_iter()
         .filter(|c| c.at.chebyshev(p.pos) <= CONE_DEPTH)
         .filter(|c| !st.net.blinded(c.node, now))
         .filter(|c| sees(&map, c, p.pos))
         .collect()
 }
 
-/// A game minute on the street: each camera that sees you warms its building's trace,
-/// never past the alarm line (a camera can lock a building down, not dump you).
+/// A game minute on the street or a site's floor: each camera that sees you warms its
+/// building's trace, never past the alarm line (a camera can lock a building down, not
+/// dump you).
 pub fn tick(st: &mut AppState) {
     let now = st.net.now(st);
     if st.net.eyes_minute.is_some_and(|m| now <= m) {
@@ -138,7 +248,7 @@ pub fn tick(st: &mut AppState) {
     }
 }
 
-/// How a camera's cone draws on the street.
+/// How a camera's cone draws on the street or a floor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConeLook {
     /// It sees you: red.
@@ -149,14 +259,19 @@ pub enum ConeLook {
     Tapped,
 }
 
-/// The cones to draw on the street now, with how each looks.
-pub fn cones(st: &AppState) -> Vec<(Vec<Pos>, ConeLook)> {
+/// The cones to draw on `place` (the street, or a site's floor) now, with how each looks.
+pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
+    let floor = match place {
+        Place::Floor { building, level } => st.interiors.floor(building, level).map(|(_, f)| f),
+        _ => None,
+    };
     let now = st.net.now(st);
     let seeing = seeing(st);
-    street_cameras(city)
+    cameras_at(st, place)
+        .into_iter()
         .filter_map(|c| {
             let look = if seeing.contains(&c) {
                 ConeLook::Seeing
@@ -167,12 +282,16 @@ pub fn cones(st: &AppState) -> Vec<(Vec<Pos>, ConeLook)> {
             } else {
                 return None;
             };
-            Some((cone(city, &c), look))
+            let tiles = match place {
+                Place::Floor { .. } => floor_cone(floor?, &c),
+                _ => cone(city, &c),
+            };
+            Some((tiles, look))
         })
         .collect()
 }
 
-/// The cones as backgrounds on the street map.
+/// The cones as backgrounds on the street's or a floor's map.
 pub struct ConeOverlay<'a> {
     pub cones: &'a [(Vec<Pos>, ConeLook)],
     pub vis: Option<&'a citygen::Grid<crate::render::Visibility>>,
@@ -220,7 +339,8 @@ impl crate::render::viewport::Overlay for ConeOverlay<'_> {
 mod tests {
     use super::*;
     use crate::net::tests::{crack_to_landing, node_cyber, under_kiroflux};
-    use game::HackTarget;
+    use crate::sitenet::testutil::{in_a_floor_cameras_cone, next_minute, tiny_room};
+    use game::{HackTarget, Op};
 
     /// Kiroflux Mart's street camera.
     fn kiroflux_cam(st: &AppState) -> Camera {
@@ -311,5 +431,110 @@ mod tests {
     fn jacked_in_your_body_is_not_seen() {
         let (st, _) = under_kiroflux();
         assert!(seeing(&st).is_empty());
+    }
+
+    #[test]
+    fn a_floor_camera_that_sees_you_warms_the_trace() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let cam = in_a_floor_cameras_cone(&mut st, b); // on its floor, lit, in its cone with a clear line
+        assert!(seeing(&st).contains(&cam));
+        let before = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        next_minute(&mut st);
+        tick(&mut st);
+        assert_eq!(
+            st.net.traces.get(&b).map_or(0, |t| t.heat),
+            before + EYE_HEAT
+        );
+    }
+
+    #[test]
+    fn a_looped_or_blinded_floor_camera_sees_nothing() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let cam = in_a_floor_cameras_cone(&mut st, b);
+        assert!(seeing(&st).contains(&cam), "it sees you before the blind");
+        let n = cam.node.site().unwrap();
+        crate::sitenet::testutil::hack(&mut st, n, NodeKind::Camera, Op::Blind);
+        assert!(seeing(&st).is_empty());
+        let before = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        next_minute(&mut st);
+        tick(&mut st);
+        assert_eq!(st.net.traces.get(&b).map_or(0, |t| t.heat), before);
+    }
+
+    #[test]
+    fn a_held_floor_cameras_loop_blinds_it() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let cam = in_a_floor_cameras_cone(&mut st, b);
+        let n = cam.node.site().unwrap();
+        let (place, here) = {
+            let p = st.player.as_ref().unwrap();
+            (p.place, p.pos)
+        };
+        assert!(seeing(&st).contains(&cam));
+        // Jack in where you stand, crack the camera from beside its node on its level of
+        // the site's Net and loop it.
+        crate::sitenet::ensure_construct(&mut st, b).unwrap();
+        let at = st.constructs.site(b).unwrap().device(n).unwrap().at;
+        st.player.as_mut().unwrap().body = Some((place, here));
+        let level = Place::SiteNet {
+            building: b,
+            level: n.level,
+        };
+        crate::constructs::land(&mut st, level, at);
+        crate::sitenet::testutil::walk_beside(&mut st, at);
+        st.net.beat = st.clock_tick();
+        crack_to_landing(&mut st, HackTarget::Site(n));
+        crate::holds::use_verb(&mut st, 'o').unwrap();
+        // Back on foot where you stood: the camera sees nothing, and its cone draws looped.
+        st.player.as_mut().unwrap().body = None;
+        crate::constructs::land(&mut st, place, here);
+        assert!(!seeing(&st).contains(&cam), "a looped camera sees nothing");
+        let looped = (st.interiors.floor(b, n.level))
+            .map(|(_, floor)| (floor_cone(floor, &cam), ConeLook::Looped));
+        assert!(cones(&st, place).contains(&looped.unwrap()));
+    }
+
+    #[test]
+    fn a_floor_camera_never_warms_past_the_alarm_line() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        in_a_floor_cameras_cone(&mut st, b);
+        st.net.trace(b).heat = game::ALARM_HEAT - 1;
+        for _ in 0..3 {
+            next_minute(&mut st);
+            tick(&mut st);
+        }
+        assert_eq!(st.net.traces[&b].heat, game::ALARM_HEAT);
+    }
+
+    #[test]
+    fn a_floor_camera_faces_away_from_its_wall() {
+        // A 5x5 room of floor walled round: a camera at (1, 2) faces east.
+        let floor = tiny_room(5, 5);
+        assert_eq!(floor_facing(&floor, Pos::new(1, 2), &[]), Dir::E);
+        assert_eq!(floor_facing(&floor, Pos::new(2, 1), &[]), Dir::S);
+    }
+
+    #[test]
+    fn a_floor_camera_with_no_wall_beside_it_faces_its_nearest_lock_else_south() {
+        let floor = tiny_room(9, 9);
+        let mid = Pos::new(4, 4);
+        assert_eq!(floor_facing(&floor, mid, &[]), Dir::S);
+        let locks = [Pos::new(4, 0), Pos::new(7, 4)];
+        assert_eq!(floor_facing(&floor, mid, &locks), Dir::E);
+        assert_eq!(floor_facing(&floor, mid, &[Pos::new(3, 0)]), Dir::N);
+    }
+
+    #[test]
+    fn a_floor_cameras_cone_draws_on_its_floor_and_not_the_street() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let cam = in_a_floor_cameras_cone(&mut st, b);
+        let here = st.player.as_ref().unwrap().pos;
+        assert_eq!(cam.place, st.player.as_ref().unwrap().place);
+        let drawn = cones(&st, cam.place);
+        assert!(
+            (drawn.iter()).any(|(tiles, look)| *look == ConeLook::Seeing && tiles.contains(&here)),
+            "{drawn:?}"
+        );
+        assert!(cones(&st, Place::Stratum(StratumKind::Street)).is_empty());
     }
 }
