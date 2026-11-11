@@ -1102,7 +1102,7 @@ mod tests {
         );
         assert!(st.jobs.get(cid).unwrap().objectives[0].done);
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(pb, 1, seed, 0);
+        st.backdoors.plant_net(pb, 1, seed, 0, 3);
         crate::jobs::send(&mut st, Event::Planted { building: pb });
         assert!(st.jobs.get(pid).unwrap().objectives[0].done);
         let stands = |b: BuildingId| st.backdoors.standing().any(|d| d.building == b);
@@ -1363,7 +1363,7 @@ mod tests {
         };
         let p = st.jobs.push(plant);
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(pb, 1, seed, 0);
+        st.backdoors.plant_net(pb, 1, seed, 0, 3);
         st.jobs.drop_job(f, 0);
         crate::jobs::take_job(&mut st, p).unwrap();
         assert!(

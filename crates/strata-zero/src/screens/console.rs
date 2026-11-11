@@ -454,7 +454,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             if made {
                 st.backdoors.start_route(None);
             }
-            st.backdoors.start_trace(now);
+            let fw = crate::rig::of(st).firewall;
+            st.backdoors.start_trace(now, fw);
             if made {
                 st.backdoors.end_route();
             }
@@ -487,8 +488,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .ok_or_else(|| format!("no host {what}"))?;
             let now = st.net.now(st);
             let seed = st.city.as_ref().map_or(0, |c| c.seed);
-            st.backdoors.can_plant(b, now).map_err(|r| r.words())?;
-            st.backdoors.plant_net(b, 1, seed, now);
+            let rig = crate::rig::of(st);
+            st.backdoors
+                .can_plant(b, now, rig.lines)
+                .map_err(|r| r.words())?;
+            st.backdoors.plant_net(b, 1, seed, now, rig.hold_days);
             Ok(format!("backdoor on `{}`", crate::net::building_name(st, b)))
         }
         "tp" => {

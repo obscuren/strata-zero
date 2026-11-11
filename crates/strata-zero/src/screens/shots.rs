@@ -2998,13 +2998,13 @@ fn net_cord() {
     let home = st.home.unwrap();
     st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
     let now = st.net.now(&st);
-    st.backdoors.plant_net(relay, 50, city.seed, now);
+    st.backdoors.plant_net(relay, 50, city.seed, now, 3);
     st.backdoors.start_route(Some(relay));
     map.update(&mut st, &[]);
     for (name, size) in [("net_cord", (120, 40)), ("net_cord_small", (100, 30))] {
         write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
     }
-    st.backdoors.start_trace(now);
+    st.backdoors.start_trace(now, 0);
     map.update(&mut st, &[]);
     write_svg(
         &dir,

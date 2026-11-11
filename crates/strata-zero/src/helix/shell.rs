@@ -1055,7 +1055,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "backdoor",
         "plant a key on this host",
-        "backdoor writes your rig's key into this user's ~/.ssh/authorized_keys, so you can ssh in as them from home or any terminal for a while, and your rig can put you on the Net at this building's gate. The rig keeps three lines at most. rm the file to burn it.",
+        "backdoor writes your rig's key into this user's ~/.ssh/authorized_keys, so you can ssh in as them from home or any terminal for a while, and your rig can put you on the Net at this building's gate. The rig keeps as many lines as its relay holds. rm the file to burn it.",
     ),
     (
         "burn",

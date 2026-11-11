@@ -1357,7 +1357,7 @@ mod tests {
         assert!(has(&c, "hand it in before the backdoor burns"), "{c:#?}");
         assert!(!has(&c, "READY"));
         let now = st.net.now(&st);
-        st.backdoors.plant_net(building, 1, 7, now);
+        st.backdoors.plant_net(building, 1, 7, now, 3);
         crate::jobs::send(&mut st, Event::Planted { building });
         let c = card(&st, id, 68);
         assert!(has(&c, "backdoor STABLE"), "{c:#?}");
@@ -1510,7 +1510,7 @@ mod tests {
             panic!()
         };
         let now = st.net.now(&st);
-        st.backdoors.plant_net(building, 1, 7, now);
+        st.backdoors.plant_net(building, 1, 7, now, 3);
         crate::jobs::send(&mut st, Event::Planted { building });
         crate::jobs::ui::hand_in(&mut st, id).unwrap();
         let host = crate::helix::hosts::building_hostname(&st, building);

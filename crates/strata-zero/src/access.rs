@@ -219,7 +219,7 @@ pub fn rig_net_lines(st: &AppState) -> Vec<String> {
     out.push(format!(
         "LINES  {} of {}",
         st.backdoors.slots_used(),
-        crate::backdoors::SLOTS
+        crate::rig::of(st).lines
     ));
     out
 }
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(user_for(&st, HostId::Building(b)), user);
         st.backdoors.burn(b, crate::backdoors::Why::You, 1);
         assert_eq!(tier_on(&st, b), Tier::Guest);
-        st.backdoors.plant_net(b, 1, 0, 2);
+        st.backdoors.plant_net(b, 1, 0, 2, 3);
         assert_eq!(tier_on(&st, b), Tier::Admin);
         assert_eq!(user_for(&st, HostId::Building(b)), "root");
     }
@@ -835,7 +835,7 @@ mod tests {
             Op::Backdoor,
             now,
         );
-        st.backdoors.plant_net(b, 1, 0, now);
+        st.backdoors.plant_net(b, 1, 0, now, 3);
         assert_eq!(tier_on(&st, b), Tier::Admin);
         assert!(Tier::Guest < Tier::User && Tier::User < Tier::Admin);
     }

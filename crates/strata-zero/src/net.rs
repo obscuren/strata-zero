@@ -922,7 +922,11 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
 /// Why a Backdoor program may not be planted here, in the shell's words.
 pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
     let now = st.net.now(st);
-    st.backdoors.can_plant(b, now).err().map(|r| r.words())
+    let lines = crate::rig::of(st).lines;
+    st.backdoors
+        .can_plant(b, now, lines)
+        .err()
+        .map(|r| r.words())
 }
 
 /// Starts a program against a target in the construct the player stands in.
@@ -1306,12 +1310,13 @@ fn land(
         }
         (Op::Backdoor, _) => {
             let seed = st.city.as_ref().map_or(0, |c| c.seed);
-            st.backdoors.plant_net(b, rating, seed, now);
+            let rig = crate::rig::of(st);
+            st.backdoors.plant_net(b, rating, seed, now, rig.hold_days);
             crate::jobs::send(st, crate::jobs::Event::Planted { building: b });
             format!(
                 "backdoor planted · `{name}`'s gate is yours · {} of {}",
                 st.backdoors.slots_used(),
-                crate::backdoors::SLOTS
+                rig.lines
             )
         }
         (Op::Shield, _) => {
@@ -1589,10 +1594,11 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.character.focus = 0;
     // A dump on a rig run starts the trace home from the relay nearest you. The rig's
     // route is your body's city's: held as you left it when your Net self walked out.
+    let firewall = crate::rig::of(st).firewall;
     let trace = |doors: &mut crate::backdoors::Backdoors, city: Option<&City>| {
         doors.route.as_ref()?;
         let running = doors.trace.is_some();
-        doors.start_trace(now);
+        doors.start_trace(now, firewall);
         let first = doors.trace.as_ref().and_then(|t| t.relays.first().copied());
         Some(match first {
             _ if running => "trace running · already on its way".to_string(),
@@ -1617,7 +1623,8 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
 /// The backdoor clock: the trace walks, relays burn, the raid lands, the rig returns.
 pub fn tick_backdoors(st: &mut AppState) {
     let now = st.net.now(st);
-    for ev in st.backdoors.minute(now) {
+    let firewall = crate::rig::of(st).firewall;
+    for ev in st.backdoors.minute(now, firewall) {
         match ev {
             crate::backdoors::Event::RelayBurned(b) => {
                 let line = format!(
@@ -1629,13 +1636,41 @@ pub fn tick_backdoors(st: &mut AppState) {
             crate::backdoors::Event::LastLeg => {
                 st.warn("trace · nothing left between them and your door");
             }
-            crate::backdoors::Event::Raid => {
+            crate::backdoors::Event::TraceStarted { hops } => {
+                if firewall >= 2 {
+                    crate::missions::call::ring(
+                        st,
+                        crate::missions::Call {
+                            story: None,
+                            from: "zenbo".to_string(),
+                            lines: vec![
+                                format!("trace on your line · {hops} hops out"),
+                                "burn the route or ride it out".to_string(),
+                            ],
+                            rang: 0,
+                            answered: None,
+                            line: 0,
+                            shown: 0,
+                            full: false,
+                        },
+                    );
+                }
+            }
+            crate::backdoors::Event::Raid { wiped } => {
                 // The route ends first, so the dump starts no second trace.
                 st.backdoors.end_route();
                 if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
                     dump_for(st, "the line went dead", COOLING_MINUTES);
                 }
-                st.story("they kicked your door in · the rig is evidence · every backdoor is gone");
+                if wiped {
+                    st.story(
+                        "the rig wiped itself before they got the door open · every backdoor is gone",
+                    );
+                } else {
+                    st.story(
+                        "they kicked your door in · the rig is evidence · every backdoor is gone",
+                    );
+                }
                 kick(st, 20);
             }
             crate::backdoors::Event::RigReturned => crate::credentials::fixer_mail(st),
@@ -1754,7 +1789,8 @@ fn spring(st: &mut AppState, b: BuildingId) {
     let _ = st
         .net
         .add_heat(b, crate::backdoors::HONEYPOT_NOISE, 0, now, false);
-    st.backdoors.start_trace(now);
+    let firewall = crate::rig::of(st).firewall;
+    st.backdoors.start_trace(now, firewall);
     st.warn("honeypot · they were waiting · trace running");
 }
 
@@ -4060,7 +4096,7 @@ pub(crate) mod tests {
         let here = Pos::new(201, 62);
         let now = st.net.now(&st);
         st.net.trace(b).alert_until = Some(now + 30);
-        st.backdoors.plant_net(b, 50, 8, now);
+        st.backdoors.plant_net(b, 50, 8, now, 3);
         let card = texts(&card_lines(&st, b, Some(here)));
         assert!(card[2].ends_with(" · alarm · backdoor"), "{card:?}");
     }
@@ -4241,7 +4277,7 @@ pub(crate) mod tests {
             .unwrap()
             .id;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.plant_net(relay, 50, city.seed, now, 3);
         st.backdoors.start_route(Some(relay));
         let gate = crate::constructs::city_gate(&city, relay).unwrap();
         let v = cord_view(&st).unwrap();
@@ -4261,9 +4297,9 @@ pub(crate) mod tests {
             .unwrap()
             .id;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.plant_net(relay, 50, city.seed, now, 3);
         st.backdoors.start_route(Some(relay));
-        st.backdoors.start_trace(now);
+        st.backdoors.start_trace(now, 0);
         let v = cord_view(&st).unwrap();
         assert!(v.traced_walk);
         assert_eq!(
@@ -4290,12 +4326,12 @@ pub(crate) mod tests {
             .unwrap()
             .id;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.plant_net(relay, 50, city.seed, now, 3);
         st.backdoors.start_route(Some(relay));
         // The honeypot springs: the relay burns first, the trace goes straight home.
         st.backdoors
             .burn(relay, crate::backdoors::Why::Honeypot, now);
-        st.backdoors.start_trace(now);
+        st.backdoors.start_trace(now, 0);
         let v = cord_view(&st).unwrap();
         assert_eq!(
             v.traced_hops,
@@ -4321,9 +4357,9 @@ pub(crate) mod tests {
             .unwrap()
             .id;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(relay, 50, city.seed, now);
+        st.backdoors.plant_net(relay, 50, city.seed, now, 3);
         st.backdoors.start_route(Some(relay));
-        st.backdoors.start_trace(now);
+        st.backdoors.start_trace(now, 0);
         // Out, and back in at a street port: no route, so no trace on the cord.
         st.backdoors.route = None;
         st.player.as_mut().unwrap().body =

@@ -1217,7 +1217,7 @@ mod tests {
             now,
         );
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(b, 1, seed, now);
+        st.backdoors.plant_net(b, 1, seed, now, 3);
         let groups = entries(&st);
         assert_eq!(groups.len(), 1);
         let (gb, header, es) = &groups[0];
@@ -1561,12 +1561,12 @@ mod tests {
     #[test]
     fn the_journal_lists_the_route_the_trace_and_the_seizure() {
         let (mut st, b) = state();
-        st.backdoors.plant_net(b, 1, 0, 0);
+        st.backdoors.plant_net(b, 1, 0, 0, 3);
         st.backdoors.start_route(Some(b));
         let lines = extra_lines(&st);
         let name = crate::helix::hosts::building_hostname(&st, b);
         assert_eq!(lines[0], format!("route · zenbo ▸ {name}"));
-        st.backdoors.start_trace(0);
+        st.backdoors.start_trace(0, 0);
         st.backdoors.end_route();
         assert!(extra_lines(&st)[0].starts_with(&format!("trace ▸ {name} · ")));
         st.backdoors.rig_seized_until = Some(120);

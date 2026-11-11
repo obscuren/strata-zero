@@ -420,10 +420,12 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
             Some(job)
         }
         KindTag::Plant => {
+            let lines = crate::rig::of(st).lines;
             let pool: Vec<BuildingId> = servers_in_band(st, standing)
                 .into_iter()
                 .filter(|b| {
-                    st.backdoors.held(*b).is_none() && st.backdoors.can_plant(*b, now).is_ok()
+                    st.backdoors.held(*b).is_none()
+                        && st.backdoors.can_plant(*b, now, lines).is_ok()
                 })
                 .collect();
             if pool.is_empty() {

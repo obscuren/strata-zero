@@ -227,7 +227,8 @@ impl AppIo<'_> {
                             );
                             if shell.origin == HostId::Rig {
                                 self.st.backdoors.start_route(None);
-                                self.st.backdoors.start_trace(now);
+                                let fw = crate::rig::of(self.st).firewall;
+                                self.st.backdoors.start_trace(now, fw);
                                 self.st.backdoors.end_route();
                                 self.st.warn("honeypot · they were waiting · trace running");
                             }
@@ -343,7 +344,8 @@ impl AppIo<'_> {
             });
         }
         let now = self.st.net.now(self.st);
-        if let Err(r) = self.st.backdoors.can_plant(b, now) {
+        let lines = crate::rig::of(self.st).lines;
+        if let Err(r) = self.st.backdoors.can_plant(b, now, lines) {
             return Err(format!("backdoor: {}", r.words()));
         }
         let path = key_path(&shell.user);
@@ -387,7 +389,7 @@ impl AppIo<'_> {
             shell.user,
             hostname(self.st, shell.host),
             self.st.backdoors.slots_used(),
-            crate::backdoors::SLOTS
+            lines
         )))
     }
 
@@ -1020,7 +1022,7 @@ mod tests {
             game::Op::Backdoor,
             now,
         );
-        st.backdoors.plant_net(b, 1, 0, now);
+        st.backdoors.plant_net(b, 1, 0, now, 3);
         let mut sh = new_shell(&mut st, HostId::Building(b));
         assert_eq!(sh.user, "root");
         let quiet = go(&mut st, &mut sh, "alarm off");
@@ -1238,9 +1240,9 @@ mod tests {
             "backdoor: already planted here"
         );
         // fill the rig, then the cap
-        st.backdoors.plant_net(BuildingId(9000), 1, 0, 0);
-        st.backdoors.plant_net(BuildingId(9001), 1, 0, 0);
-        st.backdoors.plant_net(BuildingId(9002), 1, 0, 0);
+        st.backdoors.plant_net(BuildingId(9000), 1, 0, 0, 3);
+        st.backdoors.plant_net(BuildingId(9001), 1, 0, 0, 3);
+        st.backdoors.plant_net(BuildingId(9002), 1, 0, 0, 3);
         st.backdoors.burn(b, crate::backdoors::Why::Decay, 0);
         let out = go(&mut st, &mut sh, "backdoor");
         assert_eq!(
@@ -1280,7 +1282,7 @@ mod tests {
             .find(|x| x.id != home && x.kind.is_closed())
             .map(|x| x.id)
             .unwrap();
-        st.backdoors.plant_net(other, 1, seed, 0);
+        st.backdoors.plant_net(other, 1, seed, 0, 3);
         let mut sh = new_shell(&mut st, HostId::Rig);
         let ls = text(&go(&mut st, &mut sh, "ls /net"));
         let other_name = hostname(&st, HostId::Building(other));
@@ -1308,10 +1310,10 @@ mod tests {
             ("burn: nope: no such backdoor", 1)
         );
         // a trace on the relay: burning cuts it and the building alarms
-        st.backdoors.plant_net(other, 1, seed, 5_000);
+        st.backdoors.plant_net(other, 1, seed, 5_000, 3);
         st.backdoors.patched.clear();
         st.backdoors.start_route(Some(other));
-        st.backdoors.start_trace(5_000);
+        st.backdoors.start_trace(5_000, 0);
         st.backdoors.end_route();
         let route = text(&go(&mut st, &mut sh, "route"));
         assert!(route.contains(&format!("TRACE ▸ {other_name}")), "{route}");
@@ -1611,7 +1613,7 @@ mod tests {
     fn a_honeypot_logs_you_in_and_rings_the_alarm() {
         let (mut st, b, d) = state();
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(b, 1, seed, 0);
+        st.backdoors.plant_net(b, 1, seed, 0, 3);
         st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
         let mut sh = new_shell(&mut st, HostId::District(d));
         // the clue is in the log before you use it
@@ -1633,7 +1635,7 @@ mod tests {
         let mut st = state_home();
         let home = st.home.unwrap().home.building;
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(home, 1, seed, 0);
+        st.backdoors.plant_net(home, 1, seed, 0, 3);
         st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
         let mut sh = new_shell(&mut st, HostId::Rig);
         go(&mut st, &mut sh, "ssh 1");

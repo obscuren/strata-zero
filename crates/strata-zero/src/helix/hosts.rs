@@ -1170,7 +1170,7 @@ mod tests {
         assert!(host.users.iter().any(|u| u.name == user_for(&st, id)));
         let _ = r;
         // the backdoor
-        st.backdoors.plant_net(b, 1, 0, 0);
+        st.backdoors.plant_net(b, 1, 0, 0, 3);
         assert_eq!(user_for(&st, id), "root");
         // a street terminal
         let d = st.city.as_ref().unwrap().districts[0].id;
