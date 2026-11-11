@@ -550,11 +550,13 @@ pub enum Mod {
 }
 
 /// A firewall tier's name.
-fn firewall(n: u8) -> &'static str {
+/// A tier outside 1 to 3 is not one; content validation refuses it.
+fn firewall(n: u8) -> String {
     match n {
-        0 | 1 => "sandbag",
-        2 => "tripwire",
-        _ => "killswitch",
+        1 => "sandbag".to_string(),
+        2 => "tripwire".to_string(),
+        3 => "killswitch".to_string(),
+        _ => format!("tier {n}?"),
     }
 }
 
@@ -582,7 +584,7 @@ impl Mod {
             Mod::Speed(n) => format!("jobs \u{d7}{}", speed(*n)),
             Mod::Lines(n) => format!("lines {n}"),
             Mod::Hold(n) => format!("holds {n} days"),
-            Mod::Firewall(n) => firewall(*n).to_string(),
+            Mod::Firewall(n) => firewall(*n),
         }
     }
 

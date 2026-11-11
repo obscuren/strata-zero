@@ -102,6 +102,8 @@ pub enum ContentError {
     TreeInvalid { name: String, why: String },
     #[error("number blurbs: {why}")]
     BlurbsInvalid { why: String },
+    #[error("frame `{id}`: {why}")]
+    FrameInvalid { id: String, why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -343,31 +345,40 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
 /// weight (it stands in the flat, never carried), and bays that are only the rig's
 /// four kinds with at least one core, relay and line. The rig's bays are on frames
 /// alone, and nothing else is a frame.
-fn frame_ok(i: &Item) -> Result<(), String> {
+fn frame_ok(i: &Item) -> Result<(), ContentError> {
+    let id = || i.id.0.clone();
+    let shape = |why: &str| ContentError::FrameInvalid {
+        id: id(),
+        why: why.into(),
+    };
+    let bays = |why: String| ContentError::SocketsInvalid { id: id(), why };
     if i.kind != ItemKind::Frame {
         if i.frame.is_some() {
-            return Err("a frame head on something that is not a frame".into());
+            return Err(shape("a frame head on something that is not a frame"));
         }
         if i.sockets.iter().any(|k| k.is_rig()) {
-            return Err("rig bays are on frames only".into());
+            return Err(bays("rig bays are on frames only".into()));
         }
         return Ok(());
     }
     if i.frame.is_none() {
-        return Err("no frame head".into());
+        return Err(shape("no frame head"));
     }
     if i.slot.is_some() {
-        return Err("a frame has no slot; it is never carried".into());
+        return Err(shape("a frame has no slot; it is never carried"));
     }
     if i.weight != 0.0 {
-        return Err("a frame weighs nothing".into());
+        return Err(shape("a frame weighs nothing"));
     }
     if let Some(k) = i.sockets.iter().find(|k| !k.is_rig()) {
-        return Err(format!("a frame has rig bays only, not a {}", k.fits()));
+        return Err(bays(format!(
+            "a frame has rig bays only, not a {}",
+            k.fits()
+        )));
     }
     for want in [SocketKind::Core, SocketKind::Relay, SocketKind::Line] {
         if !i.sockets.contains(&want) {
-            return Err(format!("a frame has at least one {}", want.fits()));
+            return Err(bays(format!("a frame has at least one {}", want.fits())));
         }
     }
     Ok(())
@@ -538,12 +549,7 @@ impl Content {
                 id: i.id.0.clone(),
                 why,
             })?;
-            if let Err(why) = frame_ok(i) {
-                return Err(ContentError::SocketsInvalid {
-                    id: i.id.0.clone(),
-                    why,
-                });
-            }
+            frame_ok(i)?;
             if let Err(why) = chrome_ok(i) {
                 return Err(ContentError::ChromeInvalid {
                     id: i.id.0.clone(),
@@ -600,6 +606,16 @@ impl Content {
                 return Err(ContentError::HardwareInvalid {
                     id: i.id.0.clone(),
                     why: format!("its look is drawn for a {}", h.look.kind().fits()),
+                });
+            }
+            if let Some(h) = &i.hardware
+                && h.mods
+                    .iter()
+                    .any(|m| matches!(m, Mod::Firewall(n) if !(1..=3).contains(n)))
+            {
+                return Err(ContentError::HardwareInvalid {
+                    id: i.id.0.clone(),
+                    why: "a firewall tier is 1 to 3".into(),
                 });
             }
             match (i.kind, &i.hardware) {
@@ -2615,8 +2631,34 @@ mod tests {
         bad.items[i].slot = Some(Slot::Torso);
         assert!(matches!(
             bad.validate(),
-            Err(ContentError::SocketsInvalid { .. })
+            Err(ContentError::FrameInvalid { .. })
         ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "rack_zenbo");
+        bad.items[i].frame = None;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::FrameInvalid { .. })
+        ));
+
+        let mut bad = c.clone();
+        let i = at(&bad, "rack_zenbo");
+        bad.items[i].weight = 1.0;
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::FrameInvalid { .. })
+        ));
+
+        for tier in [0, 4] {
+            let mut bad = c.clone();
+            let i = at(&bad, "sled_sandbag");
+            bad.items[i].hardware.as_mut().unwrap().mods = vec![Mod::Firewall(tier)];
+            assert!(
+                matches!(bad.validate(), Err(ContentError::HardwareInvalid { .. })),
+                "{tier}"
+            );
+        }
 
         let mut bad = c.clone();
         let i = at(&bad, "sled_r3");
@@ -2632,6 +2674,9 @@ mod tests {
         assert_eq!(Mod::Seats(2).line(), "seats 2");
         assert_eq!(Mod::Speed(150).line(), "jobs \u{d7}1.5");
         assert_eq!(Mod::Speed(200).line(), "jobs \u{d7}2");
+        assert_eq!(Mod::Speed(125).line(), "jobs \u{d7}1.25");
+        assert_ne!(Mod::Firewall(0).line(), "sandbag");
+        assert_ne!(Mod::Firewall(4).line(), "killswitch");
         assert_eq!(Mod::Lines(5).line(), "lines 5");
         assert_eq!(Mod::Hold(5).line(), "holds 5 days");
         assert_eq!(Mod::Firewall(1).line(), "sandbag");
