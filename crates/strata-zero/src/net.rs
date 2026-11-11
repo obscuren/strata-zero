@@ -1,5 +1,6 @@
 //! The Net's state this session: every construct's trace, the hacks that landed,
-//! the deck's cooling after a dump, and the program in flight.
+//! the deck's cooling after a dump, and the program in flight. The rulings cited are the
+//! site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::{AppState, FxInstance};
 use crate::constructs::Constructs;

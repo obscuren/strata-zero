@@ -12,11 +12,13 @@ use crate::world::{City, StratumKind};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-/// Security from which a construct has ICE at its gate.
+/// Security from which a construct has ICE at its gate. A site's ICE table
+/// (`sitenet::table_ice`) uses it too: from it whites patrol every other kept level.
 pub const ICE_THRESHOLD: u8 = 160;
-/// Security from which the ICE is grey and the vault has its own guard.
+/// Security from which the ICE is grey and the vault has its own guard. On a site, from
+/// it a grey patrols every kept level instead.
 pub const GREY_THRESHOLD: u8 = 200;
-/// Security from which the vault's guard is black.
+/// Security from which the vault's guard is black, on a site as in any construct.
 pub const BLACK_THRESHOLD: u8 = 230;
 const MIN_W: i32 = 14;
 const MAX_W: i32 = 40;

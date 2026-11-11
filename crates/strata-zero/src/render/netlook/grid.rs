@@ -219,8 +219,8 @@ pub(super) fn draw(
     }
 }
 
-/// A site's firewall lock on the grid (Ruling 21): `▮` red while whole, `▯` green once
-/// broken.
+/// A site's firewall lock on the grid (Ruling 21 of the plan
+/// `docs/superpowers/plans/2026-11-11-site-net.md`): `▮` red while whole, `▯` green once broken.
 fn lock_cell(broken: bool) -> (char, Rgb, Rgb, bool) {
     match broken {
         true => ('▯', SIGNAL, VOID.mix(SIGNAL, 0.3), true),

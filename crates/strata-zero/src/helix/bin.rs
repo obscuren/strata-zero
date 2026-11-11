@@ -183,8 +183,9 @@ impl AppIo<'_> {
             [i] => {
                 let b = list[*i];
                 // A site's host sits behind its firewall: from outside its Net, refused
-                // while a lock is whole, before a key is tried (Ruling 15). A shell on one
-                // of its own terminals is on the host already.
+                // while a lock is whole, before a key is tried (Ruling 15 of the plan
+                // `docs/superpowers/plans/2026-11-11-site-net.md`). A shell on one of its
+                // own terminals is on the host already.
                 if crate::sitenet::is_site(self.st, b) && !crate::sitenet::firewall_open(self.st, b)
                 {
                     let n = crate::sitenet::broken(self.st, b).len();

@@ -1,7 +1,8 @@
 //! The site's Net panel beside the tower (look D), and what the tower draws besides the
 //! construct: the building and its firewall, the job, the levels, what you hold, and your
-//! BODY, where it stands and who is near it (Rulings 19 to 23). Spec
-//! `docs/superpowers/specs/2026-11-11-site-net-design.md`, "The look: the open tower".
+//! BODY, where it stands and who is near it. Spec
+//! `docs/superpowers/specs/2026-11-11-site-net-design.md`, "The look: the open tower";
+//! Rulings 19 to 23 of its plan, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use crate::render::netlook::inside::watch_tint;

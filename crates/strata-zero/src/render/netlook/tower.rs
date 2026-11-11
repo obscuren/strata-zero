@@ -5,7 +5,7 @@
 //! it; the riser runs down through the levels on it, cut `╳` where an air gap leaves one
 //! off; the firewall stands round the riser's levels; each level's label is on its left.
 //! Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`, "The look: the open tower";
-//! Rulings 21, 22 and 23.
+//! Rulings 21, 22 and 23 of its plan, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use super::inside::{LATTICE, mask, watch_tint};
 use super::{

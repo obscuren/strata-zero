@@ -1,7 +1,8 @@
 //! A site's firewall: its locks on the city's Net, each broken for an hour by a crack from
 //! the grid or from inside (`NetState.firewalls` holds them), the gate crossed either way
 //! once every lock is broken, and an alarm closing them all. Spec
-//! `docs/superpowers/specs/2026-11-11-site-net-design.md`, Rulings 11, 12, 21 and 26.
+//! `docs/superpowers/specs/2026-11-11-site-net-design.md`; Rulings 11, 12, 21 and 26 of
+//! its plan, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use citygen::sitenet::firewall::{lock_count, outside};

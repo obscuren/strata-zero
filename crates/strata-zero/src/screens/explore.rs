@@ -4257,7 +4257,8 @@ impl Screen for MapScreen {
             Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
                 steps: crate::net::ghost_steps(st, b),
             }),
-            // The open level's alone: the tower folds the others (Ruling 22).
+            // The open level's alone: the tower folds the others (Ruling 22 of the plan
+            // `docs/superpowers/plans/2026-11-11-site-net.md`).
             Place::SiteNet { building, level } => {
                 let mut steps = crate::net::ghost_steps(st, building);
                 if let Some(k) = st.constructs.site(building) {

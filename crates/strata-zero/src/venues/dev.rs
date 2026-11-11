@@ -88,7 +88,8 @@ pub fn dev_start_with(
     start_with(st, type_id, inputs, mission, Objectives::Any)
 }
 
-/// Dev, the DEVELOPER menu's SITE NET start (Ruling 24): in a state NEW GAME (DEBUG) has
+/// Dev, the DEVELOPER menu's SITE NET start (Ruling 24 of the plan
+/// `docs/superpowers/plans/2026-11-11-site-net.md`): in a state NEW GAME (DEBUG) has
 /// just made, the type that builds offices laid on the largest building away from home
 /// that holds a MEDIUM job on its first objective in a server room, at `security` and the
 /// tick as seed, the mission copy begun, and you on the street at its main door. It keeps

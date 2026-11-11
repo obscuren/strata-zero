@@ -1,7 +1,7 @@
 //! The ways into a site's Net besides its firewall: jacking in on a floor beside a terminal
 //! or a turnstile line's switch, your body left standing there; and a backdoor on the
 //! site, landing you on G's hub. Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`,
-//! "Ways in"; Ruling 19.
+//! "Ways in"; Ruling 19 of its plan, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use citygen::sitenet::SiteNodeInfo;

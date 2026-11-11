@@ -27,7 +27,7 @@ enum Row {
     /// A start at a site of the pack's type, by index.
     Site(usize),
     /// A start outside an office copy at `venues::SITE_NET_SECURITY`, its job in a server
-    /// room (Ruling 24).
+    /// room (Ruling 24 of the plan `docs/superpowers/plans/2026-11-11-site-net.md`).
     SiteNet,
     /// D'SHAWN on the lot, on the street or the Net.
     Combat,

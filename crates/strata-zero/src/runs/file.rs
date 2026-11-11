@@ -439,7 +439,8 @@ mod tests {
 
     /// A save standing in a site's old construct (one made before the site had a Net of
     /// its own) opens and plays there, the old construct kept while you stand in it; out
-    /// through its gate, the gate in is the firewall's (Ruling 13).
+    /// through its gate, the gate in is the firewall's (Ruling 13 of the plan
+    /// `docs/superpowers/plans/2026-11-11-site-net.md`).
     #[test]
     fn a_save_inside_a_sites_old_construct_carries_on_until_you_step_out() {
         use citygen::{Place, StratumKind};

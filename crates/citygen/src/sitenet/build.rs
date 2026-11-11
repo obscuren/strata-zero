@@ -1,6 +1,7 @@
 //! A site's construct: one grid holding every kept level one under another, the highest at
 //! the top, each its floor tile for tile; the nodes on their devices' tiles, the traces
-//! from each to its level's hub, and the ICE the site's security sets.
+//! from each to its level's hub, and the ICE the site's security sets. The rulings cited
+//! are the site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use super::{SiteLevel, SiteNet, firewall};
 use crate::construct::{

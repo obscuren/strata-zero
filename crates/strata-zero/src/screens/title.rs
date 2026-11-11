@@ -225,9 +225,10 @@ impl Title {
         })
     }
 
-    /// DEVELOPER's SITE NET (Ruling 24): NEW GAME (DEBUG)'s start, then an office copy at
-    /// `venues::SITE_NET_SECURITY` away from home, its job in a server room, and you on the
-    /// street at its main door.
+    /// DEVELOPER's SITE NET (Ruling 24 of the plan
+    /// `docs/superpowers/plans/2026-11-11-site-net.md`): NEW GAME (DEBUG)'s start, then an
+    /// office copy at `venues::SITE_NET_SECURITY` away from home, its job in a server room,
+    /// and you on the street at its main door.
     fn site_net_game(&self, st: &mut AppState) -> ScreenCmd {
         self.at_a_site(st, |st| {
             crate::venues::dev_site_net(st, crate::venues::SITE_NET_SECURITY)

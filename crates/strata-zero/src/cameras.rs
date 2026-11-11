@@ -7,7 +7,7 @@
 //! A mission copy's cameras watch their floors the same way: each faces away from the
 //! wall beside its spot and sees the same cone by the floor's own light, warming the
 //! site's trace. Spec `docs/superpowers/specs/2026-11-11-site-net-design.md`, "Cameras on
-//! floors".
+//! floors"; the rulings cited are its plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use crate::render::map::{FloorMap, MapRef, TileMap};

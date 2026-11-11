@@ -2,7 +2,8 @@
 //! needed, never by chance: its nodes, the riser its hubs stand beside, the server, the
 //! data vault, an air gap, and the firewall on the city's Net that fronts it. Everything
 //! here is worked out from the city and the site's plan as they are, so a city from an old
-//! save gets it too, and the same plan always gives the same Net.
+//! save gets it too, and the same plan always gives the same Net. The rulings cited are
+//! the site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 mod build;
 pub mod firewall;

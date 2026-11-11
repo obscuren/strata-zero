@@ -3,7 +3,8 @@
 //! begins or ends. The Net itself is worked out from the plan (and a live copy's layer)
 //! when first needed (`citygen::sitenet`) and kept beside the plan, never saved; the
 //! construct is kept and saved with the rest. Spec
-//! `docs/superpowers/specs/2026-11-11-site-net-design.md`.
+//! `docs/superpowers/specs/2026-11-11-site-net-design.md`; the rulings cited here and in
+//! the submodules are its plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use citygen::sitenet::{SiteIce, SiteNet, posted_ice, site_construct, table_ice};

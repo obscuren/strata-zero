@@ -419,7 +419,8 @@ pub fn gather(
     }
 
     // A site's terminal or turnstile switch beside you: jack in there, your body left
-    // standing beside it. Its only choice (Ruling 19).
+    // standing beside it. Its only choice (Ruling 19 of the plan
+    // `docs/superpowers/plans/2026-11-11-site-net.md`).
     if let Some((_, port)) = crate::sitenet::port_in_reach(st) {
         let (glyph, colour) = crate::render::doors::device_mark(port.kind);
         let head = header(capitalised(&port.name), Some((glyph, colour.to_color())));

@@ -1,6 +1,7 @@
 //! The world behind the Access Terminal: your standing on a building, the constructs a
 //! district terminal sees, and the actions and states the HELIX/OS devices and
-//! programs call. Plain functions over the app state that answer in text.
+//! programs call. Plain functions over the app state that answer in text. The rulings
+//! cited are the site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use crate::credentials;
