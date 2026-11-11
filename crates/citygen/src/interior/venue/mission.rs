@@ -3,7 +3,8 @@
 //! to border doors until the objective lies deep enough for the size, leaves each card
 //! and code the way in and out needs where it can be picked up and carried back, posts
 //! the guards and stands the cameras, turrets and containers. It never adds a wall or a
-//! door: a copy's layout is the plain building's.
+//! door: a copy's layout is the plain building's. Nor does it shut anyone in: a layer
+//! whose kept levels leave a room with no way out but a key doesn't lay.
 
 mod kept;
 #[cfg(test)]
@@ -131,6 +132,12 @@ impl MissionLayer {
         };
         let mut used = BTreeSet::from([(objective.level, objective.at)]);
         layer.fit(layout, rule, &mut rng)?;
+        // Getting out is free: a fitted lock opens from its deeper side, but the levels a
+        // copy drops can take the only way down from a kept one.
+        let g = VenueGraph::of(layout, &layer.fitted, Some(&layer.kept));
+        if !g.shut_in().is_empty() {
+            return Err("a kept room has no way out without a key".to_string());
+        }
         layer.leave_keys(layout, &mut used, &mut rng)?;
         layer.post_guards(layout, t, rule, security, &mut used, &mut rng)?;
         layer.stand_devices(layout, t, security, &mut used, &mut rng);

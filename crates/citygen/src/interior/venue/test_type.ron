@@ -9,7 +9,7 @@ Type(
                 Door(stratum: Skyways, side: N, at: 6)]),
     zones: ["public", "staff", "secure", "strongroom"],
     borders: [
-        Border(zones: ("public", "staff"), lock: Card, one_way: true, ways: [Card, Net, Talk, Force]),
+        Border(zones: ("public", "staff"), lock: Card, ways: [Card, Net, Talk, Force]),
         Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
         Border(zones: ("secure", "strongroom"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
     ],

@@ -344,7 +344,7 @@ pub enum How {
     Cracked,
     Keycard,
     Code(u16),
-    /// No key asked: a one-way lock from its free side, a lift stop with no card.
+    /// No key asked: a zone lock from its free side, a lift stop with no card.
     Free,
 }
 

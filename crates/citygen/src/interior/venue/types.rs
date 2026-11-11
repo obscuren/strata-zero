@@ -221,7 +221,8 @@ pub struct OwnDoor {
     pub at: i32,
 }
 
-/// The lock between two zones (outer, inner) and the ways past it.
+/// The lock between two zones (outer, inner) and the ways past it going in. Every border
+/// opens without a key from its inner side: getting out is free.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "Border", deny_unknown_fields)]
 pub struct BorderDef {
@@ -230,9 +231,6 @@ pub struct BorderDef {
     /// Locked in the plain building, not only in a mission.
     #[serde(default)]
     pub always: bool,
-    /// Opens without a key from the inner side.
-    #[serde(default)]
-    pub one_way: bool,
     pub ways: Vec<Means>,
 }
 

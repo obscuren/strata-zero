@@ -361,7 +361,7 @@ impl Access<'_> {
             LinkKind::Lift if !self.lifts => Vec::new(),
             LinkKind::Lift => (plan.rides(link, level).into_iter())
                 .filter(|&to| {
-                    let card = crate::venues::ride_card(plan, link, level, to);
+                    let card = crate::venues::ride_card(plan, link, to);
                     crate::credentials::opens_stop(self.st, plan.building, card).is_some()
                 })
                 .collect(),
@@ -1319,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lift_stop_whose_card_you_lack_is_no_way() {
+    fn a_lift_stop_whose_card_you_lack_is_no_way_off() {
         let mut st = awake();
         // One lift asks for a card at L and stops at 2F and 4F; another runs from L to 4F.
         let (b, lift, stair) = tower_with(&mut st, |lift, stair| {
@@ -1329,11 +1329,15 @@ mod tests {
         });
         let city = st.city.clone().unwrap();
         st.interiors.ensure(&city, b, 0).unwrap();
+        st.interiors.ensure(&city, b, 2).unwrap();
         let floor = |level| Place::Floor { building: b, level };
-        let target = spot(floor(2), stair);
+        // Down to L, not the carded ride straight there, which asks for its card where you
+        // get off: up the carded lift, down the other.
+        put(&mut st, floor(2), lift);
+        assert_eq!(follow(&mut st, b, spot(floor(0), stair), 6), vec![2, 4, 0]);
+        // Up from L the carded lift asks for nothing: none is asked where you get off.
         put(&mut st, floor(0), lift);
-        // Not the carded ride straight there: up the other lift, down the carded one.
-        assert_eq!(follow(&mut st, b, target, 6), vec![0, 4, 2]);
+        assert_eq!(follow(&mut st, b, spot(floor(2), lift), 6), vec![0, 2]);
     }
 
     /// A venue's level every landing of which stands past a locked door: the track finds

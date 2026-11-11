@@ -31,7 +31,8 @@ pub struct GraphLock {
     pub ways: Ways,
     /// The code that opens it: (level, number).
     pub code: Option<(i32, u16)>,
-    /// This direction passes without a key: a one-way lock's free side.
+    /// This direction passes without a key: out of a lock's deeper side, or of a private
+    /// room.
     pub free: bool,
 }
 
@@ -125,14 +126,15 @@ pub(super) fn rides(stops: &[LinkStop], a: usize, b: usize) -> bool {
 impl VenueGraph {
     /// Every level's rooms, doors (a private room's door is a Keypad lock coded by its
     /// number, ways Code | Keyjack | Net | Force), links (a lift edge carries a Card | Net | Talk
-    /// lock at the card of either stop; a crawl edge a Grille lock, ways CRAWL), exits and crawl
-    /// ways in (a Grille lock). `fitted` adds the `fit` lock of those doors; `kept` keeps only those
-    /// levels, their links' stops and their ways in.
+    /// lock at the card of the stop you get off at; a crawl edge a Grille lock, ways CRAWL),
+    /// exits and crawl ways in (a Grille lock). `fitted` adds the `fit` lock of those doors;
+    /// `kept` keeps only those levels, their links' stops and their ways in.
     ///
-    /// A door joins its rooms both ways, a one-way lock free on the edge out of the room
-    /// holding its free side; a doorless join is open. An exit joins its stratum's
-    /// `Outside` and the room of its doorstep both ways, under its lock, free going out.
-    /// The graph holds no cards, codes, people or goal.
+    /// A door joins its rooms both ways, a zone lock free on the edge out of the room
+    /// holding its free side and a private room's free on the edge out of the room; a
+    /// doorless join is open. An exit joins its stratum's `Outside` and the room of its
+    /// doorstep both ways, under its lock, free going out. The graph holds no cards, codes,
+    /// people or goal.
     pub fn of(layout: &VenueLayout, fitted: &[(i32, usize)], kept: Option<&[i32]>) -> VenueGraph {
         let keeps = |level: i32| kept.is_none_or(|k| k.contains(&level));
         let mut g = VenueGraph {
@@ -171,16 +173,23 @@ impl VenueGraph {
                     g.both(a, b, Some(ab), Some(ba), door);
                     continue;
                 }
+                // A private room's keypad holds the way in; the way out is free.
                 let private = [d.rooms.0, d.rooms.1]
                     .into_iter()
                     .find(|&r| x.rooms[r].private);
-                let lock = private.map(|r| GraphLock {
-                    zone: x.rooms[r].zone,
-                    ways: KEYPAD,
-                    code: Some((x.level, x.rooms[r].number)),
-                    free: false,
-                });
-                g.both(a, b, lock, lock, door);
+                let lock = |out: bool| {
+                    private.map(|r| GraphLock {
+                        zone: x.rooms[r].zone,
+                        ways: KEYPAD,
+                        code: Some((x.level, x.rooms[r].number)),
+                        free: out,
+                    })
+                };
+                let (ab, ba) = match private {
+                    Some(r) if r == d.rooms.0 => (lock(true), lock(false)),
+                    _ => (lock(false), lock(true)),
+                };
+                g.both(a, b, ab, ba, door);
             }
         }
         for link in &layout.links {
@@ -191,7 +200,7 @@ impl VenueGraph {
                     g.room(s.level, room)
                 })
                 .collect();
-            for (i, si) in link.stops.iter().enumerate() {
+            for i in 0..link.stops.len() {
                 for (j, sj) in link.stops.iter().enumerate() {
                     let (Some(from), Some(to)) = (at[i], at[j]) else {
                         continue;
@@ -199,7 +208,8 @@ impl VenueGraph {
                     if !rides(&link.stops, i, j) {
                         continue;
                     }
-                    let card = si.card.max(sj.card);
+                    // A stop's card is asked where you get off, never where you get on.
+                    let card = sj.card;
                     let lock = match link.kind {
                         LinkKind::Lift if card > 0 => Some(GraphLock {
                             zone: card,
@@ -411,6 +421,18 @@ impl VenueGraph {
         let r = self.reach(&[goal], means, keys);
         (self.nodes.iter().zip(&r.nodes))
             .any(|(at, &reached)| reached && matches!(at, NodeAt::Outside(_)))
+    }
+
+    /// The rooms nobody gets out of to the city with no means and no key, by node: getting
+    /// out is free, so a layout or a copy whose list isn't empty can shut someone in.
+    pub fn shut_in(&self) -> Vec<usize> {
+        let outside: Vec<usize> = (0..self.nodes.len())
+            .filter(|&n| matches!(self.nodes[n], NodeAt::Outside(_)))
+            .collect();
+        let out = self.returns(&outside, Ways::default(), &Keys::default());
+        (0..self.nodes.len())
+            .filter(|&n| matches!(self.nodes[n], NodeAt::Room { .. }) && !out[n])
+            .collect()
     }
 
     /// The fewest locks on any route from a way in to `goal`, any lock passable: a lock
@@ -736,10 +758,52 @@ mod tests {
     }
 
     #[test]
+    fn a_lift_asks_for_its_card_where_you_get_off() {
+        let t = test_type();
+        let mut l = lay_out(&t, VenueFrame::own(&t), 0).unwrap();
+        let mut lift = (l.links.iter())
+            .find(|k| k.kind == LinkKind::Lift && k.stops.len() >= 2)
+            .unwrap()
+            .clone();
+        for s in &mut lift.stops {
+            (s.card, s.on, s.off) = (0, true, true);
+        }
+        lift.stops[1].card = 2;
+        l.links = vec![lift.clone()];
+        let g = VenueGraph::of(&l, &[], None);
+        let node = |s: &LinkStop| {
+            let room = room_holding(&l, s.level, s.at).unwrap();
+            g.room(s.level, room).unwrap()
+        };
+        let (a, b) = (node(&lift.stops[0]), node(&lift.stops[1]));
+        let ride = |from, to| (g.edges.iter()).find(|e| (e.from, e.to) == (from, to));
+        let carded = GraphLock {
+            zone: 2,
+            ways: LIFT,
+            code: None,
+            free: false,
+        };
+        assert_eq!(ride(a, b).unwrap().lock, Some(carded), "off at the card");
+        assert_eq!(ride(b, a).unwrap().lock, None, "on at the card, off free");
+    }
+
+    #[test]
+    fn shut_in_finds_the_rooms_with_no_free_way_out() {
+        // The street (0) open to 1; 2 behind a card lock both ways; 3 behind one free
+        // from 3.
+        let card = lock(1, Ways::CARD);
+        let mut edges = both(0, 1, None).to_vec();
+        edges.extend(both(1, 2, card));
+        edges.extend([(1, 3, card), (3, 1, free(card))]);
+        assert_eq!(graph(4, &edges).shut_in(), vec![2]);
+    }
+
+    #[test]
     fn a_layout_is_its_rooms_doors_links_and_ways_in() {
         let t = test_type();
         let l = lay_out(&t, VenueFrame::own(&t), 0).unwrap();
         let g = VenueGraph::of(&l, &[], None);
+        let mut privates = 0;
         let rooms: usize = l.levels.iter().map(|x| x.rooms.len()).sum();
         let strata: BTreeSet<StratumKind> = (l.ways_in.iter())
             .map(|w| match w.kind {
@@ -773,14 +837,21 @@ mod tests {
                         }
                     }
                     None if private => {
-                        let k = ab.lock.unwrap();
-                        assert_eq!(k.ways, KEYPAD);
-                        assert!(k.code.is_some_and(|(level, _)| level == x.level));
+                        // Its keypad holds the way in, and the way out is free.
+                        let (ab, ba) = (ab.lock.unwrap(), ba.lock.unwrap());
+                        assert_eq!((ab.ways, ba.ways), (KEYPAD, KEYPAD));
+                        assert!(ab.code.is_some_and(|(level, _)| level == x.level));
+                        assert_eq!(ab.code, ba.code);
+                        let into_b = x.rooms[d.rooms.1].private;
+                        assert_eq!((ab.free, ba.free), (!into_b, into_b));
+                        privates += 1;
                     }
                     None => assert_eq!(ab.lock, None, "{:?}", d.fit),
                 }
             }
         }
+        assert!(privates > 0);
+        assert_eq!(g.shut_in(), Vec::<usize>::new(), "getting out is free");
         // Each stratum's exits and crawls in, and nothing else, join its outside.
         for &s in &g.starts {
             let NodeAt::Outside(k) = g.nodes[s] else {

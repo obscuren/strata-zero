@@ -3,8 +3,8 @@
 //! holds; and one site per type pinned.
 
 use citygen::venue::{
-    MissionInputs, MissionLayer, PieceKind, VenueFrame, VenueLayout, VenuePack, VenueType, lay_out,
-    validate_copy, validate_venue, venue_fingerprint,
+    MissionInputs, MissionLayer, NodeAt, PieceKind, VenueFrame, VenueGraph, VenueLayout, VenuePack,
+    VenueType, lay_out, validate_copy, validate_venue, venue_fingerprint,
 };
 use citygen::{BuildingId, City, FloorPlan, GenParams, Generator, LinkKind, Pos, SizePreset};
 use std::collections::BTreeSet;
@@ -182,6 +182,44 @@ fn every_objective_holds_a_size() {
     }
 }
 
+/// Getting out is free: no room of any venue in the test cities, laid out as the city lays
+/// it, leaves you with no way out to the city but a key (a crack lapses; a perma-death
+/// run can't wait).
+#[test]
+fn nobody_is_shut_in_anywhere_in_the_test_cities() {
+    let mut venues = 0;
+    for c in cities() {
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id) else {
+                continue;
+            };
+            let Some(l) = plan.venue.as_deref() else {
+                continue;
+            };
+            venues += 1;
+            let g = VenueGraph::of(l, &[], None);
+            let shut: Vec<String> = (g.shut_in().iter())
+                .map(|&n| match g.nodes[n] {
+                    NodeAt::Room { level, room } => {
+                        let r = &l.level(level).unwrap().rooms[room];
+                        format!("{} {} at {:?}", FloorPlan::label(level), r.name, r.rect)
+                    }
+                    at => format!("{at:?}"),
+                })
+                .collect();
+            assert!(
+                shut.is_empty(),
+                "{} {:?} in city {}: {} rooms shut in: {shut:?}",
+                l.type_id,
+                b.id,
+                c.seed,
+                shut.len()
+            );
+        }
+    }
+    assert!(venues > 10, "{venues} venues");
+}
+
 /// What every builtin type offers, said without naming one.
 #[test]
 fn every_builtin_type_is_a_whole_site() {
@@ -198,11 +236,6 @@ fn every_builtin_type_is_a_whole_site() {
         assert!(
             t.links.iter().any(|l| l.kind == LinkKind::Crawl) || !t.crawls_in.is_empty(),
             "{}",
-            t.id
-        );
-        assert!(
-            t.borders.iter().any(|b| b.one_way),
-            "{}: a way out harder than the way in",
             t.id
         );
         let own = lay_out(t, VenueFrame::own(t), 0).unwrap();
@@ -223,9 +256,9 @@ fn every_builtin_type_is_a_whole_site() {
 #[test]
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
-        3190467078520661387,
-        14849534218203334198,
-        15240640969110303319,
+        10811627059381793165,
+        6076768998902127580,
+        3395241277663048963,
     ];
     let pack = VenuePack::builtin();
     assert_eq!(

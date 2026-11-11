@@ -136,7 +136,8 @@ pub struct DoorLock {
     pub zone: u8,
     pub kind: LockKind,
     pub ways: Ways,
-    /// The tile it opens from without a key: a one-way lock's inner side.
+    /// The tile it opens from without a key: its deeper zone's side, or a way in's
+    /// doorstep. A venue's layout sets it on every lock it lays.
     pub free_from: Option<Pos>,
 }
 

@@ -668,7 +668,7 @@ pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Cho
                 } else {
                     (floor, TEXT)
                 };
-                let card = crate::venues::ride_card(plan, link, level, l);
+                let card = crate::venues::ride_card(plan, link, l);
                 let carded =
                     l != level && crate::credentials::opens_stop(st, building, card).is_none();
                 let marks = if carded {

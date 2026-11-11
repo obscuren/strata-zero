@@ -218,15 +218,12 @@ pub fn lock_name(st: &AppState, b: BuildingId, level: i32, number: u16) -> Optio
     Some(lock_label(plan, &lock))
 }
 
-/// The zone card a ride on link `link` from `from` to `to` asks for: the deeper of the two
-/// stops' cards; 0 asks none.
-pub fn ride_card(plan: &FloorPlan, link: usize, from: i32, to: i32) -> u8 {
-    let card = |level| {
-        (plan.links.get(link))
-            .and_then(|l| l.stop(level))
-            .map_or(0, |s| s.card)
-    };
-    card(from).max(card(to))
+/// The zone card a ride on link `link` to level `to` asks for: the card of the stop you get
+/// off at, never the one you get on at, so getting out is free; 0 asks none.
+pub fn ride_card(plan: &FloorPlan, link: usize, to: i32) -> u8 {
+    (plan.links.get(link))
+        .and_then(|l| l.stop(to))
+        .map_or(0, |s| s.card)
 }
 
 /// What a step from `here` onto `target` on a venue's floor meets.

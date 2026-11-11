@@ -60,10 +60,10 @@ impl VenueLayout {
 }
 
 /// A layout's own checks: every link stop lies in a room of its level, every way in's
-/// doorstep (or grille) lies in its room, every door joins two rooms of its level and a
-/// one-way lock opens free from one of them, each level's doors open onto one stratum at
-/// most, its locks' numbers are its own, and every room is reached from the ways in by
-/// someone holding every key.
+/// doorstep (or grille) lies in its room, every door joins two rooms of its level and its
+/// lock opens free from one of them, each level's doors open onto one stratum at most, its
+/// locks' numbers are its own, every room is reached from the ways in by someone holding
+/// every key, and every room gets out to the city with no means and no key.
 pub fn validate_layout(layout: &VenueLayout) -> Result<(), String> {
     for link in &layout.links {
         let name = link.name.as_deref().unwrap_or("link");
@@ -109,7 +109,7 @@ pub fn validate_layout(layout: &VenueLayout) -> Result<(), String> {
                 && !b.rect.contains(p)
             {
                 return Err(format!(
-                    "{on}: the one-way lock at {:?} opens free from {p:?}, in neither of its rooms",
+                    "{on}: the lock at {:?} opens free from {p:?}, in neither of its rooms",
                     d.at
                 ));
             }
@@ -157,7 +157,23 @@ pub fn validate_layout(layout: &VenueLayout) -> Result<(), String> {
             ));
         }
     }
-    Ok(())
+    free_way_out(layout, &g)
+}
+
+/// Every room of `g`, a graph of `layout`, gets out to the city with no means and no key.
+fn free_way_out(layout: &VenueLayout, g: &VenueGraph) -> Result<(), String> {
+    match g.shut_in().first().map(|&n| g.nodes[n]) {
+        Some(NodeAt::Room { level, room }) => {
+            let r = &layout.level(level).expect("a node's level").rooms[room];
+            Err(format!(
+                "{}: the {} at {:?} has no way out without a key",
+                FloorPlan::label(level),
+                r.name,
+                r.rect
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The layout's checks and every level drawn and checked.
@@ -173,9 +189,10 @@ pub fn validate_venue(layout: &VenueLayout) -> Result<(), String> {
 }
 
 /// The copy's graph checks: each of the four ways of playing gets in to the objective,
-/// and out from it to the city with the keys it got in with; the objective lies at least
-/// the size's locks deep; the kept levels hold the size's floors and ways in, and the
-/// links between them join them.
+/// and out from it to the city with the keys it got in with; every kept room gets out to
+/// the city with no means and no key; the objective lies at least the size's locks deep;
+/// the kept levels hold the size's floors and ways in, and the links between them join
+/// them.
 pub fn validate_copy_graph(
     layout: &VenueLayout,
     layer: &MissionLayer,
@@ -190,6 +207,7 @@ pub fn validate_copy_graph(
             return Err(format!("{name} finds no way out"));
         }
     }
+    free_way_out(layout, &g)?;
     let depth = g.depth(goal).unwrap_or(0);
     if depth < u32::from(rule.locks.0) {
         return Err(format!(
@@ -313,8 +331,9 @@ pub fn venue_fingerprint(layout: &VenueLayout) -> u64 {
 mod tests {
     use super::*;
     use crate::geom::Pos;
+    use crate::interior::DoorLock;
     use crate::interior::venue::testutil::test_type;
-    use crate::interior::venue::{VenueFrame, VenuePack, WayInKind, lay_out};
+    use crate::interior::venue::{LockKind, VenueFrame, VenuePack, WayInKind, lay_out};
 
     fn laid(seed: u64) -> VenueLayout {
         let t = test_type();
@@ -385,7 +404,7 @@ mod tests {
         // A door joining a room its level doesn't have.
         let err = bad(&|m| m.levels[0].doors[0].rooms.1 = 999);
         assert!(err.contains("joins no room"), "{err}");
-        // A one-way lock free from a tile in neither of its rooms.
+        // A lock free from a tile in neither of its rooms.
         let err = bad(&|m| {
             let d = (m.levels.iter_mut().flat_map(|x| x.doors.iter_mut()))
                 .find(|d| d.fit.is_some_and(|f| f.free_from.is_some()))
@@ -394,7 +413,67 @@ mod tests {
                 l.free_from = Some(Pos::new(0, 0));
             }
         });
-        assert!(err.contains("one-way"), "{err}");
+        assert!(err.contains("in neither of its rooms"), "{err}");
+    }
+
+    /// Locks both ways the one plain door of a room past the spine on a level `on` takes,
+    /// but the room at `not` (level, tile).
+    fn shut_one(l: &mut VenueLayout, on: &dyn Fn(i32) -> bool, not: (i32, Pos)) {
+        let (x, k) = (l.levels.iter_mut().filter(|x| on(x.level)))
+            .find_map(|x| {
+                let spine = x.bands.len();
+                let k = (spine..x.rooms.len()).find_map(|i| {
+                    let doors: Vec<usize> = (0..x.doors.len())
+                        .filter(|&k| [x.doors[k].rooms.0, x.doors[k].rooms.1].contains(&i))
+                        .collect();
+                    let d = &x.doors[*doors.first()?];
+                    let plain = !d.open && d.fit.is_none() && !x.rooms[i].private;
+                    let other = !(x.level == not.0 && x.rooms[i].rect.contains(not.1));
+                    (doors.len() == 1 && plain && other).then_some(doors[0])
+                })?;
+                Some((x, k))
+            })
+            .expect("a room behind one plain door");
+        x.doors[k].lock = Some(DoorLock {
+            at: x.doors[k].at,
+            number: 65_000,
+            zone: 1,
+            kind: LockKind::Card,
+            ways: Ways::CARD,
+            free_from: None,
+        });
+    }
+
+    #[test]
+    fn validate_layout_finds_a_room_with_no_way_out_without_a_key() {
+        let mut l = laid(2);
+        validate_layout(&l).unwrap();
+        shut_one(&mut l, &|_| true, (i32::MIN, Pos::new(0, 0)));
+        let err = validate_layout(&l).unwrap_err();
+        assert!(err.contains("no way out without a key"), "{err}");
+    }
+
+    #[test]
+    fn validate_copy_finds_a_kept_room_with_no_way_out_without_a_key() {
+        let t = test_type();
+        let mut l = laid(0);
+        let small = VenuePack::builtin().size(crate::interior::venue::MissionSize::Small);
+        let inputs = MissionInputs {
+            size: small.size,
+            objective: 0,
+            security: 255,
+            seed: 0,
+        };
+        let layer = MissionLayer::lay(&l, &t, small, inputs).unwrap();
+        validate_copy_graph(&l, &layer, small).unwrap();
+        let o = layer.objective;
+        shut_one(
+            &mut l,
+            &|level| layer.kept.contains(&level),
+            (o.level, o.at),
+        );
+        let err = validate_copy_graph(&l, &layer, small).unwrap_err();
+        assert!(err.contains("no way out without a key"), "{err}");
     }
 
     #[test]

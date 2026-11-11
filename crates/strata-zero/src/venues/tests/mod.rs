@@ -12,6 +12,8 @@ use citygen::venue::{LOCK_NUMBERS, MissionInputs, WayInKind, Ways, room_label};
 use citygen::{BuildingKind, City, Floor, GenParams, Generator, Place, SizePreset};
 use crossterm::event::KeyCode;
 
+mod way_out;
+
 /// The seed-8 city the story is played in.
 fn home_city() -> City {
     Generator::run(GenParams {
@@ -316,9 +318,7 @@ fn a_one_way_door_opens_from_its_free_side() {
 #[test]
 fn a_net_crack_opens_only_locks_the_net_reaches() {
     let (mut st, b) = first_venue();
-    let (level, lock) = lock_where(&mut st, b, |l| {
-        l.ways.has(Ways::NET) && l.free_from.is_none()
-    });
+    let (level, lock) = lock_where(&mut st, b, |l| l.ways.has(Ways::NET));
     let from = outside_of(floor_of(&st, b, level), &lock);
     let node = (st.city.as_ref().unwrap().net.nodes.iter())
         .find(|n| n.building == Some(b) && n.kind == citygen::NodeKind::DoorLock)
@@ -578,9 +578,7 @@ fn zone_cards_survive_a_reopen_and_a_trip() {
         })
         .expect("a venue with a card lock");
     crate::credentials::prepare(&mut st, b);
-    let (level, lock) = lock_where(&mut st, b, |l| {
-        l.kind == LockKind::Card && l.free_from.is_none()
-    });
+    let (level, lock) = lock_where(&mut st, b, |l| l.kind == LockKind::Card);
     let from = outside_of(floor_of(&st, b, level), &lock);
     st.character.give(zone_card_id(b, lock.zone), 1);
     assert_eq!(opens_lock(&st, b, level, &lock, from), Some(How::Keycard));
@@ -613,18 +611,13 @@ fn a_walk_across_a_level_stops_at_a_shut_door() {
         room_of(p, level, to).is_some_and(|r| rooms[r])
     };
     let (mut st, b) = first_venue();
-    let (level, lock) = lock_where(&mut st, b, |l| {
-        l.kind == LockKind::Card && l.free_from.is_none()
-    });
+    let (level, lock) = lock_where(&mut st, b, |l| l.kind == LockKind::Card);
     let p = plan(&st, b).clone();
     let floor = floor_of(&st, b, level).clone();
-    // The two sides of the door: rooms of a walk on either side.
-    let sides: Vec<Pos> = (lock.at.neighbors4())
-        .filter(|n| floor.tiles.get(*n).is_some_and(|t| t.is_walkable()))
-        .collect();
-    let (a, z) = (sides[0], sides[1]);
+    // The two sides of the door: shut from its locked side, and out free from the other.
+    let (a, z) = (outside_of(&floor, &lock), lock.free_from.unwrap());
     assert!(!walks(&st, &p, level, a, z));
-    assert!(!walks(&st, &p, level, z, a));
+    assert!(walks(&st, &p, level, z, a), "getting out is free");
     st.character.give(zone_card_id(b, lock.zone), 1);
     assert!(walks(&st, &p, level, a, z));
     assert!(walks(&st, &p, level, z, a));
@@ -637,9 +630,7 @@ fn a_walk_across_a_level_stops_at_a_shut_door() {
 fn a_lock_door_and_a_grille_say_what_they_are() {
     use crate::render::map::MapRef;
     let (mut st, b) = first_venue();
-    let (level, lock) = lock_where(&mut st, b, |l| {
-        l.kind == LockKind::Card && l.free_from.is_none()
-    });
+    let (level, lock) = lock_where(&mut st, b, |l| l.kind == LockKind::Card);
     let place = Place::Floor { building: b, level };
     let from = outside_of(floor_of(&st, b, level), &lock);
     put(&mut st, place, from);

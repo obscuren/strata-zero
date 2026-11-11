@@ -686,3 +686,37 @@ fn a_cut_one_way_link_runs_its_way_still() {
     let cut = FloorPlan::of_layout(l.clone()).kept(&layer.kept);
     assert_eq!(cut_graph(&l, &cut, &layer), VenueGraph::copy(&l, &layer));
 }
+
+#[test]
+fn a_layer_never_shuts_anyone_in() {
+    // The test type with no roof door: its top level's lift lands past a border, so its
+    // front band's way down is the fire stair, which a copy short of the stair's bottom
+    // can't get off.
+    let mut t = test_type();
+    t.frame.roof = false;
+    let pack = VenuePack::builtin();
+    let (mut laid, mut refused) = (0, 0);
+    for seed in 0..20 {
+        let layout = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+        for size in SIZES {
+            for objective in 0..t.objectives.len() {
+                let inputs = MissionInputs {
+                    size,
+                    objective,
+                    security: 128,
+                    seed,
+                };
+                match MissionLayer::lay(&layout, &t, pack.size(size), inputs) {
+                    Ok(layer) => {
+                        let g = VenueGraph::copy(&layout, &layer);
+                        assert_eq!(g.shut_in(), Vec::<usize>::new(), "seed {seed} {size:?}");
+                        laid += 1;
+                    }
+                    Err(e) if e.contains("no way out without a key") => refused += 1,
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+    assert!(laid > 0 && refused > 0, "{laid} laid, {refused} refused");
+}

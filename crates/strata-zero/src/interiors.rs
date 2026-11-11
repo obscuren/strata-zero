@@ -469,8 +469,8 @@ fn link_under(st: &mut AppState, b: BuildingId) -> Option<(i32, usize, FloorPlan
 }
 
 /// Rides the lift under the player to a floor it stops at: the player steps out at its
-/// bank there. A stop that asks for a zone card, where you board or where you ride to,
-/// wants the deeper of the two.
+/// bank there. A stop that asks for a zone card asks it of a ride there, never of a ride
+/// away from it: getting out is free.
 pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
     let (here, link, plan) = link_under(st, b)
         .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
@@ -484,7 +484,7 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     if !st.net.lifts_answer(b, now) {
         return Err("lifts locked down".to_string());
     }
-    let card = crate::venues::ride_card(&plan, link, here, level);
+    let card = crate::venues::ride_card(&plan, link, level);
     if crate::credentials::opens_stop(st, b, card).is_none() {
         return Err(format!(
             "the lift wants a {} card",

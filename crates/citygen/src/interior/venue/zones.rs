@@ -1,6 +1,7 @@
 //! The zones stage: each level cut into bands front to back, a spine through them, and
 //! the doors where the spine crosses from one band to the next, locked as the type's
-//! borders say.
+//! borders say. Every border lock opens without a key from its deeper side: getting out
+//! is free, whatever the data says about the way in.
 
 use super::{
     BandArea, LOCK_NUMBERS, LevelLayout, PlannedDoor, PlannedRoom, Spine, VenueFrame, VenueLayout,
@@ -134,7 +135,8 @@ pub(super) fn front(frame: &VenueFrame) -> Dir {
 
 /// Cuts every level into its role's bands, lays its spine through them, and puts doors
 /// where the spine crosses each cut, locked as the type's border between the two zones
-/// says. Each level draws from its own rng, so the levels of one role differ.
+/// says and free from the deeper zone's side. Each level draws from its own rng, so the
+/// levels of one role differ.
 pub(super) fn lay(
     t: &VenueType,
     layout: &mut VenueLayout,
@@ -268,7 +270,7 @@ fn level(
                 .ok_or_else(|| format!("no border between `{}` and `{}`", name(zf), name(zb)))?;
             Some(b)
         };
-        // The deeper zone's side of the cut, in rows.
+        // The deeper zone's side of the cut, in rows: its lock opens free from there.
         let inside = if zb > zf { 1 } else { -1 };
         let count = usize::from(def.bands[i].doors.max(1));
         let left = count > 1 && rng.random_range(0..2) == 0;
@@ -280,7 +282,7 @@ fn level(
                 zone: zf.max(zb),
                 kind: b.lock,
                 ways: Ways::of(&b.ways),
-                free_from: b.one_way.then(|| axes.pos(cut + inside, c)),
+                free_from: Some(axes.pos(cut + inside, c)),
             });
             number += u16::from(fit.is_some());
             x.doors.push(PlannedDoor {
@@ -688,29 +690,37 @@ mod tests {
     }
 
     #[test]
-    fn a_one_way_border_opens_free_from_its_inner_side() {
-        let t = test_type();
-        let mut one_way = 0;
-        for (seed, l) in layouts(&t) {
-            for x in &l.levels {
-                for d in x.doors.iter().filter(|d| d.border) {
-                    let ((f, fp), (b, bp)) = across(x, d.at);
-                    let (zf, zb) = (x.bands[f].zone, x.bands[b].zone);
-                    let fit = d.fit.unwrap();
-                    if border(&t, zf, zb).one_way {
+    fn every_border_opens_free_from_its_deeper_side() {
+        // Every type's borders, whatever its data says about the way in.
+        let types = VenuePack::builtin()
+            .types
+            .iter()
+            .cloned()
+            .chain([test_type()]);
+        let (mut doors, mut deeper_in_front) = (0, 0);
+        for t in types {
+            for (seed, l) in layouts(&t) {
+                for x in &l.levels {
+                    let what = format!("{} seed {seed} level {}", t.id, x.level);
+                    for d in x.doors.iter().filter(|d| d.border) {
+                        let ((f, fp), (b, bp)) = across(x, d.at);
+                        let (zf, zb) = (x.bands[f].zone, x.bands[b].zone);
                         let inside = if zb > zf { bp } else { fp };
-                        assert_eq!(fit.free_from, Some(inside), "seed {seed} level {}", x.level);
-                        one_way += 1;
-                    } else {
-                        assert_eq!(fit.free_from, None);
-                    }
-                    if let Some(lock) = d.lock {
-                        assert_eq!(lock, fit);
+                        let fit = d.fit.unwrap();
+                        assert_eq!(fit.free_from, Some(inside), "{what}");
+                        if let Some(lock) = d.lock {
+                            assert_eq!(lock, fit, "{what}");
+                        }
+                        doors += 1;
+                        deeper_in_front += usize::from(zf > zb);
                     }
                 }
             }
         }
-        assert!(one_way > 0);
+        assert!(
+            doors > 0 && deeper_in_front > 0,
+            "{doors} {deeper_in_front}"
+        );
     }
 
     #[test]

@@ -8,9 +8,10 @@
 // onto the roof, and whether -1 reaches the Undercity.
 // `zones` run public first; a zone's rank is its place in the list. A `Border` is the lock
 // between two zones, outer first: a `Card` reader or a `Keypad`, `always` locked or locked only
-// for a mission, `one_way` when it opens without a key from the inner side, and the `ways`
-// past it (`Card`, `Code`, `Keyjack`, `Net`, `Force`, `Talk`), two or more. A card lock takes
-// `Card` and neither `Code` nor `Keyjack`; a keypad takes `Code`.
+// for a mission, and the `ways` past it going in (`Card`, `Code`, `Keyjack`, `Net`, `Force`,
+// `Talk`), two or more. A card lock takes `Card` and neither `Code` nor `Keyjack`; a keypad
+// takes `Code`, and a card too where one is listed. Every border opens without a key from its
+// inner side, and a lift asks for a card only where you get off: getting out is free.
 // A level's `name` is its role's, which no other role of the type has. Its `bands` are strips
 // across it, front (the first street door's side) to back, each in one zone: its `share` is
 // percent of the depth (a level's shares sum to 100), its `rooms` are laid in order, then its
@@ -60,8 +61,8 @@ Sites(
                 Border(zones: ("public", "guest"), lock: Card, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("guest", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
-                Border(zones: ("staff", "secure"), lock: Keypad, always: true, one_way: true, ways: [Code, Keyjack, Net, Force]),
-                Border(zones: ("guest", "secure"), lock: Keypad, always: true, one_way: true, ways: [Code, Keyjack, Net, Force]),
+                Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+                Border(zones: ("guest", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
             ],
             levels: Levels(
                 below: [
@@ -158,7 +159,7 @@ Sites(
             // Past the gate line the office floors stand open; a mission's reader locks a
             // floor's door.
             borders: [
-                Border(zones: ("public", "staff"), lock: Card, always: true, one_way: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("staff", "secure"), lock: Card, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("staff", "executive"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("secure", "executive"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
@@ -239,7 +240,7 @@ Sites(
                         Door(stratum: Undercity, side: E, at: 6)]),
             zones: ["public", "paid", "staff", "secure"],
             borders: [
-                Border(zones: ("public", "paid"), lock: Card, always: true, one_way: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("public", "paid"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("paid", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),

@@ -283,6 +283,11 @@ A type says, as data:
   a gate that opens from the inside, an exit-only turnstile, an emergency stair that
   opens only at its ends. This is in the data now, so saved sites don't need reshaping
   when the alert (#36) makes the way out the hard part.
+- **Getting out is free.** Every zone lock opens without a key from its deeper side, a
+  private room from inside, and a lift asks for a stop's card only where you get off.
+  This is a rule of the code, not of the data: a crack lapses, and with perma-death a
+  runner shut in has lost the run. The harder way out comes from the alert (#36), not
+  from locks.
 - **Its rooms:** a name, a zone, a generic room kind (below), sizes, furniture and
   stations. It also names set pieces with a fixed shape, like a platform with its track
   or a car park ramp.
@@ -583,6 +588,9 @@ These weren't settled with Jeff. Each is open to change.
     site shallower.
 17. Locks and links can be one-way now, and the checker finds the way in and the way out
     separately.
+18. Getting out is free: every room of a layout, and every kept room of a copy, gets out
+    to the city with no means and no key. The checker rejects a layout that fails it,
+    and a mission layer that would fail it doesn't lay.
 
 ## Left to the builder
 
