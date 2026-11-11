@@ -733,6 +733,130 @@ fn the_rig_at_home() {
     shot("rig", &st, &map, &term);
 }
 
+/// A rig with a Tinman core, sniff and keepalive installed and a Net backdoor on a block
+/// of flats, the sniff and the rent started: the minute they started.
+fn rig_with_jobs() -> (AppState, u64, citygen::BuildingId) {
+    use crate::rig::jobs::{JobKind, start};
+    let mut st = state_home();
+    let c = st.content.clone();
+    st.character.rig_copy_mut(&c).fitted[0] = Some(game::Stack {
+        item: ItemId::new("sled_tinman"),
+        qty: 1,
+        copy: None,
+    });
+    for p in ["sniff", "keepalive"] {
+        st.backdoors.jobs.programs.insert(p.to_string());
+    }
+    let home = st.home.unwrap().home.building;
+    let ids: Vec<citygen::BuildingId> = st
+        .city
+        .as_ref()
+        .unwrap()
+        .buildings
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.kind,
+                citygen::BuildingKind::Apartment | citygen::BuildingKind::Megablock
+            )
+        })
+        .map(|b| b.id)
+        .filter(|b| *b != home)
+        .collect();
+    let mut block = None;
+    for b in ids {
+        crate::credentials::prepare(&mut st, b);
+        if st
+            .interiors
+            .homes_of(b)
+            .is_some_and(|h| h.all_flats().count() >= 8)
+        {
+            block = Some(b);
+            break;
+        }
+    }
+    let b = block.expect("a block of flats");
+    let now = st.net.now(&st);
+    let seed = st.city.as_ref().unwrap().seed;
+    st.backdoors.plant_net(b, 1, seed, now, 3);
+    start(&mut st, JobKind::Sniff(b)).unwrap();
+    start(&mut st, JobKind::Rent).unwrap();
+    (st, now, b)
+}
+
+/// The rig's glass after `ps`: a sniff seven hours in and the rent running, both seats
+/// of a Tinman busy.
+#[test]
+#[ignore]
+fn rig_ps() {
+    let (mut st, t0, _) = rig_with_jobs();
+    // seven hours and twelve minutes on, the clock and the jobs together
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.catch_up(city, world.tick() + (7 * 60 + 12) * sim::TICKS_PER_MINUTE);
+    crate::net::tick_backdoors(&mut st);
+    let _ = t0;
+    for m in &mut st.journal.mails {
+        m.read = true;
+    }
+    let map = MapScreen::walking(&mut st);
+    let home = st.home.unwrap().home;
+    let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    type_lines(&mut st, &mut term, &["ps"]);
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    for size in [(120, 40), (100, 30)] {
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(text.contains("JOB        ON"), "{text}");
+        assert!(text.contains("2 of 2 seats busy"), "{text}");
+        shot_at(
+            &format!("rig_ps_{}x{}", size.0, size.1),
+            &st,
+            &map,
+            &term,
+            size,
+        );
+    }
+}
+
+/// The overnight mail from cron, read in the rig's mail program.
+#[test]
+#[ignore]
+fn cron_mail() {
+    let (mut st, t0, _) = rig_with_jobs();
+    let day = 24 * 60;
+    let six = t0 + (6 * 60 + day - (22 * 60 + t0) % day) % day;
+    crate::rig::jobs::advance(&mut st, six);
+    for m in st.journal.mails.iter_mut().filter(|m| m.from != "cron") {
+        m.read = true;
+    }
+    st.missions.daze = None;
+    st.missions.asides.clear();
+    st.mail_seen = st.journal.mails.len();
+    st.mail_pill = None;
+    let map = MapScreen::walking(&mut st);
+    let home = st.home.unwrap().home;
+    let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    type_lines(&mut st, &mut term, &["mail"]);
+    term.update(&mut st, &[key(KeyCode::Char(' '))]);
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    for size in [(120, 40), (100, 30)] {
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(text.contains("overnight"), "{text}");
+        shot_at(
+            &format!("cron_mail_{}x{}", size.0, size.1),
+            &st,
+            &map,
+            &term,
+            size,
+        );
+    }
+}
+
 /// The desk at home over the map, at 120x40 and 100x30: `keys` pressed at it first,
 /// then the card let type out.
 fn desk_shot(name: &str, st: &mut AppState, map: &MapScreen, keys: &[KeyCode]) {

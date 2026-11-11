@@ -73,15 +73,6 @@ fn lines(lines: Vec<String>) -> Output {
     }
 }
 
-/// How long a job has been up, in game minutes: `7h 12m`, `3d 4h`.
-fn up_label(minutes: u64) -> String {
-    match (minutes / 1440, minutes / 60 % 24, minutes % 60) {
-        (0, 0, m) => format!("{m}m"),
-        (0, h, m) => format!("{h}h {m}m"),
-        (d, h, _) => format!("{d}d {h}h"),
-    }
-}
-
 /// What a job has found, counted: `2 codes · 1 stash`.
 fn found_label(found: &[String]) -> String {
     let count = |p: &str| found.iter().filter(|f| f.starts_with(p)).count();
@@ -396,7 +387,7 @@ impl AppIo<'_> {
         let mut out = vec![" #  JOB        ON                      UP      FOUND".to_string()];
         for j in &self.st.backdoors.jobs.running {
             let on: String = jobs::target(self.st, &j.kind).chars().take(23).collect();
-            let up = up_label(now.saturating_sub(j.started));
+            let up = jobs::up_label(now.saturating_sub(j.started));
             let found = match j.kind {
                 JobKind::Rent => format!("¤{} paid", j.paid),
                 _ => found_label(&j.found),

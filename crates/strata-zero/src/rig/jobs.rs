@@ -360,6 +360,12 @@ pub fn advance(st: &mut AppState, now: u64) {
     let jobs = &mut st.backdoors.jobs;
     if jobs.running.is_empty() && jobs.heat.is_empty() {
         jobs.cooled = jobs.cooled.max(now - now % 60);
+        let m = morning_of(now);
+        if m > jobs.mailed_day {
+            let mut jobs = std::mem::take(&mut st.backdoors.jobs);
+            morning_mail(st, &mut jobs, m);
+            st.backdoors.jobs = jobs;
+        }
         return;
     }
     let speed = crate::rig::of(st).speed;
@@ -369,13 +375,99 @@ pub fn advance(st: &mut AppState, now: u64) {
             .map(|(i, j)| (j.last + hour_of(&j.kind, speed), j.n, i))
             .min();
         let cool = jobs.cooled + 60;
+        // the next 06:00; what happens at that minute is in the mail
+        let morning = jobs.mailed_day + 1;
+        let six = morning_at(morning);
         match next {
-            Some((t, _, i)) if t <= now && t <= cool => work(st, &mut jobs, i, t),
-            _ if cool <= now => clock_hour(st, &mut jobs, cool),
+            Some((t, _, i)) if t <= now && t <= cool && t <= six => work(st, &mut jobs, i, t),
+            _ if cool <= now && cool <= six => clock_hour(st, &mut jobs, cool),
+            _ if six <= now => morning_mail(st, &mut jobs, morning),
             _ => break,
         }
     }
     st.backdoors.jobs = jobs;
+}
+
+/// How long a job has been up, in game minutes: `7h 12m`, `3d 4h`.
+pub fn up_label(minutes: u64) -> String {
+    match (minutes / 1440, minutes / 60 % 24, minutes % 60) {
+        (0, 0, m) => format!("{m}m"),
+        (0, h, 0) => format!("{h}h"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+/// The 06:00 that `now` is on or past, counted from the first day's; 0 before the
+/// first.
+fn morning_of(now: u64) -> u64 {
+    let since = crate::ui::hud::START_MINUTE_OF_DAY as u64 + now;
+    since.saturating_sub(6 * 60) / (24 * 60)
+}
+
+/// The game minute of the `morning`th 06:00.
+fn morning_at(morning: u64) -> u64 {
+    morning * 24 * 60 + 6 * 60 - crate::ui::hud::START_MINUTE_OF_DAY as u64
+}
+
+/// The `morning`th 06:00: the report, if it has lines, goes to the journal as a mail
+/// from cron, grouped by job, and is emptied. The jobs are advanced in order up to the
+/// minute, so a rig left for days mails each morning's own lines as ticking through would.
+fn morning_mail(st: &mut AppState, jobs: &mut RigJobs, morning: u64) {
+    jobs.mailed_day = morning;
+    if jobs.report.is_empty() {
+        return;
+    }
+    let at = morning_at(morning);
+    // report lines read `kind · target · what`; a job's lines go together
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for line in &jobs.report {
+        let mut parts = line.splitn(3, " · ");
+        let head = match (parts.next(), parts.next()) {
+            (Some(a), Some(b)) => format!("{a} · {b}"),
+            (Some(a), None) => a.to_string(),
+            _ => continue,
+        };
+        let rest = parts.next().unwrap_or("").to_string();
+        match groups.iter_mut().find(|(h, _)| *h == head) {
+            Some((_, lines)) => lines.push(rest),
+            None => groups.push((head, vec![rest])),
+        }
+    }
+    let mut body = Vec::new();
+    for (head, lines) in &groups {
+        if !body.is_empty() {
+            body.push(String::new());
+        }
+        let running = jobs
+            .running
+            .iter()
+            .find(|j| self::head(st, &j.kind) == *head);
+        body.push(match running {
+            Some(j) => format!(
+                "{head} · {}, still running",
+                up_label(at.saturating_sub(j.started))
+            ),
+            None => head.clone(),
+        });
+        body.extend(
+            lines
+                .iter()
+                .filter(|l| !l.is_empty())
+                .map(|l| format!("└ {l}")),
+        );
+    }
+    let n = groups.len();
+    st.journal.mails.push(crate::credentials::Mail {
+        from: "cron".to_string(),
+        subject: format!("overnight · {n} {}", if n == 1 { "job" } else { "jobs" }),
+        body,
+        read: false,
+        at,
+        job: None,
+        story: None,
+    });
+    jobs.report.clear();
 }
 
 /// An hour of the clock at `at`: each building with jobs on it takes their noise (the
@@ -740,7 +832,15 @@ mod tests {
     }
 
     fn reported(st: &AppState, text: &str) -> usize {
+        // the report, and what the morning mail has already carried off
         (st.backdoors.jobs.report.iter())
+            .chain(
+                st.journal
+                    .mails
+                    .iter()
+                    .filter(|m| m.from == "cron")
+                    .flat_map(|m| m.body.iter()),
+            )
             .filter(|l| l.contains(text))
             .count()
     }
@@ -1000,6 +1100,82 @@ mod tests {
         assert_eq!(reported(&st, "the rig was seized"), 2);
     }
 
+    fn cron_mails(st: &AppState) -> Vec<&crate::credentials::Mail> {
+        st.journal
+            .mails
+            .iter()
+            .filter(|m| m.from == "cron")
+            .collect()
+    }
+
+    /// Minutes from `now` to the next `hh:00` on the clock.
+    fn until(now: u64, hh: u64) -> u64 {
+        let day = 24 * 60;
+        let at = (crate::ui::hud::START_MINUTE_OF_DAY as u64 + now) % day;
+        (hh * 60 + day - at) % day
+    }
+
+    #[test]
+    fn the_cron_mail_lands_at_six() {
+        let mut st = state_home();
+        install(&mut st);
+        fit(&mut st, 0, "sled_tinman");
+        let t0 = st.net.now(&st);
+        let (b, _) = planted(&mut st, 8, 0);
+        start(&mut st, JobKind::Rent).unwrap();
+        start(&mut st, JobKind::Sniff(b)).unwrap();
+        let two = t0 + until(t0, 2);
+        let six = t0 + until(t0, 6);
+        assert!(two < six);
+        advance(&mut st, two);
+        assert!(!st.backdoors.jobs.report.is_empty(), "the night's lines");
+        assert!(cron_mails(&st).is_empty(), "nothing before 06:00");
+        advance(&mut st, six - 1);
+        assert!(cron_mails(&st).is_empty());
+        advance(&mut st, six);
+        let mails = cron_mails(&st);
+        assert_eq!(mails.len(), 1);
+        let m = mails[0];
+        assert_eq!(m.subject, "overnight · 2 jobs");
+        assert_eq!(
+            (m.read, m.at, m.job.is_none(), m.story.is_none()),
+            (false, six, true, true)
+        );
+        let body = m.body.join("\n");
+        assert!(body.contains("rent · spare cycles · "), "{body}");
+        assert!(body.contains("still running"), "{body}");
+        assert!(body.contains("\n└ ¤"), "{body}");
+        assert!(st.backdoors.jobs.report.is_empty(), "the report is emptied");
+        // a second morning with nothing new says nothing; with something, one more
+        advance(&mut st, six + 60);
+        advance(&mut st, six + 24 * 60);
+        assert_eq!(cron_mails(&st).len(), 2, "rent paid on");
+        advance(&mut st, six + 24 * 60 + 90);
+        assert_eq!(cron_mails(&st).len(), 2, "one a morning");
+    }
+
+    #[test]
+    fn no_report_no_mail() {
+        let mut st = state_home();
+        let t0 = st.net.now(&st);
+        advance(&mut st, t0 + until(t0, 6) + 24 * 60);
+        assert!(cron_mails(&st).is_empty());
+    }
+
+    #[test]
+    fn away_lands_on_return() {
+        let mut st = state_home();
+        start(&mut st, JobKind::Rent).unwrap();
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.catch_up(city, world.tick() + 48 * H * sim::TICKS_PER_MINUTE);
+        crate::net::tick_backdoors(&mut st);
+        // two mornings went by: one mail for each, as ticking through would have sent
+        let at: Vec<u64> = cron_mails(&st).iter().map(|m| m.at).collect();
+        assert_eq!(at, [morning_at(1), morning_at(2)]);
+        crate::net::tick_backdoors(&mut st);
+        assert_eq!(cron_mails(&st).len(), 2);
+    }
+
     #[test]
     fn rent_pays_by_the_hour() {
         let mut st = state_home();
@@ -1131,7 +1307,7 @@ mod tests {
     fn catch_up_matches_ticking_through() {
         let (mut once, t0) = busy();
         advance(&mut once, t0 + 30 * H);
-        assert!(!once.backdoors.jobs.report.is_empty());
+        assert!(!once.backdoors.jobs.report.is_empty() || !cron_mails(&once).is_empty());
         assert!(!codes(&once, Source::Sniffed).is_empty());
 
         let (mut hourly, _) = busy();
