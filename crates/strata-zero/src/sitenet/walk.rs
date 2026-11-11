@@ -112,28 +112,35 @@ pub fn riser(st: &mut AppState, up: bool) -> Result<String, String> {
         on.filter(|l| l.level < level).max_by_key(|l| l.level)
     }
     .ok_or("the riser ends here")?;
-    // ICE on the hub: you stand on the free tile beside it, the nearest first.
+    let (to, line) = (
+        next.level,
+        format!(
+            "Entering `{}` · {}",
+            FloorPlan::label(next.level),
+            next.name
+        ),
+    );
+    land_on_hub(st, b, to)?;
+    Ok(line)
+}
+
+/// You onto level `level`'s hub of site `b`'s Net; with ICE on it, onto the free tile
+/// beside it, the nearest first. The riser lands you so, and the firewall's gate.
+pub(super) fn land_on_hub(st: &mut AppState, b: BuildingId, level: i32) -> Result<(), String> {
+    let k = st.constructs.site(b).ok_or("no Net here")?;
+    let hub = k.net_level(level).ok_or("no hub on that level")?.hub;
     let free = |p: Pos| {
         k.tiles.get(p).is_some_and(|t| t.is_walkable())
             && k.guard_at(p).is_none()
-            && k.level_at(p).is_some_and(|l| l.level == next.level)
+            && k.level_at(p).is_some_and(|l| l.level == level)
     };
-    let at = std::iter::once(next.hub)
-        .chain(next.hub.neighbors8())
+    let at = std::iter::once(hub)
+        .chain(hub.neighbors8())
         .filter(|p| free(*p))
-        .min_by_key(|p| p.manhattan(next.hub))
+        .min_by_key(|p| p.manhattan(hub))
         .ok_or("ICE holds the hub")?;
-    let line = format!(
-        "Entering `{}` · {}",
-        FloorPlan::label(next.level),
-        next.name
-    );
-    let to = Place::SiteNet {
-        building: b,
-        level: next.level,
-    };
-    crate::constructs::land(st, to, at);
-    Ok(line)
+    crate::constructs::land(st, Place::SiteNet { building: b, level }, at);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1133,9 +1133,11 @@ mod tests {
     fn a_decoy_draws_the_ice() {
         let (mut st, _) = under_kiroflux();
         let city = st.city.as_ref().unwrap();
+        // A construct of today's kind: a site's gate is its firewall's.
         let (b, gi, ad, at) = city
             .buildings
             .iter()
+            .filter(|b| !crate::sitenet::is_site(&st, b.id))
             .find_map(|b| {
                 let k = citygen::construct::generate_construct(city, b.id)?;
                 let gi = k

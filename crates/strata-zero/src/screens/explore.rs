@@ -2700,8 +2700,21 @@ impl MapScreen {
                 self.follow_player(st);
                 Some(ScreenCmd::Stay)
             }
-            // A site's Net is left through its firewall's gate (Task 11).
-            Place::SiteNet { .. } => None,
+            // A site's Net is left through its firewall's gate: the step onto it, then out
+            // through it once every lock is broken.
+            Place::SiteNet { building: b, .. } => {
+                if st.constructs.site(b)?.entry != target {
+                    return None;
+                }
+                if !step(st, dir) {
+                    say_why_not(st, dir);
+                    return Some(ScreenCmd::Stay);
+                }
+                let result = crate::sitenet::out(st);
+                report(st, result);
+                self.follow_player(st);
+                Some(ScreenCmd::Stay)
+            }
             _ => None,
         }
     }
@@ -3061,6 +3074,24 @@ impl MapScreen {
                 self.walking = None;
             } else {
                 w.next_at = now + crate::net::WALK_TICKS;
+            }
+        }
+        // Onto a site's gate inside: out through it once every lock is broken, else the
+        // walk ends on it.
+        if let Place::SiteNet { building, .. } = place
+            && st
+                .constructs
+                .site(building)
+                .is_some_and(|k| k.entry == next)
+        {
+            self.walking = None;
+            match crate::sitenet::out(st) {
+                Ok(line) => {
+                    st.say(line);
+                    self.follow_player(st);
+                    return;
+                }
+                Err(why) => st.warn(why),
             }
         }
         // The last move spent: the act half opens by itself.
@@ -12634,6 +12665,70 @@ mod tests {
     }
 
     #[test]
+    fn a_sites_gate_lets_you_through_and_out_once_its_firewall_is_broken() {
+        use crate::sitenet::testutil::{at_the_gate, office_copy};
+        let (mut st, b) = office_copy(190);
+        at_the_gate(&mut st, b);
+        let mut s = MapScreen::walking(&mut st);
+        let gate = crate::constructs::city_gate(st.city.as_ref().unwrap(), b).unwrap();
+        let toward = |from: Pos, to: Pos| Dir::ALL.into_iter().find(|d| from.step(*d) == to);
+        let onto_gate = toward(player(&st).1, gate).unwrap();
+        // A lock whole: the gate refuses you on the grid.
+        assert!(matches!(
+            s.gateway(&mut st, onto_gate),
+            Some(ScreenCmd::Stay)
+        ));
+        assert_eq!(last(&st), Some("FIREWALL · 3 locks · 0/3 broken"));
+        assert_eq!(player(&st).0, Place::Stratum(StratumKind::Net));
+        let now = st.net.now(&st);
+        for i in 0..3 {
+            st.net.break_lock(b, i, now);
+        }
+        s.gateway(&mut st, onto_gate);
+        let g = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        assert_eq!(player(&st).0, g);
+        // Inside, beside the gate: a lock closed again holds you on it.
+        let entry = st.constructs.site(b).unwrap().entry;
+        let beside = {
+            let k = st.constructs.site(b).unwrap();
+            (entry.neighbors4())
+                .find(|p| {
+                    k.tiles.get(*p).is_some_and(|t| t.is_walkable())
+                        && k.level_at(*p).is_some_and(|l| l.level == 0)
+                })
+                .unwrap()
+        };
+        let out = toward(beside, entry).unwrap();
+        st.net.firewalls.clear();
+        st.net.break_lock(b, 0, now);
+        crate::constructs::land(&mut st, g, beside);
+        assert!(matches!(s.gateway(&mut st, out), Some(ScreenCmd::Stay)));
+        assert_eq!(player(&st), (g, entry), "on the gate, held");
+        assert_eq!(last(&st), Some("FIREWALL · 3 locks · 1/3 broken"));
+        // Every lock broken: the step onto it goes out onto the city's gate tile.
+        for i in 1..3 {
+            st.net.break_lock(b, i, now);
+        }
+        crate::constructs::land(&mut st, g, beside);
+        s.gateway(&mut st, out);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert_eq!(last(&st), Some("Entering the GRID"));
+        // A walk onto the gate inside goes out too.
+        s.gateway(&mut st, onto_gate);
+        crate::constructs::land(&mut st, g, beside);
+        s.walking = Some(Walk {
+            path: vec![entry],
+            next_at: st.clock_tick(),
+        });
+        s.walk_step(&mut st);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert!(s.walking.is_none());
+    }
+
+    #[test]
     fn in_a_fight_the_arrows_aim_and_the_path_lights_to_your_moves() {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
@@ -13519,10 +13614,13 @@ mod tests {
     /// A building with a gate and a server, not one of `not`.
     fn other_construct(st: &mut AppState, not: &[citygen::BuildingId]) -> citygen::BuildingId {
         let city = st.city.clone().unwrap();
-        city.buildings
-            .iter()
+        // A construct of today's kind: a site's gate is its firewall's.
+        let candidates: Vec<citygen::BuildingId> = (city.buildings.iter())
             .map(|b| b.id)
-            .filter(|b| !not.contains(b))
+            .filter(|b| !not.contains(b) && !crate::sitenet::is_site(st, *b))
+            .collect();
+        candidates
+            .into_iter()
             .find(|b| {
                 crate::constructs::city_gate(&city, *b).is_some()
                     && st.constructs.ensure(&city, *b).is_some_and(|k| {

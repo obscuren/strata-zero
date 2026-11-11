@@ -2894,9 +2894,11 @@ fn net_inside() {
     let mut st = state_home();
     let mut map = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();
+    // A construct of today's kind: a site's gate is its firewall's.
     let (k, b) = city
         .buildings
         .iter()
+        .filter(|b| !crate::sitenet::is_site(&st, b.id))
         .filter_map(|b| citygen::construct::generate_construct(&city, b.id).map(|k| (k, b.id)))
         .find(|(k, _)| k.vault_room().is_some() && k.security >= 230 && k.guards.len() == 2)
         .expect("a black construct with a vault");
@@ -3481,9 +3483,11 @@ fn net_decoy() {
     let mut st = state_home();
     let mut map = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();
+    // A construct of today's kind: a site's gate is its firewall's.
     let (b, ad, at) = city
         .buildings
         .iter()
+        .filter(|b| !crate::sitenet::is_site(&st, b.id))
         .find_map(|b| {
             let k = citygen::construct::generate_construct(&city, b.id)?;
             let g = k.guards.iter().find(|g| g.beat.len() >= 2 && !g.inert)?;

@@ -235,17 +235,19 @@ pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, Str
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
 /// a construct's outer wall (a facade's camera, holo ad, lock) or out on the grid (a
-/// district's lamp grid, a street terminal); not hubs, not ICE; and only on the cells
-/// the live city owns (on another's, that one's map is what's there). Yourself first.
+/// district's lamp grid, a street terminal), and a site's firewall locks; not hubs, not
+/// ICE, not what a site's firewall keeps inside; and only on the cells the live city owns
+/// (on another's, that one's map is what's there). Yourself first.
 pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let Some(city) = st.city.as_ref() else {
         return out;
     };
     let near: Vec<Pos> = std::iter::once(pos).chain(pos.neighbors8()).collect();
+    let site = |b: BuildingId| crate::sitenet::is_site(st, b);
     for n in &city.net.nodes {
         if !near.contains(&n.cyber)
-            || !grid_reaches(city, n)
+            || !grid_reaches(city, n, &site)
             || !crate::outside::stream::live_owns(st, n.cyber)
         {
             continue;
@@ -255,6 +257,17 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
             None => n.kind.label().to_string(),
         };
         out.push((HackTarget::Node(n.id), what));
+    }
+    // A site's firewall locks, round its footprint.
+    let round = (city.buildings.iter()).filter(|x| x.footprint.grow(2).contains(pos));
+    for x in round.filter(|x| site(x.id)) {
+        for (i, at) in crate::sitenet::lock_spots(st, x.id).into_iter().enumerate() {
+            if near.contains(&at) && crate::outside::stream::live_owns(st, at) {
+                let lock = citygen::SiteNode::firewall(x.id, i as u8);
+                let what = format!("firewall lock {} · {}", i + 1, building_name(st, x.id));
+                out.push((HackTarget::Site(lock), what));
+            }
+        }
     }
     // ICE out on the grid, beside you or in sight at range.
     for (i, name) in crate::grid::in_reach(st, pos) {
@@ -287,11 +300,19 @@ pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<N
         let Some(Owner::City(city, q)) = b.elsewhere(p) else {
             continue;
         };
+        // Another city's plans aren't at hand: a building is a site by its kind.
+        let site = |id: BuildingId| {
+            (city.building_opt(id)).is_some_and(|x| {
+                citygen::venue::VenuePack::builtin()
+                    .for_kind(x.kind)
+                    .is_some()
+            })
+        };
         out.extend(
             city.net
                 .nodes
                 .iter()
-                .filter(|n| n.cyber == q && grid_reaches(city, n))
+                .filter(|n| n.cyber == q && grid_reaches(city, n, &site))
                 .map(|n| n.kind),
         );
     }
@@ -300,15 +321,26 @@ pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<N
 
 /// Whether the open Net reaches node `n` of `city` from its tile or beside it: out on
 /// the grid, or on a construct's outer wall (a facade's camera, holo ad, lock); not hubs,
-/// not ICE.
-fn grid_reaches(city: &City, n: &citygen::Node) -> bool {
+/// not ICE, and not a site's server, data vault or lift control, which stand inside its
+/// firewall (`site` says which buildings are sites).
+pub(crate) fn grid_reaches(
+    city: &City,
+    n: &citygen::Node,
+    site: &dyn Fn(BuildingId) -> bool,
+) -> bool {
     if matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
         return false;
     }
-    n.building.is_none()
-        || city
-            .tile(StratumKind::Net, n.cyber)
-            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
+    let Some(b) = n.building else {
+        return true;
+    };
+    let walled = matches!(
+        n.kind,
+        NodeKind::Server | NodeKind::DataVault | NodeKind::LiftCtrl
+    );
+    (city.tile(StratumKind::Net, n.cyber))
+        .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
+        && !(walled && site(b))
 }
 
 /// A target's kind where you stand.
@@ -321,13 +353,16 @@ pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target
             HackTarget::Foe(i) => Some(Target::Guard(
                 st.foes.get(i).filter(|f| !f.down)?.ice.as_ref()?.grade,
             )),
+            HackTarget::Site(n) if n.firewall_lock().is_some() => {
+                Some(Target::Node(NodeKind::Firewall))
+            }
             HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
     }
 }
 
 /// A target's tile where you stand: its tile in the construct, or its tile on the
-/// open Net.
+/// open Net (a firewall lock's, its lock tile).
 pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
     match scene {
         Scene::Inside(b) => target_pos(st, b, target),
@@ -335,18 +370,28 @@ pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
             HackTarget::Node(id) => Some(st.city.as_ref()?.net.node(id).cyber),
             HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
             HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
-            HackTarget::Guard { .. } | HackTarget::Site(_) => None,
+            HackTarget::Site(n) => {
+                let lock = usize::from(n.firewall_lock()?);
+                crate::sitenet::lock_spots(st, n.building)
+                    .get(lock)
+                    .copied()
+            }
+            HackTarget::Guard { .. } => None,
         },
     }
 }
 
 /// Whose trace a run on `target` heats: the construct's inside; on the open Net the
-/// node's owner; none for a program on yourself out there.
+/// node's owner (a firewall lock's, its building); none for a program on yourself out
+/// there.
 pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate::owners::Owner> {
     match (scene, target) {
         (Scene::Inside(b), _) => Some(crate::owners::Owner::Building(b)),
         (Scene::Outside, HackTarget::Node(id)) => crate::owners::owner_of(st.city.as_ref()?, id),
         (Scene::Outside, HackTarget::Foe(i)) => st.foes.get(i)?.ice.as_ref().map(|g| g.owner),
+        (Scene::Outside, HackTarget::Site(n)) if n.firewall_lock().is_some() => {
+            Some(crate::owners::Owner::Building(n.building))
+        }
         (Scene::Outside, _) => None,
     }
 }
@@ -431,6 +476,11 @@ pub struct NetState {
     /// The open Net's trail, sentinels, tracers' pace and sweeps.
     #[serde(default)]
     pub grid: crate::grid::GridState,
+    /// A site's broken firewall locks: the lock, and the game minute it closes again. The
+    /// one record of a broken lock (no `Hack` is pushed for one); an alarm clears the
+    /// building's.
+    #[serde(default)]
+    pub firewalls: BTreeMap<BuildingId, Vec<(u8, u64)>>,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -471,6 +521,7 @@ impl Default for NetState {
             eyes_minute: None,
             line_next: 0,
             grid: Default::default(),
+            firewalls: BTreeMap::new(),
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -673,12 +724,32 @@ impl NetState {
     }
 
     /// The alarm: every hack on the building but a backdoor expires now.
-    /// The alarm resets the building's locks, cameras and lifts; a backdoor holds,
-    /// and a broken piece of ICE stays broken for its hour.
+    /// The alarm resets the building's locks, cameras and lifts and closes a site's
+    /// firewall; a backdoor holds, and a broken piece of ICE stays broken for its hour.
     pub fn alarm(&mut self, b: BuildingId, now: u64) {
         let _ = now;
         self.hacks
             .retain(|h| h.building != b || matches!(h.op, Op::Backdoor | Op::Attack));
+        self.firewalls.remove(&b);
+    }
+
+    /// Site `b`'s firewall locks broken at minute `now`, in lock order.
+    pub fn broken_locks(&self, b: BuildingId, now: u64) -> Vec<u8> {
+        let mut locks: Vec<u8> = (self.firewalls.get(&b).into_iter().flatten())
+            .filter(|(_, until)| now < *until)
+            .map(|(lock, _)| *lock)
+            .collect();
+        locks.sort_unstable();
+        locks
+    }
+
+    /// Site `b`'s firewall lock `lock` broken at minute `now`, for `HACK_MINUTES`: broken
+    /// again, its hour starts over.
+    pub fn break_lock(&mut self, b: BuildingId, lock: u8, now: u64) {
+        let locks = self.firewalls.entry(b).or_default();
+        locks.retain(|(l, _)| *l != lock);
+        locks.push((lock, now + HACK_MINUTES));
+        locks.sort_unstable();
     }
 
     /// Sets every guard of a generated construct standing or lifted by the hacks.
@@ -707,8 +778,8 @@ impl NetState {
         }
     }
 
-    /// The game minutes up to `now` pass: hacks expire, every trace the player is
-    /// not inside cools, alerts end and their guards stand again.
+    /// The game minutes up to `now` pass: hacks expire, broken firewall locks close, every
+    /// trace the player is not inside cools, alerts end and their guards stand again.
     pub fn minute(
         &mut self,
         now: u64,
@@ -739,6 +810,10 @@ impl NetState {
             }
         }
         self.hacks.retain(|h| h.until.is_none_or(|u| now < u));
+        for locks in self.firewalls.values_mut() {
+            locks.retain(|(_, until)| now < *until);
+        }
+        self.firewalls.retain(|_, locks| !locks.is_empty());
         for b in buildings {
             self.sync_guards(constructs, b, now, roots);
         }
@@ -996,10 +1071,12 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     } else {
         spec.noise + 2
     };
-    // Out on the open Net a turn is louder than behind a gate.
+    // Out on the open Net a turn is louder than behind a gate; a firewall's lock is the
+    // gate, worked from either side.
+    let lock = matches!(run.target, HackTarget::Site(n) if n.firewall_lock().is_some());
     let noise = match scene {
-        Scene::Inside(_) => noise,
-        Scene::Outside => crate::owners::outside_noise(noise),
+        Scene::Outside if !lock => crate::owners::outside_noise(noise),
+        _ => noise,
     };
     if let Some(o) = owner {
         match crate::owners::heat_on(st, o, noise) {
@@ -1160,7 +1237,10 @@ fn land(
     rating: u8,
     now: u64,
 ) -> String {
-    st.net.land(b, target, kind, op, now);
+    // A firewall's lock is no hack: `NetState.firewalls` keeps it (`sitenet::landed`).
+    if !matches!(target, HackTarget::Site(n) if n.firewall_lock().is_some()) {
+        st.net.land(b, target, kind, op, now);
+    }
     let name = building_name(st, b);
     // A site's node says what it opens, before the arms every construct shares; so does a
     // city node of a site that opens one device, not the building.
@@ -1234,16 +1314,11 @@ fn land(
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
+        // A site's camera or terminal is held by `sitenet::landed`, above.
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
             HackTarget::Node(id) => crate::holds::take(
                 st,
                 citygen::NetNode::City(id),
-                crate::owners::Owner::Building(b),
-                now,
-            ),
-            HackTarget::Site(n) => crate::holds::take(
-                st,
-                citygen::NetNode::Site(n),
                 crate::owners::Owner::Building(b),
                 now,
             ),
@@ -3010,6 +3085,8 @@ pub fn target_label(st: &AppState, target: HackTarget) -> Option<String> {
             .foes
             .get(i)
             .map_or_else(|| "ICE".to_string(), |f| f.name.clone()),
+        // A firewall's lock is one from the grid too, before its construct is made.
+        HackTarget::Site(n) if n.firewall_lock().is_some() => NodeKind::Firewall.label().into(),
         HackTarget::Site(n) => (st.constructs.get(n.building))
             .and_then(|k| k.device(n))
             .map_or("node", |d| d.kind.label())

@@ -43,6 +43,19 @@ pub fn landed(
             crate::net::building_name(st, b)
         ),
         (NodeKind::Turret | NodeKind::Container, Op::Crack) => format!("{name} cracked"),
+        // The same lock from the grid or from inside: broken for its hour, kept in
+        // `NetState.firewalls` alone.
+        (NodeKind::Firewall, Op::Crack) => {
+            let lock = node.firewall_lock()?;
+            st.net.break_lock(b, lock, now);
+            let marks = super::broken(st, b);
+            let down = marks.iter().filter(|m| **m).count();
+            let line = format!("firewall lock {} broken · {down}/{}", lock + 1, marks.len());
+            match super::firewall_open(st, b) {
+                true => format!("{line} · the gate is open"),
+                false => line,
+            }
+        }
         _ => return None,
     })
 }
@@ -92,7 +105,7 @@ pub fn container_open(st: &AppState, node: SiteNode) -> bool {
 mod tests {
     use super::super::testutil::*;
     use super::super::*;
-    use citygen::{NodeKind, Place};
+    use citygen::{NodeKind, Place, SiteNode};
     use game::{HackTarget, ItemId, Op, Target};
 
     #[test]
@@ -220,6 +233,57 @@ mod tests {
         assert_eq!(c.second.as_deref(), Some("door lock · locked"), "{c:?}");
         hack(&mut st, door.node, NodeKind::DoorLock, Op::Crack);
         assert_eq!(card(&st).second.as_deref(), Some("door lock · cracked"));
+    }
+
+    /// The Look card's second line for the tile `at` of `place`.
+    fn look_second(st: &AppState, place: Place, at: citygen::Pos) -> Option<String> {
+        let map = crate::render::map::MapRef::for_place(
+            st.city.as_ref().unwrap(),
+            &st.interiors,
+            &st.constructs,
+            place,
+            0,
+        )
+        .unwrap();
+        crate::look::look_card(st, &map, place, at, &|_, _| None, &[]).second
+    }
+
+    #[test]
+    fn the_look_reads_a_door_node_as_a_step_meets_it() {
+        let (mut st, b, level, way) = a_locked_street_way_in();
+        on_hub(&mut st, b, level);
+        let place = st.player.as_ref().unwrap().place;
+        let lock = way.lock.unwrap();
+        let k = st.constructs.site(b).unwrap();
+        let door = k.device(SiteNode {
+            building: b,
+            level,
+            at: lock.at,
+        });
+        let door = door.expect("the way in's node").clone();
+        let second = |st: &AppState| look_second(st, place, door.at);
+        assert_eq!(second(&st).as_deref(), Some("door lock · locked"));
+        // Its street door's city lock cracked opens it: it reads open.
+        let citygen::venue::WayInKind::Door { stratum, door: at } = way.kind else {
+            unreachable!()
+        };
+        let id = (st.city.as_ref().unwrap().net.node_at(stratum, at))
+            .unwrap()
+            .id;
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            HackTarget::Node(id),
+            Target::Node(NodeKind::DoorLock),
+            Op::Crack,
+            now,
+        );
+        assert!(lock_open(&st, b, level, &lock));
+        assert_eq!(second(&st).as_deref(), Some("door lock · open"));
+        // In an alarm it's locked down, a crack landed since too, as a step finds it.
+        crate::net::lock_down(&mut st, b);
+        hack(&mut st, door.node, NodeKind::DoorLock, Op::Crack);
+        assert_eq!(second(&st).as_deref(), Some("door lock · locked down"));
     }
 
     #[test]

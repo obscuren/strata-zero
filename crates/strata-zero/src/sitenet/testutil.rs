@@ -211,3 +211,81 @@ pub(crate) fn across_a_door_node(st: &mut AppState, b: BuildingId) -> (Pos, Pos,
     }
     panic!("no door node with a free side on {b:?}'s Net")
 }
+
+/// You on the city's Net on tile `at`: jacked in from the street where you stand (the body
+/// left there), or moved there from wherever you are on the Net.
+fn on_the_grid(st: &mut AppState, at: Pos) {
+    let p = st.player.as_mut().expect("you");
+    if !p.jacked_in() {
+        assert!(p.place.is_street(), "on the street to jack in");
+        p.body = Some((p.place, p.pos));
+    }
+    st.net.beat = st.clock_tick();
+    crate::constructs::land(st, Place::Stratum(StratumKind::Net), at);
+}
+
+/// You on the city's Net on an open tile beside `at`, off every building's footprint.
+pub(crate) fn stand_on_the_grid_beside(st: &mut AppState, at: Pos) {
+    let city = st.city.as_ref().unwrap();
+    let off = |p: Pos| {
+        city.walkable(StratumKind::Net, p)
+            && !(city.buildings.iter()).any(|x| x.footprint.contains(p))
+    };
+    let spot = (at.neighbors8())
+        .find(|p| off(*p))
+        .unwrap_or_else(|| panic!("no grid tile beside {at:?}"));
+    on_the_grid(st, spot);
+}
+
+/// You on the city's Net beside site `b`'s gate, jacked in.
+pub(crate) fn at_the_gate(st: &mut AppState, b: BuildingId) {
+    let gate = crate::constructs::city_gate(st.city.as_ref().unwrap(), b).expect("a gate");
+    stand_on_the_grid_beside(st, gate);
+}
+
+/// You, on a site's Net, put on a tile beside `at` on its level you may stand on.
+pub(crate) fn walk_beside(st: &mut AppState, at: Pos) {
+    let Some(Place::SiteNet { building: b, .. }) = st.player.as_ref().map(|p| p.place) else {
+        panic!("on a site's Net");
+    };
+    let k = st.constructs.site(b).unwrap();
+    let level = k.level_at(at).expect("a tile of a level").level;
+    let spot = (at.neighbors8())
+        .find(|p| open(st, b, *p) && k.level_at(*p).is_some_and(|l| l.level == level))
+        .unwrap_or_else(|| panic!("no tile beside {at:?}"));
+    crate::constructs::land(st, Place::SiteNet { building: b, level }, spot);
+}
+
+/// You on site `b`'s Net, on the gate inside (its construct's entry).
+pub(crate) fn walk_to_the_gate_inside(st: &mut AppState, b: BuildingId) {
+    let k = st.constructs.site(b).expect("the site's construct");
+    let (entry, level) = (k.entry, k.level_at(k.entry).expect("on a level").level);
+    assert!(
+        st.player.as_ref().is_some_and(|p| p.jacked_in()),
+        "jacked in"
+    );
+    crate::constructs::land(st, Place::SiteNet { building: b, level }, entry);
+}
+
+/// A door-lock node of site `b`'s Net on a level on the riser whose door has a lock on its
+/// floor: its level and the node.
+pub(crate) fn a_door_node(st: &AppState, b: BuildingId) -> (i32, SiteNode) {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    (net.nodes.iter())
+        .filter(|n| n.kind == NodeKind::DoorLock && net.on_riser(n.node.level))
+        .map(|n| (n.node.level, n.node))
+        .find(|&(level, node)| floor_lock(st, b, level, node).is_some())
+        .expect("a door node with a lock on its floor")
+}
+
+/// The lock on its floor of site `b`'s door node `door` on `level`.
+pub(crate) fn lock_of(st: &AppState, b: BuildingId, level: i32, door: SiteNode) -> DoorLock {
+    floor_lock(st, b, level, door).expect("a lock on the floor")
+}
+
+/// The lock on its floor at site `b`'s door node `door` on `level`, if one is there.
+fn floor_lock(st: &AppState, b: BuildingId, level: i32, door: SiteNode) -> Option<DoorLock> {
+    let plan = crate::interiors::plan_now(st, b)?;
+    let floor = crate::interiors::floor_now(st, &plan, level)?;
+    floor.lock_at(door.at).copied()
+}

@@ -43,13 +43,6 @@ impl Constructs {
     }
 
     /// A site's construct, kept under its building over any construct it had before.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the ways in (the firewall, a floor's terminal) make it from Task 11 on"
-        )
-    )]
     pub fn put_site(&mut self, k: Construct) {
         self.made.insert(k.building, k);
     }
@@ -101,10 +94,14 @@ pub(crate) fn land(st: &mut AppState, place: Place, pos: Pos) {
     st.repaint = true;
 }
 
-/// Through a building's gate on the Net, onto the entry inside its construct.
+/// Through a building's gate on the Net, onto the entry inside its construct; a site's
+/// gate is its firewall's (`sitenet::through`).
 pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     // The first beat falls a full beat after the gate.
     st.net.beat = st.clock_tick();
+    if crate::sitenet::is_site(st, b) {
+        return crate::sitenet::through(st, b);
+    }
     let now = st.net.now(st);
     if st.net.alert(b, now) {
         let city = st.city.as_ref().ok_or("no city")?;

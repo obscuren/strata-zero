@@ -1010,6 +1010,8 @@ fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)
     let now = st.net.now(st);
     let state = if crate::holds::held(st, citygen::NetNode::Site(d.node), now).is_some() {
         Some("held")
+    } else if d.kind == NodeKind::DoorLock {
+        Some(door_state(st, building, d))
     } else if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
         Some("cracked")
     } else if matches!(
@@ -1026,6 +1028,31 @@ fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)
         None => kind.to_string(),
     };
     Some((d.name.clone(), second))
+}
+
+/// A door's node as a step onto it meets it (`sitenet::step_on_net`): `locked down` in an
+/// alarm; `cracked` by a hack on its own node; `open` when the Net holds its lock open
+/// another way (`sitenet::lock_open`: a way in's, by its street door's city lock); else
+/// `locked`. The card is drawn every frame: the way in's lock is read off the layout, no
+/// floor drawn for it.
+fn door_state(st: &AppState, b: citygen::BuildingId, d: &citygen::NetDevice) -> &'static str {
+    if st.net.alert(b, st.net.now(st)) {
+        return "locked down";
+    }
+    if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
+        return "cracked";
+    }
+    let (level, at) = (d.node.level, d.node.at);
+    let way_in = crate::interiors::plan_now(st, b).and_then(|plan| {
+        let v = plan.venue.as_deref()?;
+        (v.ways_in.iter())
+            .filter(|w| w.level == level)
+            .find_map(|w| w.lock.filter(|l| l.at == at))
+    });
+    match way_in {
+        Some(lock) if crate::sitenet::lock_open(st, b, level, &lock) => "open",
+        _ => "locked",
+    }
 }
 
 /// The bare ground `tile`, drawn as `glyph`: its name and `location`, where it is; or

@@ -11,9 +11,11 @@ use citygen::{BuildingId, FloorPlan, NetNode};
 use game::HackTarget;
 use std::borrow::Cow;
 
+mod firewall;
 mod locks;
 mod nodes;
 mod walk;
+pub use firewall::*;
 pub use locks::*;
 pub use nodes::*;
 pub use walk::*;
@@ -70,13 +72,6 @@ pub fn net_of(st: &AppState, b: BuildingId) -> Option<SiteNet> {
 /// Makes site `b`'s construct the first time it's needed and keeps it. Made over a
 /// construct from before (an old save's): that one's ICE and the hacks on its guards go
 /// with it (Ruling 13).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the ways in (the firewall, a floor's terminal) make it from Task 11 on"
-    )
-)]
 pub fn ensure_construct(st: &mut AppState, b: BuildingId) -> Result<(), String> {
     if st.constructs.site(b).is_some() {
         return Ok(());
@@ -115,6 +110,7 @@ pub fn forget(st: &mut AppState, b: BuildingId) {
     if st.net.feed.is_some_and(ours) {
         st.net.feed = None;
     }
+    st.net.firewalls.remove(&b);
     drop_ice(st, b);
     if st.constructs.site(b).is_some() {
         st.constructs.drop(b);
