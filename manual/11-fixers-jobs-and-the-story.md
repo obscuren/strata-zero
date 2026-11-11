@@ -40,7 +40,7 @@ Track one thing at a time: a job's next step, a fixer, a place on the map. Press
 
 - The way there lights up on the ground in cyan, pulsing every few seconds. Where you're going ripples in magenta.
 - When the target is off the edge of the screen, a tag on that edge points to it.
-- Indoors, the way runs through the door, the stairs and the lifts to the right floor; the close map marks that floor with `⌖`.
+- Indoors, the way runs through the door, the stairs and the lifts to the right floor, keeping to the doors, lifts and crawls that open for you; the close map marks that floor with `⌖`.
 - The JOBS pane says how far it is and what comes next, like `lift to 6F`.
 
 Tracking shows you the way; it doesn't walk it for you. A job's track moves on to its next step by itself.

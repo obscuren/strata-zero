@@ -41,6 +41,7 @@ New mail shows a moment as a pill in the map's top right corner, with who it's f
 | `▪` | where you jacked in |
 | `≡` | stairs |
 | `⇅` | a lift |
+| `╫` | a crawl's grille |
 | `⌂` | your front door |
 | `⌖` | the floor you're tracking |
 
