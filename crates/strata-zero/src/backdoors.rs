@@ -189,9 +189,10 @@ pub enum Event {
     TraceStarted {
         hops: usize,
     },
-    /// The raid landed; `wiped` when a killswitch took the rig first.
+    /// The raid landed at minute `at`; `wiped` when a killswitch took the rig first.
     Raid {
         wiped: bool,
+        at: u64,
     },
     RigReturned,
 }
@@ -495,7 +496,10 @@ impl Backdoors {
                     self.rung = None;
                     let wiped = firewall >= 3;
                     self.raid(t.moves_at, wiped);
-                    events.push(Event::Raid { wiped });
+                    events.push(Event::Raid {
+                        wiped,
+                        at: t.moves_at,
+                    });
                 }
             }
         }
@@ -721,7 +725,13 @@ mod tests {
         assert!(bd.minute(100 + HOLD_NET + HOLD_KEY, 0).is_empty());
         let raid_at = 100 + HOLD_NET + HOLD_KEY + LAST_LEG;
         let ev = bd.minute(raid_at, 0);
-        assert_eq!(ev, vec![Event::Raid { wiped: false }]);
+        assert_eq!(
+            ev,
+            vec![Event::Raid {
+                wiped: false,
+                at: raid_at
+            }]
+        );
         assert!(bd.trace.is_none());
         // the raid takes everything you still hold, without patching
         assert!(matches!(
@@ -789,7 +799,10 @@ mod tests {
         assert!(bd.trace.as_ref().unwrap().relays.is_empty());
         assert_eq!(
             bd.minute(1 + LAST_LEG, 0),
-            vec![Event::Raid { wiped: false }]
+            vec![Event::Raid {
+                wiped: false,
+                at: 1 + LAST_LEG
+            }]
         );
     }
 
@@ -907,7 +920,7 @@ mod tests {
         bd.start_trace(0, 3);
         let at = LAST_LEG * 2;
         let ev = bd.minute(at, 3);
-        assert!(ev.contains(&Event::Raid { wiped: true }));
+        assert!(ev.contains(&Event::Raid { wiped: true, at }));
         assert!(matches!(
             bd.list[0].state,
             State::Burned { why: Why::Raid, .. }

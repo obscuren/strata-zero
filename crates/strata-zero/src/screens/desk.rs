@@ -190,7 +190,6 @@ impl Desk {
     }
 }
 
-/// The clock runs while you work: `FIT_MINUTES` of the city's minutes.
 /// A rig with fewer seats than jobs kills the newest, and says which.
 fn lose_seats(st: &mut AppState) {
     for line in crate::rig::jobs::trim_to_seats(st) {
@@ -198,6 +197,7 @@ fn lose_seats(st: &mut AppState) {
     }
 }
 
+/// The clock runs while you work: `FIT_MINUTES` of the city's minutes.
 fn run_clock(st: &mut AppState) {
     for _ in 0..FIT_MINUTES {
         crate::clock::run(

@@ -1654,12 +1654,11 @@ pub fn tick_backdoors(st: &mut AppState) {
                     },
                 );
             }
-            crate::backdoors::Event::Raid { wiped } => {
+            crate::backdoors::Event::Raid { wiped, at } => {
                 // The route ends first, so the dump starts no second trace.
                 st.backdoors.end_route();
-                if wiped {
-                    crate::rig::jobs::kill_on_lines(st, "the rig wiped itself");
-                }
+                // The jobs work up to the door going in, and no further.
+                crate::rig::jobs::raid(st, at, wiped);
                 if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
                     dump_for(st, "the line went dead", COOLING_MINUTES);
                 }

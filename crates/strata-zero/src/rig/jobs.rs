@@ -24,6 +24,9 @@ pub struct Job {
     pub last: u64,
     pub progress: u64,
     pub found: Vec<String>,
+    /// Rent: what it has paid since the report was last emptied.
+    #[serde(default)]
+    pub paid: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +78,7 @@ pub const SIFT_HOURS: u64 = 6;
 pub const SIFT_VAULT_HOURS: u64 = 10;
 /// Credits an hour of rent pays.
 pub const RENT_PER_HOUR: u32 = 6;
-/// Noise an hour on the building, in quarter points.
+/// Noise a clock hour on the building, in quarter points, however fast the rig.
 pub const SNIFF_NOISE: u32 = 4;
 pub const KEEPALIVE_NOISE: u32 = 1;
 /// The heat that gets a mention in the morning, and the heat that gets the hole patched.
@@ -85,7 +88,6 @@ pub const HEAT_PATCH: u32 = 36 * 4;
 pub const COOL: u32 = 4;
 
 const WARNING: &str = "their auth.log is getting long. somebody reads those.";
-const RENT_LINE: &str = "rent · spare cycles · ¤";
 
 /// What a sifted shard can leave lying in a flat.
 const STASHES: [&str; 6] = [
@@ -181,6 +183,7 @@ fn sift_hours(shard: &ItemId) -> u64 {
 #[allow(dead_code)] // HELIX's `run`, later
 pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
     let now = st.net.now(st);
+    advance(st, now);
     let what = kind.name();
     if st.backdoors.seized(now) {
         return Err("run: the rig is seized".to_string());
@@ -234,6 +237,7 @@ pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
         last: now,
         progress: 0,
         found: Vec::new(),
+        paid: 0,
     });
     Ok(n)
 }
@@ -243,6 +247,7 @@ pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
 #[allow(dead_code)] // HELIX's `kill`, later
 pub fn kill(st: &mut AppState, n: u32) -> Result<String, String> {
     let now = st.net.now(st);
+    advance(st, now);
     let mut jobs = std::mem::take(&mut st.backdoors.jobs);
     let out = match jobs.running.iter().position(|j| j.n == n) {
         None => Err(format!("kill: no job {n}")),
@@ -263,6 +268,7 @@ pub fn kill(st: &mut AppState, n: u32) -> Result<String, String> {
 pub fn trim_to_seats(st: &mut AppState) -> Vec<String> {
     let seats = crate::rig::of(st).seats as usize;
     let now = st.net.now(st);
+    advance(st, now);
     let mut jobs = std::mem::take(&mut st.backdoors.jobs);
     let mut out = Vec::new();
     while jobs.running.len() > seats {
@@ -282,19 +288,26 @@ pub fn trim_to_seats(st: &mut AppState) -> Vec<String> {
 
 /// Every job ends at once, saying `why` (a seized rig).
 pub fn kill_all(st: &mut AppState, why: &str) {
-    kill_where(st, why, |_| true);
+    let now = st.net.now(st);
+    kill_where(st, why, now, |_| true);
 }
 
-/// The jobs on backdoors end, saying `why` (a rig that wiped itself, its lines gone).
-pub fn kill_on_lines(st: &mut AppState, why: &str) {
-    kill_where(st, why, |k| k.line().is_some());
+/// The raid at minute `at`: the jobs work up to it, then a seized rig loses every job
+/// and a rig that wiped itself the jobs on its lines (its backdoors all burned).
+pub fn raid(st: &mut AppState, at: u64, wiped: bool) {
+    if wiped {
+        kill_where(st, "the rig wiped itself", at, |k| k.line().is_some());
+    } else {
+        kill_where(st, "the rig was seized", at, |_| true);
+    }
 }
 
-fn kill_where(st: &mut AppState, why: &str, which: impl Fn(&JobKind) -> bool) {
+/// The jobs `which` picks work up to `now`, then end, saying `why`.
+fn kill_where(st: &mut AppState, why: &str, now: u64, which: impl Fn(&JobKind) -> bool) {
+    advance(st, now);
     if st.backdoors.jobs.running.is_empty() {
         return;
     }
-    let now = st.net.now(st);
     let mut jobs = std::mem::take(&mut st.backdoors.jobs);
     let mut i = 0;
     while i < jobs.running.len() {
@@ -343,7 +356,7 @@ fn end_on(st: &mut AppState, jobs: &mut RigJobs, b: BuildingId, now: u64, line: 
 }
 
 /// The jobs work up to `now`, an hour at a time from where each was last advanced, and
-/// the buildings with no job on them cool by the clock's hours. Every hour is played in
+/// on the clock's hours the buildings with jobs on them get noisier and the rest cool. Every hour is played in
 /// order whatever the gaps between calls, so a long catch-up comes out as ticking
 /// through does.
 pub fn advance(st: &mut AppState, now: u64) {
@@ -361,25 +374,54 @@ pub fn advance(st: &mut AppState, now: u64) {
         let cool = jobs.cooled + 60;
         match next {
             Some((t, _, i)) if t <= now && t <= cool => work(st, &mut jobs, i, t),
-            _ if cool <= now => cool_off(&mut jobs, cool),
+            _ if cool <= now => clock_hour(st, &mut jobs, cool),
             _ => break,
         }
     }
     st.backdoors.jobs = jobs;
 }
 
-/// An hour of the clock: the heat on buildings with no job on them falls.
-fn cool_off(jobs: &mut RigJobs, at: u64) {
+/// An hour of the clock at `at`: each building with jobs on it takes their noise (the
+/// warning at 18, the hole patched at 36), and the rest cool.
+fn clock_hour(st: &mut AppState, jobs: &mut RigJobs, at: u64) {
+    use crate::backdoors::Why;
     jobs.cooled = at;
-    let on: BTreeSet<BuildingId> = jobs.running.iter().filter_map(|j| j.kind.line()).collect();
+    let mut noise: BTreeMap<BuildingId, u32> = BTreeMap::new();
+    for j in &jobs.running {
+        match j.kind {
+            JobKind::Sniff(b) => *noise.entry(b).or_default() += SNIFF_NOISE,
+            JobKind::Keepalive(b) => *noise.entry(b).or_default() += KEEPALIVE_NOISE,
+            _ => {}
+        }
+    }
     for (b, h) in jobs.heat.iter_mut() {
-        if !on.contains(b) {
+        if !noise.contains_key(b) {
             *h = h.saturating_sub(COOL);
         }
     }
     jobs.heat.retain(|_, h| *h > 0);
     let heat = &jobs.heat;
     jobs.warned.retain(|b| heat.contains_key(b));
+    for (b, n) in noise {
+        let heat = jobs.heat.entry(b).or_insert(0);
+        *heat += n;
+        let heat = *heat;
+        let Some(kind) = (jobs.running.iter())
+            .find(|j| j.kind.line() == Some(b))
+            .map(|j| j.kind.clone())
+        else {
+            continue;
+        };
+        if heat >= HEAT_WARN && jobs.warned.insert(b) {
+            jobs.report.push(format!("{} · {WARNING}", head(st, &kind)));
+        }
+        if heat >= HEAT_PATCH {
+            st.backdoors.burn(b, Why::Noticed, at);
+            jobs.heat.remove(&b);
+            jobs.warned.remove(&b);
+            end_on(st, jobs, b, at, "the admins found it · the hole is patched");
+        }
+    }
 }
 
 /// Job `i` works its next hour, which ends at `t`.
@@ -393,7 +435,7 @@ fn work(st: &mut AppState, jobs: &mut RigJobs, i: usize, t: u64) {
         jobs.worked_since_boot += 1;
     }
     match kind {
-        JobKind::Rent => pay(st, jobs),
+        JobKind::Rent => pay(st, jobs, i),
         JobKind::Sift { shard } => {
             if hour >= sift_hours(&shard) {
                 sifted(st, jobs, i, t, &shard);
@@ -403,26 +445,32 @@ fn work(st: &mut AppState, jobs: &mut RigJobs, i: usize, t: u64) {
     }
 }
 
-fn pay(st: &mut AppState, jobs: &mut RigJobs) {
+/// An hour of rent: the credits paid, and the job's line in the report says the total
+/// since the report was last emptied.
+fn pay(st: &mut AppState, jobs: &mut RigJobs, i: usize) {
     let c = &mut st.character.credits;
     *c = c.saturating_add(RENT_PER_HOUR);
-    let line = jobs.report.iter_mut().find(|l| l.starts_with(RENT_LINE));
-    let paid = |l: &str| -> u32 {
-        let rest = l.strip_prefix(RENT_LINE).unwrap_or("");
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().unwrap_or(0)
-    };
-    match line {
-        Some(l) => *l = format!("{RENT_LINE}{} paid", paid(l) + RENT_PER_HOUR),
-        None => jobs.report.push(format!("{RENT_LINE}{RENT_PER_HOUR} paid")),
+    let head = head(st, &jobs.running[i].kind);
+    let job = &mut jobs.running[i];
+    let line = |paid: u32| format!("{head} · ¤{paid} paid");
+    let was = line(job.paid);
+    match jobs.report.iter_mut().find(|l| **l == was) {
+        Some(l) => {
+            job.paid += RENT_PER_HOUR;
+            *l = line(job.paid);
+        }
+        None => {
+            job.paid = RENT_PER_HOUR;
+            jobs.report.push(line(job.paid));
+        }
     }
 }
 
-/// An hour of a job on the backdoor on `b`, `minutes` long: the line checked, the noise
-/// made, and a sniff's find or a keepalive's hold.
+/// An hour of a job on the backdoor on `b`, `minutes` long: a keepalive's hold, the
+/// line checked, and a sniff's find.
 fn on_line(st: &mut AppState, jobs: &mut RigJobs, i: usize, b: BuildingId, t: u64, minutes: u64) {
     use crate::backdoors::{State, Why};
-    let Some((state, end)) = st.backdoors.held(b).map(|d| (d.state, d.real_end())) else {
+    let Some(state) = st.backdoors.held(b).map(|d| d.state) else {
         end_on(st, jobs, b, t, "the backdoor is gone");
         return;
     };
@@ -432,33 +480,23 @@ fn on_line(st: &mut AppState, jobs: &mut RigJobs, i: usize, b: BuildingId, t: u6
     }
     let kind = jobs.running[i].kind.clone();
     let n = jobs.running[i].n;
+    let sniff = matches!(kind, JobKind::Sniff(_));
+    // A keepalive holds its own line first: the life it had at its start minute.
+    if !sniff {
+        st.backdoors.hold_still(b, minutes);
+    }
+    let end = st.backdoors.held(b).map_or(0, |d| d.real_end());
     let held = (jobs.running.iter()).any(|j| j.n != n && j.kind == JobKind::Keepalive(b));
     if !held && t >= end {
         st.backdoors.burn(b, Why::Decay, end);
         end_on(st, jobs, b, t, "the line went dead");
         return;
     }
-    let sniff = matches!(kind, JobKind::Sniff(_));
-    if sniff && unknown_flats(st, b).is_empty() {
-        stop(st, jobs, i, t, "nothing left to find", false);
-        return;
-    }
-    let noise = if sniff { SNIFF_NOISE } else { KEEPALIVE_NOISE };
-    let heat = jobs.heat.entry(b).or_insert(0);
-    *heat += noise;
-    let heat = *heat;
-    if heat >= HEAT_WARN && jobs.warned.insert(b) {
-        jobs.report.push(format!("{} · {WARNING}", head(st, &kind)));
-    }
-    if heat >= HEAT_PATCH {
-        st.backdoors.burn(b, Why::Noticed, t);
-        jobs.heat.remove(&b);
-        jobs.warned.remove(&b);
-        end_on(st, jobs, b, t, "the admins found it · the hole is patched");
-        return;
-    }
     if !sniff {
-        st.backdoors.hold_still(b, minutes);
+        return;
+    }
+    if unknown_flats(st, b).is_empty() {
+        stop(st, jobs, i, t, "nothing left to find", false);
         return;
     }
     let hour = jobs.running[i].progress;
@@ -896,6 +934,76 @@ mod tests {
     }
 
     #[test]
+    fn a_keepalive_holds_a_line_with_minutes_left() {
+        let mut st = state_home();
+        install(&mut st);
+        let (b, t0) = planted(&mut st, 1, 0);
+        let d = door(&mut st, b);
+        d.nominal = 30;
+        d.factor = 100;
+        start(&mut st, JobKind::Keepalive(b)).unwrap();
+        advance(&mut st, t0 + 48 * H);
+        assert!(st.backdoors.held(b).is_some(), "still standing");
+        assert_eq!(st.backdoors.jobs.running.len(), 1);
+        assert_eq!(
+            door(&mut st, b).real_end(),
+            t0 + 48 * H + 30,
+            "30 minutes left"
+        );
+    }
+
+    #[test]
+    fn a_faster_core_is_no_noisier() {
+        let mut st = state_home();
+        install(&mut st);
+        fit(&mut st, 0, "sled_qstack");
+        let (b, t0) = planted(&mut st, 14, 0);
+        start(&mut st, JobKind::Sniff(b)).unwrap();
+        advance(&mut st, t0 + 12 * H);
+        assert_eq!(
+            st.backdoors.jobs.heat.get(&b),
+            Some(&(12 * 4)),
+            "a point a clock hour"
+        );
+        assert_eq!(
+            codes(&st, Source::Sniffed).len(),
+            6,
+            "but it finds half again as fast"
+        );
+    }
+
+    #[test]
+    fn a_raid_in_a_long_catch_up_stops_the_jobs_there() {
+        let mut st = state_home();
+        fit(&mut st, 0, "sled_tinman");
+        let paydata = ItemId::new("paydata");
+        st.character.give(paydata.clone(), 1);
+        let c0 = st.character.credits;
+        let t0 = st.net.now(&st);
+        start(&mut st, JobKind::Rent).unwrap();
+        start(
+            &mut st,
+            JobKind::Sift {
+                shard: paydata.clone(),
+            },
+        )
+        .unwrap();
+        // A trace with nothing between them and the door, there in four hours.
+        st.backdoors.start_trace(t0, 0);
+        st.backdoors.trace.as_mut().unwrap().moves_at = t0 + 4 * H;
+        let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+        world.catch_up(city, world.tick() + 30 * H * sim::TICKS_PER_MINUTE);
+        crate::net::tick_backdoors(&mut st);
+        assert!(!st.backdoors.seized(st.net.now(&st)), "and the rig is back");
+        assert!(st.backdoors.jobs.running.is_empty());
+        // Four hours of rent before the door went in, and the sift two short.
+        assert_eq!(st.character.credits, c0 + 4 * RENT_PER_HOUR);
+        assert_eq!(st.character.count(&paydata), 1, "the shard back, unsifted");
+        assert_eq!(st.character.count(&ItemId::new("paydata_sifted")), 0);
+        assert_eq!(reported(&st, "the rig was seized"), 2);
+    }
+
+    #[test]
     fn rent_pays_by_the_hour() {
         let mut st = state_home();
         let c0 = st.character.credits;
@@ -1087,7 +1195,8 @@ mod tests {
         let (b, _) = planted(&mut st, 8, 0);
         start(&mut st, JobKind::Sniff(b)).unwrap();
         let rent = start(&mut st, JobKind::Rent).unwrap();
-        kill_on_lines(&mut st, "the rig wiped itself");
+        let now = st.net.now(&st);
+        raid(&mut st, now, true);
         let left: Vec<u32> = st.backdoors.jobs.running.iter().map(|j| j.n).collect();
         assert_eq!(left, vec![rent]);
         assert_eq!(reported(&st, "the rig wiped itself"), 1);
