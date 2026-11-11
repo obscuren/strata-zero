@@ -6034,3 +6034,63 @@ fn armor_on_its_blueprints() {
         }
     }
 }
+
+/// The open tower of a site's Net (#95), in the DEVELOPER SITE NET start's office copy at
+/// 190, at 120 x 40 and 100 x 30: jacked in at the lobby kiosk with L open; jacked in at
+/// B1's terminal across the air gap; through the broken firewall on L's hub; and on the
+/// city's Net beside the building with lock 0 broken.
+#[test]
+#[ignore]
+fn site_net_shots() {
+    use crate::sitenet::testutil::*;
+    use citygen::SiteNode;
+    use game::HackTarget;
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let security = crate::venues::SITE_NET_SECURITY;
+    // Jacked in at the lobby kiosk: L open.
+    let (mut st, b) = office_copy(security);
+    stand_beside_the_kiosk(&mut st, b);
+    crate::net::jack_in_here(&mut st).unwrap();
+    site_net_shot(&dir, "L", &mut st);
+    // Jacked in at B1's terminal: B1 open across the gap.
+    let (mut st, b) = office_copy(security);
+    let gap = (crate::sitenet::net_of(&st, b).unwrap().gap).expect("an air gap");
+    stand_beside_terminal_on(&mut st, b, gap);
+    crate::net::jack_in_here(&mut st).unwrap();
+    site_net_shot(&dir, "vault", &mut st);
+    // Through the broken firewall, on L's hub.
+    let (mut st, b) = office_copy(security);
+    let now = st.net.now(&st);
+    for i in 0..3 {
+        st.net.break_lock(b, i, now);
+    }
+    at_the_gate(&mut st, b);
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    site_net_shot(&dir, "firewall", &mut st);
+    // On the grid beside the building, lock 0 broken from there.
+    let (mut st, b) = office_copy(security);
+    let gate = crate::sitenet::lock_spots(&st, b)[0];
+    stand_on_the_grid_beside(&mut st, gate);
+    let lock = HackTarget::Site(SiteNode::firewall(b, 0));
+    crate::net::tests::crack_to_landing(&mut st, lock);
+    assert_eq!(crate::sitenet::broken(&st, b), [true, false, false]);
+    // A few seconds on: the landing's kick and flourish over, its line in the log.
+    st.tick += 300;
+    site_net_shot(&dir, "grid", &mut st);
+}
+
+/// The map where you stand as `site_net_{name}_{w}x{h}`, at 120 x 40 and 100 x 30: its
+/// first frame learns the map's size, then the camera lands on you as it does when you
+/// land on a level.
+fn site_net_shot(dir: &str, name: &str, st: &mut AppState) {
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let mut map = MapScreen::walking(st);
+        draw_stack(st, &[&map], (w, h));
+        let you = st.player.as_ref().expect("you").pos;
+        map.jump_to(st, you);
+        let buf = draw_stack(st, &[&map], (w, h));
+        write_svg(dir, &format!("site_net_{name}_{w}x{h}"), st, &buf, false);
+    }
+}

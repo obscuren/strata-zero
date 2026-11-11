@@ -1,7 +1,7 @@
 use super::testutil::*;
 use super::*;
 use crate::render::map::MapRef;
-use citygen::{NodeKind, Place, Pos, StratumKind, Terrain};
+use citygen::{NodeKind, Place, Pos, SiteNode, StratumKind, Terrain};
 use game::{HackTarget, Op};
 
 #[test]
@@ -338,6 +338,143 @@ fn a_copy_starting_or_ending_drops_the_kept_net() {
         citygen::sitenet::gapped_level(copy.layer.as_ref()),
         "its air gap"
     );
+}
+
+/// The spec's "What done looks like", step by step, in the DEVELOPER start's office copy
+/// at 190, its job in a server room on a level behind an air gap. Each helper puts you
+/// where a step begins (the walking itself is tested elsewhere); every minute passes as
+/// the clock runs it.
+#[test]
+fn what_done_looks_like() {
+    let (mut st, b) = office_copy(crate::venues::SITE_NET_SECURITY);
+    // 1. Jack in at the lobby kiosk: the tower opens L, and you're on the kiosk's node.
+    let kiosk = stand_beside_the_kiosk(&mut st, b);
+    crate::net::jack_in_here(&mut st).unwrap();
+    let place = |st: &crate::app::AppState| st.player.as_ref().unwrap().place;
+    // The panel's LEVELS row marked as yours.
+    let yours = |st: &crate::app::AppState| {
+        (panel_lines(st, b).iter().map(|l| l.to_string())).find(|l| l.starts_with(" ▸ "))
+    };
+    assert_eq!(
+        place(&st),
+        Place::SiteNet {
+            building: b,
+            level: 0
+        }
+    );
+    let label = |level: i32| format!(" ▸ {:<4}", citygen::FloorPlan::label(level));
+    assert!(
+        yours(&st).is_some_and(|l| l.starts_with(&label(0))),
+        "L open"
+    );
+    let here = st.player.as_ref().unwrap().pos;
+    let k = st.constructs.site(b).unwrap();
+    assert_eq!(k.device_at(here).map(|d| d.node), Some(kiosk));
+    // 2. Crack the turnstiles' switch, jack out: the turnstiles let you through on foot.
+    let switch = walk_beside_kind(&mut st, b, NodeKind::GateSwitch);
+    let turnstile = a_turnstile(&st, switch.node);
+    let level = switch.node.level;
+    let from = locked_side(&st, b, level, &turnstile);
+    let step =
+        |st: &crate::app::AppState| crate::venues::step_onto(st, b, level, from, turnstile.at);
+    assert!(matches!(step(&st), crate::venues::Meets::Held(_)), "shut");
+    crate::net::tests::crack_to_landing(&mut st, HackTarget::Site(switch.node));
+    crate::net::jack_out(&mut st).unwrap();
+    assert!(lock_open(&st, b, level, &turnstile));
+    assert_eq!(step(&st), crate::venues::Meets::Through(None));
+    // Out of the Net the trace cools a point a minute: out on the street, let the
+    // switch's heat go.
+    let warm = heat(&st, b);
+    assert!(warm > 0, "the switch's crack was heard");
+    stand_outside(&mut st, b);
+    pass_minutes(&mut st, 15);
+    assert_eq!(heat(&st, b), warm.saturating_sub(15));
+    // 3. From the grid, crack the 3 locks: each adds trace; then the gate lands you on L's
+    // hub, beside the server.
+    let mut was = heat(&st, b);
+    let spots = lock_spots(&st, b);
+    assert_eq!(spots.len(), 3);
+    for (i, at) in spots.into_iter().enumerate() {
+        stand_on_the_grid_beside(&mut st, at);
+        let lock = HackTarget::Site(SiteNode::firewall(b, i as u8));
+        crate::net::tests::crack_to_landing(&mut st, lock);
+        let now = heat(&st, b);
+        assert!(now > was, "lock {i} heard");
+        was = now;
+    }
+    assert!(firewall_open(&st, b));
+    at_the_gate(&mut st, b);
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    let here = st.player.as_ref().unwrap().pos;
+    let k = st.constructs.site(b).unwrap();
+    assert_eq!(k.device_at(here).map(|d| d.kind), Some(NodeKind::Hub));
+    assert!((k.devices.iter()).any(|d| d.kind == NodeKind::Server && d.at.chebyshev(here) <= 1));
+    // 4. B1 across the gap, the vault on it, out of the riser's reach: spoof the goods lift
+    // from L, ride it down, jack in at B1's terminal, copy the vault.
+    let gap = net_of(&st, b).unwrap().gap.expect("an air gap");
+    let objective = layer_of(&st, b).unwrap().objective;
+    assert_eq!(gap, objective.level, "the job's level");
+    let vault = (net_of(&st, b).unwrap().nodes.iter())
+        .find(|n| n.kind == NodeKind::DataVault)
+        .map(|n| n.node);
+    assert_eq!(vault.map(|v| v.level), Some(gap), "the vault on it");
+    assert!(!site_view(&st, b, 0).reach.contains(&gap));
+    let lift = goods_lift(&st, b, gap);
+    assert_eq!(lift.node.level, 0, "spoofed from L");
+    walk_beside(&mut st, lift.at);
+    spoof_to_landing(&mut st, HackTarget::Site(lift.node));
+    crate::net::jack_out(&mut st).unwrap();
+    // The locks' heat cools before the copy's.
+    let warm = heat(&st, b);
+    pass_minutes(&mut st, 20);
+    assert_eq!(heat(&st, b), warm - 20);
+    ride_to(&mut st, lift.node, gap).unwrap();
+    assert_eq!(
+        place(&st),
+        Place::Floor {
+            building: b,
+            level: gap
+        }
+    );
+    let terminal = stand_beside_terminal_on(&mut st, b, gap);
+    crate::net::jack_in_here(&mut st).unwrap();
+    assert_eq!(
+        place(&st),
+        Place::SiteNet {
+            building: b,
+            level: gap
+        }
+    );
+    let here = st.player.as_ref().unwrap().pos;
+    let k = st.constructs.site(b).unwrap();
+    assert_eq!(k.device_at(here).map(|d| d.node), Some(terminal));
+    assert!(
+        yours(&st).is_some_and(|l| l.starts_with(&label(gap))),
+        "that level open"
+    );
+    let riser = (k.levels.iter()).filter(|l| l.level != gap).count();
+    let out = (panel_lines(&st, b).iter().map(|l| l.to_string()))
+        .filter(|l| l.contains("out of reach"))
+        .count();
+    assert_eq!(out, riser, "the riser's levels out of reach");
+    // Its doors are yours to work.
+    let door = walk_beside_kind(&mut st, b, NodeKind::DoorLock);
+    let near = crate::net::targets_near(&st, b, st.player.as_ref().unwrap().pos);
+    assert!(near.iter().any(|(t, _)| *t == HackTarget::Site(door.node)));
+    let vault = walk_beside_kind(&mut st, b, NodeKind::DataVault);
+    copy_to_landing(&mut st, HackTarget::Site(vault.node));
+    assert_eq!(st.character.count(&game::ItemId::new("vault_data")), 1);
+    assert!(!st.net.alert(b, st.net.now(&st)), "and no alarm");
+    // 5. On a floor, a camera that sees you warms the trace; looped, it doesn't.
+    crate::net::jack_out(&mut st).unwrap();
+    let cam = in_a_floor_cameras_cone(&mut st, b);
+    let before = heat(&st, b);
+    pass_minutes(&mut st, 1);
+    assert!(heat(&st, b) > before, "seen");
+    loop_from_the_net(&mut st, &cam);
+    let before = heat(&st, b);
+    pass_minutes(&mut st, 1);
+    assert!(heat(&st, b) < before, "looped, it cools");
 }
 
 #[test]

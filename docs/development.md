@@ -150,6 +150,15 @@ The title's test starts:
     from home that has ways in enough for the size (raised to the type's own height
     when it's too low), begins a mission's copy there on MISSION, and stands you on the
     street at its main door;
+  - SITE NET: NEW GAME (DEBUG)'s start, then the type that builds offices laid on the
+    largest building away from home that holds a MEDIUM job in a server room, its
+    mission's copy begun at security 190 (a firewall of 3 locks, the job's level behind
+    an air gap), and you on the street at its main door: the start to run a site's own
+    Net from. Shots of its open tower at 120×40 and 100×30 (jacked in at the lobby
+    kiosk, at the gapped level's terminal, through the firewall onto L's hub, and on the
+    city's Net with a lock broken) are the `#[ignore]` test `site_net_shots`
+    (`screens/shots.rs`); `sitenet::tests::what_done_looks_like` walks the same start
+    through the spec's "What done looks like";
   - COMBAT, `←` `→` picking NET (jacked into a construct with grey ICE on patrol) or
     STREET (on the lot at dusk with a goon and a dummy);
   - LOAD CITY: a saved city from `cities/`, a run started over in it.

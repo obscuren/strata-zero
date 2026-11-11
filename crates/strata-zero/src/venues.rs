@@ -12,24 +12,11 @@ pub(crate) use copy::copy_floor;
 pub use copy::{
     DoorMark, MissionCopy, begin, copy_live, door_mark_at, door_marks, end, note_at, tick,
 };
-pub use dev::{building_at_door, dev_site, dev_start};
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the DEVELOPER menu's SITE NET row (Task 17) and the site's tests start them"
-    )
-)]
-pub use dev::{dev_site_net, dev_start_with};
+#[cfg(test)]
+pub use dev::dev_start_with;
+pub use dev::{building_at_door, dev_site, dev_site_net, dev_start};
 
 /// The security of the DEVELOPER menu's SITE NET start (`dev_site_net`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the DEVELOPER menu's SITE NET row starts it from Task 17 on"
-    )
-)]
 pub const SITE_NET_SECURITY: u8 = 190;
 
 use crate::app::AppState;

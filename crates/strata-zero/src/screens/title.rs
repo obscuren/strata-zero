@@ -44,7 +44,8 @@ enum Entry {
     NewGame,
     /// Dev mode: D'SHAWN, maxed out, into a fresh city.
     Debug,
-    /// Dev mode: the test starts, a menu of their own (the sites, COMBAT, LOAD CITY).
+    /// Dev mode: the test starts, a menu of their own (the sites, SITE NET, COMBAT, LOAD
+    /// CITY).
     Developer,
     /// The runs still going.
     Load,
@@ -115,9 +116,27 @@ pub struct Title {
 /// none, longer than the usual pause before a held key starts repeating.
 const QUIET: u64 = 24;
 
+#[cfg(test)]
+thread_local! {
+    /// On a test's thread, the seed `Title::fresh_params` gives in place of the clock's, so
+    /// a start through the title builds the same city every run (`pin_seed`).
+    static PINNED_SEED: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Pins the seed of every city a new game through the title builds on this thread (none
+/// gives the clock's back).
+#[cfg(test)]
+pub(crate) fn pin_seed(seed: Option<u64>) {
+    PINNED_SEED.with(|s| s.set(seed));
+}
+
 impl Title {
     /// The current parameters with a seed nobody has played: the tick and the clock.
     pub fn fresh_params(st: &AppState, tick: u64) -> citygen::GenParams {
+        #[cfg(test)]
+        if let Some(seed) = PINNED_SEED.with(std::cell::Cell::get) {
+            return st.params.clone().with_seed(seed);
+        }
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -193,8 +212,7 @@ impl Title {
 
     /// A DEVELOPER site row: NEW GAME (DEBUG)'s start, then a building away from home laid
     /// out as type `type_id` at `size`, its mission's copy begun when `mission`, and you on
-    /// the street at its main door. A map opened now opens there; the start's own would
-    /// stand where it woke you.
+    /// the street at its main door.
     fn site_game(
         &self,
         st: &mut AppState,
@@ -202,10 +220,32 @@ impl Title {
         size: MissionSize,
         mission: bool,
     ) -> ScreenCmd {
+        self.at_a_site(st, |st| {
+            crate::venues::dev_start(st, type_id, size, mission)
+        })
+    }
+
+    /// DEVELOPER's SITE NET (Ruling 24): NEW GAME (DEBUG)'s start, then an office copy at
+    /// `venues::SITE_NET_SECURITY` away from home, its job in a server room, and you on the
+    /// street at its main door.
+    fn site_net_game(&self, st: &mut AppState) -> ScreenCmd {
+        self.at_a_site(st, |st| {
+            crate::venues::dev_site_net(st, crate::venues::SITE_NET_SECURITY)
+        })
+    }
+
+    /// NEW GAME (DEBUG)'s start, then `lay` putting a site down away from home and you on
+    /// the street at its door (what it can't do warned of). A map opened now opens there;
+    /// the start's own would stand where it woke you.
+    fn at_a_site(
+        &self,
+        st: &mut AppState,
+        lay: impl FnOnce(&mut AppState) -> Result<citygen::BuildingId, String>,
+    ) -> ScreenCmd {
         let ScreenCmd::Switch { fx, .. } = self.debug_game(st) else {
             return ScreenCmd::Stay;
         };
-        match crate::venues::dev_start(st, type_id, size, mission) {
+        match lay(st) {
             // The start saved before the site was laid: saved again at the map's next
             // frame, CONTINUE opens with it.
             Ok(_) => st.save_due = true,
@@ -226,6 +266,7 @@ impl Title {
                 size,
                 mission,
             } => self.site_game(st, &type_id, size, mission),
+            Pick::SiteNet => self.site_net_game(st),
             Pick::Combat(CombatMap::Street) => self.combat_game(st),
             Pick::Combat(CombatMap::Net) => self.net_game(st),
             Pick::LoadCity => ScreenCmd::Push {
@@ -846,13 +887,14 @@ mod tests {
             !text.contains("NEW GAME · COMBAT") && !text.contains("LOAD CITY"),
             "{text}"
         );
-        // DEVELOPER: a row per type, named from the pack, then COMBAT and LOAD CITY, under
-        // the logo in place of the title's own rows.
+        // DEVELOPER: a row per type, named from the pack, then SITE NET, COMBAT and LOAD
+        // CITY, under the logo in place of the title's own rows.
         open_developer(&mut t, &mut st);
         let mut rows: Vec<String> = (VenuePack::builtin().types.iter())
             .map(|x| x.name.to_uppercase())
             .collect();
-        rows.extend(["COMBAT".to_string(), "LOAD CITY".to_string()]);
+        let types = rows.len();
+        rows.extend(["SITE NET", "COMBAT", "LOAD CITY"].map(String::from));
         assert_eq!(t.developer.as_ref().unwrap().menu.items, rows);
         st.tick = 300;
         term.draw(|f| t.draw(&st, f)).unwrap();
@@ -865,13 +907,17 @@ mod tests {
                 .find(|l| l.contains(&format!(" {label} ")))
                 .unwrap_or_else(|| panic!("no row {label}: {text}"))
         };
-        for name in &rows[..rows.len() - 2] {
+        for name in &rows[..types] {
             let line = line_of(name);
             assert!(
                 line.contains("SMALL · MEDIUM · LARGE") && line.contains("PLAIN · MISSION"),
                 "{line}"
             );
         }
+        assert!(
+            !line_of("SITE NET").contains("SMALL"),
+            "a start with no picks"
+        );
         assert!(line_of("COMBAT").contains("NET · STREET"));
         assert!(!text.contains("HALL OF FAME"), "{text}");
         assert!(text.contains("esc back"), "its keys under it: {text}");
@@ -911,6 +957,8 @@ mod tests {
         use citygen::venue::{MissionSize, VenuePack};
         use citygen::{Place, StratumKind};
         let t0 = &VenuePack::builtin().types[0];
+        // A fixed city, the same every run: the clock's seed once gave one it failed on.
+        pin_seed(Some(DEVELOPER_SEED));
         for mission in [true, false] {
             let dir = Dir::new("developer-site");
             let mut st = AppState::new();
@@ -967,6 +1015,59 @@ mod tests {
             // next frame, so CONTINUE opens there with the site.
             assert!(st.last_save.is_some() && st.save_due, "a save due");
         }
+    }
+
+    /// The city seed the DEVELOPER starts' tests pin NEW GAME (DEBUG)'s city to.
+    const DEVELOPER_SEED: u64 = 11;
+
+    #[test]
+    fn site_net_starts_outside_an_office_copy_at_190() {
+        use citygen::venue::{MissionSize, VenuePack};
+        use citygen::{BuildingKind, Place, RoomKind, StratumKind};
+        pin_seed(Some(DEVELOPER_SEED));
+        let dir = Dir::new("developer-site-net");
+        let mut st = AppState::new();
+        st.unlock_dev();
+        st.saves = Some(dir.0.clone());
+        let mut t = Title::new(&st, 0);
+        open_developer(&mut t, &mut st);
+        to_row(&mut t, &mut st, "SITE NET");
+        let ScreenCmd::Switch {
+            to: map,
+            fx: TransitionKind::Glitch,
+        } = t.update(&mut st, &[key(KeyCode::Enter)])
+        else {
+            panic!("straight into the city")
+        };
+        assert_eq!(st.character.handle, "D'SHAWN");
+        assert!(st.run.is_some(), "a run of his own");
+        // On the street beside the main door of a building away from home…
+        let p = st.player.as_ref().expect("on the street");
+        assert_eq!(p.place, Place::Stratum(StratumKind::Street));
+        let at = game::At {
+            place: p.place,
+            pos: p.pos,
+        };
+        let b = crate::venues::building_at_door(&st, at).expect("at a building's door");
+        assert_ne!(st.home.map(|h| h.home.building), Some(b), "away from home");
+        // …laid out as the type that builds offices, a live MEDIUM copy at 190 on it…
+        let t = (VenuePack::builtin().for_kind(BuildingKind::Office)).unwrap();
+        let v = st.interiors.plan_of(b).unwrap().venue.as_deref().unwrap();
+        assert_eq!(v.type_id, t.id);
+        let copy = st.interiors.copy(b).expect("the mission's copy");
+        assert!(copy.live);
+        assert_eq!(copy.inputs.size, MissionSize::Medium);
+        assert_eq!(copy.inputs.security, 190);
+        // …whose objective is in a server room.
+        let room = &t.objectives[copy.inputs.objective].room;
+        assert_eq!(t.room(room).map(|r| r.kind), Some(RoomKind::Server));
+        // The map opens there, and the start is saved again at its next frame.
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| map.draw(&st, f)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        let footer = text.lines().find(|l| l.contains(" on foot · ")).unwrap();
+        assert!(footer.contains(" · Street"), "{footer}");
+        assert!(st.last_save.is_some() && st.save_due, "a save due");
     }
 
     /// A run saved in `dir` by `handle` at frame `tick`, standing at `at` when given, its

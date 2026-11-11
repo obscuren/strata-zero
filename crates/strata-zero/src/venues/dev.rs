@@ -94,13 +94,6 @@ pub fn dev_start_with(
 /// tick as seed, the mission copy begun, and you on the street at its main door. It keeps
 /// to that objective: a building where it won't lay at any of the seeds gives way to the
 /// next largest.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the DEVELOPER menu's SITE NET row starts it from Task 17 on"
-    )
-)]
 pub fn dev_site_net(st: &mut AppState, security: u8) -> Result<BuildingId, String> {
     let t = (VenuePack::builtin().for_kind(BuildingKind::Office))
         .ok_or("no site type builds offices")?;

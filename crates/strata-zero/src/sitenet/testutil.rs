@@ -1,7 +1,7 @@
 //! Sites to test the Net of a site on: an office laid on a building away from home, plain
 //! or with the DEVELOPER start's mission copy, and D'SHAWN with the programs a run wants;
-//! where to stand on its Net and on its floors; and HELIX shells on its host and its
-//! street.
+//! where to stand on its Net, on its floors and outside it; programs run to their landings
+//! and minutes passed as the clock runs them; and HELIX shells on its host and its street.
 
 use crate::app::AppState;
 use crate::cameras::Camera;
@@ -13,8 +13,8 @@ use crate::render::netlook::{NetLook, NetLookView};
 use crate::render::viewport::Overlay;
 use citygen::venue::{DeviceKind, MissionInputs, MissionSize, VenuePack, WayIn, WayInKind, Ways};
 use citygen::{
-    BuildingId, BuildingKind, DoorLock, Floor, Grid, NetDevice, NetNode, NodeKind, Place, Pos,
-    SiteNode, Size, StratumKind, Terrain, Tile,
+    BuildingId, BuildingKind, DoorLock, Floor, Grid, LinkKind, NetDevice, NetNode, NodeKind, Place,
+    Pos, SiteNode, Size, StratumKind, Terrain, Tile,
 };
 use game::{HackTarget, ItemId, Op, Target};
 
@@ -504,6 +504,174 @@ pub(crate) fn next_minute(st: &mut AppState) {
     if let (Some(city), Some(w)) = (st.city.as_ref(), st.world.as_mut()) {
         w.advance(city, w.tick() + sim::TICKS_PER_MINUTE);
     }
+}
+
+/// Game minutes passing as the clock runs them, a minute at a time as a rest does
+/// (`clock::run`): the Net's minute (traces cool, hacks run out), the cameras, the copies.
+pub(crate) fn pass_minutes(st: &mut AppState, minutes: u64) {
+    for _ in 0..minutes {
+        crate::clock::run(
+            st,
+            Some(sim::TICKS_PER_MINUTE),
+            crate::clock::PATHS_PER_FRAME,
+        );
+    }
+}
+
+/// Your heat on building `b`'s trace.
+pub(crate) fn heat(st: &AppState, b: BuildingId) -> u8 {
+    st.net.traces.get(&b).map_or(0, |t| t.heat)
+}
+
+/// You on foot out of site `b`, on the street by its main street door (the first open one),
+/// on the nearest tile no camera sees.
+pub(crate) fn stand_outside(st: &mut AppState, b: BuildingId) {
+    let city = st.city.clone().expect("a city");
+    let plan = crate::interiors::plan_now(st, b).expect("a plan");
+    let v = plan.venue.as_deref().expect("a venue's plan");
+    let door = (v.frame.doors.iter())
+        .find(|d| d.stratum == StratumKind::Street && !d.enclosed)
+        .expect("a street door")
+        .door;
+    let fp = v.frame.footprint;
+    drop(plan);
+    let mut spots: Vec<Pos> = (fp.grow(4).iter())
+        .filter(|p| !fp.contains(*p) && city.walkable(StratumKind::Street, *p))
+        .collect();
+    spots.sort_by_key(|p| (p.manhattan(door), p.y, p.x));
+    let street = Place::Stratum(StratumKind::Street);
+    for at in spots {
+        stand_on(st, street, at);
+        if crate::cameras::seeing(st).is_empty() {
+            return;
+        }
+    }
+    panic!("nowhere outside {b:?} out of the cameras' sight");
+}
+
+/// Site `b`'s first node of `kind` on the level of its Net you stand on, and you on a tile
+/// beside it there.
+pub(crate) fn walk_beside_kind(st: &mut AppState, b: BuildingId, kind: NodeKind) -> NetDevice {
+    let Some(Place::SiteNet { level, .. }) = st.player.as_ref().map(|p| p.place) else {
+        panic!("on a site's Net");
+    };
+    let k = st.constructs.site(b).expect("the site's construct");
+    let d = (k.devices.iter())
+        .find(|d| d.kind == kind && d.node.level == level)
+        .unwrap_or_else(|| panic!("no {kind:?} on level {level}"))
+        .clone();
+    walk_beside(st, d.at);
+    d
+}
+
+/// A turnstile of the line gate switch `switch` works, the lock on its floor.
+pub(crate) fn a_turnstile(st: &AppState, switch: SiteNode) -> DoorLock {
+    let plan = crate::interiors::plan_now(st, switch.building).expect("a plan");
+    let v = plan.venue.as_deref().expect("a venue's plan");
+    let piece = citygen::venue::switch_line(v, switch.level, switch.at).expect("its line");
+    let x = v.level(switch.level).expect("its level");
+    let floor = crate::interiors::floor_now(st, &plan, switch.level).expect("its floor");
+    (x.doors.iter())
+        .filter(|d| x.pieces[piece].rect.contains(d.at))
+        .find_map(|d| floor.lock_at(d.at).copied())
+        .expect("a turnstile on the line")
+}
+
+/// A floor tile you may stand on beside `lock` on site `b`'s floor `level`, on the side it
+/// doesn't open from by itself.
+pub(crate) fn locked_side(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> Pos {
+    let (_, floor) = st
+        .interiors
+        .floor(b, level)
+        .expect("its floor, walked onto");
+    (lock.at.neighbors4())
+        .filter(|p| Some(*p) != lock.free_from)
+        .find(|p| {
+            floor.tiles.get(*p).is_some_and(|t| t.is_walkable()) && floor.lock_at(*p).is_none()
+        })
+        .expect("a tile on its locked side")
+}
+
+/// Site `b`'s lift-control node of a lift that stops on level `to`.
+pub(crate) fn goods_lift(st: &AppState, b: BuildingId, to: i32) -> NetDevice {
+    let plan = crate::interiors::plan_now(st, b).expect("a plan");
+    let k = st.constructs.site(b).expect("the site's construct");
+    let stops_at = |d: &NetDevice| {
+        (plan.links.iter())
+            .filter(|l| l.kind == LinkKind::Lift && l.stop(to).is_some())
+            .any(|l| l.stop(d.node.level).is_some_and(|s| s.at == d.node.at))
+    };
+    (k.devices.iter())
+        .find(|d| d.kind == NodeKind::LiftCtrl && stops_at(d))
+        .unwrap_or_else(|| panic!("no lift of {b:?} stops on {to}"))
+        .clone()
+}
+
+/// A program run to its landing on `target`, every roll a hit.
+fn run_to_landing(st: &mut AppState, program: &str, target: HackTarget) -> Vec<String> {
+    st.net.force_roll = Some(10);
+    crate::net::start_run(st, ItemId::new(program), target).unwrap();
+    let mut lines = Vec::new();
+    while st.net.run.is_some() {
+        lines.extend(crate::net::step_run(st));
+    }
+    lines
+}
+
+/// A spoof run to its landing on `target`, every roll a hit.
+pub(crate) fn spoof_to_landing(st: &mut AppState, target: HackTarget) -> Vec<String> {
+    run_to_landing(st, "spoof", target)
+}
+
+/// A copy run to its landing on `target`, every roll a hit.
+pub(crate) fn copy_to_landing(st: &mut AppState, target: HackTarget) -> Vec<String> {
+    run_to_landing(st, "copy", target)
+}
+
+/// You on foot on the lift at node `lift`'s stop (its level, its landing), riding it to
+/// level `to` (`interiors::ride`).
+pub(crate) fn ride_to(st: &mut AppState, lift: SiteNode, to: i32) -> Result<String, String> {
+    let city = st.city.clone().expect("a city");
+    (st.interiors.ensure(&city, lift.building, lift.level)).expect("a kept level");
+    stand_on_floor(st, lift.building, lift.level, lift.at);
+    crate::interiors::ride(st, lift.building, to)
+}
+
+/// You on foot on site `b`'s floor `level`, in front of its terminal there: its node.
+pub(crate) fn stand_beside_terminal_on(st: &mut AppState, b: BuildingId, level: i32) -> SiteNode {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let node = (net.nodes.iter())
+        .find(|n| n.kind == NodeKind::Terminal && n.node.level == level)
+        .unwrap_or_else(|| panic!("no terminal on level {level}"))
+        .node;
+    stand_beside_on_floor(st, node);
+    node
+}
+
+/// From your body's floor tile, floor camera `cam` cracked from beside its node on its
+/// level of the site's Net and looped (`o`), and you back on foot where you stood.
+pub(crate) fn loop_from_the_net(st: &mut AppState, cam: &Camera) {
+    let n = cam.node.site().expect("a site's camera");
+    let (place, here) = st.player.as_ref().map(|p| (p.place, p.pos)).expect("you");
+    crate::sitenet::ensure_construct(st, n.building).unwrap();
+    let at = (st.constructs.site(n.building).unwrap().device(n))
+        .expect("its node")
+        .at;
+    st.player.as_mut().unwrap().body = Some((place, here));
+    let level = Place::SiteNet {
+        building: n.building,
+        level: n.level,
+    };
+    crate::constructs::land(st, level, at);
+    walk_beside(st, at);
+    st.net.beat = st.clock_tick();
+    crate::net::tests::crack_to_landing(st, HackTarget::Site(n));
+    crate::holds::use_verb(st, 'o').unwrap();
+    crate::net::jack_out(st).unwrap();
+    assert_eq!(
+        st.player.as_ref().map(|p| (p.place, p.pos)),
+        Some((place, here))
+    );
 }
 
 /// A `w` by `h` floor walled round, floor inside, unlit.

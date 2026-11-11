@@ -1,6 +1,7 @@
 //! The title's DEVELOPER menu (dev mode): a row per venue type in the pack, each starting
-//! D'SHAWN at a building laid out as that type, then the COMBAT starts and LOAD CITY. It
-//! takes the title's rows' place under the logo, each row's picks drawn after its label.
+//! D'SHAWN at a building laid out as that type, then SITE NET (an office copy at 190 to
+//! run its Net), the COMBAT starts and LOAD CITY. It takes the title's rows' place under
+//! the logo, each row's picks drawn after its label.
 
 use super::CombatMap;
 use crate::render::Rgb;
@@ -25,6 +26,9 @@ const PICKS_WIDTH: u16 = 39;
 enum Row {
     /// A start at a site of the pack's type, by index.
     Site(usize),
+    /// A start outside an office copy at `venues::SITE_NET_SECURITY`, its job in a server
+    /// room (Ruling 24).
+    SiteNet,
     /// D'SHAWN on the lot, on the street or the Net.
     Combat,
     /// A city from its `.city` file, a run started over in it.
@@ -35,6 +39,7 @@ impl Row {
     fn label(self) -> String {
         match self {
             Row::Site(t) => VenuePack::builtin().types[t].name.to_uppercase(),
+            Row::SiteNet => "SITE NET".to_string(),
             Row::Combat => "COMBAT".to_string(),
             Row::LoadCity => "LOAD CITY".to_string(),
         }
@@ -50,6 +55,8 @@ pub(super) enum Pick {
         size: MissionSize,
         mission: bool,
     },
+    /// The SITE NET start.
+    SiteNet,
     Combat(CombatMap),
     LoadCity,
     /// Back to the title's own rows.
@@ -72,7 +79,7 @@ impl Developer {
     pub(super) fn new(tick: u64) -> Developer {
         let types = VenuePack::builtin().types.len();
         let mut rows: Vec<Row> = (0..types).map(Row::Site).collect();
-        rows.extend([Row::Combat, Row::LoadCity]);
+        rows.extend([Row::SiteNet, Row::Combat, Row::LoadCity]);
         Developer {
             menu: Menu::new(rows.iter().map(|r| r.label()).collect(), tick),
             rows,
@@ -118,6 +125,7 @@ impl Developer {
                     mission,
                 });
             }
+            (KeyCode::Enter, Row::SiteNet) => return Some(Pick::SiteNet),
             (KeyCode::Enter, Row::Combat) => return Some(Pick::Combat(self.combat)),
             (KeyCode::Enter, Row::LoadCity) => return Some(Pick::LoadCity),
             _ => {}
@@ -129,6 +137,7 @@ impl Developer {
     pub(super) fn hint(&self) -> &'static str {
         match self.selected() {
             Row::Site(_) => "↑↓ select · ←→ size · tab plain/mission · enter start · esc back",
+            Row::SiteNet => "↑↓ select · enter start · esc back",
             Row::Combat => "↑↓ select · ←→ map · enter start · esc back",
             Row::LoadCity => "↑↓ select · enter open · esc back",
         }
@@ -184,7 +193,7 @@ impl Developer {
                     let street = self.combat == CombatMap::Street;
                     draw_pick(buf, area, picks, ry, &["NET", "STREET"], street.into());
                 }
-                Row::LoadCity => {}
+                Row::SiteNet | Row::LoadCity => {}
             }
         }
     }
@@ -224,4 +233,28 @@ fn draw_pick(buf: &mut Buffer, area: Rect, x: u16, y: u16, options: &[&str], pic
         put(o, style);
     }
     at
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::testutil::key;
+
+    #[test]
+    fn developer_lists_site_net() {
+        let mut d = Developer::new(0);
+        let types = VenuePack::builtin().types.len();
+        assert_eq!(d.menu.items[types], "SITE NET", "after the types");
+        assert_eq!(&d.menu.items[types + 1..], ["COMBAT", "LOAD CITY"]);
+        for _ in 0..types {
+            assert_eq!(d.key(&key(KeyCode::Down)), None);
+        }
+        assert_eq!(d.hint(), "↑↓ select · enter start · esc back");
+        // Its start has no picks: the arrows and tab leave it be.
+        for k in [KeyCode::Left, KeyCode::Right, KeyCode::Tab] {
+            assert_eq!(d.key(&key(k)), None);
+        }
+        assert_eq!(d.menu.selected, types);
+        assert_eq!(d.key(&key(KeyCode::Enter)), Some(Pick::SiteNet));
+    }
 }
