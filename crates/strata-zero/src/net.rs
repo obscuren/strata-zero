@@ -3903,28 +3903,32 @@ pub fn card_lines(
     out
 }
 
-/// A site's firewall on its card (`sitenet::card_line`), inside as on the grid: the word
-/// in the firewall's red, each lock's glyph in its own colour, the count quieter.
+/// A site's firewall on its card, inside as on the grid (Ruling 21): `FIREWALL` in the
+/// firewall's red, a glyph a lock in lock order in its own colour (`▯` broken, green; `▮`
+/// whole, red), then how many are broken, quieter: `FIREWALL ▯▮▮ · 1/3 broken`. Built
+/// from the locks themselves (`sitenet::broken`), never from text.
 fn firewall_line(st: &AppState, b: BuildingId) -> ratatui::text::Line<'static> {
     use crate::render::netlook::BLACK_RED;
     use crate::render::overlay::SIGNAL;
     use crate::ui::chrome::DIM;
     use ratatui::style::{Modifier, Style};
     use ratatui::text::Span;
-    let line = crate::sitenet::card_line(st, b);
-    let (word, rest) = line.split_once(' ').unwrap_or((line.as_str(), ""));
-    let (marks, count) = rest.split_once(" · ").unwrap_or((rest, ""));
+    let marks = crate::sitenet::broken(st, b);
+    let down = marks.iter().filter(|m| **m).count();
     let red = Style::default().fg(BLACK_RED.to_color());
-    let mut spans = vec![Span::styled(format!(" {word} "), red)];
-    for m in marks.chars() {
-        let fg = if m == '▯' { SIGNAL } else { BLACK_RED };
+    let mut spans = vec![Span::styled(" FIREWALL ", red)];
+    for broken in &marks {
+        let (glyph, fg) = match broken {
+            true => ("▯", SIGNAL),
+            false => ("▮", BLACK_RED),
+        };
         let style = Style::default()
             .fg(fg.to_color())
             .add_modifier(Modifier::BOLD);
-        spans.push(Span::styled(m.to_string(), style));
+        spans.push(Span::styled(glyph, style));
     }
     spans.push(Span::styled(
-        format!(" · {count}"),
+        format!(" · {down}/{} broken", marks.len()),
         Style::default().fg(DIM),
     ));
     spans.into()

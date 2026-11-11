@@ -42,15 +42,6 @@ pub fn grid_locks(st: &AppState, view: citygen::Rect) -> Vec<(Pos, bool)> {
         .collect()
 }
 
-/// The city's card's line for site `b`'s firewall (Ruling 21): a glyph a lock in lock
-/// order, `▯` broken and `▮` whole, then how many are broken: `FIREWALL ▯▮▮ · 1/3 broken`.
-pub fn card_line(st: &AppState, b: BuildingId) -> String {
-    let marks = broken(st, b);
-    let glyphs: String = (marks.iter()).map(|m| if *m { '▯' } else { '▮' }).collect();
-    let down = marks.iter().filter(|m| **m).count();
-    format!("FIREWALL {glyphs} · {down}/{} broken", marks.len())
-}
-
 /// Whether every lock of site `b`'s firewall stands broken.
 pub fn firewall_open(st: &AppState, b: BuildingId) -> bool {
     let marks = broken(st, b);
@@ -359,15 +350,19 @@ mod tests {
         let (mut st, b) = office_copy(190);
         let now = st.net.now(&st);
         st.net.break_lock(b, 0, now);
-        assert_eq!(card_line(&st, b), "FIREWALL ▯▮▮ · 1/3 broken");
-        let card: Vec<String> = crate::net::card_lines(&st, b, Some(lock_spots(&st, b)[0]))
-            .iter()
-            .map(|l| l.to_string())
-            .collect();
-        assert!(
-            card.iter().any(|l| l.trim() == "FIREWALL ▯▮▮ · 1/3 broken"),
-            "{card:?}"
-        );
+        let card = crate::net::card_lines(&st, b, Some(lock_spots(&st, b)[0]));
+        let line = (card.iter())
+            .find(|l| l.to_string().trim_start().starts_with("FIREWALL"))
+            .expect("its firewall's line");
+        assert_eq!(line.to_string(), " FIREWALL ▯▮▮ · 1/3 broken");
+        // Each lock's glyph in its own colour: a broken one green, a whole one red.
+        let fg = |glyph: &str| {
+            (line.spans.iter())
+                .find(|s| s.content == glyph)
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(fg("▯"), Some(crate::render::overlay::SIGNAL.to_color()));
+        assert_eq!(fg("▮"), Some(crate::render::netlook::BLACK_RED.to_color()));
     }
 
     #[test]
