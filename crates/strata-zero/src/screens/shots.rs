@@ -6051,14 +6051,11 @@ fn site_net_shots() {
     let security = crate::venues::SITE_NET_SECURITY;
     // Jacked in at the lobby kiosk: L open.
     let (mut st, b) = office_copy(security);
-    stand_beside_the_kiosk(&mut st, b);
-    crate::net::jack_in_here(&mut st).unwrap();
+    jacked_in_at_the_kiosk(&mut st, b);
     site_net_shot(&dir, "L", &mut st);
     // Jacked in at B1's terminal: B1 open across the gap.
     let (mut st, b) = office_copy(security);
-    let gap = (crate::sitenet::net_of(&st, b).unwrap().gap).expect("an air gap");
-    stand_beside_terminal_on(&mut st, b, gap);
-    crate::net::jack_in_here(&mut st).unwrap();
+    jacked_in_across_the_gap(&mut st, b);
     site_net_shot(&dir, "vault", &mut st);
     // Through the broken firewall, on L's hub.
     let (mut st, b) = office_copy(security);
@@ -6081,16 +6078,19 @@ fn site_net_shots() {
     site_net_shot(&dir, "grid", &mut st);
 }
 
-/// The map where you stand as `site_net_{name}_{w}x{h}`, at 120 x 40 and 100 x 30: its
-/// first frame learns the map's size, then the camera lands on you as it does when you
-/// land on a level.
+/// The map where you stand as `site_net_{name}_{w}x{h}`, at 120 x 40 and 100 x 30, the
+/// camera landed on you (`sitenet::testutil::drawn`). On a site's Net your level's label is
+/// on the map at both sizes.
 fn site_net_shot(dir: &str, name: &str, st: &mut AppState) {
+    use crate::sitenet::testutil::{drawn, label_shown};
     for (w, h) in [(120u16, 40u16), (100, 30)] {
-        let mut map = MapScreen::walking(st);
-        draw_stack(st, &[&map], (w, h));
-        let you = st.player.as_ref().expect("you").pos;
-        map.jump_to(st, you);
-        let buf = draw_stack(st, &[&map], (w, h));
+        let buf = drawn(st, (w, h));
+        if let Some(Place::SiteNet { building, level }) = st.player.as_ref().map(|p| p.place) {
+            let k = st.constructs.site(building).expect("the site's construct");
+            let role = &k.net_level(level).expect("your level").name;
+            let key = citygen::FloorPlan::label(level);
+            assert!(label_shown(&buf, &key, role), "{name} at {w}x{h}");
+        }
         write_svg(dir, &format!("site_net_{name}_{w}x{h}"), st, &buf, false);
     }
 }

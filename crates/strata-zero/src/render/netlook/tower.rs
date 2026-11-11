@@ -18,7 +18,9 @@ use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::tileset::{DOUBLE, LIGHT};
 use crate::render::viewport::{screen_to_tile, tile_to_screen};
-use citygen::{Construct, Feature, FloorPlan, NetDevice, NodeKind, Pos, Rect as TileRect, Terrain};
+use citygen::{
+    Construct, Feature, FloorPlan, NetDevice, NetLevel, NodeKind, Pos, Rect as TileRect, Terrain,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::cmp::Ordering;
@@ -672,27 +674,22 @@ impl<'a> Tower<'a> {
     }
 
     /// Left of each level its label and role, the open one marked with its node count and
-    /// how many of them you hold; right of a level out of reach, "out of reach", or for the
-    /// gapped level seen from the riser what it is and how in.
+    /// how many of them you hold (`open_label`); right of a level out of reach, "out of
+    /// reach", or for the gapped level seen from the riser what it is and how in.
     fn labels(&self, p: &mut Paint) {
         let open = self.site.open;
         for l in &self.k.levels {
-            let Some(&(y0, _)) = self.span.get(&l.level) else {
+            let Some(&(y0, y1)) = self.span.get(&l.level) else {
                 continue;
             };
             let out = !self.reaches(l.level);
-            let (label, role) = if out { (FAINT, FAINT) } else { (WHITE, DIM) };
-            let at = |dy: i32| Pos::new(LABEL_END, y0 + dy);
-            p.text_to(at(0), &FloorPlan::label(l.level), label, VOID, true);
-            p.text_to(at(1), &l.name, role, VOID, false);
             if l.level == open {
-                p.put(Pos::new(MARK_X, y0), '▸', ROOM, VOID, true);
-                let ours: Vec<&NetDevice> = (self.k.devices.iter())
-                    .filter(|d| d.node.level == open && d.kind != NodeKind::Hub)
-                    .collect();
-                let held = ours.iter().filter(|d| self.held.contains(&d.at)).count();
-                p.text_to(at(3), &format!("{} ▪", ours.len()), ICE_BLUE, VOID, false);
-                p.text_to(at(4), &format!("{held} held"), SIGNAL, VOID, false);
+                self.open_label(p, l, (y0, y1));
+            } else {
+                let (label, role) = if out { (FAINT, FAINT) } else { (WHITE, DIM) };
+                let at = |dy: i32| Pos::new(LABEL_END, y0 + dy);
+                p.text_to(at(0), &FloorPlan::label(l.level), label, VOID, true);
+                p.text_to(at(1), &l.name, role, VOID, false);
             }
             let right = |dy: i32| Pos::new(self.w + 2, y0 + dy);
             if l.gapped {
@@ -704,6 +701,72 @@ impl<'a> Tower<'a> {
             } else if out {
                 p.text(right(0), "out of reach", FAINT, VOID, false);
             }
+        }
+    }
+
+    /// The open level `l`'s label, left of its rows `y0..=y1`: its key, its role, its node
+    /// count and how many of them you hold. It keeps to the top of the level's rows on
+    /// screen while the level's first rows are scrolled off, never past its last; with the
+    /// label column scrolled off to the left, a tag in the map's top-left corner says it in
+    /// one row instead (`open_tag`).
+    fn open_label(&self, p: &mut Paint, l: &NetLevel, (y0, y1): (i32, i32)) {
+        let ours: Vec<&NetDevice> = (self.k.devices.iter())
+            .filter(|d| d.node.level == l.level && d.kind != NodeKind::Hub)
+            .collect();
+        let held = ours.iter().filter(|d| self.held.contains(&d.at)).count();
+        let key = FloorPlan::label(l.level);
+        let count = format!("{} ▪", ours.len());
+        let hold = format!("{held} held");
+        // Each line of the block: its row under the key, its words, colour and weight.
+        let block = [
+            (0, key.as_str(), WHITE, true),
+            (1, l.name.as_str(), DIM, false),
+            (3, count.as_str(), ICE_BLUE, false),
+            (4, hold.as_str(), SIGNAL, false),
+        ];
+        let wide = (block.iter())
+            .map(|(_, s, ..)| s.chars().count() as i32)
+            .max()
+            .unwrap_or(0);
+        let cols = p.cols();
+        if !cols.contains(&(LABEL_END + 1 - wide)) || !cols.contains(&LABEL_END) {
+            let sep = (" · ", DIM, false);
+            open_tag(
+                p,
+                &[
+                    ("▸ ", ROOM, true),
+                    (&key, WHITE, true),
+                    (" ", DIM, false),
+                    (&l.name, DIM, false),
+                    sep,
+                    (&count, ICE_BLUE, false),
+                    sep,
+                    (&hold, SIGNAL, false),
+                ],
+            );
+            return;
+        }
+        let last = block.iter().map(|(dy, ..)| *dy).max().unwrap_or(0);
+        let top = y0.max(p.origin.y.min(y1 - last));
+        p.put(Pos::new(MARK_X, top), '▸', ROOM, VOID, true);
+        for (dy, s, fg, bold) in block {
+            p.text_to(Pos::new(LABEL_END, top + dy), s, fg, VOID, bold);
+        }
+    }
+}
+
+/// The open level's label as one row in the map's top-left corner, for when the tower's
+/// label column is scrolled off to the left: `▸ L lobby · 11 ▪ · 0 held`, its parts in the
+/// label's colours, cut to the map's width.
+fn open_tag(p: &mut Paint, parts: &[(&str, Rgb, bool)]) {
+    let mut x = p.area.x;
+    for &(s, fg, bold) in parts {
+        for ch in s.chars() {
+            if x >= p.area.right() {
+                return;
+            }
+            put(p.buf, x, p.area.y, ch, fg, VOID, bold);
+            x += 1;
         }
     }
 }
@@ -805,9 +868,11 @@ mod tests {
     use crate::render::map::MapRef;
     use crate::render::netlook::NetLook;
     use crate::render::viewport::Overlay;
-    use crate::screens::explore::MapScreen;
     use crate::screens::testutil::buffer_text;
-    use crate::sitenet::testutil::{office_copy, on_hub};
+    use crate::sitenet::testutil::{
+        drawn, jacked_in_across_the_gap, jacked_in_at_the_kiosk, label_shown, map_cells,
+        office_copy, on_hub,
+    };
     use citygen::venue::VenuePack;
     use citygen::{BuildingId, BuildingKind, Place, SiteNode};
 
@@ -832,16 +897,11 @@ mod tests {
     }
 
     /// The map screen on a `size` terminal, you on level `level`'s hub of the office copy at
-    /// `security`: its first frame learns the map's size, then the camera lands on you as
-    /// it does when you land on a level.
+    /// `security`, the camera landed on you (`drawn`).
     fn drawn_at(security: u8, level: i32, size: (u16, u16)) -> (AppState, Buffer) {
         let (mut st, b) = office_copy(security);
         on_hub(&mut st, b, level);
-        let mut map = MapScreen::walking(&mut st);
-        crate::screens::shots::draw_stack(&st, &[&map], size);
-        let you = st.player.as_ref().expect("you").pos;
-        map.jump_to(&st, you);
-        let buf = crate::screens::shots::draw_stack(&st, &[&map], size);
+        let buf = drawn(&mut st, size);
         (st, buf)
     }
 
@@ -1039,11 +1099,94 @@ mod tests {
 
     #[test]
     fn the_tower_follows_you_at_100x30() {
-        let (_, buf) = drawn_at(190, 0, (100, 30));
+        let (st, buf) = drawn_at(190, 0, (100, 30));
         let text = screen_text(&buf);
         assert!(map_text(&buf).contains('@'), "you are on the map");
         assert!(text.contains("FIREWALL ▮▮▮ 0/3"), "the panel's firewall");
         assert!(text.contains("LEVELS"));
+        // Your level's label is on the map too, though its column can't fit beside L.
+        let l = st.constructs.site(b_of(&st)).unwrap().net_level(0).unwrap();
+        assert!(label_shown(&buf, &FloorPlan::label(0), &l.name), "{text}");
+    }
+
+    /// The open level's label as the map's top-left tag: `▸ {key} {role} · {n} ▪ · {h}
+    /// held`, or none.
+    fn tag(buf: &Buffer) -> Option<String> {
+        let first: String = map_cells(buf).first()?.iter().collect();
+        first.starts_with("▸ ").then_some(first)
+    }
+
+    #[test]
+    fn standing_low_on_a_tall_level_its_label_keeps_to_the_rows_on_screen() {
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let l = st.constructs.site(b).unwrap().net_level(0).unwrap().clone();
+        // You on L's lowest open tile, the level taller than the map.
+        let k = st.constructs.site(b).unwrap();
+        let low = (l.area.iter())
+            .filter(|p| k.tiles[*p].is_walkable() && k.guard_at(*p).is_none())
+            .max_by_key(|p| (p.y, -p.x))
+            .unwrap();
+        let place = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        crate::constructs::land(&mut st, place, low);
+        let buf = drawn(&mut st, (120, 40));
+        let map = crate::screens::explore::layout(buf.area, false).map;
+        assert!(l.area.h > map.height as i32, "a level taller than the map");
+        assert!(map_text(&buf).contains('@'));
+        let key = FloorPlan::label(0);
+        assert!(label_shown(&buf, &key, &l.name), "{}", map_text(&buf));
+        assert_eq!(tag(&buf), None, "the label column itself, at 120x40");
+    }
+
+    #[test]
+    fn the_shots_show_your_levels_label_at_both_sizes() {
+        for gap in [false, true] {
+            let (mut st, b) = office_copy(190);
+            let level = match gap {
+                false => {
+                    jacked_in_at_the_kiosk(&mut st, b);
+                    0
+                }
+                true => jacked_in_across_the_gap(&mut st, b),
+            };
+            let role = st
+                .constructs
+                .site(b)
+                .unwrap()
+                .net_level(level)
+                .unwrap()
+                .name
+                .clone();
+            for size in [(120, 40), (100, 30)] {
+                let buf = drawn(&mut st, size);
+                let key = FloorPlan::label(level);
+                assert!(map_text(&buf).contains('@'), "{key} at {size:?}");
+                assert!(
+                    label_shown(&buf, &key, &role),
+                    "{key} at {size:?}: {}",
+                    map_text(&buf)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_tag_says_the_label_in_one_row_with_digits() {
+        let (st, buf) = drawn_at(190, 0, (100, 30));
+        let k = st.constructs.site(b_of(&st)).unwrap();
+        let nodes = (k.devices.iter())
+            .filter(|d| d.node.level == 0 && d.kind != NodeKind::Hub)
+            .count();
+        let (key, role) = (FloorPlan::label(0), &k.net_level(0).unwrap().name);
+        let want = format!("▸ {key} {role} · {nodes} ▪ · 0 held");
+        assert!(
+            tag(&buf).is_some_and(|t| t.starts_with(&want)),
+            "{:?}",
+            tag(&buf)
+        );
     }
 
     /// Construct `k` (the site's own, or one changed for a test) drawn as the tower with

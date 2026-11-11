@@ -674,6 +674,72 @@ pub(crate) fn loop_from_the_net(st: &mut AppState, cam: &Camera) {
     );
 }
 
+/// You jacked in at site `b`'s lobby kiosk, on L.
+pub(crate) fn jacked_in_at_the_kiosk(st: &mut AppState, b: BuildingId) {
+    stand_beside_the_kiosk(st, b);
+    crate::net::jack_in_here(st).unwrap();
+}
+
+/// You jacked in at the terminal of site `b`'s level behind its air gap: that level.
+pub(crate) fn jacked_in_across_the_gap(st: &mut AppState, b: BuildingId) -> i32 {
+    let gap = (crate::sitenet::net_of(st, b).expect("a site's Net").gap).expect("an air gap");
+    stand_beside_terminal_on(st, b, gap);
+    crate::net::jack_in_here(st).unwrap();
+    gap
+}
+
+/// The map where you stand on a `size` terminal: its first frame learns the map's size,
+/// then the camera lands on you as it does when you land on a level.
+pub(crate) fn drawn(st: &mut AppState, size: (u16, u16)) -> ratatui::buffer::Buffer {
+    let mut map = crate::screens::explore::MapScreen::walking(st);
+    crate::screens::shots::draw_stack(st, &[&map], size);
+    let you = st.player.as_ref().expect("you").pos;
+    map.jump_to(st, you);
+    crate::screens::shots::draw_stack(st, &[&map], size)
+}
+
+/// The map area of a drawn screen, left of the panel: a row of cells each, by the first
+/// character of each cell.
+pub(crate) fn map_cells(buf: &ratatui::buffer::Buffer) -> Vec<Vec<char>> {
+    let map = crate::screens::explore::layout(buf.area, false).map;
+    (map.y..map.bottom())
+        .map(|y| {
+            (map.x..map.right())
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether the open level's label is in the map area of a drawn screen: its key over its
+/// role, both ending on one column (the tower's label column), or the one-row tag in the
+/// map's top-left corner that stands for it, `▸ {key} {role}`.
+pub(crate) fn label_shown(buf: &ratatui::buffer::Buffer, key: &str, role: &str) -> bool {
+    let rows = map_cells(buf);
+    let first: String = rows
+        .first()
+        .map_or_else(String::new, |r| r.iter().collect());
+    if first.starts_with(&format!("▸ {key} {role}")) {
+        return true;
+    }
+    // The columns `s` ends on in `row`, standing as a word of its own.
+    let ends = |row: &[char], s: &str| -> Vec<usize> {
+        let s: Vec<char> = s.chars().collect();
+        if s.is_empty() || s.len() > row.len() {
+            return Vec::new();
+        }
+        (0..=row.len() - s.len())
+            .filter(|&i| row[i..i + s.len()] == s[..])
+            .filter(|&i| i == 0 || row[i - 1] == ' ')
+            .map(|i| i + s.len())
+            .collect()
+    };
+    (rows.windows(2)).any(|w| {
+        let keys = ends(&w[0], key);
+        ends(&w[1], role).iter().any(|e| keys.contains(e))
+    })
+}
+
 /// A `w` by `h` floor walled round, floor inside, unlit.
 pub(crate) fn tiny_room(w: u32, h: u32) -> Floor {
     let size = Size { w, h };
