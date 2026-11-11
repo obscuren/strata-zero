@@ -187,4 +187,22 @@ impl VenueLayout {
     pub fn level(&self, level: i32) -> Option<&LevelLayout> {
         self.levels.iter().find(|l| l.level == level)
     }
+
+    /// The door of the private room numbered `number` on `level`.
+    pub fn room_door(&self, level: i32, number: u16) -> Option<Pos> {
+        let x = self.level(level)?;
+        let i = x
+            .rooms
+            .iter()
+            .position(|r| r.private && r.number == number)?;
+        (x.doors.iter())
+            .find(|d| !d.open && (d.rooms.0 == i || d.rooms.1 == i))
+            .map(|d| d.at)
+    }
+
+    /// The gate line (index into the level's pieces) whose rect holds `p`.
+    pub fn gate_line_at(&self, level: i32, p: Pos) -> Option<usize> {
+        (self.level(level)?.pieces.iter())
+            .position(|g| g.kind == PieceKind::GateLine && g.rect.contains(p))
+    }
 }

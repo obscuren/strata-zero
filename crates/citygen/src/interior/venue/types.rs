@@ -186,6 +186,9 @@ pub struct VenueType {
     pub borders: Vec<BorderDef>,
     pub levels: LevelRoles,
     pub rooms: Vec<RoomDef>,
+    /// The rooms (by name) with a desk terminal on the site's Net.
+    #[serde(default)]
+    pub terminals: Vec<String>,
     #[serde(default)]
     pub pieces: Vec<PieceDef>,
     pub links: Vec<LinkDef>,
@@ -527,6 +530,10 @@ impl VenueType {
                     r.name
                 ));
             }
+        }
+
+        if let Some(name) = self.terminals.iter().find(|n| self.room(n).is_none()) {
+            return Err(format!("{id}: terminals name no room `{name}`"));
         }
 
         let (fw, fh) = self.frame.footprint;

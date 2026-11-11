@@ -56,6 +56,7 @@ Type(
         Room(name: "office", kind: Office, size: ((4, 4), (6, 5)), private: true, furniture: [Desk], stations: [Desk]),
         Room(name: "lounge", kind: Suite, size: ((6, 5), (10, 8)), furniture: [Couch, Table]),
     ],
+    terminals: ["kitchen"],
     pieces: [
         Piece(name: "ramp", kind: Ramp),
         Piece(name: "track", kind: Track),

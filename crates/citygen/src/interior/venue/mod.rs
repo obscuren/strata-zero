@@ -3,6 +3,7 @@
 //! The Rust never names a type: a new type is a change to the data.
 
 mod check;
+mod devices;
 mod draw;
 mod frame;
 mod graph;
@@ -16,6 +17,7 @@ mod ways;
 mod zones;
 
 pub use check::*;
+pub use devices::*;
 pub use draw::{draw_copy_level, draw_level};
 pub use frame::*;
 pub use graph::*;
@@ -26,4 +28,4 @@ pub use mission::{
 pub use types::*;
 
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
