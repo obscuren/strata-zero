@@ -159,10 +159,14 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
 - **A mission's copy.** `Interiors.copies` (`#[serde(default)]`: older saves hold none)
   maps a building to its `venues::MissionCopy`: the mission's inputs (size, objective,
   security, seed), the levels it keeps, `live` (taken; false while it waits for you to
-  leave the building), `ending` (asked to end; it does once you're out) and `left` (the
-  zone cards the mission layer laid on its floors, and where). The layer itself isn't
-  saved: `MissionLayer::lay` lays it again from the inputs on the saved layout whenever
-  it's needed (a floor drawn, a code note read), the same every time.
+  leave the building), `ending` (asked to end; it does once you're out), `left` (the
+  zone cards the mission layer laid on its floors, and where) and `layer`, the
+  `MissionLayer` itself (`#[serde(default)]`). The layer is laid once, at `begin`, and
+  saved: a floor drawn or a code note read takes it from the copy, never laid again, so
+  a change to `flavor/sites.ron` or to the layer's code can't put other locks, devices or
+  notes beside the floors, guards and cards a save already holds. A copy saved before
+  the layer was kept has none: `venues::tick` ends it as lost, as it does a copy whose
+  type is gone.
 - **What a copy keeps.** While it's live the building's plan is the layout cut to the
   kept levels (`FloorPlan::kept`) and its floors are drawn with the layer on them; both
   are saved as any plan and floor are. The rest is play state saved where it always is:
@@ -176,7 +180,7 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   layout (`FloorPlan::of_layout`), so the plain building comes back from the seed. What
   you dropped there stays where it lies, a card you picked up stays in your pack, and
   the codes you learned still work, since the layout is the same. A copy whose type
-  this build lacks can't lay its layer: `venues::tick` ends it the same way and logs
+  this build lacks, or with no saved layer: `venues::tick` ends it the same way and logs
   `lost in the update · the job in {building}`.
 - **Another city.** The copies are a field of `Interiors`, which `outside::Stay` and
   `kept::StayParts` carry whole, so a copy in a city you've left travels with it.

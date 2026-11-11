@@ -29,7 +29,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, VecDeque};
 
-/// What a mission asks of a site; the layer is laid again from these alone.
+/// What a mission asks of a site: the layer is laid from these alone, once, and then saved
+/// with the mission's copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissionInputs {
     pub size: MissionSize,
@@ -41,7 +42,7 @@ pub struct MissionInputs {
 }
 
 /// A tile on a level.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placed {
     pub level: i32,
     pub at: Pos,
@@ -49,21 +50,23 @@ pub struct Placed {
 
 /// A guard's post: where it stands, the zone whose card it carries, and the spots it
 /// walks, starting at its post.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardPost {
     pub level: i32,
     pub at: Pos,
     pub zone: u8,
+    #[serde(default)]
     pub patrol: Vec<Pos>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a device is. Saved with a copy's layer, so a new kind joins at the end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceKind {
     Camera,
     Turret,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     pub level: i32,
     pub at: Pos,
@@ -71,7 +74,7 @@ pub struct Device {
 }
 
 /// A zone's card, left lying.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardSpot {
     pub zone: u8,
     pub level: i32,
@@ -79,26 +82,34 @@ pub struct CardSpot {
 }
 
 /// A code note: where it lies, and the lock it opens as (level, number).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeSpot {
     pub level: i32,
     pub at: Pos,
     pub lock: (i32, u16),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A mission's layer as laid. A copy saves it whole, so its floors, guards and cards keep
+/// agreeing with it whatever a later build's data or code would lay from the same inputs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissionLayer {
     pub inputs: MissionInputs,
     /// Lowest first.
     pub kept: Vec<i32>,
     pub objective: Placed,
     /// Doors given their `fit` lock: (level, door index).
+    #[serde(default)]
     pub fitted: Vec<(i32, usize)>,
+    #[serde(default)]
     pub guards: Vec<GuardPost>,
+    #[serde(default)]
     pub devices: Vec<Device>,
+    #[serde(default)]
     pub containers: Vec<Placed>,
     /// In the order they were left: each lies before the lock it opens.
+    #[serde(default)]
     pub cards: Vec<CardSpot>,
+    #[serde(default)]
     pub codes: Vec<CodeSpot>,
 }
 

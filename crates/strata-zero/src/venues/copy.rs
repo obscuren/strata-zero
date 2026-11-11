@@ -2,9 +2,9 @@
 //! mission takes a venue with `begin` and lets it go with `end`; either waits while you're
 //! inside, and `tick` carries it out once you're out. Taken, the venue's plan is cut to
 //! the copy's floors and its floors are drawn again with the mission's layer on them (laid
-//! again from the copy's inputs whenever it's needed), its guards stand at their posts and
-//! its cards lie where the layer left them. While it's live every door of the building on
-//! the city map is flagged, and a door onto a floor the plan lacks is barred. Ended, the
+//! once, at `begin`, and saved with the copy), its guards stand at their posts and its
+//! cards lie where the layer left them. While it's live every door of the building on the
+//! city map is flagged, and a door onto a floor the plan lacks is barred. Ended, the
 //! guards and the cards still lying go and the plain building comes back from its layout;
 //! what you dropped there stays where it lies, and the codes you learned still work.
 
@@ -17,7 +17,7 @@ use game::ItemId;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MissionCopy {
     pub inputs: MissionInputs,
-    /// The levels the copy keeps, lowest first.
+    /// The levels the copy keeps, lowest first: its layer's.
     pub kept: Vec<i32>,
     /// Taken: the floors are the copy's. False while it waits for you to be out.
     pub live: bool,
@@ -25,6 +25,11 @@ pub struct MissionCopy {
     pub ending: bool,
     /// The cards the layer left, where they were left.
     pub left: Vec<(Place, Pos, ItemId)>,
+    /// The layer as `begin` laid it, read from here, never laid again: a later build's
+    /// data or code could lay another. A copy saved before it was kept has none and is
+    /// lost.
+    #[serde(default)]
+    pub layer: Option<MissionLayer>,
 }
 
 /// What a venue's door on the city map shows.
@@ -36,18 +41,9 @@ pub enum DoorMark {
     Barred,
 }
 
-/// The layer of `copy` on `plan`'s layout, laid again from the copy's inputs: None for a
-/// plan with no layout, a type this build lacks, or a layer that doesn't lay.
-fn layer_of(plan: &FloorPlan, copy: &MissionCopy) -> Option<MissionLayer> {
-    let layout = plan.venue.as_deref()?;
-    let pack = VenuePack::builtin();
-    let t = pack.by_id(&layout.type_id)?;
-    MissionLayer::lay(layout, t, pack.size(copy.inputs.size), copy.inputs).ok()
-}
-
-/// Level `level` of a copy's floors: the plan's layout drawn with the layer on it.
+/// Level `level` of a copy's floors: the plan's layout drawn with the saved layer on it.
 pub(crate) fn copy_floor(plan: &FloorPlan, copy: &MissionCopy, level: i32) -> Option<Floor> {
-    draw_copy_level(plan.venue.as_deref()?, &layer_of(plan, copy)?, level)
+    draw_copy_level(plan.venue.as_deref()?, copy.layer.as_ref()?, level)
 }
 
 /// Whether the player stands on a floor of building `b`.
@@ -79,10 +75,11 @@ pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<
         .map_err(|_| format!("that building can't hold a {size} job"))?;
     let copy = MissionCopy {
         inputs,
-        kept: layer.kept,
+        kept: layer.kept.clone(),
         live: false,
         ending: false,
         left: Vec::new(),
+        layer: Some(layer),
     };
     st.interiors.set_copy(b, Some(copy));
     tick(st);
@@ -108,8 +105,8 @@ pub fn end(st: &mut AppState, b: BuildingId) -> Result<String, String> {
 }
 
 /// Takes a waiting copy, or ends one, once the player is out of its building. A copy whose
-/// type this build lacks ends at once (ending needs only the layout, which the plan holds),
-/// and the log says it's lost.
+/// type this build lacks, or saved with no layer, ends at once (ending needs only the
+/// layout, which the plan holds), and the log says it's lost.
 pub fn tick(st: &mut AppState) {
     let copies: Vec<(BuildingId, MissionCopy)> = (st.interiors.copies())
         .map(|(b, c)| (b, c.clone()))
@@ -118,7 +115,7 @@ pub fn tick(st: &mut AppState) {
         let typed = (st.interiors.plan_of(b))
             .and_then(|p| p.venue.as_deref())
             .is_some_and(|v| VenuePack::builtin().by_id(&v.type_id).is_some());
-        if !typed {
+        if !typed || copy.layer.is_none() {
             lose(st, b, &copy);
         } else if inside(st, b) {
             continue;
@@ -137,13 +134,13 @@ fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     let Some(plan) = st.interiors.plan_of(b) else {
         return;
     };
-    let Some(layer) = layer_of(plan, copy) else {
+    let Some(layer) = copy.layer.as_ref() else {
         lose(st, b, copy);
         return;
     };
     let cut = plan.kept(&copy.kept);
     st.interiors.put_plan(cut);
-    st.foes.extend(super::guard_foes(&layer, b));
+    st.foes.extend(super::guard_foes(layer, b));
     crate::credentials::stock_zone_cards(st, b);
     let left: Vec<(Place, Pos, ItemId)> = (layer.cards.iter())
         .map(|c| {
@@ -249,7 +246,7 @@ pub fn note_at(st: &AppState, place: Place, pos: Pos) -> Option<String> {
         return None;
     };
     let copy = st.interiors.copy(b).filter(|c| c.live)?;
-    let layer = layer_of(st.interiors.plan_of(b)?, copy)?;
+    let layer = copy.layer.as_ref()?;
     let note = (layer.codes.iter()).find(|c| c.level == level && c.at == pos)?;
     let (at, number) = note.lock;
     let code = citygen::rng::door_code(st.city.as_ref()?.seed, b, at, number);

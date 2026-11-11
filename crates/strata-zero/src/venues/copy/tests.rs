@@ -7,7 +7,7 @@ use crate::walker::Player;
 use citygen::venue::{
     CodeSpot, LockKind, MissionLayer, MissionSize, VenueFrame, draw_level, lay_out,
 };
-use citygen::{BuildingKind, City, DoorLock, GenParams, Generator, LinkKind, SizePreset};
+use citygen::{BuildingKind, City, DoorLock, Feature, GenParams, Generator, LinkKind, SizePreset};
 
 /// The seed-8 city the story is played in.
 fn home_city() -> City {
@@ -535,6 +535,95 @@ fn a_copy_comes_back_whole() {
     let mut back = back;
     tick(&mut back);
     assert!(same(&st.interiors, &back.interiors));
+}
+
+/// Each kept level of building `b`'s copy drawn afresh: its locks, the cameras, turrets,
+/// containers and objective standing on it, and its code notes as read.
+type Drawn = Vec<(i32, Vec<DoorLock>, Vec<(Pos, Feature)>, Vec<Option<String>>)>;
+
+fn drawn_afresh(st: &mut AppState, b: BuildingId) -> Drawn {
+    let city = st.city.clone().unwrap();
+    st.interiors.drop_floors(b);
+    let copy = st.interiors.copy(b).unwrap().clone();
+    let layer = copy.layer.unwrap();
+    (copy.kept.iter())
+        .map(|&level| {
+            let f = st.interiors.ensure(&city, b, level).unwrap().clone();
+            let marks = (f.tiles.iter())
+                .filter_map(|(p, t)| match t.feature {
+                    Some(
+                        k @ (Feature::Camera
+                        | Feature::Turret
+                        | Feature::Container
+                        | Feature::Objective),
+                    ) => Some((p, k)),
+                    _ => None,
+                })
+                .collect();
+            let notes = (layer.codes.iter())
+                .filter(|c| c.level == level)
+                .map(|c| note_at(st, floor(b, level), c.at))
+                .collect();
+            (level, f.locks, marks, notes)
+        })
+        .collect()
+}
+
+#[test]
+fn a_copy_keeps_its_layer_through_a_save_and_a_change_to_its_type() {
+    use crate::runs::testutil::{Dir, running};
+    let (mut st, b) = hotel_where(|_, _, l| !l.codes.is_empty() && !l.devices.is_empty());
+    let was = inputs(MissionSize::Small);
+    begin(&mut st, b, was).unwrap();
+    let laid = st.interiors.copy(b).unwrap().layer.clone().unwrap();
+    assert_eq!(
+        Some(&laid),
+        layer(&st, b, was).as_ref(),
+        "laid once, at begin"
+    );
+    let before = drawn_afresh(&mut st, b);
+    assert!(before.iter().any(|(_, locks, marks, notes)| {
+        !locks.is_empty() && !marks.is_empty() && notes.iter().all(Option::is_some)
+    }));
+    // Saved and opened again.
+    let dir = Dir::new("copy-layer");
+    let st = running(st);
+    let path = crate::runs::file::write(&dir.0, &st).unwrap();
+    let mut back = AppState::new();
+    crate::runs::open(&mut back, &path).unwrap();
+    assert_eq!(back.interiors.copy(b).unwrap().layer.as_ref(), Some(&laid));
+    // A build that lays this copy otherwise, as a change to its type's security would:
+    // here its inputs' security moves, which lays other guards and devices.
+    let now = MissionInputs {
+        security: was.security.wrapping_add(127),
+        ..was
+    };
+    back.interiors.copy_mut(b).unwrap().inputs = now;
+    assert_ne!(
+        layer(&back, b, now).as_ref(),
+        Some(&laid),
+        "laid again, it differs"
+    );
+    // Drawn again, its floors are as they were.
+    assert_eq!(drawn_afresh(&mut back, b), before);
+}
+
+#[test]
+fn a_copy_saved_with_no_layer_is_lost() {
+    let (mut st, b) = hotel();
+    begin(&mut st, b, inputs(MissionSize::Small)).unwrap();
+    let left = st.interiors.copy(b).unwrap().left.clone();
+    // As a save from before copies kept their layer reads.
+    st.interiors.copy_mut(b).unwrap().layer = None;
+    tick(&mut st);
+    assert!(st.interiors.copy(b).is_none(), "ended");
+    assert!(st.foes.is_empty());
+    for (place, at, id) in &left {
+        assert!(st.ground.at(*place, *at).iter().all(|s| &s.item != id));
+    }
+    let name = crate::net::building_name(&st, b);
+    let line = format!("lost in the update · the job in {name}");
+    assert!(st.log.iter().any(|e| e.text == line), "{line}");
 }
 
 /// The first venue of `st`'s city whose plan holds a small job, laid out for the session.

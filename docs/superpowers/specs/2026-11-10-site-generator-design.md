@@ -452,6 +452,9 @@ So at the end of this spec a copy can be walked, but not yet fought or snuck thr
 - Which buildings hold a copy, with the copy's inputs and kept floors, is saved:
   - with `#[serde(default)]`;
   - in `Stay` and `StayParts`, so a copy in another city travels with it.
+- A copy's mission layer is saved with it and read from there, never laid again: a
+  later change to the data or to the layer's code would lay another than the one its
+  floors, guards and cards came from. A copy saved without one is lost.
 - **Old saves:** a building whose plan was saved before this change keeps its old floors
   and today's builder for its floors not yet made. Buildings first built after the
   change are sites.
