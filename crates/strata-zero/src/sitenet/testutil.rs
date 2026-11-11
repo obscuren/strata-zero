@@ -9,6 +9,8 @@ use crate::helix::bin::new_shell;
 use crate::helix::shell::{HostId, Shell};
 use crate::owners::Owner;
 use crate::render::map::{FloorMap, MapRef};
+use crate::render::netlook::{NetLook, NetLookView};
+use crate::render::viewport::Overlay;
 use citygen::venue::{DeviceKind, MissionInputs, MissionSize, VenuePack, WayIn, WayInKind, Ways};
 use citygen::{
     BuildingId, BuildingKind, DoorLock, Floor, Grid, NetDevice, NetNode, NodeKind, Place, Pos,
@@ -463,6 +465,36 @@ pub(crate) fn stand_at_the_rig(st: &mut AppState) {
         .find(|q| h.home.rect.contains(*q) && floor.tiles[*q].is_walkable())
         .expect("a tile beside the rig");
     stand_on(st, h.place(), at);
+}
+
+/// The city's Net drawn with the look round tile `at` (80 by 40 tiles at most), its sites'
+/// firewall locks filled from that view as the map fills them: a buffer whose cell (x, y)
+/// is tile (x, y).
+pub(crate) fn paint_grid_at(st: &AppState, at: Pos) -> ratatui::buffer::Buffer {
+    let city = st.city.as_ref().expect("a city");
+    let (w, h) = ((city.size.w as i32).min(80), (city.size.h as i32).min(40));
+    let x0 = (at.x - w / 2).clamp(0, city.size.w as i32 - w);
+    let y0 = (at.y - h / 2).clamp(0, city.size.h as i32 - h);
+    let view = citygen::Rect::new(x0, y0, w, h);
+    let look = NetLookView {
+        firewalls: crate::sitenet::grid_locks(st, view),
+        ..NetLookView::default()
+    };
+    let area = ratatui::layout::Rect::new(x0 as u16, y0 as u16, w as u16, h as u16);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let map = MapRef::stratum_of(city, StratumKind::Net);
+    let net = NetLook {
+        view: &look,
+        keep: None,
+    };
+    net.draw(&map, Pos::new(x0, y0), area, st.tick, &mut buf, &st.style);
+    buf
+}
+
+/// The character drawn on tile `p` of a buffer `paint_grid_at` painted.
+pub(crate) fn cell_char(buf: &ratatui::buffer::Buffer, p: Pos) -> char {
+    let cell = &buf[(p.x as u16, p.y as u16)];
+    cell.symbol().chars().next().unwrap_or(' ')
 }
 
 /// The game's clock a game minute on: the world's, which `NetState::now` reads, and the

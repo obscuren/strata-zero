@@ -1,10 +1,11 @@
 //! The open Net in relief: a dark void lit only near data, lanes as beams with
 //! packets on them, each construct stepped by its tier and named on its plate, hubs
-//! ringed.
+//! ringed, and a site's firewall locks on its edge.
 
 use super::plate::{self, Ring};
 use super::{
-    AMBER, NetArea, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put, security_of,
+    AMBER, BLACK_RED, NetArea, NetLookView, Tier, VOID, WHITE, label_for, node_colour, put,
+    security_of,
 };
 use crate::render::Rgb;
 use crate::render::map::TileMap;
@@ -122,6 +123,7 @@ pub(super) fn draw(
     let theme =
         |d: Option<citygen::DistrictId>| d.and_then(|d| city?.district_opt(d)).map(|d| d.theme);
     let glows = &view.packets;
+    let locks: HashMap<Pos, bool> = view.firewalls.iter().copied().collect();
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
@@ -208,8 +210,21 @@ pub(super) fn draw(
                     bold = true;
                 }
             }
+            // A site's firewall lock, over whatever its tile holds.
+            if let Some(broken) = locks.get(&p) {
+                (ch, fg, bg, bold) = lock_cell(*broken);
+            }
             put(buf, sx, sy, ch, fg, bg, bold);
         }
+    }
+}
+
+/// A site's firewall lock on the grid (Ruling 21): `▮` red while whole, `▯` green once
+/// broken.
+fn lock_cell(broken: bool) -> (char, Rgb, Rgb, bool) {
+    match broken {
+        true => ('▯', SIGNAL, VOID.mix(SIGNAL, 0.3), true),
+        false => ('▮', BLACK_RED, VOID.mix(BLACK_RED, 0.3), true),
     }
 }
 

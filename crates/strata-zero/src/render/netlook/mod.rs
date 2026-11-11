@@ -145,7 +145,8 @@ pub fn node_colour(kind: NodeKind, wall: Rgb, security: Option<u8>, tick: u64) -
 }
 
 /// What the look needs besides the map: the clock, what you track, whose home it is,
-/// the spine the ICE watches and, on a site's Net, its tower's view.
+/// the spine the ICE watches, on a site's Net its tower's view and on the city's the sites'
+/// firewall locks.
 #[derive(Clone, Debug, Default)]
 pub struct NetLookView {
     pub tick: u64,
@@ -158,6 +159,9 @@ pub struct NetLookView {
     pub watch: HashMap<Pos, IceGrade>,
     /// On a site's Net, what its open tower draws besides the construct.
     pub site: Option<tower::SiteView>,
+    /// On the city's Net, each site's firewall lock in view and whether it's broken
+    /// (`sitenet::grid_locks`): drawn over the grid.
+    pub firewalls: Vec<(Pos, bool)>,
 }
 
 pub struct NetLook<'a> {

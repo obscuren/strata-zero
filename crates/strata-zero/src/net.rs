@@ -3764,8 +3764,9 @@ fn arrow(from: Pos, to: Pos) -> Option<char> {
 }
 
 /// HERE's card for a construct: its name and kind (and on the open Net, the way to its
-/// gate); its security and the ICE it keeps; on the open Net, its nodes and what
-/// stands out about it. `from` is your tile on the open Net, `None` inside.
+/// gate); its security and the ICE it keeps; a site's firewall; on the open Net, its nodes
+/// and what stands out about it. `from` is your tile on the open Net, `None` inside. A
+/// site's security is the one that governs it (`sitenet::security`), as its locks are.
 pub fn card_lines(
     st: &AppState,
     b: BuildingId,
@@ -3781,7 +3782,11 @@ pub fn card_lines(
     let Some(building) = city.building_opt(b) else {
         return Vec::new();
     };
-    let security = security_of(city, b).unwrap_or(0);
+    let site = crate::sitenet::is_site(st, b);
+    let security = match site {
+        true => crate::sitenet::security(st, b),
+        false => security_of(city, b).unwrap_or(0),
+    };
     let tier = Tier::of(security);
     let tracked = from.is_some()
         && matches!(crate::track::target_now(st), Some(crate::track::Target::Building(t)) if t == b);
@@ -3838,6 +3843,9 @@ pub fn card_lines(
         text(format!(" · {ice}")),
     ];
     let mut out = vec![Line::from(first), Line::from(second)];
+    if site {
+        out.push(firewall_line(st, b));
+    }
     if from.is_none() {
         return out;
     }
@@ -3879,6 +3887,33 @@ pub fn card_lines(
     }
     out.push(Line::from(third));
     out
+}
+
+/// A site's firewall on its card (`sitenet::card_line`), inside as on the grid: the word
+/// in the firewall's red, each lock's glyph in its own colour, the count quieter.
+fn firewall_line(st: &AppState, b: BuildingId) -> ratatui::text::Line<'static> {
+    use crate::render::netlook::BLACK_RED;
+    use crate::render::overlay::SIGNAL;
+    use crate::ui::chrome::DIM;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let line = crate::sitenet::card_line(st, b);
+    let (word, rest) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+    let (marks, count) = rest.split_once(" · ").unwrap_or((rest, ""));
+    let red = Style::default().fg(BLACK_RED.to_color());
+    let mut spans = vec![Span::styled(format!(" {word} "), red)];
+    for m in marks.chars() {
+        let fg = if m == '▯' { SIGNAL } else { BLACK_RED };
+        let style = Style::default()
+            .fg(fg.to_color())
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(m.to_string(), style));
+    }
+    spans.push(Span::styled(
+        format!(" · {count}"),
+        Style::default().fg(DIM),
+    ));
+    spans.into()
 }
 
 /// A tier's word on the card, where no ICE stands.

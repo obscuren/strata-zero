@@ -4074,18 +4074,20 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
+        // The map's tiles on screen.
+        let shown = TileRect::new(
+            origin.x,
+            origin.y,
+            map_area.width as i32,
+            map_area.height as i32,
+        );
+        let on_the_grid = self.place == Place::Stratum(StratumKind::Net);
         // The city's Net's traffic moves on with the clock round the view.
-        let (packets, soaks) = if self.place == Place::Stratum(StratumKind::Net) {
-            let view = citygen::Rect::new(
-                origin.x,
-                origin.y,
-                map_area.width as i32,
-                map_area.height as i32,
-            );
+        let (packets, soaks) = if on_the_grid {
             self.traffic
                 .borrow_mut()
                 .city(city.seed)
-                .run_city(city, view, st.tick)
+                .run_city(city, shown, st.tick)
         } else {
             Default::default()
         };
@@ -4121,6 +4123,11 @@ impl Screen for MapScreen {
                 }
                 _ => None,
             },
+            // On the city's Net each site's firewall locks on its edge.
+            firewalls: match on_the_grid {
+                true => crate::sitenet::grid_locks(st, shown),
+                false => Vec::new(),
+            },
         };
         let net_look = crate::render::netlook::NetLook {
             view: &net_view,
@@ -4131,14 +4138,8 @@ impl Screen for MapScreen {
         }
         // The cord: the way back to where you jacked in (Settings can hide it), walked
         // as far as the view shows it.
-        let shown = TileRect::new(
-            origin.x,
-            origin.y,
-            map_area.width as i32,
-            map_area.height as i32,
-        );
         let cord = crate::net::cord_view(st)
-            .filter(|_| self.place == Place::Stratum(StratumKind::Net))
+            .filter(|_| on_the_grid)
             .zip(st.player.as_ref().map(|p| p.pos))
             .map(|(mut view, you)| {
                 view.walk = self.cord_walk.borrow_mut().walk(st, view.entry, you, shown);
@@ -12918,6 +12919,50 @@ mod tests {
             ("◇", TERMINAL.to_color()),
             "the kiosk's wall tile"
         );
+    }
+
+    #[test]
+    fn on_the_citys_net_a_sites_locks_stand_on_its_edge() {
+        use crate::render::netlook::{BLACK_RED, WHITE};
+        use crate::render::overlay::SIGNAL;
+        use crate::render::viewport::tile_to_screen;
+        use crate::sitenet::testutil::{at_the_gate, office_copy};
+        let (mut st, b) = office_copy(190);
+        at_the_gate(&mut st, b);
+        let s = MapScreen::walking(&mut st);
+        draw_buffer(&s, &st, 120, 40);
+        let drawn = |st: &AppState, p: Pos| {
+            let buf = draw_buffer(&s, st, 120, 40);
+            let area = s.last_map.get();
+            let origin = s.cam.origin(area.width, area.height);
+            let (x, y) = tile_to_screen(area, origin, p)?;
+            Some((buf[(x, y)].symbol().to_string(), buf[(x, y)].fg))
+        };
+        let look = |c: &str, fg: crate::render::Rgb| Some((c.to_string(), fg.to_color()));
+        // A lock in view nobody stands on (ICE on one is drawn over it).
+        let net = Place::Stratum(StratumKind::Net);
+        let (i, at) = (crate::sitenet::lock_spots(&st, b).into_iter().enumerate())
+            .find(|(_, p)| crate::foes::foe_at(&st, net, *p).is_none() && drawn(&st, *p).is_some())
+            .expect("a lock in view, nobody on it");
+        assert_eq!(drawn(&st, at), look("▮", BLACK_RED), "lock {i} whole");
+        let now = st.net.now(&st);
+        st.net.break_lock(b, i as u8, now);
+        assert_eq!(drawn(&st, at), look("▯", SIGNAL), "lock {i} broken");
+        // A building in view that is no site keeps its gate as before (a bare one: no
+        // node on it, nobody on it).
+        let (area, city) = (s.last_map.get(), st.city.as_ref().unwrap());
+        let origin = s.cam.origin(area.width, area.height);
+        let bare = |g: Pos| {
+            (city.tile(StratumKind::Net, g)).is_some_and(|t| t.feature.is_none())
+                && crate::foes::foe_at(&st, net, g).is_none()
+        };
+        let plain = (city.buildings.iter())
+            .filter_map(|x| Some((x.id, crate::constructs::city_gate(city, x.id)?)))
+            .filter(|(_, g)| tile_to_screen(area, origin, *g).is_some() && bare(*g))
+            .find(|(x, _)| !crate::sitenet::is_site(&st, *x))
+            .expect("a building that is no site, its bare gate in view")
+            .1;
+        assert_eq!(drawn(&st, plain), look("▯", WHITE));
     }
 
     #[test]

@@ -28,6 +28,29 @@ pub fn broken(st: &AppState, b: BuildingId) -> Vec<bool> {
         .collect()
 }
 
+/// Every site's locks in `view` (city tiles), each with whether it stands broken now: what
+/// the city's Net draws on a site's edge. A lock stands on the edge or a tile out from it,
+/// so a site just off the view still brings the locks it has in it.
+pub fn grid_locks(st: &AppState, view: citygen::Rect) -> Vec<(Pos, bool)> {
+    let Some(city) = st.city.as_ref() else {
+        return Vec::new();
+    };
+    (city.buildings.iter())
+        .filter(|x| x.footprint.grow(1).intersects(view) && super::is_site(st, x.id))
+        .flat_map(|x| lock_spots(st, x.id).into_iter().zip(broken(st, x.id)))
+        .filter(|(p, _)| view.contains(*p))
+        .collect()
+}
+
+/// The city's card's line for site `b`'s firewall (Ruling 21): a glyph a lock in lock
+/// order, `▯` broken and `▮` whole, then how many are broken: `FIREWALL ▯▮▮ · 1/3 broken`.
+pub fn card_line(st: &AppState, b: BuildingId) -> String {
+    let marks = broken(st, b);
+    let glyphs: String = (marks.iter()).map(|m| if *m { '▯' } else { '▮' }).collect();
+    let down = marks.iter().filter(|m| **m).count();
+    format!("FIREWALL {glyphs} · {down}/{} broken", marks.len())
+}
+
 /// Whether every lock of site `b`'s firewall stands broken.
 pub fn firewall_open(st: &AppState, b: BuildingId) -> bool {
     let marks = broken(st, b);
@@ -314,6 +337,58 @@ mod tests {
             st.net.broken_locks(b, now + 20 + game::HACK_MINUTES - 1),
             vec![1]
         );
+    }
+
+    #[test]
+    fn a_sites_locks_stand_on_its_edge_on_the_grid() {
+        let (mut st, b) = office_copy(190);
+        let now = st.net.now(&st);
+        st.net.break_lock(b, 0, now);
+        let spots = lock_spots(&st, b);
+        let fp = st.city.as_ref().unwrap().building(b).footprint;
+        let got = grid_locks(&st, fp.grow(4));
+        assert_eq!(got.iter().filter(|(p, _)| spots.contains(p)).count(), 3);
+        assert!(got.contains(&(spots[0], true)) && got.contains(&(spots[1], false)));
+        let buf = paint_grid_at(&st, spots[0]); // the city's Net drawn round the gate
+        assert_eq!(cell_char(&buf, spots[0]), '▯');
+        assert_eq!(cell_char(&buf, spots[1]), '▮');
+    }
+
+    #[test]
+    fn the_card_says_the_firewall() {
+        let (mut st, b) = office_copy(190);
+        let now = st.net.now(&st);
+        st.net.break_lock(b, 0, now);
+        assert_eq!(card_line(&st, b), "FIREWALL ▯▮▮ · 1/3 broken");
+        let card: Vec<String> = crate::net::card_lines(&st, b, Some(lock_spots(&st, b)[0]))
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            card.iter().any(|l| l.trim() == "FIREWALL ▯▮▮ · 1/3 broken"),
+            "{card:?}"
+        );
+    }
+
+    #[test]
+    fn the_cards_security_is_the_one_that_governs_the_site() {
+        let (mut st, b) = office_copy(190);
+        // Its subnet says another: the live copy's governs the locks, and the card says it,
+        // its firewall's line under it, from the grid and from inside.
+        let city = st.city.as_mut().unwrap();
+        let subnet = (city.net.subnets.iter_mut())
+            .find(|s| s.owner == citygen::SubnetOwner::Building(b))
+            .expect("its subnet");
+        subnet.security = 120;
+        assert_eq!(security(&st, b), 190);
+        assert_eq!(lock_spots(&st, b).len(), 3);
+        for from in [Some(lock_spots(&st, b)[0]), None] {
+            let card: Vec<String> = (crate::net::card_lines(&st, b, from).iter())
+                .map(|l| l.to_string())
+                .collect();
+            assert!(card[1].starts_with(" SEC 190 · "), "{card:?}");
+            assert_eq!(card[2], " FIREWALL ▮▮▮ · 0/3 broken", "{card:?}");
+        }
     }
 
     #[test]
