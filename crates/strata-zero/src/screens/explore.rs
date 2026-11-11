@@ -232,6 +232,19 @@ fn on_level(k: &citygen::Construct, level: i32, p: Pos) -> bool {
     k.level_at(p).is_some_and(|l| l.level == level)
 }
 
+/// The tiles the look, the aim and the fire cursor keep to at `place`: on a site's Net the
+/// open level's, since the tower draws the rows round it as other levels' folds and slabs;
+/// none elsewhere.
+fn cursor_band(st: &AppState, place: Place) -> Option<TileRect> {
+    let Place::SiteNet { building, level } = place else {
+        return None;
+    };
+    st.constructs
+        .site(building)?
+        .net_level(level)
+        .map(|l| l.area)
+}
+
 /// Whether `place`'s map carries on past the city's edge: the street and the Net, with a
 /// world out there.
 fn carries_on(st: &AppState, place: Place) -> bool {
@@ -932,7 +945,9 @@ impl MapScreen {
                     .iter()
                     .enumerate()
                     .filter(|(i, g)| {
-                        k.guard_at(g.pos) == Some(*i) && crate::net::line_clear_in(k, p.pos, g.pos)
+                        k.guard_at(g.pos) == Some(*i)
+                            && crate::net::line_clear_in(k, p.pos, g.pos)
+                            && cursor_band(st, p.place).is_none_or(|r| r.contains(g.pos))
                     })
                     .map(|(i, g)| (Enemy::Ice(i), g.pos))
                     .collect();
@@ -1207,7 +1222,9 @@ impl MapScreen {
         if let Some(dir) = dir_for(k.code) {
             let from = self.target.unwrap_or(me);
             let to = from.step(dir);
-            if st.city.as_ref().is_some_and(|c| c.size.contains(to)) {
+            if st.city.as_ref().is_some_and(|c| c.size.contains(to))
+                && cursor_band(st, place).is_none_or(|r| r.contains(to))
+            {
                 self.target = Some(to);
             }
             return Some(ScreenCmd::Stay);
@@ -2185,6 +2202,16 @@ impl MapScreen {
         TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32)
     }
 
+    /// The tiles on screen the look cursor may rest on: on a site's Net only the open
+    /// level's (`cursor_band`).
+    fn look_rect(&self, st: &AppState) -> TileRect {
+        let view = self.view_rect();
+        match cursor_band(st, self.place) {
+            Some(band) => view.intersection(band).unwrap_or(band),
+            None => view,
+        }
+    }
+
     /// Keys in look mode: the walk keys move the cursor (shift by eight), tab and
     /// shift-tab step through what is worth a look, space opens what is in reach,
     /// esc or `x` puts the cursor away.
@@ -2229,7 +2256,7 @@ impl MapScreen {
                     st,
                     &map,
                     self.place,
-                    self.view_rect(),
+                    self.look_rect(st),
                     from,
                     &|pl, p| self.inside_person_at(pl, p),
                 );
@@ -2249,9 +2276,10 @@ impl MapScreen {
                 Some(d) => {
                     let step = if fast { 8 } else { 1 };
                     let (dx, dy) = d.delta();
-                    let view = self.view_rect();
-                    // the view bounds the cursor, and the map too where it ends; the
-                    // street and the Net carry on past the city's edge
+                    let view = self.look_rect(st);
+                    // the view bounds the cursor (on a site's Net the open level's part
+                    // of it), and the map too where it ends; the street and the Net carry
+                    // on past the city's edge
                     let size = st
                         .city
                         .as_ref()
@@ -3388,13 +3416,18 @@ impl MapScreen {
                     return Some(ScreenCmd::Stay);
                 }
                 // The aim reaches as far as the moves do; a piece within that reach
-                // may be aimed at (no path: a red cross).
+                // may be aimed at (no path: a red cross). On a site's Net it keeps to
+                // the open level.
                 let from = self.aim.unwrap_or(pos);
                 let to = from.step(dir);
                 let cap = crate::net::aim_cap(st);
+                let band = (st.player.as_ref())
+                    .and_then(|p| cursor_band(st, p.place))
+                    .is_none_or(|r| r.contains(to));
                 let open = st.constructs.get(b).is_some_and(|k| {
-                    crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
-                        || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)
+                    (band
+                        && (crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
+                            || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)))
                         // Off the map from the entry: the gate, one tile past it.
                         || (from == k.entry
                             && !k.tiles.in_bounds(to)
@@ -12885,6 +12918,55 @@ mod tests {
             ("◇", TERMINAL.to_color()),
             "the kiosk's wall tile"
         );
+    }
+
+    #[test]
+    fn on_a_sites_net_the_cursors_keep_to_the_open_level() {
+        use crate::sitenet::testutil::{office_copy, on_hub};
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let mut s = MapScreen::walking(&mut st);
+        draw_buffer(&s, &st, 120, 64);
+        s.jump_to(&st, player(&st).1);
+        let area = (st.constructs.site(b).unwrap().net_level(0)).unwrap().area;
+        let on_it = |p: Pos| area.contains(p);
+        // The look: pushed past each edge, it rests on the level's first and last rows and
+        // columns, never on the folds and slabs the tower draws round it.
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        let cursor = |s: &MapScreen| s.looking.as_ref().unwrap().cursor;
+        for (k, edge) in [
+            ('K', area.y),
+            ('J', area.bottom() - 1),
+            ('H', area.x),
+            ('L', area.right() - 1),
+        ] {
+            for _ in 0..12 {
+                s.update(&mut st, &[key(KeyCode::Char(k))]);
+                assert!(on_it(cursor(&s)), "{k}: {:?} off {area:?}", cursor(&s));
+            }
+            let at = cursor(&s);
+            let got = if matches!(k, 'K' | 'J') { at.y } else { at.x };
+            assert_eq!(got, edge, "{k}");
+        }
+        // Tab through what's worth a look: only what's on it.
+        for _ in 0..12 {
+            s.update(&mut st, &[key(KeyCode::Tab)]);
+            assert!(on_it(cursor(&s)), "tab: {:?}", cursor(&s));
+        }
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        // The fire cursor on your act half the same.
+        let here = player(&st).0;
+        crate::net::engage(&mut st, here, true);
+        assert!(crate::net::stay(&mut st));
+        s.update(&mut st, &[]);
+        for _ in 0..60 {
+            s.update(&mut st, &[key(KeyCode::Char('k'))]);
+        }
+        assert_eq!(s.target.map(|t| t.y), Some(area.y), "the fire cursor");
+        for _ in 0..60 {
+            s.update(&mut st, &[key(KeyCode::Char('j'))]);
+        }
+        assert_eq!(s.target.map(|t| t.y), Some(area.bottom() - 1));
     }
 
     #[test]

@@ -471,7 +471,8 @@ impl<'a> Tower<'a> {
 
     /// A row of a folded level (Ruling 22): its back rooms' walls, the wall with its doors
     /// and turnstiles, or its front's walls; the riser through it; its nodes and ICE by
-    /// their floor row against its fold, a collision shifting right. Dimmed out of reach.
+    /// their floor row against its fold, a collision shifting right (left once it meets the
+    /// level's last column). Dimmed out of reach.
     fn fold_row(&self, p: &mut Paint, level: i32, row: u8, y: i32) {
         let Some(l) = self.k.net_level(level) else {
             return;
@@ -518,10 +519,7 @@ impl<'a> Tower<'a> {
             if self.fold_of(level, at.y - area.y) != row {
                 return None;
             }
-            let mut x = at.x;
-            while !taken.insert(x) {
-                x += 1;
-            }
+            let x = free_column(&mut taken, at.x, area.x..area.right())?;
             Some(Pos::new(x, y))
         };
         for n in ours {
@@ -623,19 +621,23 @@ impl<'a> Tower<'a> {
                 }
             }
         }
-        if self.riser.is_some_and(|(a, _)| a <= top) {
-            p.put(Pos::new(self.rx, top), '╦', BLACK_RED, glow, true);
-        }
         let n = self.site.broken.len();
         let words = format!(" FIREWALL · {n} {} ", if n == 1 { "lock" } else { "locks" });
         let len = words.chars().count() as i32;
-        p.text(
-            Pos::new((x0 + x1 + 1 - len) / 2, top),
-            &words,
-            BLACK_RED,
-            glow,
-            false,
-        );
+        // Off the riser's head: four past it as look D has them, else wherever they fit
+        // inside the corners clear of it, nearest the middle; the head drawn after them.
+        let centred = (x0 + x1 + 1 - len) / 2;
+        let starts = x0 + 1..=x1 - len;
+        let clear = |x: &i32| starts.contains(x) && !(*x..x + len).contains(&self.rx);
+        let mut near_middle: Vec<i32> = starts.clone().collect();
+        near_middle.sort_by_key(|x| (x - centred).abs());
+        let at = (std::iter::once(self.rx + 4).chain(near_middle))
+            .find(clear)
+            .unwrap_or(centred);
+        p.text(Pos::new(at, top), &words, BLACK_RED, glow, false);
+        if self.riser.is_some_and(|(a, _)| a <= top) {
+            p.put(Pos::new(self.rx, top), '╦', BLACK_RED, glow, true);
+        }
         // G folded: its locks on the firewall's sides beside it.
         if self.site.open != 0
             && let Some(&(g0, _)) = self.span.get(&0)
@@ -727,6 +729,19 @@ fn line_mask(q: Pos, on: impl Fn(Pos) -> bool) -> usize {
         };
         on(n) && !(here == crossed && lean(n) == crossed)
     })
+}
+
+/// The column a piece at column `x` of a folded row takes: its own when free, else the
+/// next free one right of it, else left of it, all inside `cols` (the level's width);
+/// none when the row is full.
+fn free_column(taken: &mut HashSet<i32>, x: i32, cols: std::ops::Range<i32>) -> Option<i32> {
+    if cols.is_empty() {
+        return None;
+    }
+    let x = x.clamp(cols.start, cols.end - 1);
+    let right = x..cols.end;
+    let left = (cols.start..x).rev();
+    right.chain(left).find(|c| taken.insert(*c))
 }
 
 /// A node's glyph on the tower: doors `▯`, terminals `◇`, the server `◆`, the vault `⌗`,
@@ -1029,5 +1044,100 @@ mod tests {
         assert!(map_text(&buf).contains('@'), "you are on the map");
         assert!(text.contains("FIREWALL ▮▮▮ 0/3"), "the panel's firewall");
         assert!(text.contains("LEVELS"));
+    }
+
+    /// Construct `k` (the site's own, or one changed for a test) drawn as the tower with
+    /// `site` over its bounds; and the tile at the area's top left.
+    fn paint_k(st: &AppState, k: &Construct, site: SiteView) -> (Buffer, Pos) {
+        let city = st.city.as_ref().unwrap();
+        let m = ConstructMap {
+            city,
+            construct: k,
+            level: Some(site.open),
+        };
+        let r = bounds(k, site.open);
+        let area = Rect::new(0, 0, r.w as u16, r.h as u16);
+        let mut buf = Buffer::empty(area);
+        let view = NetLookView::default();
+        let origin = Pos::new(r.x, r.y);
+        draw(&m, &view, &site, origin, area, &mut buf, &st.style);
+        (buf, origin)
+    }
+
+    /// Row `y` of `buf`, as text.
+    fn row_text(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// What the tower draws a node or a piece of ICE with.
+    fn a_piece(symbol: &str) -> bool {
+        ["▯", "◇", "◆", "⌗", "⬡", "▪", "▮", "◈"].contains(&symbol)
+    }
+
+    #[test]
+    fn the_firewalls_words_keep_off_the_risers_head() {
+        let (st, k) = site_construct_at(190, 0);
+        let site = crate::sitenet::site_view(&st, b_of(&st), 0);
+        // As laid, and with the riser moved under the middle of the firewall's top edge,
+        // where its words stood centred.
+        let mut middle = k.clone();
+        let mid = (FIREWALL_X + k.size.w as i32 + 1) / 2;
+        (middle.levels.iter_mut())
+            .find(|l| l.level == 0)
+            .unwrap()
+            .hub
+            .x = mid;
+        for k in [&k, &middle] {
+            let (buf, o) = paint_k(&st, k, site.clone());
+            let rx = k.net_level(0).unwrap().hub.x;
+            let row = (0..buf.area.height)
+                .find(|y| row_text(&buf, *y).contains("FIREWALL · 3 locks"))
+                .expect("the firewall's words, whole");
+            let head = cell(&buf, o, Pos::new(rx, o.y + i32::from(row)));
+            assert_eq!(head.symbol(), "╦", "{}", row_text(&buf, row));
+        }
+    }
+
+    #[test]
+    fn a_folded_levels_nodes_stay_inside_its_width() {
+        let (st, mut k) = site_construct_at(190, 0);
+        let site = crate::sitenet::site_view(&st, b_of(&st), 0);
+        // Three nodes of a level above crowded onto its last column, on its fold's row.
+        let l = (k.levels.iter()).find(|l| l.level > 0).unwrap().clone();
+        let fold = (site.folds.iter())
+            .find(|(lv, _)| *lv == l.level)
+            .unwrap()
+            .1;
+        let last = Pos::new(l.area.right() - 1, l.area.y + fold);
+        let mut crowd = (k.devices.iter_mut()).filter(|d| d.node.level == l.level);
+        for d in crowd.by_ref().take(3) {
+            d.at = last;
+        }
+        drop(crowd);
+        let on_row = |p: Pos| p.y - l.area.y == fold;
+        let pieces = (k.devices.iter())
+            .filter(|d| d.node.level == l.level && on_row(d.at))
+            .count()
+            + (k.guards.iter())
+                .filter(|g| g.standing && l.area.contains(g.pos) && on_row(g.pos))
+                .count();
+        assert!(pieces >= 3);
+        let (buf, o) = paint_k(&st, &k, site);
+        let (y, _) = (stack(&k, 0).into_iter())
+            .find(|(_, s)| {
+                *s == Stacked::Fold {
+                    level: l.level,
+                    row: 1,
+                }
+            })
+            .unwrap();
+        let drawn = |x: i32| a_piece(cell(&buf, o, Pos::new(x, y)).symbol());
+        assert!(drawn(last.x), "one on its last column");
+        let inside = (l.area.x..l.area.right()).filter(|x| drawn(*x)).count();
+        assert_eq!(inside, pieces, "every piece of the row inside the level");
+        // Nothing past it, up to the firewall's side.
+        for x in l.area.right()..=k.size.w as i32 {
+            assert!(!drawn(x), "a piece at {x}, past the level's {}", l.area.w);
+        }
     }
 }

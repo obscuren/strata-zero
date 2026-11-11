@@ -358,7 +358,8 @@ pub fn panel_lines(st: &AppState, b: BuildingId) -> Vec<Line<'static>> {
     // What you hold, a row a node and what each does.
     out.push(Line::from(span(" HELD", DIM)));
     let now = st.net.now(st);
-    let mut rows: Vec<(char, String, &'static str)> = Vec::new();
+    // A row a node and what it does: two nodes of one name are two rows.
+    let mut rows: Vec<(SiteNode, char, String, &'static str)> = Vec::new();
     for d in &k.devices {
         let mut words: Vec<&'static str> = Vec::new();
         if let Some(h) = crate::holds::held(st, citygen::NetNode::Site(d.node), now) {
@@ -377,15 +378,15 @@ pub fn panel_lines(st: &AppState, b: BuildingId) -> Vec<Line<'static>> {
             _ => '▪',
         };
         for word in words {
-            if !rows.iter().any(|r| r.1 == d.name && r.2 == word) {
-                rows.push((glyph, d.name.clone(), word));
+            if !rows.iter().any(|r| r.0 == d.node && r.3 == word) {
+                rows.push((d.node, glyph, d.name.clone(), word));
             }
         }
     }
     if rows.is_empty() {
         out.push(Line::from(span("  none", FAINTER)));
     }
-    for (glyph, name, word) in rows {
+    for (_, glyph, name, word) in rows {
         let room = w.saturating_sub(4 + 3 + word.chars().count());
         out.push(Line::from(vec![
             span("  ", TEXT),
@@ -594,6 +595,35 @@ mod tests {
         let view = site_view(&st, b, 0);
         assert!(view.held.contains(&door.at));
         assert_eq!(view.broken, vec![true, false, false]);
+    }
+
+    #[test]
+    fn held_lists_two_nodes_of_one_name_apart() {
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        // Two door locks under one name, both spoofed: a row each, as the tower counts
+        // each node it holds.
+        let mut k = st.constructs.site(b).unwrap().clone();
+        let doors: Vec<usize> = (k.devices.iter().enumerate())
+            .filter(|(_, d)| d.kind == NodeKind::DoorLock)
+            .map(|(i, _)| i)
+            .take(2)
+            .collect();
+        assert_eq!(doors.len(), 2, "two door locks");
+        let name = k.devices[doors[0]].name.clone();
+        k.devices[doors[1]].name = name.clone();
+        let nodes = doors.iter().map(|i| k.devices[*i].node).collect::<Vec<_>>();
+        st.constructs.put_site(k);
+        for node in nodes {
+            hack(&mut st, node, NodeKind::DoorLock, Op::Spoof);
+        }
+        let lines: Vec<String> = panel_lines(&st, b).iter().map(|l| l.to_string()).collect();
+        let row = format!("▯ {name} · spoofed");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains(&row)).count(),
+            2,
+            "{lines:#?}"
+        );
     }
 
     #[test]
