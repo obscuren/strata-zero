@@ -4,7 +4,9 @@ use crate::look::{Group, Looks, look_card};
 use crate::render::map::MapRef;
 use crate::venues::{begin, end, guard_foes};
 use crate::walker::Player;
-use citygen::venue::{LockKind, MissionLayer, MissionSize, VenueFrame, draw_level, lay_out};
+use citygen::venue::{
+    CodeSpot, LockKind, MissionLayer, MissionSize, VenueFrame, draw_level, lay_out,
+};
 use citygen::{BuildingKind, City, DoorLock, GenParams, Generator, LinkKind, SizePreset};
 
 /// The seed-8 city the story is played in.
@@ -701,4 +703,72 @@ fn a_code_note_reads_under_its_tile() {
     outside(&mut st, b);
     end(&mut st, b).unwrap();
     assert_eq!(note_at(&st, place, note.at), None);
+}
+
+/// The layer's code note for a locked room's door, not a zone lock's.
+fn room_note(st: &AppState, b: BuildingId, l: &MissionLayer) -> Option<CodeSpot> {
+    let v = st.interiors.plan_of(b)?.venue.as_deref()?;
+    l.codes.iter().copied().find(|c| {
+        let (level, number) = c.lock;
+        (v.level(level)).is_some_and(|x| x.rooms.iter().any(|r| r.private && r.number == number))
+    })
+}
+
+#[test]
+fn a_rooms_code_note_and_the_keyjack_open_its_door() {
+    use crate::screens::popup::Pick;
+    let (mut st, b) = hotel_where(|st, b, l| room_note(st, b, l).is_some());
+    begin(&mut st, b, inputs(MissionSize::Small)).unwrap();
+    let layer = layer(&st, b, inputs(MissionSize::Small)).unwrap();
+    let (level, number) = room_note(&st, b, &layer).unwrap().lock;
+    let city = st.city.clone().unwrap();
+    st.interiors.ensure(&city, b, level).unwrap();
+    let f = st.interiors.floor(b, level).unwrap().1.clone();
+    let room = (f.rooms.iter())
+        .find(|r| r.private && r.number == number)
+        .unwrap()
+        .clone();
+    let door = room.door.unwrap();
+    let from = (door.neighbors4())
+        .find(|n| !room.rect.contains(*n) && f.tiles.get(*n).is_some_and(|t| t.is_walkable()))
+        .unwrap();
+    let place = floor(b, level);
+    let step = |st: &mut AppState| {
+        use crate::app::Screen;
+        use crossterm::event::KeyCode;
+        put(st, place, from);
+        let k = match (door.x - from.x, door.y - from.y) {
+            (1, 0) => 'l',
+            (-1, 0) => 'h',
+            (0, 1) => 'j',
+            _ => 'k',
+        };
+        let mut s = crate::screens::explore::MapScreen::walking(st);
+        s.update(st, &[crate::screens::testutil::key(KeyCode::Char(k))]);
+        st.player.as_ref().unwrap().pos
+    };
+    // Beside its door, its keypad; the step holds.
+    put(&mut st, place, from);
+    let subjects = crate::interact::gather(&st, &|_, _| None);
+    let pad = (subjects.iter()).find(|s| s.pos == door).expect("the door");
+    let keypad = |p: &Pick| {
+        matches!(*p, Pick::Keypad { building, level: l, number: n }
+            if (building, l, n) == (b, level, number))
+    };
+    assert!(
+        (pad.choices.iter()).any(|c| c.enabled && keypad(&c.pick)),
+        "a keypad on the door"
+    );
+    assert_eq!(step(&mut st), from, "locked");
+    // The note's code keyed in opens it.
+    let code = citygen::rng::door_code(city.seed, b, level, number);
+    assert_eq!(try_code(&mut st, b, level, number, code), Verdict::Open);
+    assert_eq!(step(&mut st), door);
+    // And the Keyjack's crack, the code forgotten.
+    st.journal = Default::default();
+    assert_eq!(step(&mut st), from, "locked again");
+    let keyjack = crate::credentials::Source::Keyjack;
+    let opened = crate::credentials::open_with(&mut st, b, level, number, keyjack);
+    assert_eq!(opened, Verdict::Open);
+    assert_eq!(step(&mut st), door);
 }

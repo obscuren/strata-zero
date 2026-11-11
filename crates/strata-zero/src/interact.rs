@@ -330,18 +330,23 @@ pub fn gather(
         }
     }
 
-    // A locked flat's door beside you, or a keypad lock's unless you stand on its free
-    // side: its keypad.
+    // A locked flat's door beside you, a venue's locked room's but your home's, or a
+    // keypad lock's unless you stand on its free side: its keypad. A locked room opens
+    // from inside with none.
     if let Place::Floor { building, level } = place
-        && let Some((_, floor)) = st.interiors.floor(building, level)
+        && let Some((plan, floor)) = st.interiors.floor(building, level)
     {
         let now = st.net.now(st);
+        let venue = plan.venue.is_some();
         for d in pos.neighbors4() {
             let lock = (floor.lock_at(d))
                 .filter(|l| l.kind == LockKind::Keypad && l.free_from != Some(pos))
                 .map(|l| l.number);
+            let padded = |r: &citygen::Room| {
+                r.kind == citygen::RoomKind::Flat || (venue && r.kind != citygen::RoomKind::Home)
+            };
             let flat = (floor.door_of(d))
-                .filter(|r| r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos))
+                .filter(|r| r.private && padded(r) && !r.rect.contains(pos))
                 .map(|r| r.number);
             let Some(number) = lock.or(flat) else {
                 continue;
