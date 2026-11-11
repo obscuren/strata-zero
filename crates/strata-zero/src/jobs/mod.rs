@@ -186,6 +186,15 @@ pub fn handin_item(kind: &Kind) -> Option<ItemId> {
     }
 }
 
+/// What a rig has sifted a hand-in's shard into: the shard it takes in its place.
+pub fn handin_sifted(kind: &Kind) -> Option<ItemId> {
+    match kind {
+        Kind::Fetch { .. } | Kind::Copy { vault: false, .. } => Some(ItemId::new("paydata_sifted")),
+        Kind::Copy { vault: true, .. } => Some(ItemId::new("vault_data_sifted")),
+        Kind::Plant { .. } | Kind::Deliver { .. } => None,
+    }
+}
+
 /// Minutes left as the pane says them.
 pub fn clock_text(left: u64) -> String {
     match left {
@@ -435,6 +444,7 @@ impl Jobs {
         }
         if let Some(item) = handin_item(&j.kind)
             && !carries(&item)
+            && !handin_sifted(&j.kind).is_some_and(|s| carries(&s))
         {
             return Err("the shard is not on you".to_string());
         }

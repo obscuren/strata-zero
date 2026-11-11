@@ -57,6 +57,8 @@ pub enum Say {
     Refused,
     Nothing,
     Receiver,
+    /// The mail that says a rack is at your door.
+    Rack,
 }
 
 #[derive(Clone, Debug, Error, PartialEq)]
@@ -94,6 +96,7 @@ pub struct Flavor {
     pub refused: Vec<String>,
     pub nothing: Vec<String>,
     pub receiver: Vec<String>,
+    pub rack: Vec<String>,
 }
 
 /// Replaces every `{slot}` that has a value; unknown braces stay as written.
@@ -127,6 +130,7 @@ impl Flavor {
             ("refused", &self.refused),
             ("nothing", &self.nothing),
             ("receiver", &self.receiver),
+            ("rack", &self.rack),
         ] {
             if list.is_empty() {
                 return Err(FlavorError::Empty(name.into()));
@@ -196,6 +200,7 @@ impl Flavor {
             Say::Refused => &self.refused,
             Say::Nothing => &self.nothing,
             Say::Receiver => &self.receiver,
+            Say::Rack => &self.rack,
         };
         pick(list, roll)
     }

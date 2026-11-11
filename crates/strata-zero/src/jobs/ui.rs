@@ -85,7 +85,7 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
     ]
 }
 
-use super::{Event, Kind, REFUSE_AT, Say, handin_item};
+use super::{COPY_AT, Event, Kind, PLANT_AT, REFUSE_AT, Say, VAULT_AT, handin_item, handin_sifted};
 use crate::screens::popup::{Choice, Header, Pick, Popup};
 use crate::ui::hud::AMBER;
 use citygen::BuildingId;
@@ -321,15 +321,104 @@ fn bonus(kind: &Kind) -> Option<(ItemId, &'static str)> {
         .then(|| (ItemId::new(crate::keyjack::STOCK_FUSE), " · a stock fuse"))
 }
 
+/// The sleds a fixer pays for knowing you, in the order they come.
+const KNOW_SLEDS: [&str; 4] = [
+    "sled_tinman",
+    "sled_switchback",
+    "sled_longwire",
+    "sled_sandbag",
+];
+/// The racks trust sends, in the order they come.
+const TRUST_RACKS: [&str; 2] = ["rack_civitas", "rack_lotus"];
+
+/// What a hand-in that moved a fixer's standing from `before` to `after` brings in rig
+/// parts: a sled for each fixer who comes to know you, a rack at your door for the first
+/// two who trust you, the Halcyon for the first inner circle, and the program shards
+/// from the first Plant and the first Copy. Each item with the words the line adds.
+pub fn rig_rewards(
+    st: &mut AppState,
+    fixer: PersonId,
+    before: i32,
+    after: i32,
+    kind: &Kind,
+) -> Vec<(ItemId, String)> {
+    let name = fixer_name(st, fixer);
+    let crossed = |at: i32| before < at && after >= at;
+    let mut got: Vec<ItemId> = Vec::new();
+    let mut racks: Vec<ItemId> = Vec::new();
+    let r = &mut st.character.rig_rewards;
+    if crossed(COPY_AT)
+        && let Some(sled) = KNOW_SLEDS.get(r.sleds as usize)
+        && r.paid.insert(format!("know:{name}"))
+    {
+        r.sleds += 1;
+        got.push(ItemId::new(sled));
+    }
+    if crossed(PLANT_AT)
+        && let Some(rack) = TRUST_RACKS.get(r.racks as usize)
+        && r.paid.insert(format!("trust:{name}"))
+    {
+        r.racks += 1;
+        racks.push(ItemId::new(rack));
+    }
+    if crossed(VAULT_AT) && !r.halcyon && r.paid.insert(format!("inner:{name}")) {
+        r.halcyon = true;
+        racks.push(ItemId::new("rack_halcyon"));
+    }
+    let program = match kind {
+        Kind::Plant { .. } => Some(("first_plant", "prog_sniff")),
+        Kind::Copy { .. } => Some(("first_copy", "prog_keepalive")),
+        _ => None,
+    };
+    if let Some((key, item)) = program
+        && r.paid.insert(key.to_string())
+    {
+        got.push(ItemId::new(item));
+    }
+    let named = |st: &AppState, i: &ItemId| {
+        let n = st.content.item(i).map_or(i.0.clone(), |i| i.name.clone());
+        format!("a {n}")
+    };
+    let mut out = Vec::new();
+    for item in got {
+        // Hardware gets a copy of its own, as the Keyjack's fuse does; a shard just stacks.
+        st.character.give_item(&st.content, item.clone(), 1);
+        let words = named(st, &item);
+        out.push((item, words));
+    }
+    for rack in racks {
+        st.character.frames.push(rack.clone());
+        let roll = st.character.rig_rewards.paid.len() as u64;
+        let said = st.flavor.line(Say::Rack, roll).to_string();
+        let words = named(st, &rack);
+        let now = st.net.now(st);
+        st.journal.mails.push(crate::credentials::Mail {
+            from: name.clone(),
+            subject: words.clone(),
+            body: vec![said],
+            read: false,
+            at: now,
+            job: None,
+            story: None,
+        });
+        out.push((rack, words));
+    }
+    out
+}
+
 /// Ends the job at its fixer: the item out of the pack, the pay in, the line logged.
 pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
     let j = st.jobs.get(id).cloned().ok_or("no such job")?;
     st.jobs.ready(id, &stands(st), &carries(st))?;
     if let Some(item) = handin_item(&j.kind) {
-        game::remove_from_pack(&mut st.character, &item, 1);
+        // The plain shard first; a rig's sifted one takes its place when that's all there is.
+        let sifted = handin_sifted(&j.kind).filter(|_| st.character.count(&item) == 0);
+        game::remove_from_pack(&mut st.character, &sifted.unwrap_or(item), 1);
     }
     let now = st.net.now(st);
+    let before = st.jobs.standing(j.fixer);
     let pay = st.jobs.hand_in(id, now).ok_or("not in hand")?;
+    let after = st.jobs.standing(j.fixer);
     st.character.credits = st.character.credits.saturating_add(pay);
     let bonus = bonus(&j.kind);
     if let Some((item, _)) = &bonus {
@@ -337,6 +426,11 @@ pub fn hand_in(st: &mut AppState, id: JobId) -> Result<String, String> {
         st.character.give_item(&st.content, item.clone(), 1);
     }
     let fuse = bonus.map_or("", |b| b.1);
+    let parts: String = rig_rewards(st, j.fixer, before, after, &j.kind)
+        .into_iter()
+        .map(|(_, words)| format!(" · {words}"))
+        .collect();
+    let fuse = format!("{fuse}{parts}");
     let fixer = fixer_name(st, j.fixer);
     let said = st.flavor.line(Say::Handed, id.0 as u64).to_string();
     let line = format!(
@@ -504,6 +598,147 @@ mod tests {
         p.pos = beside;
         st.player = Some(p);
         st.world.as_mut().unwrap().park(who, spot);
+    }
+
+    fn fetch() -> Kind {
+        Kind::Fetch {
+            building: BuildingId(0),
+            level: 1,
+            number: 101,
+            tile: citygen::Pos::new(1, 1),
+        }
+    }
+
+    fn two_fixers(st: &AppState) -> (PersonId, PersonId) {
+        let mut it = st
+            .world
+            .as_ref()
+            .unwrap()
+            .people()
+            .iter()
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id);
+        (it.next().unwrap(), it.next().expect("two fixers"))
+    }
+
+    fn sleds_in_pack(st: &AppState, id: &str) -> u32 {
+        st.character.count(&ItemId::new(id))
+    }
+
+    #[test]
+    fn knowing_you_pays_a_sled_once() {
+        use crate::jobs::COPY_AT;
+        let mut st = state_home();
+        let (a, b) = two_fixers(&st);
+        let got = rig_rewards(&mut st, a, COPY_AT - 1, COPY_AT, &fetch());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, ItemId::new("sled_tinman"));
+        assert_eq!(sleds_in_pack(&st, "sled_tinman"), 1);
+        let got = rig_rewards(&mut st, b, COPY_AT - 1, COPY_AT, &fetch());
+        assert_eq!(got[0].0, ItemId::new("sled_switchback"));
+        // Same fixer again, or a drop and a climb back, pays nothing.
+        assert!(rig_rewards(&mut st, a, COPY_AT - 1, COPY_AT, &fetch()).is_empty());
+        assert!(rig_rewards(&mut st, a, COPY_AT, COPY_AT + 1, &fetch()).is_empty());
+        assert_eq!(st.character.rig_rewards.sleds, 2);
+    }
+
+    #[test]
+    fn the_first_trust_sends_the_civitas() {
+        use crate::jobs::PLANT_AT;
+        let mut st = state_home();
+        let (a, b) = two_fixers(&st);
+        let got = rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        assert!(got.iter().any(|(i, _)| *i == ItemId::new("rack_civitas")));
+        assert_eq!(st.character.frames, vec![ItemId::new("rack_civitas")]);
+        assert_eq!(sleds_in_pack(&st, "rack_civitas"), 0, "never carried");
+        let mail = st.journal.mails.last().unwrap();
+        assert_eq!(mail.from, fixer_name(&st, a));
+        assert!(
+            mail.body.iter().any(|l| l.contains("it's at your door")),
+            "{:?}",
+            mail.body
+        );
+        assert!(!mail.read);
+        rig_rewards(&mut st, b, PLANT_AT - 1, PLANT_AT, &fetch());
+        assert_eq!(
+            st.character.frames,
+            vec![ItemId::new("rack_civitas"), ItemId::new("rack_lotus")]
+        );
+        // A third fixer, or the same one again, sends nothing more.
+        let mails = st.journal.mails.len();
+        rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        assert_eq!(st.character.frames.len(), 2);
+        assert_eq!(st.journal.mails.len(), mails);
+    }
+
+    #[test]
+    fn inner_circle_sends_the_halcyon_once() {
+        use crate::jobs::VAULT_AT;
+        let mut st = state_home();
+        let (a, b) = two_fixers(&st);
+        rig_rewards(&mut st, a, VAULT_AT - 1, VAULT_AT, &fetch());
+        assert!(st.character.frames.contains(&ItemId::new("rack_halcyon")));
+        assert!(st.character.rig_rewards.halcyon);
+        let n = st.character.frames.len();
+        rig_rewards(&mut st, b, VAULT_AT - 1, VAULT_AT, &fetch());
+        assert_eq!(
+            st.character
+                .frames
+                .iter()
+                .filter(|f| **f == ItemId::new("rack_halcyon"))
+                .count(),
+            1
+        );
+        assert!(st.character.frames.len() <= n + 1);
+    }
+
+    #[test]
+    fn first_plant_pays_sniff_first_copy_pays_keepalive() {
+        let mut st = state_home();
+        let (a, _) = two_fixers(&st);
+        let plant = Kind::Plant {
+            building: BuildingId(1),
+        };
+        let copy = Kind::Copy {
+            building: BuildingId(1),
+            vault: false,
+        };
+        let got = rig_rewards(&mut st, a, 0, 1, &plant);
+        assert_eq!(got[0].0, ItemId::new("prog_sniff"));
+        assert_eq!(sleds_in_pack(&st, "prog_sniff"), 1);
+        assert!(rig_rewards(&mut st, a, 2, 3, &plant).is_empty());
+        let got = rig_rewards(&mut st, a, 2, 3, &copy);
+        assert!(got.iter().any(|(i, _)| *i == ItemId::new("prog_keepalive")));
+        assert_eq!(sleds_in_pack(&st, "prog_keepalive"), 1);
+        assert!(
+            rig_rewards(&mut st, a, 3, 4, &copy)
+                .iter()
+                .all(|(i, _)| *i != ItemId::new("prog_keepalive"))
+        );
+    }
+
+    #[test]
+    fn a_sifted_shard_hands_in() {
+        use crate::jobs::handin_sifted;
+        let copy = Kind::Copy {
+            building: BuildingId(1),
+            vault: true,
+        };
+        assert_eq!(handin_sifted(&fetch()), Some(ItemId::new("paydata_sifted")));
+        assert_eq!(handin_sifted(&copy), Some(ItemId::new("vault_data_sifted")));
+        let mut st = state_home();
+        let id = st.jobs.active().unwrap().id;
+        let (b, level, _, tile) = first_fetch(&st).unwrap();
+        crate::jobs::send(
+            &mut st,
+            Event::Taken {
+                place: Place::Floor { building: b, level },
+                pos: tile,
+            },
+        );
+        st.character.give(ItemId::new("paydata_sifted"), 1);
+        assert!(hand_in(&mut st, id).is_ok());
+        assert_eq!(st.character.count(&ItemId::new("paydata_sifted")), 0);
     }
 
     #[test]
