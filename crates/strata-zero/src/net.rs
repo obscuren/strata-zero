@@ -1920,6 +1920,16 @@ pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
     out
 }
 
+/// What the map draws of `k`'s watch: on a site's Net (`level`) the open level's alone,
+/// since the tower folds the others; all of it in any other construct.
+pub fn watched_on(k: &Construct, level: Option<i32>) -> HashMap<Pos, IceGrade> {
+    let mut watch = watched(k);
+    if let Some(level) = level {
+        watch.retain(|p, _| k.level_at(*p).is_some_and(|l| l.level == level));
+    }
+    watch
+}
+
 /// No wall of the construct on the line between two tiles, the ends excluded:
 /// the construct's own clear line, as `foes::line_clear` is a stratum's.
 pub fn line_clear_in(k: &Construct, from: Pos, to: Pos) -> bool {

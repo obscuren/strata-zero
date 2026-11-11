@@ -4109,11 +4109,7 @@ impl Screen for MapScreen {
                     .unwrap_or_default(),
                 // On a site's Net the tower folds the other levels: the open one's watch.
                 Place::SiteNet { building, level } => (st.constructs.site(building))
-                    .map(|k| {
-                        let mut watch = crate::net::watched(k);
-                        watch.retain(|p, _| on_level(k, level, *p));
-                        watch
-                    })
+                    .map(|k| crate::net::watched_on(k, Some(level)))
                     .unwrap_or_default(),
                 _ => Default::default(),
             },
