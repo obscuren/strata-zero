@@ -104,7 +104,7 @@ impl Backdoor {
     }
 
     /// The minute it really stops working.
-    fn real_end(&self) -> u64 {
+    pub(crate) fn real_end(&self) -> u64 {
         (self.planted + self.nominal * self.factor as u64 / 100).saturating_sub(self.spent)
     }
 
@@ -213,6 +213,9 @@ pub struct Backdoors {
     /// A trace began and its tripwire has not rung yet: the hops out.
     #[serde(default)]
     rung: Option<usize>,
+    /// The rig's jobs, run on this city's backdoors (`rig::jobs`).
+    #[serde(default)]
+    pub jobs: crate::rig::jobs::RigJobs,
 }
 
 fn factor_for(seed: u64, b: BuildingId, planted: u64) -> u8 {
@@ -351,12 +354,20 @@ impl Backdoors {
         }
     }
 
+    /// A keepalive held the backdoor on `b` for `minutes`: its life moves on by as
+    /// much, so it is as healthy as it was and its hidden end as far off.
+    pub fn hold_still(&mut self, b: BuildingId, minutes: u64) {
+        if let Some(d) = self.held_mut(b) {
+            d.planted += minutes;
+        }
+    }
+
     pub fn burn(&mut self, b: BuildingId, why: Why, now: u64) -> Burnt {
         let Some(d) = self.held_mut(b) else {
             return Burnt { cut_trace: false };
         };
         d.state = State::Burned { at: now, why };
-        if matches!(why, Why::You | Why::Trace) {
+        if matches!(why, Why::You | Why::Trace | Why::Noticed) {
             self.patched.insert(b, now + PATCH_MINUTES);
         }
         let on_it = self

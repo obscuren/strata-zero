@@ -1,6 +1,8 @@
 //! What the rig does, read off the sleds in its rack: seats, clock, backdoor lines,
 //! how long a backdoor holds and how hard the firewall fights a trace.
 
+pub mod jobs;
+
 use crate::app::AppState;
 use game::{Character, Content, Mod};
 

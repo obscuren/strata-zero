@@ -277,6 +277,7 @@ pub fn listings(st: &AppState, stratum: StratumKind) -> Vec<Listing> {
         return out;
     };
     jobs_and_story(st, stratum, &mut out);
+    stashes(st, stratum, &mut out);
     if let Some(rig) = st.home.as_ref() {
         let b = rig.home.building;
         if let Some(tile) = building_tile(st, b, stratum) {
@@ -405,6 +406,41 @@ fn jobs_and_story(st: &AppState, stratum: StratumKind, out: &mut Vec<Listing>) {
                 Target::Person(p) => Some(p),
                 _ => None,
             },
+            walk: None,
+        });
+    }
+}
+
+/// The stashes the rig's sifts turned up that still lie where they were found, pinned
+/// with the jobs: `stash · Hollis Court`.
+fn stashes(st: &AppState, stratum: StratumKind, out: &mut Vec<Listing>) {
+    for s in &st.backdoors.jobs.stashes {
+        let place = Place::Floor {
+            building: s.building,
+            level: s.level,
+        };
+        if !st.ground.at(place, s.tile).iter().any(|x| x.item == s.item) {
+            continue;
+        }
+        let Some(tile) = building_tile(st, s.building, stratum) else {
+            continue;
+        };
+        let item = st
+            .content
+            .item(&s.item)
+            .map_or("something", |i| i.name.as_str());
+        out.push(Listing {
+            id: ListingId::Building(s.building),
+            kind: Kind::Jobs,
+            name: format!("stash · {}", crate::net::building_name(st, s.building)),
+            what: format!(
+                "{item} in {} · {}",
+                s.number,
+                citygen::FloorPlan::label(s.level)
+            ),
+            tile,
+            building: Some(s.building),
+            person: None,
             walk: None,
         });
     }

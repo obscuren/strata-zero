@@ -37,6 +37,10 @@ pub enum Source {
     Shell,
     /// Cracked at the pad with a Keyjack.
     Keyjack,
+    /// Read off a backdoor's line by the rig's `sniff`.
+    Sniffed,
+    /// Dug out of a paydata shard by the rig's `sift`.
+    Sifted,
 }
 
 /// A message in the rig's inbox.
@@ -799,9 +803,13 @@ fn door_of(st: &AppState, c: &Code) -> String {
     }
     let whose = match c.source {
         Source::Home => "your flat".to_string(),
-        Source::ServerCopy | Source::Keypad | Source::Keyjack | Source::Mail | Source::Shell => {
-            whose_flat(st, c.building, c.level, c.number)
-        }
+        Source::ServerCopy
+        | Source::Keypad
+        | Source::Keyjack
+        | Source::Mail
+        | Source::Shell
+        | Source::Sniffed
+        | Source::Sifted => whose_flat(st, c.building, c.level, c.number),
     };
     format!("{whose} `{}`, level {}", c.number, c.level)
 }
@@ -817,6 +825,8 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
             Source::Keyjack => format!("cracked with the Keyjack, {}", stamp(c.at)),
+            Source::Sniffed => format!("sniffed off the line, {}", stamp(c.at)),
+            Source::Sifted => format!("sifted out of a shard, {}", stamp(c.at)),
             Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
             Source::Shell => match &c.noted_by {
                 Some(n) => format!("read in `{n}`'s notes, {}", stamp(c.at)),

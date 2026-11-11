@@ -1657,6 +1657,9 @@ pub fn tick_backdoors(st: &mut AppState) {
             crate::backdoors::Event::Raid { wiped } => {
                 // The route ends first, so the dump starts no second trace.
                 st.backdoors.end_route();
+                if wiped {
+                    crate::rig::jobs::kill_on_lines(st, "the rig wiped itself");
+                }
                 if st.player.as_ref().is_some_and(|p| p.jacked_in()) {
                     dump_for(st, "the line went dead", COOLING_MINUTES);
                 }
@@ -1674,6 +1677,11 @@ pub fn tick_backdoors(st: &mut AppState) {
             crate::backdoors::Event::RigReturned => crate::credentials::fixer_mail(st),
         }
     }
+    // The raid took the rig, and every job on it.
+    if st.backdoors.seized(now) {
+        crate::rig::jobs::kill_all(st, "the rig was seized");
+    }
+    crate::rig::jobs::advance(st, now);
 }
 
 /// Back to the body, wherever it waits, seeing around it again.

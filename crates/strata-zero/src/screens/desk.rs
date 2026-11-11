@@ -142,6 +142,7 @@ impl Desk {
             Ok(line) => {
                 run_clock(st);
                 st.say(line);
+                lose_seats(st);
                 self.row = self.row.min(Self::rows(st) - 1);
                 self.picker = None;
                 self.card = st.tick;
@@ -173,6 +174,7 @@ impl Desk {
             Ok(_) => {
                 run_clock(st);
                 st.say(format!("you pull the {} · {FIT_MINUTES}m", name(st, &sled)));
+                lose_seats(st);
                 self.card = st.tick;
             }
             Err(e) => st.warn(e),
@@ -189,6 +191,13 @@ impl Desk {
 }
 
 /// The clock runs while you work: `FIT_MINUTES` of the city's minutes.
+/// A rig with fewer seats than jobs kills the newest, and says which.
+fn lose_seats(st: &mut AppState) {
+    for line in crate::rig::jobs::trim_to_seats(st) {
+        st.warn(line);
+    }
+}
+
 fn run_clock(st: &mut AppState) {
     for _ in 0..FIT_MINUTES {
         crate::clock::run(
@@ -1030,6 +1039,20 @@ mod tests {
         // An empty bay has nothing to pull, and takes no time.
         press(&mut d, &mut st, KeyCode::Char('x'));
         assert_eq!(st.net.now(&st), from + FIT_MINUTES);
+    }
+
+    #[test]
+    fn pulling_the_core_kills_the_jobs_it_seated() {
+        let mut st = state_home();
+        let n = crate::rig::jobs::start(&mut st, crate::rig::jobs::JobKind::Rent).unwrap();
+        let mut d = Desk::open(&st);
+        d.row = 1;
+        press(&mut d, &mut st, KeyCode::Char('x'));
+        assert!(st.backdoors.jobs.running.is_empty(), "no core, no seats");
+        assert_eq!(
+            last(&st),
+            format!("job {n} killed · rent · spare cycles · no seat for it")
+        );
     }
 
     #[test]
