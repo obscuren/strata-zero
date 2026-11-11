@@ -31,7 +31,10 @@ const EXPLORE: &[(&str, &str)] = &[
 /// (`manual::tests::the_on_foot_table_is_the_key_list`).
 pub(crate) const WALK: &[(&str, &str)] = &[
     ("hjkl yubn ↑↓←→", "move"),
-    ("< >", "down · up: stairs, a lift, a ladder, a manhole"),
+    (
+        "< >",
+        "down · up: stairs, a lift, a ladder, a manhole, a hub",
+    ),
     ("W", "the overworld, from the open street or the Net"),
     ("space", "the thing in reach: look, talk, take, jack in"),
     ("space", "on turns: stay put · jacked in: run the program"),
