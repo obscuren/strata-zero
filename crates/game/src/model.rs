@@ -1153,6 +1153,39 @@ pub struct ImplantArt {
     pub colours: BTreeMap<char, (u8, u8, u8)>,
 }
 
+/// A picture is at most this many pixels wide and tall: the Ratchet's width and 22
+/// cells, which fit the smallest blueprint window and, halved, the GEAR & INVENTORY
+/// viewer.
+pub const PICTURE_MAX_W: usize = 88;
+pub const PICTURE_MAX_H: usize = 44;
+
+/// What an item with no look of its own shows on its blueprint: one char per pixel,
+/// `.` empty, a colour per char, two pixels to a cell stacked, and text laid over the
+/// cells.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Picture {
+    pub rows: Vec<String>,
+    pub colours: BTreeMap<char, (u8, u8, u8)>,
+    #[serde(default)]
+    pub labels: Vec<PictureLabel>,
+}
+
+impl Picture {
+    /// Its width in pixels (and cells), from its first row.
+    pub fn width(&self) -> usize {
+        self.rows.first().map_or(0, |r| r.chars().count())
+    }
+}
+
+/// Text on a picture, bold, at a cell of it: a stencil, a label tape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PictureLabel {
+    pub x: u16,
+    pub y: u16,
+    pub text: String,
+    pub colour: (u8, u8, u8),
+}
+
 /// A talent's icon is this many pixels wide and tall, two pixels to a cell stacked.
 pub const TALENT_ART_W: usize = 6;
 pub const TALENT_ART_H: usize = 6;

@@ -320,7 +320,7 @@ pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> O
             equipped: true,
             copy: st.character.worn_copy(slot).map(|k| k.id),
         };
-        choices.push(Choice::new('i', "Inspect", worn));
+        choices.push(Choice::new('i', "Inspect / Mod", worn));
     }
     if choices.is_empty() {
         st.warn(format!("nothing in the pack fits {}", slot.label()));
@@ -350,7 +350,7 @@ pub(crate) fn item_popup(st: &mut AppState, id: &ItemId, anchor: (u16, u16)) -> 
         equipped: false,
         copy: None,
     };
-    let mut choices = vec![Choice::new('i', "Inspect", carried)];
+    let mut choices = vec![Choice::new('i', "Inspect / Mod", carried)];
     if item.slot.is_some() {
         choices.push(Choice::new(
             'e',
@@ -418,7 +418,7 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
         equipped: false,
         copy: Some(copy),
     };
-    let mut choices = vec![Choice::new('i', "Inspect", carried)];
+    let mut choices = vec![Choice::new('i', "Inspect / Mod", carried)];
     if item.slot.is_some() {
         choices.push(Choice::new(
             'e',
@@ -3771,7 +3771,7 @@ mod tests {
         let only_inspect = |p: &Popup| {
             assert!(p.choices().len() > 1);
             for c in p.choices() {
-                assert_eq!(c.enabled, c.label == "Inspect", "{}", c.label);
+                assert_eq!(c.enabled, c.label == "Inspect / Mod", "{}", c.label);
             }
         };
         // The rack: the DECK slot offers the spare deck and Unequip, dimmed; Inspect works.
@@ -3789,7 +3789,7 @@ mod tests {
         let mut p = d.interact(&mut st).unwrap();
         only_inspect(&p);
         let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, ["Inspect", "Use", "Drop one", "Drop all"]);
+        assert_eq!(labels, ["Inspect / Mod", "Use", "Drop one", "Drop all"]);
         // A dimmed verb's key does nothing.
         for k in ['u', 'd', 'D'] {
             assert!(matches!(
@@ -4042,7 +4042,7 @@ mod tests {
         on_pack(&mut d, &mut st, |r| r.detail == Some(Detail::Copy(second)));
         let mut p = d.interact(&mut st).unwrap();
         let labels: Vec<&str> = p.choices().iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, ["Inspect", "Equip", "Drop"]);
+        assert_eq!(labels, ["Inspect / Mod", "Equip", "Drop"]);
         let picks: Vec<Pick> = p.choices().iter().map(|c| c.pick.clone()).collect();
         assert!(
             matches!(&picks[0], Pick::Blueprint { item, equipped: false, copy: Some(k) }

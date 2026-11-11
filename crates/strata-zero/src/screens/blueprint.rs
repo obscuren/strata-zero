@@ -14,6 +14,7 @@ use crate::ui::art::Art;
 use crate::ui::chrome::{CYAN, DIM, PANEL_BG, put, solid};
 use crate::ui::hardware::HardwareArt;
 use crate::ui::looks::ItemArt;
+use crate::ui::picture::PictureArt;
 use crate::ui::stickers::{Loose, Placed, placed};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{CopyId, HardwareLook, Host, Item, ItemId, ItemLook, Slot};
@@ -79,6 +80,8 @@ enum Inspect {
     Drawn(ItemLook),
     /// A sticker, drawn as it is.
     Sticker(Loose),
+    /// An item drawn from its picture, to look at only.
+    Pictured(PictureArt),
     /// No drawing yet.
     Missing,
 }
@@ -105,14 +108,15 @@ impl Inspect {
                 stickers: stuck_on(st, host),
             })),
             Inspect::Sticker(art) => Some(Box::new(art.clone())),
+            Inspect::Pictured(art) => Some(Box::new(art.clone())),
             Inspect::Missing => None,
         }
     }
 }
 
 /// What the window shows for an item: a deck the content knows as its look, hardware
-/// as itself, any other item with a look as that, a sticker as it is, anything else
-/// nothing.
+/// as itself, any other item with a look as that, a sticker as it is, an item with a
+/// picture as that, anything else nothing.
 fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Inspect {
     match st.content.item(item) {
         Some(i) if i.deck.is_some() => {
@@ -126,7 +130,10 @@ fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId
             }),
             (None, Some(look), _) => Inspect::Drawn(look),
             (None, None, Some(art)) => Inspect::Sticker(Loose { art: art.clone() }),
-            (None, None, None) => Inspect::Missing,
+            (None, None, None) => match st.content.picture(item) {
+                Some(p) => Inspect::Pictured(PictureArt { picture: p.clone() }),
+                None => Inspect::Missing,
+            },
         },
         None => Inspect::Missing,
     }
@@ -163,7 +170,8 @@ impl Blueprint {
     /// The window on `item`, `equipped` when Inspect was on the item worn (the rack)
     /// rather than one in the pack, `copy` the copy it was on when the item is held per
     /// copy. A deck the content knows draws as its look, hardware as itself, any other
-    /// item with a look as that; anything else has no blueprint yet. It opens in inspect.
+    /// item with a look as that, an item with a picture as its picture; anything else
+    /// has no blueprint yet. It opens in inspect.
     pub fn open(st: &AppState, item: ItemId, equipped: bool, copy: Option<CopyId>) -> Blueprint {
         let known = st.content.item(&item);
         let title_name = known.map_or_else(|| item.to_string(), |i| i.name.clone());
@@ -259,6 +267,10 @@ impl Blueprint {
                 (None, "esc close")
             }
             Inspect::Sticker(art) => {
+                art.draw(art.origin(body), body, buf);
+                (None, "esc close")
+            }
+            Inspect::Pictured(art) => {
                 art.draw(art.origin(body), body, buf);
                 (None, "esc close")
             }
@@ -832,6 +844,62 @@ mod tests {
                 ScreenCmd::Pop { .. }
             ));
         }
+    }
+
+    #[test]
+    fn armor_is_drawn_from_its_picture() {
+        let mut st = state();
+        st.tick = 40;
+        let armor = [
+            "salvage_jacket",
+            "ballistic_weave",
+            "cargo_pants",
+            "hardhat",
+            "mirrorshades",
+        ];
+        for item in armor {
+            let mut bp = Blueprint::open(&st, id(item), false, None);
+            assert!(matches!(bp.inspect, Inspect::Pictured(_)), "{item}");
+            let picture = st.content.picture(&id(item)).unwrap();
+            let colours: Vec<Color> = picture
+                .colours
+                .values()
+                .map(|&(r, g, b)| Color::Rgb(r, g, b))
+                .collect();
+            for (w, h) in [(100, 30), (120, 40)] {
+                let buf = screen(&bp, &st, w, h);
+                let text = buffer_text(&buf);
+                assert!(!text.contains("MISSING BLUEPRINT"), "{item} {w}x{h}");
+                // The whole picture fits the body, and is what is drawn there.
+                let body = body_of(w, h);
+                let art = bp.drawing(&st).unwrap();
+                let (aw, ah) = art.size();
+                assert!(aw <= body.width && ah <= body.height, "{item} {w}x{h}");
+                let (ox, oy) = art.origin(body);
+                let painted = (oy..oy + ah)
+                    .flat_map(|y| (ox..ox + aw).map(move |x| (x, y)))
+                    .filter(|&p| colours.contains(&buf[p].bg) || colours.contains(&buf[p].fg))
+                    .count();
+                let room = usize::from(aw) * usize::from(ah);
+                assert!(painted * 3 > room, "{item} {w}x{h}: {painted} of {room}");
+                // To look at only: no modding, no stickers.
+                let r = window(w, h);
+                let hint = row(&buf, r.y + r.height - 2);
+                assert!(hint.contains("esc close"), "{hint}");
+                assert!(
+                    !hint.contains("m mod") && !hint.contains("s stickers"),
+                    "{hint}"
+                );
+            }
+            for code in [KeyCode::Char('m'), KeyCode::Char('s')] {
+                assert!(matches!(press(&mut bp, &mut st, &[code]), ScreenCmd::Stay));
+                assert_eq!(bp.mode, Mode::Inspect, "{item}");
+            }
+        }
+        // The hardhat's stencil is over its shell.
+        let bp = Blueprint::open(&st, id("hardhat"), false, None);
+        let text = buffer_text(&screen(&bp, &st, 100, 30));
+        assert!(text.contains("DOCK 9"), "{text}");
     }
 
     #[test]

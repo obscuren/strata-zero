@@ -41,7 +41,7 @@ Only your PRIMARY weapon fires. Throwables are thrown from the map, not from her
 
 ### Inspecting
 
-`i` opens the item's blueprint. On a piece with sockets, `m` switches to modding: pick a socket and fit hardware into it. Hardware only works while it's fitted to something you wear; the Keyjack is the exception, and works from your pack on the fuse in its socket (The city and the world covers it). `s` lets you put stickers on a drawing that takes them; the Keyjack's doesn't.
+`i` (Inspect / Mod in the item's menu) opens the item's blueprint. On a piece with sockets, `m` switches to modding: pick a socket and fit hardware into it. Hardware only works while it's fitted to something you wear; the Keyjack is the exception, and works from your pack on the fuse in its socket (The city and the world covers it). `s` lets you put stickers on a drawing that takes them; the Keyjack's doesn't.
 
 Your deck's blueprint is where you load programs. `space` on a program lifts it and `space` on a slot drops it in; a deck has only so many slots. The deck's failsafe is under a cover here too (The Net explains it). Change your deck before you jack in, not after.
 
