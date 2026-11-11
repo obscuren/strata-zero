@@ -156,10 +156,10 @@ Sites(
                 doors: [Door(stratum: Street, side: S, at: 6), Door(stratum: Street, side: W, at: 4),
                         Door(stratum: Skyways, side: N, at: 6)]),
             zones: ["public", "staff", "secure", "executive"],
-            // Past the gate line the office floors stand open; a mission's reader locks a
-            // floor's door.
+            // The gate line's turnstiles take a card, a code or the Keyjack; past them the
+            // office floors stand open, and a mission's reader locks a floor's door.
             borders: [
-                Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("public", "staff"), lock: Keypad, always: true, ways: [Card, Code, Keyjack, Net, Talk, Force]),
                 Border(zones: ("staff", "secure"), lock: Card, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("staff", "executive"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
                 Border(zones: ("secure", "executive"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),

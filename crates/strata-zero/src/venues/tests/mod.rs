@@ -12,6 +12,7 @@ use citygen::venue::{LOCK_NUMBERS, MissionInputs, WayInKind, Ways, room_label};
 use citygen::{BuildingKind, City, Floor, GenParams, Generator, Place, SizePreset};
 use crossterm::event::KeyCode;
 
+mod gate_line;
 mod way_out;
 
 /// The seed-8 city the story is played in.

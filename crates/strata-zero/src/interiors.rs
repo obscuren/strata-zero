@@ -676,7 +676,7 @@ fn receptionist(world: &World, occupants: &[Occupant]) -> Option<PersonId> {
 }
 
 /// The one of the work floors a worker works on, by who they are.
-fn work_floor(work_floors: &[i32], id: PersonId) -> i32 {
+pub(crate) fn work_floor(work_floors: &[i32], id: PersonId) -> i32 {
     let h = hash64(id.0 as u64, 0x0CC);
     work_floors[(h % work_floors.len() as u64) as usize]
 }

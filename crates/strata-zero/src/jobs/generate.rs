@@ -14,6 +14,7 @@ use citygen::rng::hash64;
 use citygen::{BuildingId, FloorPlan, Place, Pos, RoomKind};
 use game::ItemId;
 use sim::{PersonId, Work};
+use std::collections::BTreeMap;
 
 const SALT_KIND: u64 = 0x10B_0001;
 const SALT_TARGET: u64 = 0x10B_0002;
@@ -73,6 +74,74 @@ fn has_node(st: &AppState, b: BuildingId, kind: NodeKind) -> bool {
             .iter()
             .any(|n| n.building == Some(b) && n.kind == kind)
     })
+}
+
+/// Whether `id`, at work in building `b`, is met there from the street with no key: their
+/// work floor's every room with a station is reached so. A building that's no venue meets
+/// everyone. `met` keeps each building's floors once worked out.
+fn met_at_work(
+    st: &AppState,
+    met: &mut BTreeMap<BuildingId, Option<(Vec<i32>, Vec<i32>)>>,
+    b: BuildingId,
+    id: PersonId,
+) -> bool {
+    let floors = met.entry(b).or_insert_with(|| {
+        let plan = crate::interiors::plan_now(st, b)?;
+        let open = crate::venues::floors_met_without_a_key(&plan)?;
+        Some((plan.work_floors(), open))
+    });
+    match floors {
+        None => true,
+        Some((work, open)) => open.contains(&crate::interiors::work_floor(work, id)),
+    }
+}
+
+/// Everyone a Deliver from `fixer`, whose corner is `spot`, can name, and where they're
+/// met: the living at their station some time inside the job's window, met there with no
+/// key, far enough from the corner, and someone from out of town only with enough of
+/// their shift left to walk to.
+fn deliver_pool(st: &AppState, fixer: PersonId, spot: Pos) -> Option<Vec<(PersonId, Pos)>> {
+    let world = st.world.as_ref()?;
+    let city = st.city.as_ref()?;
+    let mine = st.home.and_then(|h| {
+        st.interiors
+            .homes_of(h.home.building)?
+            .household_of(h.home.level, h.home.number)
+    });
+    let start = st.minute_of_day() as u64;
+    let mut met = BTreeMap::new();
+    let pool = world
+        .people()
+        .iter()
+        .filter(|p| p.profession != "fixer" && p.id != fixer && Some(p.household) != mine)
+        .filter(|p| !world.is_dead(p.id))
+        // At their station at some point inside the window.
+        .filter(|p| on_shift_within(p.shift, start, HOURS_DELIVER * 60))
+        // Met there with no key: not behind a venue's locks.
+        .filter(|p| match p.work {
+            Work::Building(b) => met_at_work(st, &mut met, b, p.id),
+            _ => true,
+        })
+        .filter_map(|p| match p.work {
+            Work::Spot(pos) => Some((p.id, pos)),
+            Work::Building(b) if city.building_opt(b).is_some_and(|x| x.kind.is_closed()) => {
+                Some((p.id, door_of(st, b)?))
+            }
+            _ => None,
+        })
+        .filter(|(_, pos)| pos.manhattan(spot) >= DELIVER_MIN_RANGE)
+        // someone from out of town is out of reach once they walk out: enough of
+        // their shift in the window to walk to them
+        .filter(|(id, pos)| {
+            world.comes_in_by(*id).is_none() || {
+                let walk = u64::from(sim::commute::walk_minutes(spot, *pos));
+                let shift = world.work_hours(*id).unwrap_or((0, 0));
+                let on = minutes_on_shift_within(shift, start, HOURS_DELIVER * 60);
+                on >= DELIVER_ON_SHIFT.max(walk)
+            }
+        })
+        .collect();
+    Some(pool)
 }
 
 fn lived_in(st: &AppState, b: BuildingId) -> bool {
@@ -385,40 +454,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
         KindTag::Deliver => {
             let world = st.world.as_ref()?;
             let city = st.city.as_ref()?;
-            let mine = st.home.and_then(|h| {
-                st.interiors
-                    .homes_of(h.home.building)?
-                    .household_of(h.home.level, h.home.number)
-            });
-            let start = st.minute_of_day() as u64;
-            let pool: Vec<(PersonId, Pos)> = world
-                .people()
-                .iter()
-                .filter(|p| p.profession != "fixer" && p.id != fixer && Some(p.household) != mine)
-                .filter(|p| !world.is_dead(p.id))
-                // At their station at some point inside the window.
-                .filter(|p| on_shift_within(p.shift, start, HOURS_DELIVER * 60))
-                .filter_map(|p| match p.work {
-                    Work::Spot(pos) => Some((p.id, pos)),
-                    Work::Building(b)
-                        if city.building_opt(b).is_some_and(|x| x.kind.is_closed()) =>
-                    {
-                        Some((p.id, door_of(st, b)?))
-                    }
-                    _ => None,
-                })
-                .filter(|(_, pos)| pos.manhattan(spot) >= DELIVER_MIN_RANGE)
-                // someone from out of town is out of reach once they walk out: enough of
-                // their shift in the window to walk to them
-                .filter(|(id, pos)| {
-                    world.comes_in_by(*id).is_none() || {
-                        let walk = u64::from(sim::commute::walk_minutes(spot, *pos));
-                        let shift = world.work_hours(*id).unwrap_or((0, 0));
-                        let on = minutes_on_shift_within(shift, start, HOURS_DELIVER * 60);
-                        on >= DELIVER_ON_SHIFT.max(walk)
-                    }
-                })
-                .collect();
+            let pool = deliver_pool(st, fixer, spot)?;
             if pool.is_empty() {
                 return None;
             }
@@ -707,6 +743,58 @@ mod tests {
             j.objectives[0].text
         );
         assert!(j.pay >= PAY_DELIVER_BASE);
+    }
+
+    #[test]
+    fn deliver_names_nobody_behind_a_venues_locks() {
+        use citygen::venue::{Keys, VenueGraph, Ways};
+        let mut st = state_home();
+        // Mid-morning, the office drones at work.
+        let city = st.city.clone().unwrap();
+        let w = st.world.as_mut().unwrap();
+        while w.minute_of_day() != 10 * 60 {
+            let t = w.tick() + sim::TICKS_PER_MINUTE;
+            w.advance(&city, t);
+        }
+        let fixers: Vec<PersonId> = (st.world.as_ref().unwrap().people().iter())
+            .filter(|p| p.profession == "fixer")
+            .map(|p| p.id)
+            .collect();
+        // Every recipient a Deliver can name, from every fixer.
+        let (mut named, mut in_venues) = (0, 0);
+        for &fx in &fixers {
+            let spot = fixer_spot(&st, fx).unwrap();
+            for (to, _) in deliver_pool(&st, fx, spot).unwrap() {
+                named += 1;
+                let Work::Building(b) = st.world.as_ref().unwrap().people()[to.0 as usize].work
+                else {
+                    continue;
+                };
+                let Some(plan) = crate::interiors::plan_now(&st, b) else {
+                    continue;
+                };
+                let Some(v) = plan.venue.as_deref() else {
+                    continue;
+                };
+                // Every room with a station on their work floor, reached from the city by
+                // nobody's means and no key.
+                let g = VenueGraph::of(v, &[], None);
+                let reached = g.reach(&g.starts, Ways::default(), Keys::default()).nodes;
+                let level = crate::interiors::work_floor(&plan.work_floors(), to);
+                let x = v.level(level).unwrap();
+                for (r, room) in x.rooms.iter().enumerate() {
+                    if !room.stations.is_empty() {
+                        let n = g.room(level, r).unwrap();
+                        assert!(reached[n], "{to:?} works behind a lock, in {}", room.name);
+                    }
+                }
+                in_venues += 1;
+            }
+        }
+        assert!(
+            named > 20 && in_venues > 0,
+            "{named} named, {in_venues} in venues"
+        );
     }
 
     #[test]

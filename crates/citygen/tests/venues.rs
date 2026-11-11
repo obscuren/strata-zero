@@ -257,7 +257,7 @@ fn every_builtin_type_is_a_whole_site() {
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
         10811627059381793165,
-        6076768998902127580,
+        13561429448275412134,
         3395241277663048963,
     ];
     let pack = VenuePack::builtin();

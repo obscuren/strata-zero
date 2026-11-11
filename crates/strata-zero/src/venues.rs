@@ -17,7 +17,9 @@ pub use dev::{building_at_door, dev_site, dev_start};
 use crate::app::AppState;
 use crate::credentials::{self, How};
 use crate::foes::{Foe, Post};
-use citygen::venue::{LockKind, MissionLayer, VenueFrame, VenueLayout, VenuePack, WayInKind};
+use citygen::venue::{
+    Keys, LockKind, MissionLayer, VenueFrame, VenueGraph, VenueLayout, VenuePack, WayInKind, Ways,
+};
 use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind, Terrain};
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -332,6 +334,23 @@ pub fn reached(st: &AppState, plan: &FloorPlan, level: i32, from: Pos) -> Option
         }
     }
     Some(seen)
+}
+
+/// The work floors of `plan` where someone at work is met from the city with no key: in
+/// a venue, those whose every room with a station is reached from a way in with no means
+/// and no key; None for a plan with no layout, where everyone at work is.
+pub fn floors_met_without_a_key(plan: &FloorPlan) -> Option<Vec<i32>> {
+    let v = plan.venue.as_deref()?;
+    let g = VenueGraph::of(v, &[], None);
+    let reached = g.reach(&g.starts, Ways::default(), Keys::default()).nodes;
+    let met = |level: i32| {
+        v.level(level).is_some_and(|x| {
+            (0..x.rooms.len())
+                .filter(|&r| !x.rooms[r].stations.is_empty())
+                .all(|r| g.room(level, r).is_some_and(|n| reached[n]))
+        })
+    };
+    Some(plan.work_floors().into_iter().filter(|&l| met(l)).collect())
 }
 
 /// The layer's guards as inert foes at their posts: name "guard", glyph '@', post set.
