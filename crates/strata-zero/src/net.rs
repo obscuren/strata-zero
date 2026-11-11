@@ -1637,24 +1637,22 @@ pub fn tick_backdoors(st: &mut AppState) {
                 st.warn("trace · nothing left between them and your door");
             }
             crate::backdoors::Event::TraceStarted { hops } => {
-                if firewall >= 2 {
-                    crate::missions::call::ring(
-                        st,
-                        crate::missions::Call {
-                            story: None,
-                            from: "zenbo".to_string(),
-                            lines: vec![
-                                format!("trace on your line · {hops} hops out"),
-                                "burn the route or ride it out".to_string(),
-                            ],
-                            rang: 0,
-                            answered: None,
-                            line: 0,
-                            shown: 0,
-                            full: false,
-                        },
-                    );
-                }
+                crate::missions::call::ring(
+                    st,
+                    crate::missions::Call {
+                        story: None,
+                        from: "zenbo".to_string(),
+                        lines: vec![
+                            format!("trace on your line · {hops} hops out"),
+                            "burn the route or ride it out".to_string(),
+                        ],
+                        rang: 0,
+                        answered: None,
+                        line: 0,
+                        shown: 0,
+                        full: false,
+                    },
+                );
             }
             crate::backdoors::Event::Raid { wiped } => {
                 // The route ends first, so the dump starts no second trace.
@@ -4245,6 +4243,100 @@ pub(crate) mod tests {
         st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
         st.backdoors.start_route(None);
         (st, b)
+    }
+
+    /// The rig on a Civitas cabinet with `sled` in its firewall bay.
+    fn fit_firewall(st: &mut AppState, sled: &str) {
+        let c = st.content.clone();
+        st.character
+            .set_frame(&c, &game::ItemId::new("rack_civitas"));
+        st.character.rig_copy_mut(&c).fitted[3] = Some(game::Stack {
+            item: game::ItemId::new(sled),
+            qty: 1,
+            copy: None,
+        });
+    }
+
+    fn advance_minutes(st: &mut AppState, n: u64) {
+        let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) else {
+            panic!("no city, no clock")
+        };
+        world.advance(city, world.tick() + n * sim::TICKS_PER_MINUTE);
+    }
+
+    fn calls_from_zenbo(st: &AppState) -> Vec<Vec<String>> {
+        st.missions
+            .call
+            .iter()
+            .chain(st.missions.calls.iter())
+            .filter(|c| c.from == "zenbo")
+            .map(|c| c.lines.clone())
+            .collect()
+    }
+
+    /// A trace on the relay the rig's route holds, started at `now` and due a minute on.
+    fn trace_on_a_relay(st: &mut AppState, relay: BuildingId, firewall: u8) {
+        let now = st.net.now(st);
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(relay, 50, seed, now, 3);
+        st.backdoors.start_route(Some(relay));
+        st.backdoors.start_trace(now, firewall);
+    }
+
+    fn some_relay(st: &AppState, not: BuildingId) -> BuildingId {
+        st.city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|x| x.id != not && x.name.as_deref() == Some("Stack 101 Terminal"))
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn a_tripwire_rings_once_when_the_trace_starts() {
+        let (mut st, kiroflux) = rig_run();
+        fit_firewall(&mut st, "sled_tripwire");
+        let relay = some_relay(&st, kiroflux);
+        trace_on_a_relay(&mut st, relay, 2);
+        advance_minutes(&mut st, 1);
+        tick_backdoors(&mut st);
+        tick_backdoors(&mut st);
+        assert_eq!(
+            calls_from_zenbo(&st),
+            vec![vec![
+                "trace on your line · 1 hops out".to_string(),
+                "burn the route or ride it out".to_string()
+            ]]
+        );
+    }
+
+    #[test]
+    fn the_stock_rig_has_no_tripwire() {
+        let (mut st, kiroflux) = rig_run();
+        let relay = some_relay(&st, kiroflux);
+        trace_on_a_relay(&mut st, relay, 0);
+        advance_minutes(&mut st, 1);
+        tick_backdoors(&mut st);
+        assert!(calls_from_zenbo(&st).is_empty());
+    }
+
+    #[test]
+    fn a_killswitch_wipes_the_rig_and_seizes_nothing() {
+        let (mut st, _) = rig_run();
+        fit_firewall(&mut st, "sled_killswitch");
+        let now = st.net.now(&st);
+        st.backdoors.start_trace(now, 3);
+        advance_minutes(&mut st, 1 + crate::backdoors::LAST_LEG * 2);
+        tick_backdoors(&mut st);
+        assert!(logged(
+            &st,
+            "the rig wiped itself before they got the door open"
+        ));
+        assert!(!logged(&st, "they kicked your door in"));
+        assert_eq!(st.backdoors.rig_seized_until, None);
+        assert_eq!(st.backdoors.fixer_quiet_until, None);
     }
 
     #[test]

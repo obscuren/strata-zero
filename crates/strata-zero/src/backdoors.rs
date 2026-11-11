@@ -365,6 +365,7 @@ impl Backdoors {
             .is_some_and(|t| t.relays.get(t.at) == Some(&b));
         if why == Why::You && on_it {
             self.trace = None;
+            self.rung = None;
             return Burnt { cut_trace: true };
         }
         Burnt { cut_trace: false }
@@ -480,6 +481,7 @@ impl Backdoors {
                 }
                 None => {
                     self.trace = None;
+                    self.rung = None;
                     let wiped = firewall >= 3;
                     self.raid(t.moves_at, wiped);
                     events.push(Event::Raid { wiped });
@@ -533,6 +535,10 @@ pub fn route_line(names: &[String]) -> String {
 mod tests {
     use super::*;
 
+    /// The stock rig's lines and hold days.
+    const STOCK_LINES: usize = 3;
+    const STOCK_HOLD: u64 = 3;
+
     fn b(i: u32) -> BuildingId {
         BuildingId(i)
     }
@@ -561,10 +567,10 @@ mod tests {
         let mut bd = Backdoors::default();
         bd.plant_key(b(1), "mara", citygen::construct::GREY_THRESHOLD, 7, 0);
         assert_eq!(bd.held(b(1)).unwrap().nominal, KEY_LIFE / 2);
-        bd.plant_net(b(2), 1, 7, 0, 3);
-        assert_eq!(bd.held(b(2)).unwrap().nominal, (3 * 24 * 60));
-        bd.plant_net(b(3), 2, 7, 0, 3);
-        assert_eq!(bd.held(b(3)).unwrap().nominal, (3 * 24 * 60) * 2);
+        bd.plant_net(b(2), 1, 7, 0, STOCK_HOLD);
+        assert_eq!(bd.held(b(2)).unwrap().nominal, (STOCK_HOLD * 24 * 60));
+        bd.plant_net(b(3), 2, 7, 0, STOCK_HOLD);
+        assert_eq!(bd.held(b(3)).unwrap().nominal, (STOCK_HOLD * 24 * 60) * 2);
         assert_eq!(bd.held(b(3)).unwrap().hold(), HOLD_NET * 2);
         assert_eq!(bd.held(b(1)).unwrap().hold(), HOLD_KEY);
         assert!(bd.root_on(b(2)));
@@ -621,26 +627,32 @@ mod tests {
     #[test]
     fn the_cap_and_the_refusals_in_order() {
         let mut bd = Backdoors::default();
-        for i in 1..=3_u32 {
-            assert_eq!(bd.can_plant(b(i), 0, 3), Ok(()));
+        for i in 1..=STOCK_LINES as u32 {
+            assert_eq!(bd.can_plant(b(i), 0, STOCK_LINES), Ok(()));
             bd.plant_key(b(i), "u", 100, 1, 0);
         }
-        assert_eq!(bd.slots_used(), 3);
-        assert_eq!(bd.can_plant(b(9), 0, 3), Err(Refusal::Full(3)));
-        assert_eq!(bd.can_plant(b(1), 0, 3), Err(Refusal::Full(3)));
+        assert_eq!(bd.slots_used(), STOCK_LINES);
+        assert_eq!(
+            bd.can_plant(b(9), 0, STOCK_LINES),
+            Err(Refusal::Full(STOCK_LINES))
+        );
+        assert_eq!(
+            bd.can_plant(b(1), 0, STOCK_LINES),
+            Err(Refusal::Full(STOCK_LINES))
+        );
         bd.burn(b(1), Why::You, 10);
-        assert_eq!(bd.slots_used(), 3 - 1);
+        assert_eq!(bd.slots_used(), STOCK_LINES - 1);
         // burned by you: patched for a day
         assert_eq!(
-            bd.can_plant(b(1), 10, 3),
+            bd.can_plant(b(1), 10, STOCK_LINES),
             Err(Refusal::Patched(10 + PATCH_MINUTES))
         );
-        assert_eq!(bd.can_plant(b(1), 10 + PATCH_MINUTES, 3), Ok(()));
-        assert_eq!(bd.can_plant(b(2), 10, 3), Err(Refusal::Already));
+        assert_eq!(bd.can_plant(b(1), 10 + PATCH_MINUTES, STOCK_LINES), Ok(()));
+        assert_eq!(bd.can_plant(b(2), 10, STOCK_LINES), Err(Refusal::Already));
         bd.rig_seized_until = Some(100);
-        assert_eq!(bd.can_plant(b(1), 50, 3), Err(Refusal::Seized));
+        assert_eq!(bd.can_plant(b(1), 50, STOCK_LINES), Err(Refusal::Seized));
         assert_eq!(
-            Refusal::Full(3).words(),
+            Refusal::Full(STOCK_LINES).words(),
             "the rig holds 3 lines · burn one first"
         );
         assert_eq!(Refusal::Seized.words(), "the rig is seized · no line home");
@@ -655,8 +667,8 @@ mod tests {
     fn a_route_then_a_trace_that_walks_it_home() {
         let mut bd = Backdoors::default();
         bd.plant_key(b(1), "u", 100, 1, 0);
-        bd.plant_net(b(2), 1, 1, 0, 3);
-        bd.plant_net(b(3), 1, 1, 0, 3);
+        bd.plant_net(b(2), 1, 1, 0, STOCK_HOLD);
+        bd.plant_net(b(3), 1, 1, 0, STOCK_HOLD);
         bd.start_route(Some(b(1)));
         bd.hop(b(2));
         assert_eq!(bd.route.as_ref().unwrap().relays, vec![b(1), b(2)]);
@@ -773,7 +785,7 @@ mod tests {
     #[test]
     fn the_trace_walks_past_a_relay_that_burned_already() {
         let mut bd = Backdoors::default();
-        bd.plant_net(b(1), 1, 1, 0, 3);
+        bd.plant_net(b(1), 1, 1, 0, STOCK_HOLD);
         bd.plant_key(b(2), "u", 100, 1, 0);
         bd.start_route(Some(b(1)));
         bd.hop(b(2));
@@ -818,11 +830,11 @@ mod tests {
     #[test]
     fn fewer_lines_than_held_burns_nothing() {
         let mut bd = Backdoors::default();
-        for i in 1..=3 {
+        for i in 1..=STOCK_LINES as u32 {
             bd.plant_key(b(i), "u", 0, 1, 0);
         }
         assert_eq!(bd.can_plant(b(9), 0, 1), Err(Refusal::Full(1)));
-        assert_eq!(bd.standing().count(), 3);
+        assert_eq!(bd.standing().count(), STOCK_LINES);
         assert!(bd.standing().all(|d| d.state == State::Live));
     }
 
@@ -851,6 +863,17 @@ mod tests {
         let ev = bd.minute(HOLD_KEY, 1);
         assert_eq!(ev, vec![Event::RelayBurned(b(1)), Event::LastLeg]);
         assert_eq!(bd.trace.as_ref().unwrap().moves_at, HOLD_KEY + LAST_LEG * 2);
+    }
+
+    #[test]
+    fn a_cut_trace_never_rings_the_tripwire() {
+        let mut bd = Backdoors::default();
+        bd.plant_key(b(1), "u", 0, 1, 0);
+        bd.start_route(Some(b(1)));
+        bd.start_trace(0, 2);
+        assert_eq!(bd.burn(b(1), Why::You, 1), Burnt { cut_trace: true });
+        assert!(bd.trace.is_none());
+        assert!(bd.minute(2, 2).is_empty());
     }
 
     #[test]
@@ -896,7 +919,7 @@ mod tests {
         );
         assert_eq!(route_line(&[]), "zenbo");
         let mut bd = Backdoors::default();
-        bd.plant_net(b(2), 1, 1, 0, 3);
+        bd.plant_net(b(2), 1, 1, 0, STOCK_HOLD);
         assert_eq!(bd.held(b(2)).unwrap().user_label(), "root");
         bd.plant_key(b(3), "mara-voss", 100, 1, 0);
         assert_eq!(bd.held(b(3)).unwrap().user_label(), "mara-voss");
@@ -951,7 +974,7 @@ mod tests {
             let city_seed = st.city.as_ref().unwrap().seed;
             let mut planted = Vec::new();
             for b in targets.iter().copied() {
-                if st.backdoors.can_plant(b, 0, 3).is_ok() {
+                if st.backdoors.can_plant(b, 0, STOCK_LINES).is_ok() {
                     st.backdoors.plant_key(b, "user", 100, city_seed, 0);
                     planted.push(b);
                 }

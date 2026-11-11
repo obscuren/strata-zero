@@ -1,6 +1,5 @@
 //! What the rig does, read off the sleds in its rack: seats, clock, backdoor lines,
 //! how long a backdoor holds and how hard the firewall fights a trace.
-#![allow(dead_code)] // seats and speed are read by the programs; the rest by the callers that follow
 
 use crate::app::AppState;
 use game::{Character, Content, Mod};
@@ -8,8 +7,10 @@ use game::{Character, Content, Mod};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RigSpec {
     /// Programs the rig runs at once.
+    #[allow(dead_code)] // read by the programs, later
     pub seats: u8,
     /// Clock, in percent; 100 is stock.
+    #[allow(dead_code)] // read by the programs, later
     pub speed: u16,
     /// Backdoors the rig can keep.
     pub lines: usize,
@@ -20,6 +21,7 @@ pub struct RigSpec {
 }
 
 /// The stock Zenbo rig: ZB-8, R-3 and CU-1.
+#[allow(dead_code)] // the tests' yardstick
 pub const STOCK: RigSpec = RigSpec {
     seats: 1,
     speed: 100,
