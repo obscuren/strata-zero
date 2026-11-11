@@ -499,6 +499,38 @@ fn keyjack_copy(st: &AppState) -> game::CopyId {
         .expect("a Keyjack in the pack")
 }
 
+/// The four rig sleds large, each at a tier: a stock core, a tier-two relay, a
+/// tier-three line and a firewall.
+#[test]
+#[ignore]
+fn rig_sleds() {
+    use crate::ui::art::Art;
+    use crate::ui::hardware::HardwareArt;
+    use game::{HardwareLook, Mod};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let st = AppState::new();
+    let area = Rect::new(0, 0, 108, 38);
+    let mut buf = Buffer::empty(area);
+    for c in &mut buf.content {
+        c.set_bg(Color::Rgb(4, 6, 10));
+    }
+    for (i, (look, mods)) in [
+        (HardwareLook::SledCore, vec![Mod::Seats(1)]),
+        (HardwareLook::SledRelay, vec![Mod::Lines(5)]),
+        (HardwareLook::SledLine, vec![Mod::Hold(7)]),
+        (HardwareLook::SledFirewall, vec![Mod::Firewall(2)]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = (1 + (i as u16 % 2) * 54, 1 + (i as u16 / 2) * 19);
+        HardwareArt { look, mods }.draw(at, area, &mut buf);
+    }
+    write_svg(&dir, "rig_sleds", &st, &buf, false);
+}
+
 /// The Keyjack through the real screens: the clip line, a run on the keypad (a beat, a
 /// miss, the fuse blown, the door cracked), and the item on its blueprint, modded, and
 /// its fuse inspected.
