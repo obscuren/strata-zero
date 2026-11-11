@@ -153,16 +153,19 @@ always gives the same Net, with the same nodes in the same order.
 
 | Node | Comes from | In the plain building |
 |---|---|---|
-| Door lock | every `DoorLock` with `Ways::NET`: card doors, keypads, locked street doors | yes |
+| Door lock | every lock the Net can open today: `DoorLock`s with `Ways::NET` (card doors, keypads, locked street doors) and private rooms' keypads (the venue graph's `KEYPAD` way) | yes |
 | Gate switch | one for each line of turnstiles, standing at one end of the line | yes |
-| Lift | one for each lift | yes |
+| Lift | one for each lift, at its landing on the lowest level it serves that is on the riser | yes |
 | Terminal | new, placed with the plan (below) | yes |
 | Hub | one on each level, beside the riser | yes |
-| Server | new, in the type's back-office room (below) | yes |
-| Data vault | a copy's data objective, or the server room in a security of 230 or more | copies, or 230+ |
+| Server | new, the building's host, beside G's hub (below) | yes |
+| Data vault | a copy whose objective is in a server room: on the objective's spot; the plain building at security 230 or more: in its first server room | copies, or 230+ |
 | Camera | the mission layer's cameras | copies |
 | Turret | the mission layer's turrets | copies |
 | Container lock | the mission layer's containers | copies |
+
+A hotel floor of guest rooms has a node for every room's keypad: the count is honest,
+and you crack only the one you need.
 
 A node is known by its building and its place in the site's Net, never by an index into
 `city.net.nodes`. Hacks, holds and the camera feed name it that way.
@@ -176,24 +179,32 @@ The **riser** follows the lift shaft that serves the most levels the site keeps.
 hub stands on a floor tile beside that shaft. So the hubs are one above another, and in
 the section they make one vertical line.
 
-**An air gap.** A copy at security 160 or more cuts off its deepest zone. The devices of
-that zone hang off a hub of their own, and that hub isn't on the riser. Nothing else on
-the building's Net can reach those nodes, and they can't reach anything else. The way
-in is a terminal placed inside the gapped zone. The plain building has no air gap.
+**An air gap** cuts off a whole level. A copy at security 160 or more cuts off its
+objective's level, unless that level is G. That level's devices hang off its own hub, and
+that hub isn't on the riser. Nothing else on the building's Net can reach those nodes,
+and they can't reach anything else. The way in is a terminal on that level, in its
+outermost zone near where its lifts and stairs arrive. So you can reach it on foot, then
+work the level's own doors from its own Net. The plain building has no air gap.
 
-**Terminals.** Each type's data names the rooms that get a terminal, and in which zone:
+**Terminals.** Each type's data names the rooms that get a terminal:
 - every site has a public terminal at G (a lobby kiosk, or the station's ticket machine);
-- staff rooms have desk terminals;
-- the security office and the server room each have one;
-- an air-gapped zone always has one.
+- some staff rooms have desk terminals;
+- a gapped level always has one, as above.
 
 Terminals are placed after the layout is laid, by a pass of their own with its own seed.
 So placing them changes nothing the layout already laid: doors, locks, lock numbers and
 codes all stay the same.
 
-**The server** stands in the room each type names: an office's server room, a hotel's
-service floor, a station's control room. If a copy doesn't keep that floor, the server
-goes on the deepest floor it does keep.
+**The server** is the building's host: it stands beside G's hub, at the foot of the
+riser where the building meets the street. G is never gapped, so the server is always on
+the riser. The data a job is after sits in the data vault, which is where an air gap can
+put it.
+
+**Which security.** A site's security comes from a live copy's own `inputs.security`, or
+from the building's subnet when no copy holds it. It sets the firewall's locks, the ICE,
+the gap, and the odds and trace of runs on the site, through `owners::security`. When a
+copy starts or ends, the site's Net is worked out again. The firewall's broken locks and
+the hacks and holds on the site's nodes are dropped.
 
 ### The firewall
 
@@ -208,22 +219,25 @@ From the city's Net, a site is a building behind a firewall.
   | 160–229 | 3 |
   | 230 and up | 4 |
 
-- **Where they are.** The locks stand on the building's edge on the Net, each where a lane
-  of the grid reaches it, spread around the building as far as they'll go. The building's
-  gate tile is always one of them. A building with fewer lanes than locks has fewer locks.
-  They are worked out from the Net map as it is, not added when the city is made. So a
-  city in an old save gets them too.
+- **Where they are.** The locks stand on the building's edge on the Net, each on a tile
+  of the open grid against the edge, spread around the building as far as they'll go. The
+  building's gate tile is always one of them. Only the gate has a lane today; no new
+  lanes are laid. They are worked out from the Net map as it is, not added when the city
+  is made. So a city in an old save gets them too.
 - **Cracking one.**
-  - A lock is a target for a run. From the grid, you crack it as you would a node beside
-    you; from your rig, or through a backdoor, as a remote node.
-  - Inside the site's Net, the locks stand on the outer wall of the server's level, and
-    can be cracked from there.
+  - A lock is a target for a run, cracked standing beside it on the grid, as you crack a
+    node beside you.
+  - "From your rig or a backdoor" means where your body is. You jack in at home, or land
+    at a backdoor nearby, and go to the lock on the grid: your body stays safe, but
+    every break is heard. There is no new way to target a lock from afar.
+  - Inside the site's Net, the locks stand on G's outer wall, and can be cracked from
+    there.
   - Each landed crack adds trace to the building, as a crack does today. A miss adds
     more.
   - A broken lock stays broken for the hack's hour, or until an alarm. An alarm closes
     them all.
 - **Through it.** While every lock is broken, the gate lets you through, both ways:
-  - into the site's Net, landing on the server's hub;
+  - into the site's Net, landing on G's hub, beside the server;
   - and out again onto the grid.
 
   With a lock still whole, the gate says "FIREWALL · 3 locks · 1/3 broken".
@@ -241,8 +255,8 @@ site's Net and the city's.
      air-gapped zone all work.
    - An alarm locks the building's ports, as it does today.
 2. **Through the firewall**, from the grid, as above.
-3. **A backdoor on the server.** A backdoor planted on a site's server lands you on the
-   server's hub, past the firewall, as a backdoor lands you in a construct today.
+3. **A backdoor on the server.** A backdoor planted on a site's server lands you on G's
+   hub, past the firewall, as a backdoor lands you in a construct today.
 
 A camera is not a way in: it is out of reach on the ceiling. A device you already hold
 is not a way in either. Both are left for later.
@@ -253,12 +267,14 @@ The construct has one level for each floor the site keeps. Each level is that fl
 plan, tile for tile:
 
 - walls are Net walls, and the floor is Net floor;
-- a plain door is an opening;
+- a door with no lock is an opening;
 - a door with a lock node is that node.
   - It stops you on the Net until it's cracked, except from its free side, as on the
     floor.
   - So the zones on the Net are the zones on the floor.
 - a door whose lock has no Net way is a wall on the Net;
+- the floor is drawn tile for tile, at the floor's own size (floors are their
+  footprint × 3). The level scrolls with you as a floor does;
 - each device stands as a node on its own tile. A device on a wall (a gate switch, a
   camera) stands on the floor tile in front of it;
 - the links from devices to their hub are drawn as thin traces. They are only drawn, and
@@ -273,9 +289,9 @@ plan, tile for tile:
 | Security | ICE |
 |---|---|
 | under 100 | none |
-| 100–159 | 1 white at the server's hub |
-| 160–199 | 1 white at the server's hub; 1 white patrolling every other kept level |
-| 200–229 | grey patrolling every kept level, as well as the white at the server |
+| 100–159 | 1 white at G's hub |
+| 160–199 | 1 white at G's hub; 1 white patrolling every other kept level |
+| 200–229 | grey patrolling every kept level, as well as the white at G's hub |
 | 230 and up | as at 200, and black on the data vault |
 
 A patrol walks a beat through the level's rooms. Each level's ICE is the engine's ICE as
@@ -310,6 +326,18 @@ opens only its own door.
 **What's inside the firewall.** For a site, the city's server, vault and lift-control
 nodes are inside the firewall now, so you can't target them from the grid. Its cameras
 and terminals on its face stay on the city's Net, as part of the street.
+
+**HELIX on a site.** Today, `ssh` from any street terminal into a building's host with
+User standing runs building-wide commands (`door release`, `lift answer`, `cam loop`,
+`alarm off` in `access.rs` and `helix/bin.rs`). On a site, that would get around the
+firewall and open everything from the chair. So on a site:
+- `ssh` into its host from outside the site's Net is refused while any firewall lock is
+  whole: "FIREWALL · 3 LOCKS". From a terminal on the site's own Net, or with the
+  firewall broken, it connects as today.
+- The four building-wide commands need root on a site, which means a cracked server.
+  With root they act on every device of their kind on the riser's levels, but not across
+  an air gap.
+- The rest of HELIX (mail, files, plans, the user commands) works as today.
 
 **An alarm** works as today, on the site's trace:
 - it drops every hack on the site's nodes and every broken firewall lock;
@@ -352,9 +380,9 @@ These are drawn as mock D, on the map of a site's Net:
   - The street line runs across at G.
   - Levels under it sit in the earth.
   - The riser is cut, `╳`, where an air gap leaves a level off it.
-- **The firewall** is a red double line around the levels above the street:
-  - its locks are `▮`, and green `▯` when broken;
-  - each lock's lane of the grid runs off to the map's edge;
+- **The firewall** is a red double line around every level on the riser, above and
+  under the street. A gapped level sits outside it, in the earth or above.
+  - Its locks are `▮` on G's outer wall, and green `▯` when broken.
   - "FIREWALL · 3 locks" is written on its top edge.
 - **A level you can't reach** from where you stand (across an air gap) is dimmed. Its
   label on the right says "out of reach".
@@ -373,9 +401,10 @@ These are drawn as mock D, on the map of a site's Net:
   - ICE's colours by grade;
   - the firewall red;
   - an air-gapped level's floor tinted red.
-- **Scrolling.** The tower scrolls with you when it's bigger than the map, as the street
-  does. At 120×40 a four-level site fits whole. At 100×30 the open level and the levels
-  next to it show.
+- **Scrolling.** Levels are drawn tile for tile, so a tower is usually bigger than the
+  map. It scrolls with you both ways, as the street does, and the folded levels and the
+  firewall scroll with it. Don't promise that a whole tower fits on the map; the mock's
+  floors are smaller than a real site's.
 - **On the city's Net**, a site's building carries its locks on its edge, `▮`, or `▯` once
   broken. Its card says "FIREWALL ▯▮▮ · 1/3 broken".
 
@@ -443,17 +472,20 @@ Tests, beside the code they test:
   - A crack from inside counts the same as one from outside.
 - **Ways in.**
   - Jacking in at a kiosk lands on its node.
-  - A backdoor lands on the server's hub.
+  - A backdoor lands on G's hub.
   - In an air gap, the levels across it can't be reached.
 - **Cameras on floors** warm the trace, and stop when looped.
 - **Saves.**
   - A round trip keeps the construct's ICE and the firewall's state.
   - The fixtures open.
 - **Shots** of the open tower at 120×40 and 100×30, from a DEVELOPER start in an office
-  copy:
+  copy whose objective is the server room:
   - on L;
   - on the vault's level across an air gap;
-  - one through the firewall.
+  - one through the firewall;
+  - the building on the city's Net with a lock broken.
+- **HELIX.** `ssh` to a site's host from the street is refused while its firewall
+  stands, and a building-wide command needs root.
 
 ## Calls I made
 
@@ -461,21 +493,32 @@ Tests, beside the code they test:
    are not.
 2. The lock count by security: 1, 2, 3 and 4 locks at 0, 100, 160 and 230.
 3. The locks are worked out from the city's Net map, not made with the city, so old
-   cities get them too.
-4. Through the firewall you land on the server's hub. From inside, the locks stand on the
-   server level's outer wall.
-5. The riser follows the lift shaft that serves the most kept levels, and each hub stands
+   cities get them too. They stand on open-grid tiles against the building's edge, and no
+   new lanes are laid.
+4. A lock is cracked standing beside it. "From your rig or a backdoor" means your body is
+   safe there while you walk the grid; there's no remote targeting.
+5. The server, the building's host, stands beside G's hub. Through the firewall, or by a
+   backdoor, you land on G's hub. From inside, the locks stand on G's outer wall.
+6. The riser follows the lift shaft that serves the most kept levels, and each hub stands
    beside it.
-6. The air gap is a copy's deepest zone, at security 160 or more. The plain building has
-   none.
-7. ICE by security, as in the table, close to today's thresholds. Patrols walk the level's
-   rooms.
-8. Locked doors stop you on the Net, except from their free side, as on the floor.
-9. The server stands in the room each type names, or on the deepest floor a copy keeps.
-10. A site's city-Net server, vault and lift nodes are inside the firewall now. Its face's
+7. An air gap is a whole level: a copy's objective level, at security 160 or more, unless
+   it is G. Its terminal is in its outermost zone, near where its lifts and stairs arrive.
+   The plain building has none.
+8. The data vault is on a copy's objective when that's a server room, and in the plain
+   building's first server room at security 230 or more.
+9. Every lock the Net can open today is a node, private rooms' keypads included.
+10. ICE by security, as in the table, close to today's thresholds. Patrols walk the
+    level's rooms.
+11. Locked doors stop you on the Net, except from their free side, as on the floor.
+12. Levels are drawn tile for tile, and the tower scrolls both ways.
+13. A live copy's security governs its site's Net; otherwise the subnet's does. When a
+    copy starts or ends, the site's hacks, holds and broken locks are dropped.
+14. A site's city-Net server, vault and lift nodes are inside the firewall now. Its face's
     cameras and terminals stay on the street's Net.
-11. Floor cameras watch and warm the trace now, ahead of #36.
-12. A turret, a container lock and a hub are nodes now. What they do comes with #97, #96
+15. HELIX on a site: `ssh` from outside is refused while the firewall stands, and the four
+    building-wide commands need root.
+16. Floor cameras watch and warm the trace now, ahead of #36.
+17. A turret, a container lock and a hub are nodes now. What they do comes with #97, #96
     and #73.
 
 ## Left to the builder
@@ -487,20 +530,24 @@ Tests, beside the code they test:
 - How the open tower is drawn under the hood. The renderer can make the stack up from
   levels and folds.
 - What a save inside a site's old construct does (above).
-- The types' data for terminal rooms and the server's room (`flavor/sites.ron`).
+- The types' data for terminal rooms (`flavor/sites.ron`).
+- Where exactly the hub and the server stand beside the shaft, as long as the hubs line
+  up level to level.
 
 ## What done looks like
 
-In a DEVELOPER start in an office copy at security 190:
+In a DEVELOPER start in an office copy at security 190, whose objective is the server
+room on the server basement:
 
 1. Jack in at the lobby kiosk. The open tower shows with L open, and you're on the
    kiosk's node.
 2. Crack the turnstiles' switch, then jack out: the turnstiles let you through on foot.
 3. From the grid, crack the 3 firewall locks one by one. Each adds trace, and once all 3
-   are broken the gate lets you onto the server's level.
-4. The vault's floor is across an air gap. From the riser it's dimmed and out of reach.
-   Ride the goods lift down (spoofed from L) and jack in at its terminal, and the vault
-   level opens.
+   are broken the gate lets you onto L's hub, beside the server.
+4. The server basement is across an air gap, with the data vault on it. From the riser
+   it's dimmed and out of reach. Spoof the goods lift from L, ride it down, and jack in
+   at the basement's terminal: that level opens, and you can work its doors and copy the
+   vault.
 5. On a floor, a camera that sees you warms the trace. Looped, it doesn't.
 
 The checks pass on both front ends, the shots are written at 120×40 and 100×30, and the
