@@ -441,11 +441,11 @@ impl VenueType {
     }
 
     /// Whether the type is whole: everything it names exists, every border can be got
-    /// past more than one way by ways that fit its lock, its frame's doors stand on a
-    /// side between its corners, no two level roles share a name, neighbouring bands of
-    /// two zones have a border between them, every link joins two levels or more, every
-    /// objective has a room, the levels' shares and scales hold, and every size has its
-    /// security.
+    /// past more than one way by ways that fit its lock, a locked room lists no station
+    /// but a desk, its frame's doors stand on a side between its corners, no two level
+    /// roles share a name, neighbouring bands of two zones have a border between them,
+    /// every link joins two levels or more, every objective has a room, the levels'
+    /// shares and scales hold, and every size has its security.
     pub fn check(&self, sizes: &[SizeRule]) -> Result<(), String> {
         let id = &self.id;
         let zone = |z: &str, what: &str| -> Result<u8, String> {
@@ -499,6 +499,15 @@ impl VenueType {
                 return Err(format!(
                     "{id}: room `{}`'s size {:?} runs from larger to smaller",
                     r.name, r.size
+                ));
+            }
+            // A drawn floor takes no station but a desk inside a locked room.
+            if r.private
+                && let Some(s) = r.stations.iter().find(|s| **s != Role::Desk)
+            {
+                return Err(format!(
+                    "{id}: room `{}` is locked, which holds desks only, and lists a {s:?} station",
+                    r.name
                 ));
             }
         }
@@ -710,6 +719,13 @@ mod tests {
         assert!(bad(&|t| t.security.truncate(1)).contains("security"));
         assert!(bad(&|t| t.frame.doors[0].at = 0).contains("between its corners"));
         assert!(bad(&|t| t.frame.doors[0].side = Dir::NE).contains("between its corners"));
+        assert!(
+            bad(&|t| {
+                let r = t.rooms.iter_mut().find(|r| r.private).unwrap();
+                r.stations = vec![Role::Desk, Role::Shelf];
+            })
+            .contains("desks only")
+        );
         let ground = test_type().levels.ground.name;
         assert!(bad(&|t| t.levels.top[0].name = ground.clone()).contains("two levels are named"));
         assert!(
