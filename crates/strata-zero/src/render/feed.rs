@@ -95,7 +95,8 @@ pub fn draw(
     else {
         return;
     };
-    let Some(n) = city.net.nodes.get(node.index()) else {
+    // A site node's feed is drawn by the site's own Net.
+    let Some(n) = node.city().and_then(|id| city.net.nodes.get(id.index())) else {
         return;
     };
     let at =

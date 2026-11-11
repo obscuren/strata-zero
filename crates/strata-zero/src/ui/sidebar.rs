@@ -290,8 +290,8 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
                         _ => None,
                     };
                     let state = match id {
-                        Some(id) if v.net.blinded(id, v.now) => " · blind",
-                        Some(id) if v.net.copied(id, v.now) => " · copied",
+                        Some(id) if v.net.blinded(citygen::NetNode::City(id), v.now) => " · blind",
+                        Some(id) if v.net.copied(game::HackTarget::Node(id), v.now) => " · copied",
                         _ => "",
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));

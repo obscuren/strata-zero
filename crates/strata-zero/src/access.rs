@@ -451,7 +451,7 @@ pub fn cam_state(st: &AppState, b: BuildingId, i: usize) -> String {
     let Some(node) = nodes_of(st, b, NodeKind::Camera).get(i).copied() else {
         return format!("cam{i}: absent");
     };
-    if !st.net.blinded(node, now) {
+    if !st.net.blinded(citygen::NetNode::City(node), now) {
         return format!("cam{i}: live");
     }
     let until = st
@@ -764,7 +764,10 @@ mod tests {
         match loop_cams(&mut st, b) {
             Ok(r) => {
                 assert!(r.ends_with("LOOPED · 60 MIN"), "{r}");
-                assert!(cams.iter().all(|c| st.net.blinded(*c, now)));
+                assert!(
+                    cams.iter()
+                        .all(|c| st.net.blinded(citygen::NetNode::City(*c), now))
+                );
                 assert!(cam_state(&st, b, 0).starts_with("cam0: looped (until "));
             }
             Err(e) => assert_eq!((e.as_str(), cams.len()), ("NO CAMERAS", 0)),

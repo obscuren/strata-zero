@@ -1624,7 +1624,7 @@ mod tests {
                     .into_iter()
                     .find(|(x, _)| *x == d)?
                     .1;
-                let cyber = city.net.node(cam.node).cyber;
+                let cyber = city.net.node(cam.node.city().unwrap()).cyber;
                 let pos = cyber
                     .neighbors8()
                     .find(|p| city.walkable(StratumKind::Net, *p))?;
@@ -1669,14 +1669,24 @@ mod tests {
         assert!(holds::use_verb(&mut st, Verb::Tap.key()).is_ok());
         assert_eq!(st.net.feed, Some(cam));
         // The ad board held and its building's ads saying your tag.
-        holds::take(&mut st, ad, Owner::Building(b), now);
+        holds::take(&mut st, citygen::NetNode::City(ad), Owner::Building(b), now);
         holds::hijack(&mut st, ad, Line::Tag);
         assert!(!st.net.hijacks.is_empty());
         // A street terminal held: a user's seat on the district's host.
-        holds::take(&mut st, term, Owner::District(d), now);
+        holds::take(
+            &mut st,
+            citygen::NetNode::City(term),
+            Owner::District(d),
+            now,
+        );
         // The district's lamp grid held and cut.
-        holds::take(&mut st, lamp, Owner::District(d), now);
-        holds::spend(&mut st, lamp, Verb::LightsOut);
+        holds::take(
+            &mut st,
+            citygen::NetNode::City(lamp),
+            Owner::District(d),
+            now,
+        );
+        holds::spend(&mut st, citygen::NetNode::City(lamp), Verb::LightsOut);
         st.net.lights_out.insert(d, now + holds::LIGHTS_OUT_MINUTES);
         holds::relight(&mut st);
         st.net.eyes_minute = Some(now);
@@ -1703,8 +1713,8 @@ mod tests {
         let target = crate::net::targets_outside(&st, pos)
             .into_iter()
             .map(|(t, _)| t)
-            .find(|t| matches!(t, HackTarget::Node(n) if *n != cam))
-            .unwrap_or(HackTarget::Node(cam));
+            .find(|t| matches!(t, HackTarget::Node(n) if Some(*n) != cam.city()))
+            .unwrap_or(HackTarget::from(cam));
         let crack = game::Run {
             program: ItemId::new("crack"),
             target,
@@ -1738,7 +1748,7 @@ mod tests {
             .net
             .holds
             .iter()
-            .find(|h| city.net.node(h.node).kind == NodeKind::Camera)
+            .find(|h| city.net.node(h.node.city().unwrap()).kind == NodeKind::Camera)
             .expect("the camera's hold")
             .node;
         assert!(crate::holds::looped(st, cam, now) && st.net.blinded(cam, now));

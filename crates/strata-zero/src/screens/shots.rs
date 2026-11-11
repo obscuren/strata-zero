@@ -3252,8 +3252,18 @@ fn held_camera(tap: bool) -> (AppState, MapScreen) {
     stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(cam),
+        crate::owners::Owner::Building(b),
+        now,
+    );
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     if tap {
         crate::holds::use_verb(&mut st, 'f').unwrap();
     }
@@ -3390,7 +3400,12 @@ fn street_hijack() {
     let b = kiroflux(&st);
     let (ad, _) = kiroflux_node(&st, citygen::NodeKind::AdBoard);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     crate::holds::hijack(&mut st, ad, crate::holds::Line::Smear);
     map.update(&mut st, &[]);
     pass(&mut st, 60);
@@ -3495,7 +3510,12 @@ fn net_decoy() {
     stand_in(&mut st, Place::Construct(b), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     crate::holds::use_verb(&mut st, 'z').unwrap();
     for _ in 0..2 {
         st.net.beat = st.clock_tick();
@@ -3650,7 +3670,12 @@ fn net_space_camera() {
     );
     let b = kiroflux(&st);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(cam),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     map.update(&mut st, &[]);
     let crate::app::ScreenCmd::Push { to: w, .. } = map.update(&mut st, &[key(KeyCode::Char(' '))])
     else {
@@ -3696,7 +3721,7 @@ fn net_shell() {
     stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, id, owner, now);
+    crate::holds::take(&mut st, citygen::NetNode::City(id), owner, now);
     map.update(&mut st, &[]);
     write_svg(
         &dir,

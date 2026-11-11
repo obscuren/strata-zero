@@ -598,7 +598,9 @@ fn credit_done_work(st: &mut AppState, id: JobId) {
             };
             let copied = st.city.as_ref().is_some_and(|c| {
                 c.net.nodes.iter().any(|n| {
-                    n.building == Some(building) && n.kind == kind && st.net.copied(n.id, now)
+                    n.building == Some(building)
+                        && n.kind == kind
+                        && st.net.copied(game::HackTarget::Node(n.id), now)
                 })
             });
             if copied {

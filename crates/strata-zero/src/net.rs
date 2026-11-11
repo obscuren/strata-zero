@@ -6,9 +6,7 @@ use crate::constructs::Constructs;
 use crate::render::map::MapRef;
 use citygen::pathing::{astar, bresenham};
 use citygen::rng::hash64;
-use citygen::{
-    BuildingId, City, Construct, IceGrade, NodeId, NodeKind, Place, Pos, StratumKind, Terrain,
-};
+use citygen::{BuildingId, City, Construct, IceGrade, NodeKind, Place, Pos, StratumKind, Terrain};
 use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
     TraceEvent, applies, difficulty, power, succeeds,
@@ -415,7 +413,7 @@ pub struct NetState {
     pub holds: Vec<crate::holds::Hold>,
     /// The camera whose feed is open.
     #[serde(default)]
-    pub feed: Option<NodeId>,
+    pub feed: Option<citygen::NetNode>,
     /// Buildings whose holo ads say your line.
     #[serde(default)]
     pub hijacks: Vec<crate::holds::Hijack>,
@@ -648,17 +646,17 @@ impl NetState {
     }
 
     /// A camera blinded, or looped by a hold that still lasts.
-    pub fn blinded(&self, node: NodeId, now: u64) -> bool {
+    pub fn blinded(&self, node: citygen::NetNode, now: u64) -> bool {
         self.live(now)
-            .any(|h| h.target == HackTarget::Node(node) && h.op == Op::Blind)
+            .any(|h| h.target == HackTarget::from(node) && h.op == Op::Blind)
             || self.holds.iter().any(|h| {
                 h.node == node && now < h.until && h.used.contains(&crate::holds::Verb::Loop)
             })
     }
 
-    pub fn copied(&self, node: NodeId, now: u64) -> bool {
+    pub fn copied(&self, target: HackTarget, now: u64) -> bool {
         self.live(now)
-            .any(|h| h.target == HackTarget::Node(node) && h.op == Op::Copy)
+            .any(|h| h.target == target && h.op == Op::Copy)
     }
 
     /// Minutes until the dumped deck jacks in again.
@@ -854,11 +852,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
         return Err(format!("{} does nothing there", item.name));
     }
     let now = st.net.now(st);
-    if spec.op == Op::Copy
-        && st
-            .net
-            .copied(node_of(target).unwrap_or(NodeId(u32::MAX)), now)
-    {
+    if spec.op == Op::Copy && st.net.copied(target, now) {
         return Err("copied already".to_string());
     }
     if spec.op == Op::Backdoor
@@ -911,15 +905,6 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
         Some(_) => format!("run aborted · {starts}"),
         None => starts,
     })
-}
-
-fn node_of(target: HackTarget) -> Option<NodeId> {
-    match target {
-        HackTarget::Node(id) => Some(id),
-        HackTarget::Guard { .. } | HackTarget::Deck | HackTarget::Foe(_) | HackTarget::Site(_) => {
-            None
-        }
-    }
 }
 
 /// One turn of the program in flight: the roll, the heat, the alarm or the dump,
@@ -1229,9 +1214,18 @@ fn land(
             format!("mask raised · {MASK_TURNS} turns")
         }
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
-            HackTarget::Node(id) => {
-                crate::holds::take(st, id, crate::owners::Owner::Building(b), now)
-            }
+            HackTarget::Node(id) => crate::holds::take(
+                st,
+                citygen::NetNode::City(id),
+                crate::owners::Owner::Building(b),
+                now,
+            ),
+            HackTarget::Site(n) => crate::holds::take(
+                st,
+                citygen::NetNode::Site(n),
+                crate::owners::Owner::Building(b),
+                now,
+            ),
             _ => format!("{} {}", k.label(), op.done_label()),
         },
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
@@ -1272,7 +1266,9 @@ fn land_outside(
         },
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => {
             match (target, owner) {
-                (HackTarget::Node(id), Some(o)) => crate::holds::take(st, id, o, now),
+                (HackTarget::Node(id), Some(o)) => {
+                    crate::holds::take(st, citygen::NetNode::City(id), o, now)
+                }
                 _ => format!("{} {}", k.label(), op.done_label()),
             }
         }
@@ -4509,7 +4505,10 @@ pub(crate) mod tests {
             Op::Blind,
             10,
         );
-        assert!(net.blinded(NodeId(8), 20) && !net.blinded(NodeId(7), 20));
+        assert!(
+            net.blinded(citygen::NetNode::City(NodeId(8)), 20)
+                && !net.blinded(citygen::NetNode::City(NodeId(7)), 20)
+        );
         net.land(
             b(1),
             HackTarget::Node(NodeId(9)),
@@ -4517,7 +4516,7 @@ pub(crate) mod tests {
             Op::Copy,
             10,
         );
-        assert!(net.copied(NodeId(9), 20));
+        assert!(net.copied(HackTarget::Node(NodeId(9)), 20));
         // The alarm: the lock relocks, the lifts stop, a spoof after the alarm frees them.
         assert_eq!(
             net.trace(b(1)).add(game::ALARM_HEAT, 20),

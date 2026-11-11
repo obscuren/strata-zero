@@ -304,14 +304,20 @@ mod tests {
         on_foot(&mut a, ahead);
         assert_eq!(crate::cameras::seeing(&a), vec![cam], "it sees you there");
         // Held from the lane under its wall and looped.
-        let at = a.city.as_ref().unwrap().net.node(cam.node).cyber;
+        let at = a
+            .city
+            .as_ref()
+            .unwrap()
+            .net
+            .node(cam.node.city().unwrap())
+            .cyber;
         {
             let p = a.player.as_mut().unwrap();
             p.place = Place::Stratum(StratumKind::Net);
             p.pos = Pos::new(at.x, at.y + 1);
             p.body = Some((Place::Stratum(StratumKind::Street), ahead));
         }
-        crack_to_landing(&mut a, game::HackTarget::Node(cam.node));
+        crack_to_landing(&mut a, game::HackTarget::Node(cam.node.city().unwrap()));
         crate::holds::use_verb(&mut a, 'o').unwrap();
         on_foot(&mut a, ahead);
         assert!(crate::cameras::seeing(&a).is_empty(), "looped");

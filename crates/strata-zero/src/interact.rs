@@ -737,8 +737,7 @@ pub fn run_rows_at(
             }
             let Some(key) = letters.next() else { break };
             let verb = capitalised(spec.op.label());
-            let copied = spec.op == game::Op::Copy
-                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
+            let copied = spec.op == game::Op::Copy && st.net.copied(target, now);
             if copied {
                 let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
                     .tail(" · copied already");
@@ -798,10 +797,19 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
-    let n = city.net.node(node);
-    let what = match n.building {
-        Some(b) => format!("{} · {}", n.kind.label(), crate::net::building_name(st, b)),
-        None => n.kind.label().to_string(),
+    let (kind, building) = match node {
+        citygen::NetNode::City(id) => {
+            let n = city.net.node(id);
+            (n.kind, n.building)
+        }
+        citygen::NetNode::Site(s) => (
+            crate::holds::kind_of(st, node).unwrap_or(citygen::NodeKind::Camera),
+            Some(s.building),
+        ),
+    };
+    let what = match building {
+        Some(b) => format!("{} · {}", kind.label(), crate::net::building_name(st, b)),
+        None => kind.label().to_string(),
     };
     let now = st.net.now(st);
     let left = crate::holds::held(st, node, now).map_or(0, |h| h.until - now);

@@ -6,7 +6,7 @@
 
 use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
-use citygen::{BuildingId, City, Dir, NodeId, NodeKind, Place, Pos, StratumKind, sight};
+use citygen::{BuildingId, City, Dir, NetNode, NodeKind, Place, Pos, StratumKind, sight};
 
 /// How deep a camera's cone reaches.
 pub const CONE_DEPTH: i32 = 8;
@@ -19,7 +19,7 @@ pub const EYE_HEAT: u8 = 2;
 /// faces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Camera {
-    pub node: NodeId,
+    pub node: NetNode,
     pub building: BuildingId,
     pub at: Pos,
     pub facing: Dir,
@@ -44,7 +44,7 @@ pub fn street_cameras(city: &City) -> impl Iterator<Item = Camera> + '_ {
         .filter_map(|n| {
             let b = n.building?;
             Some(Camera {
-                node: n.id,
+                node: NetNode::City(n.id),
                 building: b,
                 at: n.anchor.1,
                 facing: facing(city, b, n.anchor.1)?,

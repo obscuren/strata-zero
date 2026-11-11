@@ -2050,9 +2050,7 @@ impl MapScreen {
             if !game::applies(spec.op, kind) {
                 continue;
             }
-            if spec.op == game::Op::Copy
-                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now))
-            {
+            if spec.op == game::Op::Copy && st.net.copied(target, now) {
                 copied = true;
                 continue;
             }
@@ -11127,7 +11125,7 @@ mod tests {
         let (id, at) = (term.id, term.cyber);
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), at);
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, id, owner, now);
+        crate::holds::take(&mut st, citygen::NetNode::City(id), owner, now);
         (st, s)
     }
 
@@ -11204,7 +11202,7 @@ mod tests {
         }
         let now = st.net.now(&st);
         assert!(
-            crate::holds::held(&st, cam, now).is_some(),
+            crate::holds::held(&st, citygen::NetNode::City(cam), now).is_some(),
             "{:?}",
             last(&st)
         );
@@ -11214,13 +11212,21 @@ mod tests {
             panic!("the window with the camera's verbs");
         };
         w.update(&mut st, &[key(KeyCode::Char('o'))]);
-        assert!(crate::holds::looped(&st, cam, now), "{:?}", last(&st));
+        assert!(
+            crate::holds::looped(&st, citygen::NetNode::City(cam), now),
+            "{:?}",
+            last(&st)
+        );
         let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("the window again");
         };
         w.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam), "the feed opens from the window too");
+        assert_eq!(
+            st.net.feed,
+            Some(citygen::NetNode::City(cam)),
+            "the feed opens from the window too"
+        );
     }
 
     #[test]
@@ -11232,10 +11238,15 @@ mod tests {
         let here = Pos::new(at.x, at.y + 1);
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+        crate::holds::take(
+            &mut st,
+            citygen::NetNode::City(cam),
+            crate::owners::Owner::Building(b),
+            now,
+        );
         // Esc closes it, and doesn't open the menu.
         s.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam));
+        assert_eq!(st.net.feed, Some(citygen::NetNode::City(cam)));
         let cmd = s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(matches!(cmd, ScreenCmd::Stay), "no menu while a feed is up");
         assert_eq!(st.net.feed, None);
@@ -11245,7 +11256,7 @@ mod tests {
         assert!(matches!(cmd, ScreenCmd::Push { .. }));
         // A step closes it.
         s.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam));
+        assert_eq!(st.net.feed, Some(citygen::NetNode::City(cam)));
         let city = st.city.clone().unwrap();
         let step = [Dir::E, Dir::W, Dir::S, Dir::N]
             .into_iter()
@@ -11373,7 +11384,12 @@ mod tests {
             Pos::new(at.x, at.y - 1),
         );
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+        crate::holds::take(
+            &mut st,
+            citygen::NetNode::City(ad),
+            crate::owners::Owner::Building(b),
+            now,
+        );
         let ScreenCmd::Push { to: mut picker, .. } = s.update(&mut st, &[key(KeyCode::Char('i'))])
         else {
             panic!("the hijack's picker");
@@ -17499,7 +17515,7 @@ mod tests {
             };
             let now = st.net.now(&st);
             let owner = crate::owners::owner_of(st.city.as_ref().unwrap(), held).unwrap();
-            crate::holds::take(&mut st, held, owner, now);
+            crate::holds::take(&mut st, citygen::NetNode::City(held), owner, now);
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), a);
             assert!(
                 !crate::net::out_of_reach(&st, a).is_empty(),
@@ -18688,7 +18704,12 @@ mod tests {
                 st.net.lights_out.insert(d.id, now + LIGHTS_OUT_MINUTES);
             }
             for (node, b, _) in ad_boards(&city) {
-                holds::take(&mut st, node, crate::owners::Owner::Building(b), now);
+                holds::take(
+                    &mut st,
+                    citygen::NetNode::City(node),
+                    crate::owners::Owner::Building(b),
+                    now,
+                );
                 holds::hijack(&mut st, node, Line::Tag);
             }
             holds::tick(&mut st);
