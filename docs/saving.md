@@ -27,8 +27,9 @@ Elsewhere:
 - `app.rs`: the `AppState` fields `saves` (where this session saves; `None` in `AppState::new()`), `run`, `save_due`, `last_save`, `save_failed`; `AppState::clear_screens()`; `Screen::holds_story()`; `Runner::save_on_exit()`.
 - `cli.rs`: `start_state` is the only place that turns saving on (`saves`: `runs/` in the game's folder, which `files_dir` finds through `platform::Platform::files_dir`: the player's app folder, or `STRATA_DIR`). The terminal game and the window use the same folder, wherever they're started.
 - `window/mod.rs`: the window's ways out save through `Runner::save_on_exit`.
-- `screens/title.rs` (CONTINUE, HALL OF FAME, dev LOAD CITY), `screens/runs.rs` (LOAD GAME and HALL OF FAME), `screens/broadcast.rs` (`Broadcast::resume`: the run's own flags, no switches), `screens/mod.rs` (`resume_screen`), `screens/explore.rs` (`MapScreen::resumed`, the `s` key, the SAVED mark on the bottom status row, the flatline switch), `screens/pause.rs` (SAVE GAME, the ways out, `last saved · …`), `screens/flatlined.rs` (taunt or reload).
-- `credentials.rs`: `run_items` / `put_back`, the run-made `keycard:*` items.
+- `screens/title.rs` (CONTINUE, HALL OF FAME, and dev LOAD CITY on its DEVELOPER menu, `title/developer.rs`), `screens/runs.rs` (LOAD GAME and HALL OF FAME), `screens/broadcast.rs` (`Broadcast::resume`: the run's own flags, no switches), `screens/mod.rs` (`resume_screen`), `screens/explore.rs` (`MapScreen::resumed`, the `s` key, the SAVED mark on the bottom status row, the flatline switch), `screens/pause.rs` (SAVE GAME, the ways out, `last saved · …`), `screens/flatlined.rs` (taunt or reload).
+- `credentials.rs`: `run_items` / `put_back`, the run-made `keycard:*` items (a flat's, and a venue zone's, `keycard:{building}:zone{n}`).
+- `interiors.rs`: `Interiors` is saved whole: the plans (a venue's carrying its layout), the floors walked into, who lives in which flat, and the missions' copies of venues (`venues/`). See "Sites and copies".
 - `credentials.rs`: the journal is saved whole. `KeypadState.faults` (`#[serde(default)]`) is the faults a Keyjack has run up on a pad; they stay with the pad's state until the door opens or its lockout ends. `Source::Keyjack` is a new code source; old saves never hold it. The Keyjack's numbers (`flavor/keyjack.ron`, `keyjack.rs`) are content, not saved.
 - `sim::World::rebuild`, `track::refollow`, `holds::relight`, `forget_unknown` on `game::Character`, `game::Ground` and `missions::Missions`.
 - `net.rs`: `NetState` is saved whole: the Net's nodes with it (`holds`: held nodes and the verbs spent, a camera's loop among them, the feed, hijacks, lights out, a decoy; `owners`: the districts' traces; `grid::GridState`: the open Net's trail, sentinels posted, tracers' and sentinels' pace, sweeps' rings, owners on alert). Grid ICE is a `foes::Foe` with `ice`. `RollEcho` reads the first saves' `building` as its `scene` (`EchoRead`).
@@ -129,6 +130,70 @@ body where it is, at the rig too, and the rig's route ends as a jack out ends it
 body's city is set aside in the save, home whole and any other kept (a body left in one
 stands on a stratum: only the home city has the rig). While it's held, `outside::body_stay` reads it: the port the cord runs to, the
 rig's relays and its trace home (a dump on a rig run starts that trace there).
+
+## Sites and copies
+
+Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron`
+(`citygen::venue`) and its floors are drawn from that layout. The design is
+`docs/superpowers/specs/2026-11-10-site-generator-design.md`.
+
+- **A venue's layout is saved inside its plan.** `FloorPlan.venue` holds the whole
+  `VenueLayout` (its frame, zones, levels, rooms, locks, links and ways in), and the plan
+  is saved whole with the rest of `Interiors.plans`, so a floor drawn after a reopen
+  agrees with the floors saved beside it. A venue's plan also holds `sizes` (its deep
+  levels drawn at another size) and `crawls` (the crawls in from the city). Nothing about
+  a venue is rebuilt in `after_restore`.
+- **An old save's buildings keep the classic builder.** A plan saved before venues reads
+  through `FloorPlanRead`, which also reads the older shapes (the levels from
+  `lowest`/`top`, the doors from `bridge`/`roof`, the links from `lift`/`stair`), and has
+  no `venue`: its floors not yet drawn come from today's builder, so they match the ones
+  saved. A hotel or office first planned after the change is a venue, in an old save too.
+  A venue's plan draws without its type, so a type this build lacks leaves its plain
+  buildings standing.
+- **New fields default.** `FloorPlan.sizes`, `crawls` and `venue`; `Room.name` and
+  `Room.zone`; `Floor.locks` (the `DoorLock`s on a venue's zone borders and ways in, and
+  the readers a copy fits); `LinkStop.card`, `on` and `off` (`on` and `off` default to
+  true); `LevelLink.name`; `FrameDoor.enclosed`; `Foe.post`. The new `Terrain`,
+  `Feature` and `RoomKind` variants join their enums at the end, so saved indices keep
+  their meaning.
+- **The venue's own enums grow only at their end too.** A saved layout and a copy hold
+  `LinkKind`, `LockKind`, `Spine`, `PieceKind`, `WayInKind`, `MissionSize` and
+  `DeviceKind`: a new variant joins its enum at the end. A `Ways` is a set of bits, one
+  per means: a new means takes the next bit, and no bit changes its meaning.
+- **Getting out is free.** Every `DoorLock` a layout lays opens without a key from its
+  deeper side (`free_from`, set by the zones stage on every border lock, and on a way
+  in's doorstep), a locked room opens from inside, and a lift asks for a stop's card
+  only where you get off (`venues::ride_card`). The rule is in the code, so a saved
+  layout carries it with its locks; the checker refuses a layout, and a mission layer
+  won't lay, that leaves any room with no way out without a key.
+- **A mission's copy.** `Interiors.copies` (`#[serde(default)]`: older saves hold none)
+  maps a building to its `venues::MissionCopy`: the mission's inputs (size, objective,
+  security, seed), the levels it keeps, `live` (taken; false while it waits for you to
+  leave the building), `ending` (asked to end; it does once you're out), `left` (the
+  zone cards the mission layer laid on its floors, and where) and `layer`, the
+  `MissionLayer` itself (`#[serde(default)]`). The layer is laid once, at `begin`, and
+  saved: a floor drawn or a code note read takes it from the copy, never laid again, so
+  a change to `flavor/sites.ron` or to the layer's code can't put other locks, devices or
+  notes beside the floors, guards and cards a save already holds. A copy saved before
+  the layer was kept has none: `venues::tick` ends it as lost, as it does a copy whose
+  type is gone.
+- **What a copy keeps.** While it's live the building's plan is the layout cut to the
+  kept levels (`FloorPlan::kept`) and its floors are drawn with the layer on them; both
+  are saved as any plan and floor are. The rest is play state saved where it always is:
+  its guards are foes with a `post` (`foes::Post`: the building, their zone, their
+  patrol), the items on its floors are in `Ground`, the codes learned are in the journal
+  and the Net's holds in `NetState`. Zone cards are run-made `keycard:` items, so their
+  catalogue entries are saved by `credentials::run_items`.
+- **Ending.** `venues::end` marks the copy, and `venues::tick` (every step of the clock)
+  ends it once you're out: the foes posted to that building go, the cards still lying
+  where `left` says go, the floors are dropped and the plan is made again from its
+  layout (`FloorPlan::of_layout`), so the plain building comes back from the seed. What
+  you dropped there stays where it lies, a card you picked up stays in your pack, and
+  the codes you learned still work, since the layout is the same. A copy whose type
+  this build lacks, or with no saved layer: `venues::tick` ends it the same way and logs
+  `lost in the update · the job in {building}`.
+- **Another city.** The copies are a field of `Interiors`, which `outside::Stay` and
+  `kept::StayParts` carry whole, so a copy in a city you've left travels with it.
 
 ## Writing a save
 

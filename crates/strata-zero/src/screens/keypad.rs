@@ -1,8 +1,8 @@
-//! The keypad on a flat's door: a beige device over the map. Key the code, V to
-//! verify; a hit is learned, three misses lock it. Or `k` clips a Keyjack on and cracks
-//! the code a beat at a time: space strikes while the marker sits in the lit zone, a hit
-//! keys that digit in, a miss is a fault on the door, and the last fault locks the pad and
-//! burns the Keyjack's fuse.
+//! The keypad on a flat's door or a venue's keypad lock: a beige device over the map. Key
+//! the code, V to verify; a hit is learned, three misses lock it. Or `k` clips a Keyjack on
+//! and cracks the code a beat at a time: space strikes while the marker sits in the lit
+//! zone, a hit keys that digit in, a miss is a fault on the door, and the last fault locks
+//! the pad and burns the Keyjack's fuse.
 
 use crate::app::{AppState, FPS, Screen, ScreenCmd, TransitionKind};
 use crate::credentials::{self, Source, Verdict};
@@ -156,7 +156,9 @@ impl Keypad {
             building,
             level,
             number,
-            label: format!("flat {number}"),
+            // A flat's pad names no owner: its number is on the door.
+            label: crate::credentials::venue_door(st, building, level, number)
+                .unwrap_or_else(|| format!("flat {number}")),
             code: citygen::rng::door_code(seed, building, level, number),
             known: st.journal.code_for(building, level, number).map(|c| c.code),
             typed: Vec::new(),
@@ -193,6 +195,12 @@ impl Keypad {
     #[cfg(test)]
     pub(crate) fn typed(&self) -> &[u8] {
         &self.typed
+    }
+
+    /// The door's name on the glass.
+    #[cfg(test)]
+    pub(crate) fn label(&self) -> &str {
+        &self.label
     }
 
     /// Moves the clock on to the frame after one that shows the marker in the zone (or

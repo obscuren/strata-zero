@@ -46,11 +46,18 @@ impl Side {
     }
 }
 
-/// A part's tiles count as floor for light: the floor, grates, stairs and lifts.
+/// A part's tiles count as floor for light: the floor, grates, every link's landing and a
+/// station's track.
 fn part_terrain(t: Terrain) -> bool {
     matches!(
         t,
-        Terrain::Floor | Terrain::Grate | Terrain::Stair | Terrain::Lift | Terrain::Ladder
+        Terrain::Floor
+            | Terrain::Grate
+            | Terrain::Stair
+            | Terrain::Lift
+            | Terrain::Ladder
+            | Terrain::Escalator
+            | Terrain::Track
     )
 }
 
@@ -135,10 +142,10 @@ fn dist2(p: Pos, (x, y): (f32, f32)) -> f32 {
 impl Builder<'_> {
     /// Places every part's fittings by its room's tone and mood, and sets the ambient
     /// and the emitters `finish` lights the floor from.
-    pub(super) fn light(&mut self) {
+    pub(in crate::interior) fn light(&mut self) {
         let parts = self.parts();
         let corridor = self.ambient_rgb(None, 0);
-        let mut in_part = Grid::filled(self.plan.size, false);
+        let mut in_part = Grid::filled(self.size, false);
         for part in &parts {
             let kind = part.room.map(|i| self.rooms[i].kind);
             let number = part.room.map_or(0, |i| self.rooms[i].number);
@@ -151,7 +158,7 @@ impl Builder<'_> {
         }
         // Walls, doors, windows and the rest take their brightest floor neighbour's
         // ambient, else the corridor's.
-        let size = self.plan.size;
+        let size = self.size;
         for y in 0..size.h as i32 {
             for x in 0..size.w as i32 {
                 let p = Pos::new(x, y);
@@ -179,12 +186,12 @@ impl Builder<'_> {
 
     /// The room that owns each tile: the smallest whose rect holds it.
     fn owners(&self) -> Grid<Option<usize>> {
-        let mut out = Grid::filled(self.plan.size, None);
+        let mut out = Grid::filled(self.size, None);
         let mut by_area: Vec<usize> = (0..self.rooms.len()).collect();
         by_area.sort_by_key(|&i| std::cmp::Reverse(self.rooms[i].rect.area()));
         for i in by_area {
             for p in self.rooms[i].rect.iter() {
-                if self.plan.size.contains(p) {
+                if self.size.contains(p) {
                     out[p] = Some(i);
                 }
             }
@@ -195,7 +202,7 @@ impl Builder<'_> {
     /// The floor cut into parts: one room's floor tiles joined across open floor only.
     fn parts(&self) -> Vec<Part> {
         let owners = self.owners();
-        let size = self.plan.size;
+        let size = self.size;
         let mut seen = Grid::filled(size, false);
         let mut out = Vec::new();
         for y in 0..size.h as i32 {
@@ -230,7 +237,7 @@ impl Builder<'_> {
     fn room_mood(&self, kind: Option<RoomKind>, number: u16) -> (tuning::RoomLight, Mood) {
         let light = tuning::room_light(kind, self.plan.kind);
         let mood = room_mood(
-            self.city.seed,
+            self.city_seed,
             self.plan.building,
             kind,
             number,
@@ -257,7 +264,7 @@ impl Builder<'_> {
         let mut out = Vec::new();
         for &p in &part.tiles {
             for wall in p.neighbors4() {
-                if self.plan.size.contains(wall)
+                if self.size.contains(wall)
                     && self.tiles[wall].terrain == Terrain::Wall
                     && self.tiles[wall].feature.is_none()
                     && seen.insert(wall)
@@ -404,7 +411,7 @@ impl Builder<'_> {
             } else {
                 vec![p]
             };
-            let size = self.plan.size;
+            let size = self.size;
             let wear = self.wear(kind, tone, size.index(p) as u64);
             let (base, colour) = match (kind, wear) {
                 (FittingKind::HighBay, _) => (tuning::HIGH_BAY, tone_rgb(tone)),
@@ -439,7 +446,7 @@ impl Builder<'_> {
         else {
             return false;
         };
-        let wear = self.wear(kind, tone, self.plan.size.index(p) as u64);
+        let wear = self.wear(kind, tone, self.size.index(p) as u64);
         self.tiles[p].feature = Some(fitting(kind, tone, wear));
         if wear != Wear::Dead {
             let light = if wear == Wear::Stutter {
@@ -675,6 +682,13 @@ mod tests {
             .collect()
     }
 
+    /// Every building of `kind` in the cities, with today's builder's plan.
+    fn classic_plans(kind: BuildingKind) -> Vec<(&'static City, FloorPlan)> {
+        (plans(kind).into_iter())
+            .filter_map(|(c, p)| FloorPlan::classic(c, p.building).map(|p| (c, p)))
+            .collect()
+    }
+
     fn fittings(f: &Floor) -> Vec<(Pos, Fitting)> {
         f.tiles
             .iter()
@@ -697,9 +711,9 @@ mod tests {
             let Some((city, plan)) = plans(kind).into_iter().next() else {
                 continue;
             };
-            let levels: BTreeSet<i32> = [plan.lowest, 0, plan.top]
+            let levels: BTreeSet<i32> = [plan.lowest(), 0, plan.top()]
                 .into_iter()
-                .filter(|l| (plan.lowest..=plan.top).contains(l))
+                .filter(|l| plan.has_level(*l))
                 .collect();
             for level in levels {
                 let f = generate_floor(city, &plan, level);
@@ -752,8 +766,8 @@ mod tests {
 
     #[test]
     fn wall_fittings_light_their_own_side() {
-        for (city, plan) in plans(BuildingKind::Hotel).into_iter().take(2) {
-            for level in [0, 1.min(plan.top)] {
+        for (city, plan) in classic_plans(BuildingKind::Hotel).into_iter().take(2) {
+            for level in [0, 1.min(plan.top())] {
                 let b = super::super::built(city, &plan, level);
                 for e in &b.emitters {
                     assert!(
@@ -779,9 +793,9 @@ mod tests {
 
     #[test]
     fn a_place_keeps_its_mood_on_every_floor_and_every_visit() {
-        let (city, plan) = plans(BuildingKind::Hotel)
+        let (city, plan) = classic_plans(BuildingKind::Hotel)
             .into_iter()
-            .find(|(_, p)| p.top >= 2)
+            .find(|(_, p)| p.top() >= 2)
             .expect("a hotel of three floors");
         let corridor = |level| -> BTreeSet<String> {
             fittings(&generate_floor(city, &plan, level))
@@ -889,7 +903,7 @@ mod tests {
                 .filter_map(move |b| FloorPlan::new(c, b.id).map(|p| (c, p)))
         });
         for (city, plan) in clinics.take(4) {
-            for level in plan.lowest..=plan.top {
+            for level in plan.levels() {
                 let f = generate_floor(city, &plan, level);
                 let Some(chair) = f.chair() else {
                     continue;
@@ -912,7 +926,7 @@ mod tests {
     fn corridors_are_cooler_than_flats() {
         let (city, plan) = plans(BuildingKind::Megablock)
             .into_iter()
-            .find(|(_, p)| p.top >= 3)
+            .find(|(_, p)| p.top() >= 3)
             .expect("a megablock");
         let f = generate_floor(city, &plan, 3);
         let mean = |kind: RoomKind| -> f32 {

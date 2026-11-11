@@ -10,7 +10,7 @@ use crate::render::style::StylePack;
 use crate::track::mini::MapTrack;
 use crate::ui::chrome::{CYAN, CYAN_RGB, DIM, FAINT};
 use citygen::{
-    Floor, FloorPlan, Grid, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Terrain, Tile,
+    Floor, FloorPlan, Grid, LinkKind, Pos, Rect as TileRect, RoomKind, Size, StratumKind, Tile,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -152,48 +152,61 @@ fn room_index(floor: &Floor) -> Grid<Option<RoomKind>> {
     out
 }
 
-/// The shaft strip's rows, the top floor first, `None` a gap where floors are skipped:
-/// yours and the one wanted always, then the top, the bottom, the floors next to yours
-/// and to the wanted one, two from yours, then the rest nearest yours, each only while
-/// the strip still fits `rows`. Too few rows even for yours and the wanted one: the gap
-/// rows go, the ends first, then the wanted floor.
-pub fn shaft_rows(
-    lowest: i32,
-    top: i32,
-    you: i32,
-    wanted: Option<i32>,
-    rows: usize,
-) -> Vec<Option<i32>> {
-    let laid = |chosen: &BTreeSet<i32>| {
+/// The shaft strip's rows for a building's `levels` (the lowest first), the top floor
+/// first, `None` a gap where floors of the list are skipped: yours and the one wanted
+/// always, then the top, the bottom, the floors next to yours and to the wanted one, two
+/// from yours, then the rest nearest yours, each only while the strip still fits `rows`.
+/// Too few rows even for yours and the wanted one: the gap rows go, the ends first,
+/// then the wanted floor.
+pub fn shaft_rows(levels: &[i32], you: i32, wanted: Option<i32>, rows: usize) -> Vec<Option<i32>> {
+    let Some(last) = levels.len().checked_sub(1) else {
+        return Vec::new();
+    };
+    // Worked out on places in the list: a level the building doesn't have is no gap,
+    // and the floor next to yours is the next one in the list.
+    let laid = |chosen: &BTreeSet<usize>| {
         let mut out = Vec::new();
-        let mut above: Option<i32> = None;
-        for &l in chosen.iter().rev() {
-            if above.map_or(l < top, |a| a - l > 1) {
+        let mut above: Option<usize> = None;
+        for &i in chosen.iter().rev() {
+            if above.map_or(i < last, |a| a - i > 1) {
                 out.push(None);
             }
-            out.push(Some(l));
-            above = Some(l);
+            out.push(Some(levels[i]));
+            above = Some(i);
         }
-        if above.is_some_and(|l| l > lowest) {
+        if above.is_some_and(|i| i > 0) {
             out.push(None);
         }
         out
     };
-    let mut order = vec![you];
-    order.extend(wanted);
-    order.extend([top, lowest, you + 1, you - 1]);
-    if let Some(w) = wanted {
-        order.extend([w + 1, w - 1]);
-    }
-    order.extend([you + 2, you - 2]);
-    let mut rest: Vec<i32> = (lowest..=top).collect();
-    rest.sort_by_key(|l| ((l - you).abs(), -l));
+    let at = |l: i32| levels.iter().position(|x| *x == l);
+    let (you_at, wanted_at) = (at(you), wanted.and_then(at));
+    let step = |from: Option<usize>, by: isize| {
+        from.and_then(|i| i.checked_add_signed(by))
+            .filter(|i| *i <= last)
+    };
+    let mut order: Vec<usize> = [
+        you_at,
+        wanted_at,
+        Some(last),
+        Some(0),
+        step(you_at, 1),
+        step(you_at, -1),
+        step(wanted_at, 1),
+        step(wanted_at, -1),
+        step(you_at, 2),
+        step(you_at, -2),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut rest: Vec<usize> = (0..=last).collect();
+    rest.sort_by_key(|i| (you_at.map_or(0, |y| y.abs_diff(*i)), std::cmp::Reverse(*i)));
     order.extend(rest);
-    let on = |l: &i32| (lowest..=top).contains(l);
-    let mut chosen: BTreeSet<i32> = std::iter::once(you).chain(wanted).filter(on).collect();
-    for l in order.into_iter().filter(on) {
-        if chosen.insert(l) && laid(&chosen).len() > rows {
-            chosen.remove(&l);
+    let mut chosen: BTreeSet<usize> = you_at.into_iter().chain(wanted_at).collect();
+    for i in order {
+        if chosen.insert(i) && laid(&chosen).len() > rows {
+            chosen.remove(&i);
         }
     }
     let mut out = laid(&chosen);
@@ -376,7 +389,7 @@ impl Minimap<'_> {
     /// than one.
     fn floor_plan(&self, m: &FloorMap, area: Rect, buf: &mut Buffer) {
         let (plan, floor) = (m.plan, m.floor);
-        let shaft = plan.lowest < plan.top && area.width > 2 * SHAFT_W;
+        let shaft = plan.floors() > 1 && area.width > 2 * SHAFT_W;
         let plan_area = Rect {
             width: area.width - if shaft { SHAFT_W } else { 0 },
             ..area
@@ -385,19 +398,24 @@ impl Minimap<'_> {
         let colours = PlanColours::of(self.style.theme_or_neutral(Some(plan.theme)));
         let room = |p: Pos| rooms.get(p).copied().flatten();
         let (px, v) = self.plan(&floor.tiles, room, &colours, plan_area, buf);
-        // The lift wins a cell it shares with the stairs, unless the walk takes the stairs.
-        let stairs = floor
-            .tiles
-            .get(plan.stair)
-            .is_some_and(|t| t.terrain == Terrain::Stair)
-            .then_some((plan.stair, '≡', DIM));
-        let lift = plan.lift.map(|l| (l, '⇅', CORNER));
-        let ways = if self.track.walk.last() == Some(&plan.stair) {
-            [lift, stairs]
-        } else {
-            [stairs, lift]
-        };
-        for (at, ch, fg) in ways.into_iter().flatten() {
+        // A mark per link that stops here. The lift wins a cell it shares with the
+        // stairs, unless the walk takes the stairs: the landing the walk ends on wins.
+        let walked = self.track.walk.last().copied();
+        let mut ways: Vec<(bool, bool, Pos, char, Color)> = plan
+            .links
+            .iter()
+            .filter_map(|l| {
+                let at = l.stop(floor.level)?.at;
+                let (ch, fg) = match l.kind {
+                    LinkKind::Lift => ('⇅', CORNER),
+                    LinkKind::Stair | LinkKind::Escalator => ('≡', DIM),
+                    LinkKind::Ladder | LinkKind::Crawl => ('╫', DIM),
+                };
+                Some((walked == Some(at), l.kind == LinkKind::Lift, at, ch, fg))
+            })
+            .collect();
+        ways.sort_by_key(|(walk, lift, ..)| (*walk, *lift));
+        for (_, _, at, ch, fg) in ways {
             mark(buf, &px, &v, at, ch, fg, false);
         }
         for r in floor.rooms.iter().filter(|r| r.kind == RoomKind::Home) {
@@ -421,7 +439,7 @@ impl Minimap<'_> {
     /// the track wants `⌖` in cyan, the shaft between them lit.
     fn shaft(&self, plan: &FloorPlan, level: i32, area: Rect, buf: &mut Buffer) {
         let wanted = self.track.wanted.filter(|w| *w != level);
-        let rows = shaft_rows(plan.lowest, plan.top, level, wanted, area.height as usize);
+        let rows = shaft_rows(&plan.levels, level, wanted, area.height as usize);
         for y in area.y..area.bottom() {
             buf[(area.x, y)].set_char('│').set_fg(FAINT);
         }
@@ -950,8 +968,9 @@ mod tests {
     fn shaft_rows_choose() {
         let gap = None;
         let f = |l: i32| Some(l);
+        let span = |lo: i32, hi: i32| (lo..=hi).collect::<Vec<_>>();
         assert_eq!(
-            shaft_rows(-1, 27, 18, Some(0), 12),
+            shaft_rows(&span(-1, 27), 18, Some(0), 12),
             vec![
                 f(27),
                 gap,
@@ -968,21 +987,45 @@ mod tests {
             ]
         );
         assert_eq!(
-            shaft_rows(-1, 27, 18, Some(0), 5),
+            shaft_rows(&span(-1, 27), 18, Some(0), 5),
             vec![gap, f(18), gap, f(0), f(-1)]
         );
-        assert_eq!(shaft_rows(0, 3, 2, None, 12), vec![f(3), f(2), f(1), f(0)]);
-        assert_eq!(shaft_rows(-2, 0, 0, Some(-2), 12), vec![f(0), f(-1), f(-2)]);
-        assert_eq!(shaft_rows(0, 40, 20, None, 3), vec![gap, f(20), gap]);
+        assert_eq!(
+            shaft_rows(&span(0, 3), 2, None, 12),
+            vec![f(3), f(2), f(1), f(0)]
+        );
+        assert_eq!(
+            shaft_rows(&span(-2, 0), 0, Some(-2), 12),
+            vec![f(0), f(-1), f(-2)]
+        );
+        assert_eq!(shaft_rows(&span(0, 40), 20, None, 3), vec![gap, f(20), gap]);
         // A building that fits shows every floor.
         let all: Vec<_> = (-1..=8).rev().map(f).collect();
-        assert_eq!(shaft_rows(-1, 8, 5, Some(0), 12), all);
-        assert!(shaft_rows(0, 9, 4, None, 0).is_empty());
+        assert_eq!(shaft_rows(&span(-1, 8), 5, Some(0), 12), all);
+        assert!(shaft_rows(&span(0, 9), 4, None, 0).is_empty());
         // Too few rows: the gaps go before your floor or the wanted one does.
-        assert_eq!(shaft_rows(0, 9, 4, None, 2), vec![f(4), gap]);
-        assert_eq!(shaft_rows(0, 9, 4, Some(0), 2), vec![f(4), f(0)]);
-        assert_eq!(shaft_rows(0, 9, 4, Some(0), 1), vec![f(4)]);
-        assert_eq!(shaft_rows(0, 9, 4, Some(7), 3), vec![f(7), gap, f(4)]);
+        assert_eq!(shaft_rows(&span(0, 9), 4, None, 2), vec![f(4), gap]);
+        assert_eq!(shaft_rows(&span(0, 9), 4, Some(0), 2), vec![f(4), f(0)]);
+        assert_eq!(shaft_rows(&span(0, 9), 4, Some(0), 1), vec![f(4)]);
+        assert_eq!(
+            shaft_rows(&span(0, 9), 4, Some(7), 3),
+            vec![f(7), gap, f(4)]
+        );
+    }
+
+    #[test]
+    fn shaft_rows_follow_the_level_list() {
+        let f = |l: i32| Some(l);
+        // -3 and -1 are neighbours in the list: no gap between them.
+        assert_eq!(
+            shaft_rows(&[-3, -1, 0, 1, 2], 0, None, 12),
+            vec![f(2), f(1), f(0), f(-1), f(-3)]
+        );
+        // Today's trim order: the end gaps go first, so three rows keep 5, the gap below it and 0.
+        assert_eq!(
+            shaft_rows(&[0, 1, 5, 9], 5, Some(0), 3),
+            vec![f(5), None, f(0)]
+        );
     }
 
     #[test]
@@ -1042,7 +1085,7 @@ mod tests {
     fn the_flat_is_drawn_whole() {
         let (st, _) = crate::screens::shots::tracked_from_the_flat();
         let buf = inside(&st, 40, 13);
-        let (v, plan, _) = flat_view(&st, 12);
+        let (v, plan, level) = flat_view(&st, 12);
         assert_eq!(v.s, 3, "a megablock's floor is drawn at 3");
         let (_, floor) = st
             .interiors
@@ -1055,9 +1098,9 @@ mod tests {
         ] {
             assert!(v.cell_of(corner).is_some(), "the whole floor shows");
         }
-        let lift = v.cell_of(plan.lift.unwrap()).unwrap();
+        let lift = v.cell_of(plan.lift_on(level).unwrap()).unwrap();
         assert_eq!(buf[lift].symbol(), "⇅");
-        let stair = v.cell_of(plan.stair).unwrap();
+        let stair = v.cell_of(plan.stair_on(level).unwrap()).unwrap();
         assert_eq!(buf[stair].symbol(), "≡");
         let you = v.cell_of(st.player.as_ref().unwrap().pos).unwrap();
         assert_eq!(buf[you].symbol(), "@");
@@ -1082,7 +1125,7 @@ mod tests {
         let (st, _) = crate::screens::shots::tracked_from_the_flat();
         let buf = inside(&st, 40, 13);
         let (_, plan, level) = flat_view(&st, 12);
-        let rows = shaft_rows(plan.lowest, plan.top, level, Some(0), 12);
+        let rows = shaft_rows(&plan.levels, level, Some(0), 12);
         let top = (12 - rows.len() as u16) / 2;
         for y in 0..12 {
             assert_eq!(buf[(32, y)].symbol(), "│", "the strip's rule");
@@ -1131,10 +1174,7 @@ mod tests {
             .filter(|b| b.kind.is_closed())
             .find(|b| {
                 st.interiors.ensure(&city, b.id, 0).is_some()
-                    && st
-                        .interiors
-                        .plan_of(b.id)
-                        .is_some_and(|p| p.lowest == p.top)
+                    && st.interiors.plan_of(b.id).is_some_and(|p| p.floors() == 1)
             })
             .expect("a one-floor building")
             .id;
@@ -1213,9 +1253,9 @@ mod tests {
     fn the_lift_wins_a_shared_cell_unless_you_take_the_stairs() {
         let (mut st, _) = crate::screens::shots::tracked_from_the_flat();
         // At 11 rows the flat's lift and stairs fall in one cell.
-        let (v, plan, _) = flat_view(&st, 11);
-        let cell = v.cell_of(plan.stair).unwrap();
-        assert_eq!(v.cell_of(plan.lift.unwrap()), Some(cell));
+        let (v, plan, level) = flat_view(&st, 11);
+        let cell = v.cell_of(plan.stair_on(level).unwrap()).unwrap();
+        assert_eq!(v.cell_of(plan.lift_on(level).unwrap()), Some(cell));
         assert_eq!(inside(&st, 40, 12)[cell].symbol(), "⇅");
         let now = st.net.now(&st);
         st.net.trace(plan.building).add(game::ALARM_HEAT, now);
@@ -1358,7 +1398,7 @@ mod tests {
         ));
         let buf = inside(&st, 40, 13);
         assert!(find(&buf, "≡").is_some(), "the stairs win their cell");
-        let rows = shaft_rows(plan.lowest, plan.top, level, Some(0), 12);
+        let rows = shaft_rows(&plan.levels, level, Some(0), 12);
         let top = (12 - rows.len() as u16) / 2;
         let lobby = top + rows.iter().position(|r| *r == Some(0)).unwrap() as u16;
         assert_eq!(buf[(38, lobby)].symbol(), "⌖", "the stairs want L too");

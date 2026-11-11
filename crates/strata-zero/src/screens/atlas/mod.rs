@@ -639,7 +639,7 @@ pub(crate) mod tests {
         let doc = clinic(&st);
         crate::track::set(&mut st, crate::track::Source::Listing(doc.id)).unwrap();
         let b = st.home.unwrap().home.building;
-        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift_on(0).unwrap();
         let lobby = Place::Floor {
             building: b,
             level: 0,

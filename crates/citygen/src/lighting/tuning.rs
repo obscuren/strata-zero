@@ -124,9 +124,18 @@ pub fn room_light(room: Option<RoomKind>, building: BuildingKind) -> RoomLight {
             light(Tone::Blacklight, 50, &[(Walls, 1), (Both, 1)])
         }
         (Some(R::Hall), BuildingKind::Temple) => light(Tone::Tungsten, 50, &[(Walls, 1)]),
-        (Some(R::Laundry | R::Lockers | R::Toilets | R::Storage), _) => {
-            light(Tone::Fluorescent, 92, &[(Ceiling, 1)])
-        }
+        (
+            Some(
+                R::Laundry
+                | R::Lockers
+                | R::Toilets
+                | R::Storage
+                | R::Plant
+                | R::Server
+                | R::Kitchen,
+            ),
+            _,
+        ) => light(Tone::Fluorescent, 92, &[(Ceiling, 1)]),
         (Some(R::Waiting), _) => light(Tone::Fluorescent, 100, &[(Ceiling, 2), (Both, 1)]),
         (Some(R::Lobby), _) => light(Tone::Led, 120, &[(Walls, 1), (Both, 1)]),
         (Some(R::Shop), _) => light(Tone::Led, 120, &[(Walls, 1), (Both, 2)]),
@@ -138,7 +147,9 @@ pub fn room_light(room: Option<RoomKind>, building: BuildingKind) -> RoomLight {
         (Some(R::Bar | R::Vip), _) => light(Tone::Tungsten, 50, &[(Walls, 1), (Both, 1)]),
         (Some(R::Shrine), _) => light(Tone::Tungsten, 50, &[(Walls, 1)]),
         (Some(R::Surgery), _) => light(Tone::Surgical, 128, &[(Both, 1)]),
-        (Some(R::Hall | R::Bays), _) => light(Tone::Sodium, 78, &[(Ceiling, 3), (Both, 1)]),
+        (Some(R::Hall | R::Bays | R::Platform | R::Track | R::CarPark), _) => {
+            light(Tone::Sodium, 78, &[(Ceiling, 3), (Both, 1)])
+        }
         (Some(R::Stage), _) => light(Tone::Neon(Hue::Magenta), 60, &[(Ceiling, 1)]),
         (Some(R::Corridor) | None, _) => light(Tone::Fluorescent, 92, &[(Ceiling, 3), (Walls, 1)]),
     }

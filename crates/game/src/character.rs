@@ -309,6 +309,10 @@ pub struct Character {
     pub loaded: Vec<ItemId>,
     /// The id the next copy takes.
     pub next_copy: u32,
+    /// The title's debug runner (NEW GAME (DEBUG) and the DEVELOPER starts): never
+    /// overburdened, so a test start takes what it finds whatever it carries.
+    #[serde(default)]
+    pub dev: bool,
 }
 
 /// What a piece of chrome takes of the load, with what is fitted in its copy; what is
@@ -376,6 +380,7 @@ impl Character {
             talent_points: cr.talent_points,
             loaded: Vec::new(),
             next_copy: 0,
+            dev: false,
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -602,11 +607,13 @@ impl Character {
     /// its best, full HP and focus, a rebuilt five-slot deck jacked in with its
     /// sockets empty, the deck hardware, the weapon pieces and one of every piece
     /// of chrome it hasn't installed in the pack, and every program that fits
-    /// loaded. The chrome leaves it overburdened. For the title's NEW GAME (DEBUG).
+    /// loaded. The chrome weighs more than it can carry, and it carries that and more
+    /// (`dev`). For the title's NEW GAME (DEBUG) and the DEVELOPER starts.
     pub fn debug_runner(c: &Content) -> Character {
         let mut d = Self::from_template(c, &TemplateId::new("vex"))
             .expect("the vex template is in the content");
         d.handle = "D'SHAWN".to_string();
+        d.dev = true;
         d.level = 50;
         d.xp = 0;
         d.talent_points = 0;
@@ -977,8 +984,9 @@ impl Character {
         8.0 + 2.0 * self.attributes.body as f32 + bonus
     }
 
+    /// Over its capacity, so it takes nothing more; the debug runner never is.
     pub fn overburdened(&self, c: &Content) -> bool {
-        self.weight(c) > self.carry_cap(c)
+        !self.dev && self.weight(c) > self.carry_cap(c)
     }
 
     /// Innate abilities first, then those granted by owned categories in content order,
@@ -2306,6 +2314,19 @@ mod tests {
                 .stickers
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn debug_runner_is_never_overburdened() {
+        let c = Content::load().unwrap();
+        let d = Character::debug_runner(&c);
+        assert!(
+            d.weight(&c) > d.carry_cap(&c),
+            "its chrome is over its capacity"
+        );
+        assert!(!d.overburdened(&c));
+        let player = Character { dev: false, ..d };
+        assert!(player.overburdened(&c), "anyone else that heavy is");
     }
 
     #[test]

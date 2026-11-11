@@ -26,13 +26,39 @@ Every district has a manhole and a set of stairs open to anyone. When nothing le
 
 Most buildings are solid on the map; you go in through their doors (`▯`). Bars, markets, shops and arcades are open to the street, and you can walk straight in.
 
-Inside, floors are named as a lift would: `B1` under the street, `L` at street level, then `2F`, `3F` and up. A door from the Street opens onto `L`, a bridge from the Skyways onto its floor, a roof door from the Heights onto the top floor. Stairs take you a floor at a time. A building of three floors or more has a lift; `<`, `>` or `space` at the lift asks which floor, with the one you're tracking marked `⌖`.
+Inside, floors are named as a lift would: `B1` under the street and `B2` under that, `L` at street level, then `2F`, `3F` and up. A door from the Street opens onto `L`, a bridge from the Skyways onto its floor, a roof door from the Heights onto the top floor, and a door from an Undercity tunnel onto `B1`. Stairs take you to the next floor they stop at. A building of three floors or more has a lift; `<`, `>` or `space` at the lift asks which floor, with the one you're tracking marked `⌖`.
 
 Doors to flats and offices are often locked. A keycard, or a code you've learned, opens them; your journal keeps every code you know. Your own door always opens for you.
 
+### Hotels and offices
+
+Hotels and offices are built floor by floor, and no two floors are quite the same. A hotel has a car park at `B1` and a service floor at `B2`, its lobby at `L`, guest floors above and a penthouse near the top. An office has open-plan floors over its lobby, an executive floor near the top and a server room under the street. Rooms are numbered by floor: `1204` on `12F`, and `B1-04` under the street.
+
+There is more than one way between floors. A hotel has a guest lift and a service lift, a grand stair up from the lobby, a service stair and a fire stair. An office has two banks of lifts, a goods lift down to its basement, a stair and a fire stair.
+
+- A lift lists only the floors it stops at. If yours doesn't go where you want, another lift or a stair might.
+- A fire stair lets you on at every floor but off only at its top and bottom.
+
+### Zones and keycards
+
+A hotel or office is split into zones, from the public lobby to the staff's rooms and the secure ones deeper in. The doors between zones are locked.
+
+- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net). An alarm ends that: until it's over, those doors say locked down, and only a card opens them.
+- Deeper doors have a keypad instead, worked as a flat's is: a code, the Keyjack or the Net opens it.
+- Getting out is free. Every zone door opens with no key from the deeper side, and a locked room opens from inside, so you can always leave a zone without a key, even once a crack runs out.
+- A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants. It asks only where you get off: riding away from a carded floor takes nothing.
+
+An office keeps its lifts and stairs behind the turnstiles in its lobby, for staff only. Its turnstiles have keypads: a code or the Keyjack gets you through, as do a card and the Net, or find another way in. Out through them is free.
+
+A hotel's or office's main street door is always open. Its other doors, from the Street, the Skyways, the roof or the Undercity, may open past the public rooms. Such a door is locked, with a keypad outside: a code, the Keyjack, a keycard for its zone or the Net opens it. From inside it always opens.
+
+### Vents and ducts
+
+Hotels and offices have crawls: vents and ducts behind a grille (`☰`), running between floors and in from the roof or a tunnel outside. They go round the locks, but a grille takes TECH 6 to open. With it, `<` and `>` on a grille take you along the crawl to the next floor it comes out on, and `space` on the roof or tunnel tile where one starts offers to crawl in. Without it, `space` beside a grille shows what it takes.
+
 ### Keypads
 
-A locked flat has a keypad on its door: `space` next to it and `i Interact: Keypad` brings it up. Type the four digits and press `V`; `X` clears them, and `V` with nothing typed keys in the code your journal holds. A right code reads `OPEN` and goes into your journal. Three wrong codes lock the pad for half an hour, and it counts down `LOCKED` on its glass.
+A locked flat has a keypad on its door, and so do the deeper doors of hotels and offices, their locked rooms, an office's turnstiles and their locked doors in: `space` next to it and `i Interact: Keypad` brings it up. Type the four digits and press `V`; `X` clears them, and `V` with nothing typed keys in the code your journal holds. A right code reads `OPEN` and goes into your journal. Three wrong codes lock the pad for half an hour, and it counts down `LOCKED` on its glass.
 
 ### The Keyjack
 
@@ -56,7 +82,8 @@ What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone 
 | `≡` | a lift |
 | `╫` | a ladder |
 | `◍` | a manhole |
-| `▯` | a door |
+| `▯` | a door; in orange, one with a card reader |
+| `☰` | a vent; indoors, a crawl's grille |
 | `▣` | a terminal |
 | `●` | a street lamp |
 | `◉` | a camera |

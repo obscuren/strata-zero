@@ -148,6 +148,7 @@ pub fn piece(grade: IceGrade, role: Role, owner: Owner, pos: Pos) -> Foe {
         chrome: false,
         marked: false,
         ice: Some(GridIce { grade, role, owner }),
+        post: None,
     }
 }
 

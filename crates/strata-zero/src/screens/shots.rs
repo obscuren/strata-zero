@@ -12,6 +12,7 @@ use crate::screens::kit::{Kit, Pane};
 use crate::screens::popup::Popup;
 use crate::screens::terminal::Terminal;
 use crate::screens::testutil::key;
+use crate::screens::title::CombatMap;
 use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
 use crossterm::event::KeyCode;
 use game::{ItemId, ItemKind, Slot};
@@ -148,9 +149,7 @@ fn shot_stack(name: &str, st: &AppState, stack: &[&dyn Screen], size: (u16, u16)
 fn combat_aim() -> (AppState, MapScreen) {
     let mut st = AppState::new();
     st.unlock_dev();
-    let mut title = crate::screens::title::Title::new(&st, 0);
-    title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-    let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
+    let _ = crate::screens::title::combat_start(&mut st, CombatMap::Street);
     let mut map = MapScreen::walking(&mut st);
     st.tick += 100;
     // East along the road until the goon in the far corner sees you.
@@ -199,9 +198,7 @@ fn drone_on_the_lot() {
     };
     let mut st = AppState::new();
     st.unlock_dev();
-    let mut title = crate::screens::title::Title::new(&st, 0);
-    title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-    let _ = title.update(&mut st, &[key(KeyCode::Enter)]);
+    let _ = crate::screens::title::combat_start(&mut st, CombatMap::Street);
     let mut map = MapScreen::walking(&mut st);
     for _ in 0..60 {
         st.tick += 1;
@@ -232,13 +229,8 @@ fn combat_net_start() {
     };
     let mut st = AppState::new();
     st.unlock_dev();
-    let mut title = crate::screens::title::Title::new(&st, 0);
-    title.update(
-        &mut st,
-        &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Left)],
-    );
     let crate::app::ScreenCmd::Switch { to: mut map, .. } =
-        title.update(&mut st, &[key(KeyCode::Enter)])
+        crate::screens::title::combat_start(&mut st, CombatMap::Net)
     else {
         panic!("straight to the lot's construct")
     };
@@ -2351,10 +2343,7 @@ fn minimap_one_floor() {
             .filter(|b| b.kind.is_closed())
             .find(|b| {
                 st.interiors.ensure(&city, b.id, 0).is_some()
-                    && st
-                        .interiors
-                        .plan_of(b.id)
-                        .is_some_and(|p| p.lowest == p.top)
+                    && st.interiors.plan_of(b.id).is_some_and(|p| p.floors() == 1)
             })
             .expect("a one-floor building")
             .id;
@@ -5799,4 +5788,179 @@ fn manual_desk() {
         let name = format!("manual_desk_leaned_{}x{}", size.0, size.1);
         shot_stack(&name, &st, &[&m], size);
     }
+}
+
+/// Every venue type as a site: for each type in the pack, on the building a dev start
+/// takes for a large job in the story's city, every level of the plain site (a small
+/// one's frame), then at each size the copy's kept levels, one sheet of them side by side,
+/// and the street at its main door. Each level is shown whole, every tile in sight, the
+/// player on its first landing.
+#[test]
+#[ignore]
+fn site_shots() {
+    use citygen::venue::{MissionInputs, MissionSize, VenuePack};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let inputs = |size| MissionInputs {
+        size,
+        objective: 0,
+        security: 128,
+        seed: 7,
+    };
+    for t in &VenuePack::builtin().types {
+        let id = &t.id;
+        let mut st = state_home();
+        let b = crate::venues::dev_start(&mut st, id, MissionSize::Large, false)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        crate::venues::dev_site(&mut st, b, id, inputs(MissionSize::Small)).unwrap();
+        crate::venues::end(&mut st, b).unwrap();
+        let levels: Vec<i32> = st.interiors.plan_of(b).unwrap().levels().collect();
+        for &level in &levels {
+            let map = site_level(&mut st, b, level, (120, 40));
+            let name = format!("site_{id}_plain_{}", citygen::FloorPlan::label(level));
+            write_svg(
+                &dir,
+                &name,
+                &st,
+                &draw_stack(&st, &[&map], (120, 40)),
+                false,
+            );
+        }
+        for size in MissionSize::ALL {
+            let label = size.label();
+            st.player = None;
+            crate::venues::dev_site(&mut st, b, id, inputs(size))
+                .unwrap_or_else(|e| panic!("{id} {label}: {e}"));
+            let kept = st.interiors.copy(b).unwrap().kept.clone();
+            // Each level's map at 96 x 36 under a line naming it, a gap between them.
+            let (w, h) = (96u16, 36u16);
+            let mut sheet = Buffer::empty(Rect::new(0, 0, (w + 2) * kept.len() as u16, h + 1));
+            for (i, &level) in kept.iter().enumerate() {
+                let map = site_level(&mut st, b, level, (120, 40));
+                let name = format!("site_{id}_{label}_{}", citygen::FloorPlan::label(level));
+                write_svg(
+                    &dir,
+                    &name,
+                    &st,
+                    &draw_stack(&st, &[&map], (120, 40)),
+                    false,
+                );
+                // A terminal whose map area is 96 x 36: the map's own rect at 120 x 40 grown
+                // by what 120 x 40 leaves round it.
+                let r = map.last_map_rect();
+                let size = (w + 120 - r.width, h + 40 - r.height);
+                let map = site_level(&mut st, b, level, size);
+                let one = draw_stack(&st, &[&map], size);
+                let r = map.last_map_rect();
+                let x0 = (w + 2) * i as u16;
+                let role = (st.interiors.plan_of(b).unwrap().venue.as_deref())
+                    .and_then(|v| v.level(level))
+                    .map(|x| x.role.clone())
+                    .unwrap_or_default();
+                let name = format!("{} · {role}", citygen::FloorPlan::label(level));
+                sheet.set_string(
+                    x0,
+                    0,
+                    name,
+                    ratatui::style::Style::default().fg(Color::Rgb(0, 229, 255)),
+                );
+                for (x, y) in
+                    (0..w.min(r.width)).flat_map(|x| (0..h.min(r.height)).map(move |y| (x, y)))
+                {
+                    sheet[(x0 + x, 1 + y)] = one[(r.x + x, r.y + y)].clone();
+                }
+            }
+            write_svg(
+                &dir,
+                &format!("site_{id}_{label}_sheet"),
+                &st,
+                &sheet,
+                false,
+            );
+            let map = site_street(&mut st, b);
+            let name = format!("site_{id}_{label}_street");
+            write_svg(
+                &dir,
+                &name,
+                &st,
+                &draw_stack(&st, &[&map], (120, 40)),
+                false,
+            );
+            st.player = None;
+            crate::venues::end(&mut st, b).unwrap();
+        }
+    }
+}
+
+/// The map on `level` of building `b`, the player on the level's first landing (else its
+/// first way in, else its first floor tile) and every tile in sight, settled at `size`.
+fn site_level(
+    st: &mut AppState,
+    b: citygen::BuildingId,
+    level: i32,
+    size: (u16, u16),
+) -> MapScreen {
+    use crate::render::Visibility;
+    use crate::render::map::{MapRef, TileMap};
+    let city = st.city.clone().unwrap();
+    let floor = st.interiors.ensure(&city, b, level).unwrap().clone();
+    let plan = st.interiors.plan_of(b).unwrap();
+    let landing = (plan.links.iter())
+        .find_map(|l| l.stop(level))
+        .map(|s| s.at)
+        .or_else(|| {
+            let v = plan.venue.as_deref()?;
+            v.ways_in.iter().find(|w| w.level == level).map(|w| w.at)
+        })
+        .or_else(|| {
+            floor
+                .tiles
+                .iter()
+                .find(|(_, t)| t.is_walkable())
+                .map(|(p, _)| p)
+        })
+        .unwrap();
+    let place = Place::Floor { building: b, level };
+    let mut you = crate::walker::Player::at(place, landing);
+    let map = MapRef::for_place(
+        &city,
+        &st.interiors,
+        &st.constructs,
+        place,
+        st.minute_of_day(),
+    )
+    .unwrap();
+    you.update_fov(&map, 0);
+    let area = map.size();
+    for y in 0..area.h as i32 {
+        for x in 0..area.w as i32 {
+            you.set_vis(Pos::new(x, y), Visibility::Visible);
+        }
+    }
+    st.player = Some(you);
+    let mut screen = MapScreen::walking(st);
+    screen.settle(st, size);
+    screen
+}
+
+/// The street outside building `b`'s first street door, the player at it, settled at
+/// 120 x 40.
+fn site_street(st: &mut AppState, b: citygen::BuildingId) -> MapScreen {
+    use crate::render::map::MapRef;
+    let city = st.city.clone().unwrap();
+    let v = st.interiors.plan_of(b).unwrap().venue.as_deref().unwrap();
+    let d = (v.frame.doors.iter())
+        .find(|d| d.stratum == StratumKind::Street && !d.enclosed)
+        .unwrap();
+    let place = Place::Stratum(StratumKind::Street);
+    let mut you = crate::walker::Player::at(place, d.landing);
+    you.update_fov(
+        &MapRef::stratum_at(&city, StratumKind::Street, st.minute_of_day()),
+        0,
+    );
+    st.player = Some(you);
+    let mut screen = MapScreen::walking(st);
+    screen.settle(st, (120, 40));
+    screen
 }

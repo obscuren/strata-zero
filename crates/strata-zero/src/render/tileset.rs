@@ -5,6 +5,7 @@ use crate::render::lighting::{lit, lit_by};
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
+use crate::ui::chrome::MAGENTA_RGB;
 use citygen::lighting::tuning::tone_rgb;
 use citygen::{
     BuildingKind, ConnectorKind, Feature, Fitting, FittingKind, Furniture, IceGrade, NodeKind,
@@ -129,6 +130,10 @@ pub fn glyph_for(
             Feature::PowerLine(false) => '┄',
             Feature::PowerLine(true) => '┆',
             Feature::FireBarrel => '•',
+            Feature::Shutter => '▓',
+            Feature::Turret => '◆',
+            Feature::Container => '□',
+            Feature::Objective => '◎',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
                 Furniture::Desk => '▭',
@@ -280,6 +285,17 @@ pub fn glyph_for(
         Terrain::Ford => one_in(variant, 2, '·'),
         Terrain::Rise => ['·', '░', '░', '░'][(variant % 4) as usize],
         Terrain::Wash => ['░', '·', ' '][(variant % 3) as usize],
+        // The way it runs from here.
+        Terrain::Escalator => match connector {
+            Some(ConnDir {
+                up: true,
+                down: true,
+                ..
+            }) => '⇅',
+            Some(ConnDir { down: true, .. }) => '↓',
+            _ => '↑',
+        },
+        Terrain::Track => '╪',
     }
 }
 
@@ -382,7 +398,9 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::Bridge => (ts.wall.scale(1.3), Rgb(18, 22, 30)),
         Terrain::Tunnel => (Rgb(48, 58, 48), Rgb(13, 16, 14)),
         Terrain::Rail => (Rgb(140, 125, 95), Rgb(13, 16, 14)),
-        Terrain::Stair | Terrain::Lift | Terrain::Ladder => (ts.accent2, ts.floor),
+        Terrain::Stair | Terrain::Lift | Terrain::Ladder | Terrain::Escalator => {
+            (ts.accent2, ts.floor)
+        }
         Terrain::Grate => (Rgb(100, 112, 100), Rgb(13, 16, 14)),
         Terrain::NetGrid => (ts.accent.mix(SIGNAL, 0.5).scale(0.45), Rgb(3, 6, 10)),
         Terrain::NetLane => (
@@ -408,6 +426,8 @@ fn terrain_colors(terrain: Terrain, tile: &Tile, ctx: &RenderCtx, tick: u64) -> 
         Terrain::Ford => (Rgb(90, 140, 190), Rgb(14, 40, 64)),
         Terrain::Rise => (Rgb(70, 60, 44), Rgb(20, 17, 13)),
         Terrain::Wash => (Rgb(96, 84, 60), Rgb(22, 19, 14)),
+        // The city's rails, on a station's floor.
+        Terrain::Track => (Rgb(140, 125, 95), ts.floor),
     }
 }
 
@@ -468,6 +488,10 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         // round 2's fire in a drum, guttering
         Feature::FireBarrel => FIRE.scale(flicker(tick, tile.variant, true)),
         Feature::PowerLine(_) => Rgb(42, 46, 54),
+        Feature::Shutter => Rgb(120, 120, 128),
+        Feature::Turret => Rgb(255, 60, 70),
+        Feature::Container => Rgb(150, 160, 170),
+        Feature::Objective => MAGENTA_RGB,
     }
 }
 
@@ -503,8 +527,21 @@ pub fn fitting_colour(f: Fitting) -> Rgb {
     }
 }
 
+/// A card reader's orange: a door with one is drawn in it.
+pub const READER: Rgb = Rgb(255, 154, 60);
+
 /// The styled cell for a tile. Remembered tiles freeze at tick 0.
 pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
+    styled(tile, ctx, false)
+}
+
+/// The styled cell for a door with a card reader on it: the door in the reader's orange.
+/// Any other tile is styled as `cell` styles it.
+pub fn reader_cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
+    styled(tile, ctx, true)
+}
+
+fn styled(tile: &Tile, ctx: &RenderCtx, reader: bool) -> Cell {
     let tick = if ctx.vis == Visibility::Remembered {
         0
     } else {
@@ -521,6 +558,9 @@ pub fn cell(tile: &Tile, ctx: &RenderCtx) -> Cell {
         ctx.style,
     );
     let (mut fg, mut bg) = terrain_colors(tile.terrain, tile, ctx, tick);
+    if reader && tile.terrain == Terrain::Door {
+        fg = READER;
+    }
     if let Some(f) = tile.feature {
         fg = feature_color(f, tile, ctx, tick);
     }
@@ -714,6 +754,22 @@ mod tests {
         assert_eq!(g(Terrain::Bridge, MASK_E), '╍');
         assert_eq!(g(Terrain::Railing, MASK_N | MASK_S), '│');
         assert_eq!(g(Terrain::Railing, MASK_W | MASK_E), '─');
+    }
+
+    #[test]
+    fn an_escalator_points_the_way_it_runs() {
+        let s = StylePack::load().unwrap();
+        let g = |up, down| {
+            let way = ConnDir {
+                kind: ConnectorKind::Stair,
+                up,
+                down,
+            };
+            glyph_for(Terrain::Escalator, None, Some(way), None, 1, 0, 0, &s)
+        };
+        assert_eq!(g(true, false), '↑');
+        assert_eq!(g(false, true), '↓');
+        assert_eq!(g(true, true), '⇅');
     }
 
     #[test]
@@ -924,6 +980,56 @@ mod tests {
         assert!(warm.bg.0 > warm.bg.2, "{:?}", warm.bg);
         let cold = cell(&floor, &glow_ctx(&s, Some(Rgb(140, 180, 170))));
         assert!(cold.bg.2 >= cold.bg.0, "{:?}", cold.bg);
+    }
+
+    #[test]
+    fn a_track_and_its_shutters_draw_in_their_own_colours() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let track = Tile::new(Terrain::Track);
+        assert_eq!(cell(&track, &ctx).ch, '╪');
+        assert_eq!(
+            terrain_colors(Terrain::Track, &track, &ctx, 0).0,
+            Rgb(140, 125, 95)
+        );
+        let mut shutter = Tile::new(Terrain::Wall);
+        shutter.feature = Some(Feature::Shutter);
+        assert_eq!(cell(&shutter, &ctx).ch, '▓');
+        assert_eq!(
+            feature_color(Feature::Shutter, &shutter, &ctx, 0),
+            Rgb(120, 120, 128)
+        );
+    }
+
+    #[test]
+    fn a_missions_devices_draw_in_their_own_colours() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        for (f, ch, colour) in [
+            (Feature::Turret, '◆', Rgb(255, 60, 70)),
+            (Feature::Container, '□', Rgb(150, 160, 170)),
+            (Feature::Objective, '◎', MAGENTA_RGB),
+        ] {
+            let mut t = Tile::new(Terrain::Floor);
+            t.feature = Some(f);
+            assert_eq!(cell(&t, &ctx).ch, ch, "{f:?}");
+            assert_eq!(feature_color(f, &t, &ctx, 0), colour, "{f:?}");
+        }
+    }
+
+    #[test]
+    fn a_door_with_a_reader_draws_in_the_readers_orange() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let door = Tile::new(Terrain::Door);
+        let (plain, _) = terrain_colors(Terrain::Door, &door, &ctx, 0);
+        assert_eq!(cell(&door, &ctx).fg, lit(street_tint(&s, plain), 120));
+        let reader = reader_cell(&door, &ctx);
+        assert_eq!(reader.fg, lit(street_tint(&s, READER), 120));
+        assert_eq!(reader.ch, cell(&door, &ctx).ch);
+        // Anything but a door draws as it always does.
+        let floor = Tile::new(Terrain::Floor);
+        assert_eq!(reader_cell(&floor, &ctx), cell(&floor, &ctx));
     }
 
     #[test]

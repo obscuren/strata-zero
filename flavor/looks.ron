@@ -120,6 +120,17 @@ Looks(
             "Coloured light on the stage boards, waiting for somebody.",
             "The stage glows in two colours that don't agree.",
         ],
+        "shutter": ["A steel shutter down across the tunnel mouth, chained to a ring in the floor."],
+        "shutter_sealed": ["The shutter's welded to its frame, a fresh seal stamped over the chain."],
+        "turret": [
+            "A gun on a floor mount, cabled into the wall. Its barrel follows the door.",
+            "Twin barrels on a swivel, a red eye under them, warm and waiting.",
+        ],
+        "container": [
+            "A steel case on the floor, a corp seal across the latch.",
+            "A crate with a stencilled number and a lock nobody bothered to hide.",
+        ],
+        "objective": ["What the job came for."],
     },
     furniture: {
         "desk": ["A desk with a cold monitor and a mug ring nobody wiped."],
@@ -175,9 +186,21 @@ Looks(
         "rig": ["Your rig, humming under the desk, its fans full of dust."],
         "stairwell": ["Concrete steps, a handrail rubbed bright."],
         "lift": ["Steel doors, a panel of buttons and a smell of old cigarettes."],
+        "escalator": ["Grooved steps grinding along, the handrail a beat behind them."],
         "stairs": ["Steps worn hollow by the whole city going up and down."],
         "ladder": ["Rungs bolted into the wall, cold and slick."],
+        "track": ["Two rails on a bed of grit and old cigarette ends."],
         "manhole": ["A cast-iron lid, pried loose often enough to sit crooked."],
         "flat_door": ["Steel door, a peephole, a keypad under a cracked cover."],
+        "zone_door": [
+            "A heavy door with no handle, its lock blinking red beside it.",
+            "Brushed steel, a lock panel and a camera dome that watches it.",
+        ],
+        "grille": [
+            "A vent grille, four screws, the dark behind it breathing warm air.",
+            "A duct cover, its screws scratched bright by somebody's knife.",
+        ],
+        "flagged_door": ["The same door as yesterday, but somebody's waiting behind it now."],
+        "barred_door": ["Steel bars across the frame, bolted into the wall on both sides."],
     },
 )

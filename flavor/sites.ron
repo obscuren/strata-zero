@@ -1,0 +1,335 @@
+// Venue types: how a kind of building is laid out, as data. The Rust never names a type, so
+// a new type is a change to this file. A type `builds` the building kinds laid out as it
+// (none for a type that stands only on its own frame) and gives a building's floors by role:
+// `below` from -1 down, `ground` at 0, `top` on the highest floors (lowest first) and
+// `middle` repeated to fill between. Its own `frame` is the building it stands in when no
+// city building gives one: a footprint in city tiles, its top level, `doors` along its sides
+// (`at` is footprint tiles from the side's start), the Skyways door on level `bridge`, a door
+// onto the roof, and whether -1 reaches the Undercity.
+// `zones` run public first; a zone's rank is its place in the list. A `Border` is the lock
+// between two zones, outer first: a `Card` reader or a `Keypad`, `always` locked or locked only
+// for a mission, and the `ways` past it going in (`Card`, `Code`, `Keyjack`, `Net`, `Force`,
+// `Talk`), two or more. A card lock takes `Card` and neither `Code` nor `Keyjack`; a keypad
+// takes `Code`, and a card too where one is listed. Every border opens without a key from its
+// inner side, and a lift asks for a card only where you get off: getting out is free.
+// A level's `name` is its role's, which no other role of the type has. Its `bands` are strips
+// across it, front (the first street door's side) to back, each in one zone: its `share` is
+// percent of the depth (a level's shares sum to 100), its `rooms` are laid in order, then its
+// `fill` room until the band is used, and `doors` is how many doors cross its border with the
+// band in front. `scale` is percent of the frame's width and height, over 100 (up to 200)
+// only below -1; `spine` is how the corridor runs (`Straight`, `Bent`, `Ring`, `Hall`, or
+// `Any` for the level's seed to pick). `pieces` names set pieces.
+// On a `Hall` each band is one room of its first listed room (its fill when it lists none),
+// never locked. So a level whose objective room is locked runs `Straight` (or `Bent`, below),
+// keeping that room and its lock; and a level whose rooms matter one by one takes no `Hall` or
+// `Any`. A `Bent` turns in the back band and packs its rooms along the turn: give it a thin
+// back band. A `Ring` runs straight on a level too small for one, and walls a core in its
+// middle.
+// `rooms` are the type's rooms by name: a generic `kind`, a size range ((least width, least
+// height), (most width, most height)), `private` for a locked room (whose only stations are
+// desks), its furniture and the stations people work at. A listed room is no larger than its
+// range; a fill room runs out to the wall. What no room takes is wall, so a band with no fill
+// stands mostly in rock. `pieces` are set pieces of fixed shape: a `Ramp`, a `Track` along the
+// far side with its platform, a `GateLine` of turnstiles across the level's first border.
+// `links` move you between levels: a `kind`, the zone its landings open into, the levels it
+// `serves` (`All`, `Roles([...])` by role name, `Levels([...])` by number), a lift's `cards`
+// as (role, zone) where it asks for that zone's card, `dir` (`Up` or `Down` for one way) and
+// `alight: Ends` for a stair you can leave only at its ends. `crawls_in` come in from a
+// stratum and out in a zone. `objectives` name a room, on a level of the role in `level` when
+// one is given. `security` is a mission's layer per size: guard weights per zone, and ranges
+// of cameras, turrets (in `turret_zones`) and containers.
+// `sizes` is what a mission of each size keeps: floors, locks between a way in and its
+// objective, ways in at least, and guards. `crawl_tech` is the Tech a crawl's grille wants.
+// Sizes and security are first guesses, to tune by playing.
+Sites(
+    crawl_tech: 6,
+    sizes: [
+        Size(size: Small,  floors: (2, 3), locks: (2, 2), ways_in: 2, guards: (6, 10)),
+        Size(size: Medium, floors: (4, 6), locks: (3, 3), ways_in: 3, guards: (12, 20)),
+        Size(size: Large,  floors: (6, 9), locks: (4, 5), ways_in: 4, guards: (25, 40)),
+    ],
+    types: [
+        Type(
+            id: "hotel",
+            name: "hotel",
+            builds: [Hotel],
+            frame: Frame(kind: Hotel, footprint: (15, 9), top: 6, undercity: true, roof: true, bridge: Some(3),
+                doors: [Door(stratum: Street, side: S, at: 5), Door(stratum: Street, side: E, at: 4),
+                        Door(stratum: Skyways, side: N, at: 7), Door(stratum: Undercity, side: W, at: 3)]),
+            zones: ["public", "guest", "staff", "secure"],
+            borders: [
+                Border(zones: ("public", "guest"), lock: Card, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("guest", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+                Border(zones: ("guest", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+            ],
+            levels: Levels(
+                below: [
+                    Level(name: "car park", spine: Straight, pieces: ["ramp"], bands: [
+                        Band(zone: "public", share: 15, rooms: ["lift lobby"], fill: Some("lift lobby")),
+                        Band(zone: "staff", share: 50, rooms: [], fill: Some("car park")),
+                        Band(zone: "secure", share: 35, rooms: ["server room", "security office"], fill: Some("stockroom"))]),
+                    Level(name: "service", spine: Straight, bands: [
+                        Band(zone: "staff", share: 100, rooms: ["kitchen", "laundry", "lockers", "store"], fill: Some("stockroom"))]),
+                ],
+                ground: Level(name: "lobby", spine: Bent, bands: [
+                    Band(zone: "public", share: 60, rooms: ["reception", "bar", "lift lobby"], fill: Some("sitting room")),
+                    Band(zone: "staff", share: 40, rooms: ["manager's office"], fill: Some("stockroom"))]),
+                // The staff band at the back keeps the service lift and stairs behind a staff
+                // door; the ring, where it fits, runs through the guest rooms.
+                middle: Some(Level(name: "guest floor", spine: Ring, bands: [
+                    Band(zone: "public", share: 15, rooms: ["lift lobby", "linen room"], fill: Some("sitting room")),
+                    Band(zone: "guest", share: 65, rooms: ["suite"], fill: Some("guest room")),
+                    Band(zone: "staff", share: 20, rooms: [], fill: Some("stockroom"))])),
+                top: [
+                    Level(name: "penthouse", spine: Straight, bands: [
+                        Band(zone: "guest", share: 25, rooms: ["foyer", "lounge", "cocktail bar"], fill: Some("sitting room")),
+                        Band(zone: "staff", share: 20, rooms: ["pantry"], fill: Some("stockroom")),
+                        Band(zone: "secure", share: 55, rooms: ["office", "bedroom"], fill: Some("spare bedroom"))]),
+                    // On top, so the roof door and the roof's crawl come in to staff, a lock and
+                    // the riser's grille short of the penthouse.
+                    Level(name: "plant floor", bands: [Band(zone: "staff", share: 100, rooms: ["plant room"], fill: Some("plant room"))]),
+                ],
+            ),
+            rooms: [
+                Room(name: "lift lobby", kind: Lobby, size: ((3, 3), (14, 8))),
+                Room(name: "car park", kind: CarPark, size: ((8, 6), (30, 16))),
+                Room(name: "server room", kind: Server, size: ((3, 3), (16, 10)), private: true, furniture: [Machine, Machine]),
+                Room(name: "security office", kind: Office, size: ((4, 3), (12, 10)), private: true, furniture: [Desk, Machine], stations: [Desk]),
+                Room(name: "stockroom", kind: Storage, size: ((3, 3), (8, 6)), private: true, furniture: [Shelf, Shelf]),
+                Room(name: "kitchen", kind: Kitchen, size: ((6, 5), (14, 8)), furniture: [Counter, Machine], stations: [Machine]),
+                Room(name: "laundry", kind: Laundry, size: ((4, 3), (12, 6)), furniture: [Machine], stations: [Machine]),
+                Room(name: "lockers", kind: Lockers, size: ((3, 3), (8, 5)), furniture: [Locker, Bench]),
+                Room(name: "store", kind: Storage, size: ((3, 3), (8, 5)), furniture: [Shelf], stations: [Shelf]),
+                Room(name: "reception", kind: Lobby, size: ((5, 4), (16, 10)), furniture: [Counter], stations: [Reception]),
+                Room(name: "bar", kind: Bar, size: ((4, 4), (14, 8)), furniture: [Counter, Stool, Table], stations: [Bar]),
+                Room(name: "sitting room", kind: Lobby, size: ((3, 3), (12, 8)), furniture: [Couch, Table]),
+                Room(name: "manager's office", kind: Office, size: ((3, 3), (8, 6)), private: true, furniture: [Desk], stations: [Desk]),
+                Room(name: "suite", kind: Suite, size: ((5, 5), (9, 7)), private: true, furniture: [Bed, Couch]),
+                Room(name: "guest room", kind: HotelRoom, size: ((3, 4), (6, 6)), private: true, furniture: [Bed]),
+                Room(name: "linen room", kind: Storage, size: ((3, 3), (10, 6)), private: true, furniture: [Shelf, Shelf]),
+                Room(name: "foyer", kind: Lobby, size: ((3, 3), (12, 8))),
+                Room(name: "cocktail bar", kind: Bar, size: ((3, 3), (10, 6)), furniture: [Counter, Stool]),
+                Room(name: "lounge", kind: Suite, size: ((4, 4), (16, 10)), furniture: [Couch, Table]),
+                Room(name: "pantry", kind: Kitchen, size: ((3, 3), (8, 5)), furniture: [Counter]),
+                Room(name: "office", kind: Office, size: ((3, 3), (8, 6)), private: true, furniture: [Desk], stations: [Desk]),
+                Room(name: "bedroom", kind: HotelRoom, size: ((4, 3), (12, 8)), furniture: [Bed, Couch]),
+                Room(name: "spare bedroom", kind: HotelRoom, size: ((3, 3), (10, 6)), furniture: [Bed]),
+                Room(name: "plant room", kind: Plant, size: ((4, 4), (9, 6)), furniture: [Machine], stations: [Machine]),
+            ],
+            pieces: [Piece(name: "ramp", kind: Ramp)],
+            links: [
+                // A guest card takes it to the penthouse's foyer, which the staff band keeps
+                // from the secure rooms. The service lift and stair skip the penthouse.
+                Link(name: "guest lift", kind: Lift, zone: "public", serves: Roles(["car park", "lobby", "guest floor", "penthouse"]),
+                     cards: [("penthouse", "guest")]),
+                Link(name: "service lift", kind: Lift, zone: "staff", serves: Roles(["car park", "service", "lobby", "guest floor"])),
+                Link(name: "service stair", kind: Stair, zone: "staff", serves: Roles(["car park", "service", "lobby", "guest floor", "plant floor"])),
+                Link(name: "grand stair", kind: Stair, zone: "public", serves: Levels([0, 1])),
+                Link(name: "fire stair", kind: Stair, zone: "staff", serves: Roles(["lobby", "guest floor", "penthouse", "plant floor"]),
+                     alight: Ends),
+                // From G up: in the basements its grille took the floor that the crawl in from
+                // the Undercity and the kitchen's staff need.
+                Link(name: "riser", kind: Crawl, zone: "staff", serves: Roles(["lobby", "guest floor", "penthouse", "plant floor"])),
+            ],
+            crawls_in: [Crawl(stratum: Heights, zone: "staff"), Crawl(stratum: Undercity, zone: "staff")],
+            objectives: [
+                Objective(id: "safe", name: "the penthouse safe", room: "office", level: Some("penthouse")),
+                Objective(id: "guest", name: "a guest's room", room: "guest room", level: Some("guest floor")),
+                Objective(id: "server", name: "the security office's server", room: "server room", level: Some("car park")),
+            ],
+            security: [
+                Security(size: Small, guards: [("public", 1), ("staff", 1), ("secure", 2)], cameras: (2, 4), turrets: (0, 0),
+                         containers: (1, 2)),
+                Security(size: Medium, guards: [("public", 1), ("guest", 1), ("staff", 2), ("secure", 3)],
+                         cameras: (4, 8), turrets: (0, 1), turret_zones: ["secure"], containers: (2, 4)),
+                Security(size: Large, guards: [("public", 2), ("guest", 2), ("staff", 3), ("secure", 4)],
+                         cameras: (8, 14), turrets: (2, 4), turret_zones: ["secure"], containers: (3, 6)),
+            ],
+        ),
+        Type(
+            id: "office",
+            name: "office",
+            builds: [Office],
+            frame: Frame(kind: Office, footprint: (12, 10), top: 8, undercity: true, roof: true, bridge: Some(3),
+                doors: [Door(stratum: Street, side: S, at: 6), Door(stratum: Street, side: W, at: 4),
+                        Door(stratum: Skyways, side: N, at: 6)]),
+            zones: ["public", "staff", "secure", "executive"],
+            // The gate line's turnstiles take a card, a code or the Keyjack; past them the
+            // office floors stand open, and a mission's reader locks a floor's door.
+            borders: [
+                Border(zones: ("public", "staff"), lock: Keypad, always: true, ways: [Card, Code, Keyjack, Net, Talk, Force]),
+                Border(zones: ("staff", "secure"), lock: Card, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("staff", "executive"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("secure", "executive"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+            ],
+            levels: Levels(
+                below: [
+                    Level(name: "server basement", spine: Straight, bands: [
+                        Band(zone: "secure", share: 55, rooms: ["server room"], fill: Some("data store")),
+                        Band(zone: "staff", share: 45, rooms: ["plant room", "store"], fill: Some("archive"))]),
+                ],
+                // One lobby hall, its reception the security desk too, the gate line across, and
+                // the lift hall behind it.
+                ground: Level(name: "lobby", spine: Hall, pieces: ["gate line"], bands: [
+                    Band(zone: "public", share: 55, rooms: ["reception"]),
+                    Band(zone: "staff", share: 45, rooms: ["lift hall"])]),
+                // The office floors in front of the lift lobby, behind its door; staff at the
+                // back, as in the lobby, so lifts and stairs stack.
+                middle: Some(Level(name: "open-plan floor", spine: Any, bands: [
+                    Band(zone: "secure", share: 80, rooms: ["open plan", "meeting room", "records"], fill: Some("open plan")),
+                    Band(zone: "staff", share: 20, rooms: ["lift lobby"], fill: Some("print room"))])),
+                top: [Level(name: "executive floor", spine: Straight, bands: [
+                    Band(zone: "executive", share: 65, rooms: ["executive office", "boardroom"], fill: Some("partner office")),
+                    Band(zone: "staff", share: 35, rooms: ["outer office"], fill: Some("archive"))])],
+            ),
+            rooms: [
+                Room(name: "reception", kind: Lobby, size: ((5, 4), (14, 10)), furniture: [Counter, Desk, Machine],
+                     stations: [Reception, Desk]),
+                Room(name: "lift hall", kind: Lobby, size: ((5, 4), (14, 10)), furniture: [Bench]),
+                Room(name: "lift lobby", kind: Lobby, size: ((3, 3), (14, 8))),
+                Room(name: "print room", kind: Storage, size: ((3, 3), (8, 6)), private: true, furniture: [Machine, Shelf]),
+                Room(name: "open plan", kind: OpenPlan, size: ((6, 4), (20, 10)), furniture: [Desk, Desk, Desk, Desk], stations: [Desk, Desk]),
+                Room(name: "meeting room", kind: Office, size: ((4, 3), (8, 6)), furniture: [Table]),
+                Room(name: "records", kind: Storage, size: ((3, 3), (8, 6)), private: true, furniture: [Shelf]),
+                Room(name: "plant room", kind: Plant, size: ((4, 4), (12, 8)), furniture: [Machine], stations: [Machine]),
+                Room(name: "store", kind: Storage, size: ((3, 3), (8, 6)), furniture: [Shelf], stations: [Shelf]),
+                Room(name: "archive", kind: Storage, size: ((3, 3), (8, 6)), private: true, furniture: [Shelf, Shelf]),
+                Room(name: "server room", kind: Server, size: ((4, 3), (12, 8)), private: true, furniture: [Machine, Machine]),
+                Room(name: "data store", kind: Server, size: ((3, 3), (8, 6)), private: true, furniture: [Machine, Shelf]),
+                Room(name: "outer office", kind: Office, size: ((4, 4), (12, 8)), furniture: [Desk], stations: [Desk]),
+                Room(name: "executive office", kind: Office, size: ((5, 4), (12, 8)), private: true, furniture: [Desk, Couch], stations: [Desk]),
+                Room(name: "boardroom", kind: Office, size: ((5, 4), (12, 8)), furniture: [Table]),
+                Room(name: "partner office", kind: Office, size: ((4, 4), (10, 6)), private: true, furniture: [Desk, Couch], stations: [Desk]),
+            ],
+            pieces: [Piece(name: "gate line", kind: GateLine)],
+            links: [
+                Link(name: "main lifts", kind: Lift, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]),
+                     cards: [("executive floor", "executive")]),
+                Link(name: "side lifts", kind: Lift, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]),
+                     cards: [("executive floor", "executive")]),
+                Link(name: "goods lift", kind: Lift, zone: "staff", serves: Roles(["server basement", "lobby", "open-plan floor"]),
+                     cards: [("server basement", "staff")]),
+                Link(name: "stair", kind: Stair, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"])),
+                Link(name: "fire stair", kind: Stair, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]), alight: Ends),
+                Link(name: "duct", kind: Crawl, zone: "staff", serves: All),
+            ],
+            crawls_in: [Crawl(stratum: Heights, zone: "staff")],
+            objectives: [
+                Objective(id: "server", name: "the server room", room: "server room", level: Some("server basement")),
+                Objective(id: "executive", name: "the executive's office", room: "executive office", level: Some("executive floor")),
+                Objective(id: "desk", name: "a desk on the open plan", room: "open plan", level: Some("open-plan floor")),
+            ],
+            security: [
+                Security(size: Small, guards: [("public", 1), ("staff", 2), ("secure", 1), ("executive", 1)], cameras: (3, 5),
+                         turrets: (0, 0), containers: (1, 2)),
+                Security(size: Medium, guards: [("public", 1), ("staff", 2), ("secure", 2), ("executive", 1)],
+                         cameras: (5, 9), turrets: (0, 1), turret_zones: ["secure"], containers: (2, 4)),
+                Security(size: Large, guards: [("public", 2), ("staff", 3), ("secure", 3), ("executive", 2)],
+                         cameras: (9, 15), turrets: (2, 4), turret_zones: ["secure", "executive"], containers: (3, 6)),
+            ],
+        ),
+        Type(
+            id: "metro",
+            name: "metro station",
+            builds: [],
+            frame: Frame(kind: Depot, footprint: (32, 13), top: 0, undercity: true, roof: false,
+                doors: [Door(stratum: Street, side: S, at: 8), Door(stratum: Street, side: S, at: 24),
+                        Door(stratum: Street, side: N, at: 16), Door(stratum: Undercity, side: W, at: 6),
+                        Door(stratum: Undercity, side: E, at: 6)]),
+            zones: ["public", "paid", "staff", "secure"],
+            borders: [
+                Border(zones: ("public", "paid"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("public", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("paid", "staff"), lock: Card, always: true, ways: [Card, Net, Talk, Force]),
+                Border(zones: ("staff", "secure"), lock: Keypad, always: true, ways: [Code, Keyjack, Net, Force]),
+            ],
+            levels: Levels(
+                below: [
+                    Level(name: "concourse", spine: Bent, pieces: ["gate line"], bands: [
+                        Band(zone: "public", share: 30, rooms: ["ticket hall"], fill: Some("subway")),
+                        Band(zone: "paid", share: 40, rooms: ["paid side"], fill: Some("paid side")),
+                        Band(zone: "staff", share: 30, rooms: ["cash room", "ticket office", "staff room"], fill: Some("store room"))]),
+                    Level(name: "upper platform", spine: Straight, pieces: ["track"], bands: [
+                        Band(zone: "staff", share: 20, rooms: ["signal box", "equipment room"], fill: Some("store room")),
+                        Band(zone: "paid", share: 80, rooms: ["platform landing"], fill: Some("platform landing"))]),
+                    // A hall: one platform the width of the level.
+                    Level(name: "lower platform", spine: Hall, pieces: ["track"], bands: [
+                        Band(zone: "staff", share: 20, rooms: ["equipment room"]),
+                        Band(zone: "paid", share: 80, rooms: ["platform landing"])]),
+                    Level(name: "service", spine: Straight, bands: [
+                        Band(zone: "staff", share: 60, rooms: ["duty room", "substation", "freight bay", "fan room"], fill: Some("workshop")),
+                        Band(zone: "secure", share: 40, rooms: ["line control"], fill: Some("cable vault"))]),
+                    Level(name: "drainage", spine: Bent, bands: [
+                        Band(zone: "staff", share: 70, rooms: ["pump room"], fill: Some("sump")),
+                        Band(zone: "secure", share: 30, rooms: ["cable vault"], fill: Some("cable vault"))]),
+                ],
+                ground: Level(name: "hall", spine: Hall, bands: [
+                    Band(zone: "public", share: 80, rooms: ["station hall"]),
+                    Band(zone: "staff", share: 20, rooms: ["service passage"])]),
+            ),
+            rooms: [
+                Room(name: "station hall", kind: Hall, size: ((12, 8), (60, 24)), furniture: [Bench, Vending, Bench, Bench, Vending, Bench]),
+                Room(name: "service passage", kind: Corridor, size: ((8, 3), (40, 8)), furniture: [Shelf, Locker]),
+                Room(name: "ticket hall", kind: Hall, size: ((12, 8), (40, 16)), furniture: [Vending, Counter, Vending, Bench], stations: [Reception]),
+                Room(name: "subway", kind: Corridor, size: ((4, 3), (40, 8)), furniture: [Bench, Vending]),
+                Room(name: "paid side", kind: Hall, size: ((8, 6), (40, 16)), furniture: [Bench, Vending, Bench]),
+                Room(name: "ticket office", kind: Office, size: ((4, 3), (20, 8)), furniture: [Counter, Desk], stations: [Desk]),
+                Room(name: "staff room", kind: BackRoom, size: ((4, 4), (20, 8)), private: true, furniture: [Table, Locker]),
+                Room(name: "cash room", kind: Storage, size: ((3, 3), (8, 5)), private: true, furniture: [Locker]),
+                Room(name: "store room", kind: Storage, size: ((3, 3), (10, 6)), private: true, furniture: [Shelf, Locker]),
+                Room(name: "signal box", kind: Server, size: ((4, 3), (16, 6)), private: true, furniture: [Desk, Machine], stations: [Desk]),
+                Room(name: "equipment room", kind: Plant, size: ((4, 3), (24, 6)), furniture: [Machine], stations: [Machine]),
+                Room(name: "platform landing", kind: Hall, size: ((8, 4), (40, 10)), furniture: [Bench, Vending, Bench]),
+                // The service level, as Cinder Cross has it: the duty room's guards, the
+                // substation, the freight bay off the lift, and Line Control among cable vaults.
+                Room(name: "duty room", kind: BackRoom, size: ((5, 4), (24, 8)), furniture: [Table, Locker, Bench]),
+                Room(name: "substation", kind: Plant, size: ((5, 4), (30, 10)), private: true, furniture: [Machine, Machine]),
+                Room(name: "freight bay", kind: Bays, size: ((5, 4), (30, 10)), furniture: [Shelf]),
+                Room(name: "fan room", kind: Plant, size: ((5, 4), (24, 8)), furniture: [Machine, Machine]),
+                Room(name: "workshop", kind: Storage, size: ((5, 4), (14, 8)), furniture: [Shelf, Machine], stations: [Machine]),
+                Room(name: "line control", kind: Server, size: ((6, 5), (24, 12)), private: true, furniture: [Desk, Machine, Machine], stations: [Desk]),
+                Room(name: "pump room", kind: Plant, size: ((6, 4), (16, 8)), furniture: [Machine, Machine]),
+                Room(name: "sump", kind: Plant, size: ((4, 4), (16, 8)), furniture: [Machine]),
+                Room(name: "cable vault", kind: Server, size: ((4, 4), (10, 6)), private: true, furniture: [Machine]),
+            ],
+            pieces: [Piece(name: "gate line", kind: GateLine), Piece(name: "track", kind: Track)],
+            links: [
+                Link(name: "street stairs", kind: Stair, zone: "public", serves: Roles(["hall", "concourse"])),
+                Link(name: "hall escalators", kind: Escalator, zone: "public", serves: Roles(["hall", "concourse"])),
+                // A bank each way between each two levels: a one-way link of two stops.
+                Link(name: "platform escalators down", kind: Escalator, zone: "paid", serves: Roles(["concourse", "upper platform"]), dir: Down),
+                Link(name: "platform escalators up", kind: Escalator, zone: "paid", serves: Roles(["concourse", "upper platform"]), dir: Up),
+                Link(name: "interchange escalators down", kind: Escalator, zone: "paid", serves: Roles(["upper platform", "lower platform"]), dir: Down),
+                Link(name: "interchange escalators up", kind: Escalator, zone: "paid", serves: Roles(["upper platform", "lower platform"]), dir: Up),
+                Link(name: "platform lift", kind: Lift, zone: "paid", serves: Roles(["concourse", "upper platform", "lower platform"])),
+                Link(name: "freight lift", kind: Lift, zone: "staff", serves: Roles(["hall", "concourse", "service"]),
+                     cards: [("concourse", "staff"), ("service", "staff")]),
+                // From the station office straight down past both platforms to the service
+                // level, both ways: behind the paid side's staff door, it is a lock as deep as
+                // the freight lift's card.
+                Link(name: "emergency stair", kind: Stair, zone: "staff", serves: Roles(["concourse", "service"]), alight: Ends),
+                Link(name: "ventilation shaft", kind: Crawl, zone: "staff", serves: Roles(["hall", "service"])),
+                // Up from the cable vaults under it into Line Control's corridor.
+                Link(name: "cable duct", kind: Crawl, zone: "secure", serves: Roles(["service", "drainage"])),
+                Link(name: "old shaft", kind: Ladder, zone: "staff", serves: Roles(["service", "drainage"])),
+            ],
+            // Up from the tunnels into the paid side, the staff doors still ahead.
+            crawls_in: [Crawl(stratum: Undercity, zone: "paid")],
+            objectives: [
+                Objective(id: "core", name: "the Line Control core", room: "line control", level: Some("service")),
+                Objective(id: "cash", name: "the cash room", room: "cash room", level: Some("concourse")),
+                Objective(id: "signal", name: "the signal box", room: "signal box", level: Some("upper platform")),
+            ],
+            security: [
+                Security(size: Small, guards: [("public", 1), ("paid", 1), ("staff", 2), ("secure", 1)], cameras: (3, 5),
+                         turrets: (0, 0), containers: (1, 2)),
+                Security(size: Medium, guards: [("public", 1), ("paid", 2), ("staff", 2), ("secure", 2)],
+                         cameras: (5, 9), turrets: (0, 1), turret_zones: ["secure"], containers: (2, 4)),
+                Security(size: Large, guards: [("public", 2), ("paid", 3), ("staff", 3), ("secure", 3)],
+                         cameras: (9, 15), turrets: (2, 4), turret_zones: ["secure"], containers: (3, 6)),
+            ],
+        ),
+    ],
+)

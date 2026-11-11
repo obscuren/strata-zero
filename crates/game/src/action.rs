@@ -1090,6 +1090,23 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_runner_takes_past_its_capacity() {
+        let (c, _, mut g, at) = setup();
+        let mut ch = Character::debug_runner(&c);
+        ch.inventory.push(Stack::new(id("scrap_servo"), 40));
+        assert!(ch.weight(&c) > ch.carry_cap(&c));
+        let had = ch.count(&id("bottle_caps"));
+        g.add(at.place, at.pos, id("bottle_caps"), 2);
+        let take = Action::Take {
+            item: id("bottle_caps"),
+            qty: 1,
+        };
+        apply(&mut ch, &mut g, &c, at, 0, take).unwrap();
+        apply(&mut ch, &mut g, &c, at, 0, Action::TakeAll).unwrap();
+        assert_eq!(ch.count(&id("bottle_caps")), had + 2);
+    }
+
+    #[test]
     fn fire_respects_grants_kinds_and_cooldowns() {
         let (c, mut ch, mut g, at) = setup();
         let scan = || Action::Fire(AbilityId::new("netscan"));

@@ -48,6 +48,7 @@ mod sheet;
 mod term;
 mod track;
 mod ui;
+mod venues;
 mod walker;
 #[cfg(feature = "window")]
 mod window;

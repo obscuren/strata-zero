@@ -24,10 +24,13 @@ pub enum WorldAct {
     JackOut,
     Up,
     Down,
-    /// A lift ride to a floor of the building the player is in.
+    /// A ride on the lift under the player to a floor it stops at.
     Lift(i32),
-    /// The stairwell, one floor up or down.
+    /// The stair, escalator or ladder under the player, to its next stop up or down.
     Climb(bool),
+    /// Through a crawl's grille: in from the city tile outside a building (the building
+    /// and which of its crawls), or out from the grille under the player (`None`).
+    Crawl(Option<(citygen::BuildingId, usize)>),
 }
 
 /// What a row does when fired.
@@ -416,6 +419,17 @@ impl Popup {
             }
             return TransitionKind::None;
         }
+        if let WorldAct::Crawl(into) = act {
+            let result = match into {
+                Some((b, way)) => crate::interiors::crawl_in(st, b, way),
+                None => crate::interiors::crawl_out(st),
+            };
+            match result {
+                Ok(msg) => st.say(msg),
+                Err(e) => st.warn(e),
+            }
+            return TransitionKind::None;
+        }
         if let WorldAct::Lift(level) = act {
             let building = match st.player.as_ref().map(|p| p.place) {
                 Some(citygen::Place::Floor { building, .. }) => Some(building),
@@ -472,6 +486,7 @@ impl Popup {
                     WorldAct::JackOut => Err("not jacked in".to_string()),
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),
+                    WorldAct::Crawl(_) => Err("no crawl here".to_string()),
                     WorldAct::Up | WorldAct::Down => {
                         let up = act == WorldAct::Up;
                         match player.use_connector(city, up) {

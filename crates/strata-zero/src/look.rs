@@ -7,9 +7,10 @@ use crate::render::map::{MapRef, TileMap};
 use crate::render::mark::{mark_items, mark_person, mark_tile};
 use crate::ui::chrome::{DIM, TEXT, frame, put, solid};
 use crate::ui::hud::capitalised;
+use citygen::venue::LockKind;
 use citygen::{
-    City, ConnectorKind, Feature, FloorPlan, Place, Pos, Rect as TileRect, StratumKind, Terrain,
-    Tile,
+    City, ConnectorKind, Feature, FloorPlan, LinkKind, Place, Pos, Rect as TileRect, StratumKind,
+    Terrain, Tile,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -123,6 +124,10 @@ fn feature_name(f: Feature) -> Option<(&'static str, &'static str)> {
         Feature::Pipe => ("Pipe", "pipe"),
         Feature::Cable => ("Cable", "cable"),
         Feature::Awning => ("Awning", "awning"),
+        Feature::Shutter => ("Shutter", "shutter"),
+        Feature::Turret => ("Turret", "turret"),
+        Feature::Container => ("Container", "container"),
+        Feature::Objective => ("Objective", "objective"),
         Feature::Fitting(x) => fitting_name(x),
         _ => return None,
     })
@@ -195,6 +200,40 @@ fn fixture_at(
                 });
             }
             let (plan, floor) = st.interiors.floor(building, level)?;
+            // A venue's lock: whether it opens for you from where you stand. From its free
+            // side, the room behind it, it opens with no key.
+            if let Some(lock) = floor.lock_at(pos) {
+                let from = (st.player.as_ref())
+                    .filter(|p| p.place == place)
+                    .map_or(lock.at, |p| p.pos);
+                let room = |p: Pos| crate::venues::room_of(plan, level, p);
+                let free_side = lock
+                    .free_from
+                    .is_some_and(|f| f == from || room(f).is_some_and(|r| room(from) == Some(r)));
+                let state = match crate::credentials::opens_lock(st, building, level, lock, from) {
+                    _ if free_side => "opens from here",
+                    Some(_) => "unlocked",
+                    None if crate::venues::locked_down(st, building, lock) => "locked down",
+                    None => "locked",
+                };
+                let reader = match lock.kind {
+                    LockKind::Card => "card",
+                    LockKind::Keypad => "keypad",
+                    LockKind::Grille => "grille",
+                };
+                return Some(Fixture {
+                    name: capitalised(&crate::venues::lock_label(plan, lock)),
+                    second: Some(format!("{reader} · {state}")),
+                    key: "zone_door",
+                });
+            }
+            if crate::venues::grille_at(plan, level, pos) {
+                return Some(Fixture {
+                    name: "Grille".into(),
+                    second: Some(format!("a crawl, Tech {}", crate::venues::crawl_tech())),
+                    key: "grille",
+                });
+            }
             if let Some(r) = floor
                 .door_of(pos)
                 .filter(|r| r.private && r.kind == citygen::RoomKind::Flat)
@@ -218,28 +257,72 @@ fn fixture_at(
                     key: "flat_door",
                 });
             }
-            match tile.terrain {
-                Terrain::Stair => Some(Fixture {
-                    name: "Stairwell".into(),
-                    second: leads(
-                        (level < plan.top).then(|| FloorPlan::label(level + 1)),
-                        (level > plan.lowest).then(|| FloorPlan::label(level - 1)),
-                    ),
-                    key: "stairwell",
-                }),
-                Terrain::Lift => Some(Fixture {
-                    name: "Lift".into(),
-                    second: Some(format!(
+            let link = plan.link_at(level, pos)?;
+            let kind = plan.links[link].kind;
+            let second = match kind {
+                // The lift's whole run, over the floors the building has.
+                LinkKind::Lift => {
+                    let stops = plan.links[link]
+                        .stops
+                        .iter()
+                        .map(|s| s.level)
+                        .filter(|l| plan.has_level(*l));
+                    let (lo, hi) = (stops.clone().min()?, stops.max()?);
+                    Some(format!(
                         "{} to {}",
-                        FloorPlan::label(plan.lowest),
-                        FloorPlan::label(plan.top)
-                    )),
-                    key: "lift",
-                }),
-                _ => None,
-            }
+                        FloorPlan::label(lo),
+                        FloorPlan::label(hi)
+                    ))
+                }
+                _ => leads(
+                    plan.next_stop(link, level, true).map(FloorPlan::label),
+                    plan.next_stop(link, level, false).map(FloorPlan::label),
+                ),
+            };
+            Some(Fixture {
+                name: crate::interact::link_name(kind).into(),
+                second,
+                key: match kind {
+                    LinkKind::Lift => "lift",
+                    LinkKind::Stair => "stairwell",
+                    LinkKind::Escalator => "escalator",
+                    LinkKind::Ladder => "ladder",
+                    LinkKind::Crawl => "grille",
+                },
+            })
         }
         Place::Stratum(k) => {
+            // A venue's door the session marks: into a mission's copy, or shut.
+            let live = st.city.as_ref().is_some_and(|c| std::ptr::eq(c, city));
+            if let Some((b, mark)) = live
+                .then(|| crate::venues::door_mark_at(st, k, at))
+                .flatten()
+            {
+                return Some(match mark {
+                    crate::venues::DoorMark::Flagged => {
+                        let kind = (st.interiors.plan_of(b))
+                            .and_then(|p| p.venue.as_deref())
+                            .map_or_else(String::new, |v| v.type_name.clone());
+                        Fixture {
+                            name: "Flagged door".into(),
+                            second: Some(format!("{kind} · a job inside")),
+                            key: "flagged_door",
+                        }
+                    }
+                    crate::venues::DoorMark::Barred => Fixture {
+                        name: "Barred door".into(),
+                        second: Some(
+                            if crate::venues::copy_live(st, b) {
+                                "shut for the job"
+                            } else {
+                                "shut"
+                            }
+                            .into(),
+                        ),
+                        key: "barred_door",
+                    },
+                });
+            }
             if city
                 .connectors_at(at)
                 .any(|c| c.kind == ConnectorKind::Jack && c.serves.contains(&k))
@@ -803,6 +886,15 @@ pub fn look_card(
             f => match feature_name(f) {
                 Some((name, key)) => {
                     set_head(&mut card, name.to_string(), glyph);
+                    // A mission's copy seals its track ends.
+                    let key = match place {
+                        Place::Floor { building, .. }
+                            if f == Feature::Shutter && crate::venues::copy_live(st, building) =>
+                        {
+                            "shutter_sealed"
+                        }
+                        _ => key,
+                    };
                     // A holo ad cutting into the news reads the headline while it lasts.
                     let cut = (visible
                         && live_cell
@@ -860,6 +952,14 @@ pub fn look_card(
         }
     } else {
         ground(&location, mark(), tile, own, &mut card);
+        // A station's track has its line, as the stairs do.
+        if visible && !own && tile.terrain == Terrain::Track {
+            card.body.extend(
+                looks
+                    .line(Group::Fixture, "track", seed, at)
+                    .map(String::from),
+            );
+        }
     }
     // What the story left on the tile, its own paragraph.
     if visible
@@ -874,6 +974,16 @@ pub fn look_card(
             card.body.push(String::new());
         }
         card.body.push(note.clone());
+    }
+    // A code a mission's copy left on the tile, its own paragraph too.
+    if visible
+        && live_cell
+        && let Some(note) = crate::venues::note_at(st, place, pos)
+    {
+        if !card.body.is_empty() {
+            card.body.push(String::new());
+        }
+        card.body.push(note);
     }
     if !visible {
         card.second = Some("as you last saw it".to_string());
@@ -1256,6 +1366,56 @@ mod tests {
     }
 
     #[test]
+    fn a_track_and_its_shutter_read_their_lines() {
+        use citygen::venue::{PieceKind, VenueFrame, VenuePack, lay_out};
+        // Whichever type the data lays a track in, over its own frame.
+        let (layout, level, track) = (VenuePack::builtin().types.iter())
+            .flat_map(|t| (0..10).filter_map(|seed| lay_out(t, VenueFrame::own(t), seed).ok()))
+            .find_map(|l| {
+                let (level, piece) = l.levels.iter().find_map(|x| {
+                    let p = x.pieces.iter().find(|p| p.kind == PieceKind::Track)?;
+                    Some((x.level, p.clone()))
+                })?;
+                Some((l, level, piece))
+            })
+            .expect("a type lays a track");
+        let mut st = state(false);
+        let city = st.city.clone().unwrap();
+        let plan = FloorPlan::of_layout(layout);
+        let b = plan.building;
+        st.interiors.put_plan(plan);
+        st.interiors.ensure(&city, b, level).unwrap();
+        let place = Place::Floor { building: b, level };
+        fn map(st: &AppState, place: Place) -> MapRef<'_> {
+            MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap()
+        }
+        // On the rails beside the shutter at the track's end.
+        let shutter = track.ends[0];
+        let on = (track.rect.iter())
+            .find(|p| p.manhattan(shutter) == 1)
+            .unwrap();
+        let rail = (track.rect.iter()).find(|p| p.manhattan(on) == 1).unwrap();
+        let mut p = Player::at(place, on);
+        p.update_fov(&map(&st, place), 0);
+        st.player = Some(p);
+        let looks = Looks::load();
+        let line = |g, key| looks.line(g, key, 0, Pos::new(0, 0)).unwrap().to_string();
+        let c = look_card(&st, &map(&st, place), place, shutter, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Shutter"), "{c:?}");
+        assert_eq!(c.body, vec![line(Group::Feature, "shutter")]);
+        let c = look_card(&st, &map(&st, place), place, rail, &|_, _| None, &[]);
+        assert_eq!(c.header.as_deref(), Some("Track"), "{c:?}");
+        assert_eq!(c.body, vec![line(Group::Fixture, "track")]);
+    }
+
+    #[test]
     fn a_hint_shows_only_within_reach() {
         let mut st = state(false);
         let at = bare(&st);
@@ -1393,6 +1553,23 @@ mod tests {
             assert!(l.has(k), "{k}");
         }
         assert!(l.line(Group::Feature, "lamp", 0, Pos::new(0, 0)).is_some());
+    }
+
+    #[test]
+    fn a_missions_turret_container_and_objective_read_their_lines() {
+        let l = Looks::load();
+        for (f, name) in [
+            (Feature::Turret, "Turret"),
+            (Feature::Container, "Container"),
+            (Feature::Objective, "Objective"),
+        ] {
+            let (header, key) = feature_name(f).unwrap_or_else(|| panic!("{f:?} has no name"));
+            assert_eq!(header, name);
+            assert!(
+                l.line(Group::Feature, key, 0, Pos::new(0, 0)).is_some(),
+                "{key}"
+            );
+        }
     }
 
     #[test]

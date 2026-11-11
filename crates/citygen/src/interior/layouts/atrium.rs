@@ -93,13 +93,8 @@ impl Builder<'_> {
             Rect::new(BAND + 1, BAND + 1 + WALK, WALK, run_h),
             Rect::new(right - WALK, BAND + 1 + WALK, WALK, run_h),
         ] {
-            self.rooms.push(Room {
-                rect,
-                kind: RoomKind::Corridor,
-                door: None,
-                private: false,
-                number: 0,
-            });
+            self.rooms
+                .push(Room::new(rect, RoomKind::Corridor, None, false, 0));
         }
         // The lift lobby: six wide in the middle of the top band, open to the walkway.
         let (lx0, lx1) = lift_lobby(w);
@@ -111,13 +106,13 @@ impl Builder<'_> {
                 self.tiles[p].terrain = Terrain::Floor;
             }
         }
-        self.rooms.push(Room {
-            rect: Rect::new(lx0, 1, lx1 - lx0 + 1, top),
-            kind: RoomKind::Corridor,
-            door: None,
-            private: false,
-            number: 0,
-        });
+        self.rooms.push(Room::new(
+            Rect::new(lx0, 1, lx1 - lx0 + 1, top),
+            RoomKind::Corridor,
+            None,
+            false,
+            0,
+        ));
         let bands = self.bands();
         let mut number = 0u16;
         for (i, band) in bands.into_iter().enumerate() {
@@ -146,13 +141,13 @@ impl Builder<'_> {
         let rect = Rect::new(x0 + 1, band.c0, HOME_RUN - 2, band.c1 - band.c0 + 1);
         let door = Pos::new(rect.x + HOME_DOOR, band.wall);
         self.home_flat(rect, door);
-        self.rooms.push(Room {
+        self.rooms.push(Room::new(
             rect,
-            kind: RoomKind::Home,
-            door: Some(door),
-            private: true,
-            number: (self.level.max(0) as u16) * 100 + *number,
-        });
+            RoomKind::Home,
+            Some(door),
+            true,
+            (self.level.max(0) as u16) * 100 + *number,
+        ));
         self.side_flats(&right, laundry, number);
     }
 
@@ -289,13 +284,7 @@ impl Builder<'_> {
                 *diner = true;
                 RoomKind::Bar
             };
-            self.rooms.push(Room {
-                rect,
-                kind,
-                door: None,
-                private: false,
-                number: 0,
-            });
+            self.rooms.push(Room::new(rect, kind, None, false, 0));
             prev_end = Some(end);
             a = end + 1;
         }
@@ -392,13 +381,8 @@ impl Builder<'_> {
                         self.tiles[p].terrain = Terrain::Floor;
                     }
                 }
-                self.rooms.push(Room {
-                    rect,
-                    kind: RoomKind::Corridor,
-                    door: None,
-                    private: false,
-                    number: 0,
-                });
+                self.rooms
+                    .push(Room::new(rect, RoomKind::Corridor, None, false, 0));
                 a = end + 1;
                 continue;
             }
@@ -439,13 +423,13 @@ impl Builder<'_> {
                 0
             };
             self.furnish_room(rect, kind, door);
-            self.rooms.push(Room {
+            self.rooms.push(Room::new(
                 rect,
                 kind,
                 door,
-                private: private && door.is_some(),
-                number: room_number,
-            });
+                private && door.is_some(),
+                room_number,
+            ));
             a = end + 1;
         }
     }

@@ -1,7 +1,8 @@
 //! One floor of an interior: tiles, light, rooms, exits and the stations people
 //! stand at.
 
-use crate::geom::{Grid, Pos, Rect};
+use super::venue::{LockKind, Ways};
+use crate::geom::{Grid, Pos, Rect, Size};
 use crate::tile::Tile;
 use crate::world::StratumKind;
 
@@ -29,6 +30,12 @@ pub enum RoomKind {
     Bays,
     Home,
     Shop,
+    Platform,
+    Track,
+    Plant,
+    Server,
+    Kitchen,
+    CarPark,
 }
 
 impl RoomKind {
@@ -56,6 +63,12 @@ impl RoomKind {
             RoomKind::Bays => "bays",
             RoomKind::Home => "home",
             RoomKind::Shop => "shop",
+            RoomKind::Platform => "platform",
+            RoomKind::Track => "track",
+            RoomKind::Plant => "plant room",
+            RoomKind::Server => "server room",
+            RoomKind::Kitchen => "kitchen",
+            RoomKind::CarPark => "car park",
         }
     }
 }
@@ -90,6 +103,42 @@ pub struct Room {
     pub private: bool,
     /// A flat or room number, 0 when the room has none.
     pub number: u16,
+    /// A venue room's name from its type: "server room". None for today's rooms.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// A venue room's zone, by rank: 0 is public, and every room of today's buildings.
+    #[serde(default)]
+    pub zone: u8,
+}
+
+impl Room {
+    /// A room of no venue: unnamed, in zone 0.
+    pub fn new(rect: Rect, kind: RoomKind, door: Option<Pos>, private: bool, number: u16) -> Room {
+        Room {
+            rect,
+            kind,
+            door,
+            private,
+            number,
+            name: None,
+            zone: 0,
+        }
+    }
+}
+
+/// The lock on a door between two zones: a card reader or a keypad, and the ways past it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DoorLock {
+    pub at: Pos,
+    /// Keys its code with (building, level), as a flat's number does.
+    pub number: u16,
+    /// The card that opens it: this zone's, or a deeper one's.
+    pub zone: u8,
+    pub kind: LockKind,
+    pub ways: Ways,
+    /// The tile it opens from without a key: its deeper zone's side, or a way in's
+    /// doorstep. A venue's layout sets it on every lock it lays.
+    pub free_from: Option<Pos>,
 }
 
 /// A door tile on the floor that leads outside.
@@ -116,26 +165,37 @@ pub struct Floor {
     pub rooms: Vec<Room>,
     pub exits: Vec<Exit>,
     pub stations: Vec<Station>,
+    /// The locks on its doors: a venue's zone borders and its ways in above public.
+    #[serde(default)]
+    pub locks: Vec<DoorLock>,
+}
+
+/// The tile just inside a door at `p` of a floor of `size`: in from the frame wall, or
+/// west of an inner door, as the roof door beside the stairwell.
+pub(in crate::interior) fn doorstep_of(size: Size, p: Pos) -> Pos {
+    let (w, h) = (size.w as i32, size.h as i32);
+    if p.x == 0 {
+        p.offset(1, 0)
+    } else if p.x == w - 1 {
+        p.offset(-1, 0)
+    } else if p.y == 0 {
+        p.offset(0, 1)
+    } else if p.y == h - 1 {
+        p.offset(0, -1)
+    } else {
+        p.offset(-1, 0)
+    }
 }
 
 impl Floor {
     /// The tile just inside an exit's door.
     pub fn doorstep(&self, e: &Exit) -> Pos {
-        let size = self.tiles.size();
-        let (w, h) = (size.w as i32, size.h as i32);
-        let p = e.at;
-        if p.x == 0 {
-            p.offset(1, 0)
-        } else if p.x == w - 1 {
-            p.offset(-1, 0)
-        } else if p.y == 0 {
-            p.offset(0, 1)
-        } else if p.y == h - 1 {
-            p.offset(0, -1)
-        } else {
-            // An inner door, as the roof door beside the stairwell: the tile west of it.
-            p.offset(-1, 0)
-        }
+        doorstep_of(self.tiles.size(), e.at)
+    }
+
+    /// The lock on the door at `p`.
+    pub fn lock_at(&self, p: Pos) -> Option<&DoorLock> {
+        self.locks.iter().find(|k| k.at == p)
     }
 
     pub fn exit_at(&self, p: Pos) -> Option<&Exit> {

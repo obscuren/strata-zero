@@ -1,12 +1,16 @@
-//! The interiors this session has walked into: plans and floors, generated on the
-//! first visit and kept for the session. Never saved; the seed brings them back.
+//! The interiors of the city's closed buildings: a plan made the first time a building
+//! is needed and a floor the first time it is visited, both kept. They are saved with the
+//! run whole, not remade from the seed, so a building keeps the plan it was first given:
+//! a hotel an old save holds keeps today's builder, and one it never saw is laid out as a
+//! venue.
 
 use crate::app::AppState;
 use crate::render::map::MapRef;
 use citygen::rng::hash64;
+use citygen::venue::VenueLayout;
 use citygen::{
-    BuildingId, City, Exit, Floor, FloorPlan, Place, Pos, Role, RoomKind, StratumKind, Terrain,
-    generate_floor,
+    BuildingId, City, Exit, Floor, FloorPlan, LinkKind, Place, Pos, Role, RoomKind, StratumKind,
+    Terrain, generate_floor,
 };
 use sim::{HouseholdId, Occupant, OccupantRole, PersonId, Whereabouts, World};
 use std::borrow::Cow;
@@ -21,6 +25,11 @@ pub struct Interiors {
     floors: HashMap<(BuildingId, i32), Floor>,
     /// Who lives in which flat, per residential building.
     homes: HashMap<BuildingId, Homes>,
+    /// The venues a mission holds, each with its copy: a live one's plan is cut to the
+    /// copy's floors, and its floors are drawn with the mission's layer. After the first
+    /// saves, so it defaults: they hold none.
+    #[serde(default)]
+    copies: BTreeMap<BuildingId, crate::venues::MissionCopy>,
 }
 
 /// Which household lives in which flat of one building: stable, in or out.
@@ -101,36 +110,105 @@ impl Homes {
     }
 }
 
+/// The plan of closed building `b` in `plans`, made on first ask.
+fn plan_in<'a>(
+    plans: &'a mut HashMap<BuildingId, FloorPlan>,
+    city: &City,
+    b: BuildingId,
+) -> Option<&'a FloorPlan> {
+    match plans.entry(b) {
+        Entry::Occupied(e) => Some(e.into_mut()),
+        Entry::Vacant(e) => Some(e.insert(FloorPlan::new(city, b)?)),
+    }
+}
+
+/// Level `level` of `plan` drawn: a live copy's with the mission's layer on it, else
+/// from the seed (and a copy whose layer this build can't lay, plain).
+fn draw_floor(
+    city: &City,
+    plan: &FloorPlan,
+    copy: Option<&crate::venues::MissionCopy>,
+    level: i32,
+) -> Floor {
+    (copy.filter(|c| c.live))
+        .and_then(|c| crate::venues::copy_floor(plan, c, level))
+        .unwrap_or_else(|| generate_floor(city, plan, level))
+}
+
+/// A venue's flats, (level, number), from its layout.
+fn venue_flats(layout: &VenueLayout) -> Vec<(i32, u16)> {
+    (layout.levels.iter())
+        .flat_map(|x| {
+            (x.rooms.iter())
+                .filter(|r| r.kind == RoomKind::Flat)
+                .map(move |r| (x.level, r.number))
+        })
+        .collect()
+}
+
 impl Interiors {
     /// The plan of a closed building, made on first ask.
     pub fn plan(&mut self, city: &City, b: BuildingId) -> Option<&FloorPlan> {
-        match self.plans.entry(b) {
-            Entry::Occupied(e) => Some(e.into_mut()),
-            Entry::Vacant(e) => Some(e.insert(FloorPlan::new(city, b)?)),
-        }
+        plan_in(&mut self.plans, city, b)
     }
 
     pub fn plan_of(&self, b: BuildingId) -> Option<&FloorPlan> {
         self.plans.get(&b)
     }
 
-    /// A floor, generated if this is its first visit. `None` for an open building or
-    /// a level the plan does not have. An atrium floor brings the plaza below with it,
-    /// for the look-down.
+    /// Replaces a building's plan and drops the floors made from the old one.
+    pub fn put_plan(&mut self, plan: FloorPlan) {
+        self.drop_floors(plan.building);
+        self.plans.insert(plan.building, plan);
+    }
+
+    /// Drops every floor of building `b`: each is drawn again from its plan when next
+    /// needed.
+    pub(crate) fn drop_floors(&mut self, b: BuildingId) {
+        self.floors.retain(|(x, _), _| *x != b);
+    }
+
+    /// The mission's copy of venue `b`, live or waiting.
+    pub fn copy(&self, b: BuildingId) -> Option<&crate::venues::MissionCopy> {
+        self.copies.get(&b)
+    }
+
+    pub(crate) fn copy_mut(&mut self, b: BuildingId) -> Option<&mut crate::venues::MissionCopy> {
+        self.copies.get_mut(&b)
+    }
+
+    /// Records venue `b`'s copy, or with None lets it go.
+    pub(crate) fn set_copy(&mut self, b: BuildingId, copy: Option<crate::venues::MissionCopy>) {
+        match copy {
+            Some(c) => self.copies.insert(b, c),
+            None => self.copies.remove(&b),
+        };
+    }
+
+    /// Every venue a mission holds, in building order.
+    pub(crate) fn copies(&self) -> impl Iterator<Item = (BuildingId, &crate::venues::MissionCopy)> {
+        self.copies.iter().map(|(b, c)| (*b, c))
+    }
+
+    /// A floor, generated if this is its first visit: a live copy's with the mission's
+    /// layer on it. `None` for an open building or a level the plan does not have. An
+    /// atrium floor brings the plaza below with it, for the look-down. The plan is
+    /// borrowed beside the floors, not copied: a venue's carries its whole layout.
     pub fn ensure(&mut self, city: &City, b: BuildingId, level: i32) -> Option<&Floor> {
-        let plan = self.plan(city, b)?.clone();
-        if level < plan.lowest || level > plan.top {
+        let plan = plan_in(&mut self.plans, city, b)?;
+        if !plan.has_level(level) {
             return None;
         }
         if plan.atrium.is_some() && level >= 1 {
             self.floors
                 .entry((b, 0))
-                .or_insert_with(|| generate_floor(city, &plan, 0));
+                .or_insert_with(|| generate_floor(city, plan, 0));
         }
+        let copy = self.copies.get(&b);
         Some(
             self.floors
                 .entry((b, level))
-                .or_insert_with(|| generate_floor(city, &plan, level)),
+                .or_insert_with(|| draw_floor(city, plan, copy, level)),
         )
     }
 
@@ -139,17 +217,21 @@ impl Interiors {
         Some((self.plans.get(&b)?, self.floors.get(&(b, level))?))
     }
 
-    /// Works out who lives where in a building, once; generates its flat floors to
-    /// count the flats. True when somebody lives there.
+    /// Works out who lives where in a building, once, counting its flats: on the floors
+    /// it generates for them, or a venue's from its layout, drawing no floor. True when
+    /// somebody lives there.
     pub fn ensure_homes(&mut self, city: &City, world: &World, b: BuildingId) -> bool {
         if let Some(h) = self.homes.get(&b) {
             return !h.is_empty();
         }
-        let Some(plan) = self.plan(city, b).cloned() else {
+        let Some(plan) = plan_in(&mut self.plans, city, b) else {
             return false;
         };
-        let mut flats = Vec::new();
-        for level in plan.corridor_floors() {
+        let (mut flats, levels) = match plan.venue.as_deref() {
+            Some(layout) => (venue_flats(layout), Vec::new()),
+            None => (Vec::new(), plan.corridor_floors()),
+        };
+        for level in levels {
             if let Some(floor) = self.ensure(city, b, level) {
                 flats.extend(
                     floor
@@ -228,19 +310,9 @@ fn land(st: &mut AppState, place: Place, pos: Pos) {
     st.repaint = true;
 }
 
-/// The floor a door on a stratum opens onto.
-pub(crate) fn level_for(plan: &FloorPlan, stratum: StratumKind) -> Option<i32> {
-    match stratum {
-        StratumKind::Street => Some(0),
-        StratumKind::Skyways => plan.bridge,
-        StratumKind::Heights => plan.roof.then_some(plan.top),
-        StratumKind::Undercity => (plan.lowest < 0).then_some(-1),
-        StratumKind::Net => None,
-    }
-}
-
 /// Walks the player through a closed building's door on the city map, onto the
-/// doorstep inside; the floor is generated if this is its first visit.
+/// doorstep inside; the floor is generated if this is its first visit. A venue's way in
+/// into a deep zone asks its lock from the city side, as a step onto it does inside.
 pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not now".to_string());
@@ -256,9 +328,14 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
     let plan = st
         .interiors
         .plan(city, b)
-        .ok_or("that building has no inside")?
-        .clone();
-    let level = level_for(&plan, door.0).ok_or("that door opens onto nothing")?;
+        .ok_or("that building has no inside")?;
+    let level = plan
+        .door_level(door.0)
+        .ok_or("that door opens onto nothing")?;
+    // A venue's door onto a level it lacks, or a mission's copy doesn't keep, is shut.
+    if !plan.has_level(level) {
+        return Err("barred".to_string());
+    }
     let floor = st
         .interiors
         .ensure(city, b, level)
@@ -270,12 +347,25 @@ pub fn enter(st: &mut AppState, b: BuildingId, door: (StratumKind, Pos)) -> Resu
         .copied()
         .ok_or("no way in here")?;
     let step = floor.doorstep(&exit);
+    let lock = floor.lock_at(exit.at).copied();
+    // From the city side: never its free side, which is the doorstep inside.
+    let opened = match (lock, st.interiors.plan_of(b)) {
+        (Some(lock), Some(plan)) => {
+            match crate::venues::meets_lock(st, plan, level, &lock, lock.at) {
+                crate::venues::Meets::Held(why) => return Err(why),
+                crate::venues::Meets::Through(line) => line,
+                crate::venues::Meets::Nothing => None,
+            }
+        }
+        _ => None,
+    };
     let name = building_name(city, b);
     crate::credentials::prepare(st, b);
     land(st, Place::Floor { building: b, level }, step);
-    Ok(match keyed {
-        Some(code) => format!("you key in {code:04}"),
-        None => format!("Entering `{name}`"),
+    Ok(match (keyed, opened) {
+        (Some(code), _) => format!("you key in {code:04}"),
+        (None, Some(line)) => line,
+        (None, None) => format!("Entering `{name}`"),
     })
 }
 
@@ -294,80 +384,147 @@ pub fn leave(st: &mut AppState, exit: &Exit) -> Result<String, String> {
                         .is_some_and(|t| t.terrain != Terrain::Door && !t.is_building_part()))
         })
         .ok_or("the way out is blocked")?;
-    // Where you are entering: the district on the street, the kind of way elsewhere.
-    let onto = match exit.stratum {
-        StratumKind::Street => city
-            .tile(exit.stratum, landing)
-            .and_then(|t| t.district)
-            .map_or_else(
-                || "the `STREET`".to_string(),
-                |d| format!("`{}`", city.district(d).name),
-            ),
-        StratumKind::Skyways => "the `WALKWAY`".to_string(),
-        StratumKind::Heights => "the `ROOF`".to_string(),
-        StratumKind::Undercity => "the `TUNNEL`".to_string(),
-        StratumKind::Net => "the `GRID`".to_string(),
-    };
+    let onto = onto(city, exit.stratum, landing);
     land(st, Place::Stratum(exit.stratum), landing);
     Ok(format!("Entering {onto}"))
 }
 
-/// Rides the lift to a floor: the player steps out at that floor's lift bank.
-pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
-    let city = st.city.as_ref().ok_or("no city")?;
-    let plan = st
-        .interiors
-        .plan(city, b)
-        .ok_or("that building has no inside")?
-        .clone();
-    let lift = plan.lift.ok_or("no lift here")?;
-    if level < plan.lowest || level > plan.top {
-        return Err("no such floor".to_string());
+/// Where you come out onto at tile `at` of stratum `k`, as a log line names it: the
+/// district on the street, the kind of way elsewhere.
+fn onto(city: &City, k: StratumKind, at: Pos) -> String {
+    match k {
+        StratumKind::Street => city.tile(k, at).and_then(|t| t.district).map_or_else(
+            || "the `STREET`".to_string(),
+            |d| format!("`{}`", city.district(d).name),
+        ),
+        StratumKind::Skyways => "the `WALKWAY`".to_string(),
+        StratumKind::Heights => "the `ROOF`".to_string(),
+        StratumKind::Undercity => "the `TUNNEL`".to_string(),
+        StratumKind::Net => "the `GRID`".to_string(),
     }
+}
+
+/// Crawls in through crawl `way` of building `b` from the city tile you stand on, outside
+/// it, onto its grille inside; the floor is generated if this is its first visit. The
+/// grille wants a crawler.
+pub fn crawl_in(st: &mut AppState, b: BuildingId, way: usize) -> Result<String, String> {
+    if st.net.engaged.is_some() {
+        return Err("not now".to_string());
+    }
+    if !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
+    let city = st.city.as_ref().ok_or("no city")?;
+    let w = (st.interiors.plan(city, b))
+        .and_then(|plan| plan.crawls.get(way))
+        .copied()
+        .ok_or("no crawl here")?;
+    let here = st.player.as_ref().map(|p| (p.place, p.pos));
+    if here != Some((Place::Stratum(w.stratum), w.outside)) {
+        return Err("no crawl here".to_string());
+    }
+    st.interiors
+        .ensure(city, b, w.level)
+        .ok_or("that floor is missing")?;
+    let name = building_name(city, b);
+    crate::credentials::prepare(st, b);
+    land(
+        st,
+        Place::Floor {
+            building: b,
+            level: w.level,
+        },
+        w.at,
+    );
+    Ok(format!("Crawling into `{name}`"))
+}
+
+/// Crawls out through the grille under the player, onto the city tile it comes in from.
+pub fn crawl_out(st: &mut AppState) -> Result<String, String> {
+    let Some((Place::Floor { building, level }, pos)) =
+        st.player.as_ref().map(|p| (p.place, p.pos))
+    else {
+        return Err("no crawl here".to_string());
+    };
+    let w = (st.interiors.plan_of(building))
+        .and_then(|plan| Some(plan.crawls[crate::venues::crawl_way_at(plan, level, pos)?]))
+        .ok_or("no crawl here")?;
+    if !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
+    let onto = onto(st.city.as_ref().ok_or("no city")?, w.stratum, w.outside);
+    land(st, Place::Stratum(w.stratum), w.outside);
+    Ok(format!("Entering {onto}"))
+}
+
+/// The level the player stands on in building `b`, the link under them, and the plan.
+fn link_under(st: &mut AppState, b: BuildingId) -> Option<(i32, usize, FloorPlan)> {
+    let (level, pos) = match st.player.as_ref().map(|p| (p.place, p.pos))? {
+        (Place::Floor { building, level }, pos) if building == b => (level, pos),
+        _ => return None,
+    };
+    let plan = st.interiors.plan(st.city.as_ref()?, b)?.clone();
+    let link = plan.link_at(level, pos)?;
+    Some((level, link, plan))
+}
+
+/// Rides the lift under the player to a floor it stops at: the player steps out at its
+/// bank there. A stop that asks for a zone card asks it of a ride there, never of a ride
+/// away from it: getting out is free.
+pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
+    let (here, link, plan) = link_under(st, b)
+        .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
+        .ok_or("no lift here")?;
+    let at = plan.links[link]
+        .stop(level)
+        .filter(|_| plan.rides(link, here).contains(&level))
+        .ok_or("the lift doesn't stop there")?
+        .at;
     let now = st.net.now(st);
     if !st.net.lifts_answer(b, now) {
         return Err("lifts locked down".to_string());
     }
+    let card = crate::venues::ride_card(&plan, link, level);
+    if crate::credentials::opens_stop(st, b, card).is_none() {
+        return Err(format!(
+            "the lift wants a {} card",
+            crate::venues::zone_name(&plan, card)
+        ));
+    }
+    let city = st.city.as_ref().ok_or("no city")?;
     st.interiors
         .ensure(city, b, level)
         .ok_or("that floor is missing")?;
     crate::credentials::prepare(st, b);
-    land(st, Place::Floor { building: b, level }, lift);
+    land(st, Place::Floor { building: b, level }, at);
     Ok(format!("Entering `{}`", FloorPlan::label(level)))
 }
 
-/// Takes the stairwell one floor up or down, staying on the same tile.
+/// Takes the stair, escalator, ladder or crawl under the player to its next stop up or
+/// down, landing on its landing there. A crawl wants a crawler.
 pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
-    let (b, level, pos) = match st.player.as_ref().map(|p| (p.place, p.pos)) {
-        Some((Place::Floor { building, level }, pos)) => (building, level, pos),
+    let b = match st.player.as_ref().map(|p| p.place) {
+        Some(Place::Floor { building, .. }) => building,
         _ => return Err("no stairs here".to_string()),
     };
+    let nothing = || {
+        if up {
+            "nothing leads up from here".to_string()
+        } else {
+            "nothing leads down from here".to_string()
+        }
+    };
+    let (level, link, plan) = link_under(st, b)
+        .filter(|(_, link, plan)| plan.links[*link].kind != LinkKind::Lift)
+        .ok_or_else(nothing)?;
+    if plan.links[link].kind == LinkKind::Crawl && !crate::venues::can_crawl(st) {
+        return Err(crate::venues::screwed_shut());
+    }
+    let (next, at) = plan
+        .next_stop(link, level, up)
+        .and_then(|next| Some((next, plan.links[link].stop(next)?.at)))
+        .ok_or_else(nothing)?;
     let city = st.city.as_ref().ok_or("no city")?;
-    let plan = st
-        .interiors
-        .plan(city, b)
-        .ok_or("that building has no inside")?
-        .clone();
-    let on_stair = st.interiors.floor(b, level).is_some_and(|(_, f)| {
-        f.tiles
-            .get(pos)
-            .is_some_and(|t| t.terrain == Terrain::Stair)
-    });
-    if !on_stair {
-        return Err(if up {
-            "nothing leads up from here".to_string()
-        } else {
-            "nothing leads down from here".to_string()
-        });
-    }
-    let next = if up { level + 1 } else { level - 1 };
-    if next < plan.lowest || next > plan.top {
-        return Err(if up {
-            "nothing leads up from here".to_string()
-        } else {
-            "nothing leads down from here".to_string()
-        });
-    }
     st.interiors
         .ensure(city, b, next)
         .ok_or("that floor is missing")?;
@@ -378,25 +535,31 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
             building: b,
             level: next,
         },
-        pos,
+        at,
     );
     Ok(format!("Entering `{}`", FloorPlan::label(next)))
 }
 
-/// The lift panel's rows: every floor, marked where it opens somewhere.
-pub fn floor_rows(plan: &FloorPlan, here: i32) -> Vec<(i32, String)> {
-    plan.levels()
+/// The lift panel's rows for link `link` from `here`: the floors it takes you to and
+/// your own, lowest first, marked where they open somewhere.
+pub fn floor_rows(plan: &FloorPlan, link: usize, here: i32) -> Vec<(i32, String)> {
+    let mut levels = plan.rides(link, here);
+    if plan.links.get(link).is_some_and(|l| l.stop(here).is_some()) {
+        levels.push(here);
+    }
+    levels.sort_unstable();
+    levels
+        .into_iter()
         .map(|level| {
             let mut label = FloorPlan::label(level);
             let mut marks = Vec::new();
             if level == here {
                 marks.push("here");
             }
-            if plan.bridge == Some(level) {
-                marks.push("bridge");
-            }
-            if plan.roof && level == plan.top {
-                marks.push("roof");
+            match plan.door_stratum(level) {
+                Some(StratumKind::Skyways) => marks.push("bridge"),
+                Some(StratumKind::Heights) => marks.push("roof"),
+                _ => {}
             }
             if !marks.is_empty() {
                 label = format!("{label} · {}", marks.join(" · "));
@@ -417,18 +580,22 @@ pub fn plan_now(st: &AppState, b: BuildingId) -> Option<Cow<'_, FloorPlan>> {
 /// A floor as the session has it once walked onto, else made fresh from the seed: the
 /// same floor, not kept. So the story can see a floor nobody has looked at.
 pub fn floor_now<'a>(st: &'a AppState, plan: &FloorPlan, level: i32) -> Option<Cow<'a, Floor>> {
-    if !plan.levels().any(|l| l == level) {
+    if !plan.has_level(level) {
         return None;
     }
     match st.interiors.floor(plan.building, level) {
         Some((_, floor)) => Some(Cow::Borrowed(floor)),
-        None => Some(Cow::Owned(generate_floor(st.city.as_ref()?, plan, level))),
+        None => {
+            let copy = st.interiors.copy(plan.building);
+            Some(Cow::Owned(draw_floor(st.city.as_ref()?, plan, copy, level)))
+        }
     }
 }
 
 /// Where a person is drawn now (doctor spec §4): their tile on the street, or inside a
 /// building the tile its floor's `Placement` stands them on, on the floor they occupy.
-/// None for the dead, and for anyone behind a door.
+/// None for the dead, for anyone behind a door, and for anyone in a building a mission's
+/// live copy stands in for: the real building carries on unseen.
 pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
     let world = st.world.as_ref()?;
     if let Some(pos) = world.pos_of(id) {
@@ -437,14 +604,20 @@ pub fn drawn_at(st: &AppState, id: PersonId) -> Option<(Place, Pos)> {
     let Whereabouts::Inside(b) = world.people().get(id.0 as usize)?.whereabouts else {
         return None;
     };
+    if crate::venues::copy_live(st, b) {
+        return None;
+    }
     let occupants = world.inside(b);
     let o = occupants.iter().find(|o| o.id == id)?;
-    let plan = plan_now(st, b)?;
+    // Residents and guests are behind their doors: no plan is made for them.
+    let plan = match o.role {
+        OccupantRole::Living | OccupantRole::Guest => return None,
+        OccupantRole::Working | OccupantRole::Visiting => plan_now(st, b)?,
+    };
     let level = match o.role {
         OccupantRole::Working if receptionist(world, &occupants) == Some(id) => 0,
         OccupantRole::Working => work_floor(&plan.work_floors(), id),
-        OccupantRole::Visiting => 0,
-        OccupantRole::Living | OccupantRole::Guest => return None,
+        _ => 0,
     };
     let floor = floor_now(st, &plan, level)?;
     let none = Homes::default();
@@ -503,7 +676,7 @@ fn receptionist(world: &World, occupants: &[Occupant]) -> Option<PersonId> {
 }
 
 /// The one of the work floors a worker works on, by who they are.
-fn work_floor(work_floors: &[i32], id: PersonId) -> i32 {
+pub(crate) fn work_floor(work_floors: &[i32], id: PersonId) -> i32 {
     let h = hash64(id.0 as u64, 0x0CC);
     work_floors[(h % work_floors.len() as u64) as usize]
 }
@@ -601,8 +774,8 @@ impl Placement {
                 }
             }
         }
-        // Whoever found no station stands on open floor, nearest the lift.
-        let anchor = plan.lift.unwrap_or(plan.stair);
+        // Whoever found no station stands on open floor, nearest the first landing.
+        let anchor = plan.anchor(floor.level);
         let used: HashSet<Pos> = at.iter().map(|(p, _)| *p).collect();
         let doorsteps: HashSet<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
         let mut spots: Vec<Pos> = floor
@@ -611,7 +784,8 @@ impl Placement {
             .filter(|(p, t)| {
                 t.is_walkable()
                     && t.feature.is_none()
-                    && !matches!(t.terrain, Terrain::Lift | Terrain::Stair | Terrain::Door)
+                    && !t.is_connector()
+                    && t.terrain != Terrain::Door
                     && !used.contains(p)
                     && !doorsteps.contains(p)
                     && floor.room_at(*p).is_none_or(|r| !r.private)
@@ -777,7 +951,7 @@ mod tests {
         let mut i = Interiors::default();
         assert!(i.plan(&c, shop.id).is_none());
         assert!(i.ensure(&c, shop.id, 0).is_none());
-        let top = i.plan(&c, tower.id).unwrap().top;
+        let top = i.plan(&c, tower.id).unwrap().top();
         assert!(i.ensure(&c, tower.id, 0).is_some());
         assert!(i.ensure(&c, tower.id, 0).is_some());
         assert_eq!(i.generated(), 1);
@@ -786,6 +960,179 @@ mod tests {
         assert_eq!(i.generated(), 2);
         assert!(i.floor(tower.id, 1).is_none());
         assert!(i.floor(tower.id, top).is_some());
+    }
+
+    #[test]
+    fn levels_with_a_gap_climb_and_ride_over_it() {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let mut plan = st.interiors.plan(&city, b).unwrap().clone();
+        // The links keep their stops on 2F and 3F: they are read through the levels.
+        plan.levels.retain(|l| ![2, 3].contains(l));
+        st.interiors.put_plan(plan.clone());
+        st.interiors.ensure(&city, b, 1).unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        let floor1 = Place::Floor {
+            building: b,
+            level: 1,
+        };
+        stand(&mut st, floor1, plan.stair_on(1).unwrap());
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `4F`");
+        assert_eq!(climb(&mut st, false).unwrap(), "Entering `1F`");
+        stand(&mut st, floor1, plan.lift_on(1).unwrap());
+        assert_eq!(
+            ride(&mut st, b, 3).unwrap_err(),
+            "the lift doesn't stop there"
+        );
+        assert_eq!(ride(&mut st, b, 4).unwrap(), "Entering `4F`");
+        assert!(st.interiors.ensure(&city, b, 2).is_none());
+        assert!(
+            floor_rows(st.interiors.plan_of(b).unwrap(), 0, 0)
+                .iter()
+                .all(|(l, _)| ![2, 3].contains(l))
+        );
+    }
+
+    fn stand(st: &mut AppState, place: Place, pos: Pos) {
+        let p = st.player.as_mut().unwrap();
+        (p.place, p.pos) = (place, pos);
+    }
+
+    /// The home city with the player in it, and its first corp tower with `edit` made
+    /// to its plan.
+    fn tower_edited(edit: impl FnOnce(&mut FloorPlan)) -> (AppState, BuildingId, FloorPlan) {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let city = st.city.clone().unwrap();
+        let b = city
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap()
+            .id;
+        let mut plan = st.interiors.plan(&city, b).unwrap().clone();
+        edit(&mut plan);
+        st.interiors.put_plan(plan.clone());
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        (st, b, plan)
+    }
+
+    #[test]
+    fn an_escalator_and_a_ladder_climb_like_stairs() {
+        let stop = |level, at, on, off| citygen::LinkStop {
+            level,
+            at,
+            card: 0,
+            on,
+            off,
+        };
+        let (p0, p1, q) = (Pos::new(2, 2), Pos::new(5, 2), Pos::new(2, 5));
+        let (mut st, b, _) = tower_edited(|plan| {
+            plan.links.push(citygen::LevelLink {
+                kind: citygen::LinkKind::Escalator,
+                stops: vec![stop(0, p0, true, false), stop(1, p1, false, true)],
+                name: None,
+            });
+            plan.links.push(citygen::LevelLink {
+                kind: citygen::LinkKind::Ladder,
+                stops: vec![stop(1, q, true, true), stop(2, q, true, true)],
+                name: None,
+            });
+        });
+        let city = st.city.clone().unwrap();
+        for level in 0..=2 {
+            st.interiors.ensure(&city, b, level).unwrap();
+        }
+        let floor = |level| Place::Floor { building: b, level };
+        assert_eq!(
+            st.interiors.floor(b, 0).unwrap().1.tiles[p0].terrain,
+            Terrain::Escalator
+        );
+        assert_eq!(
+            st.interiors.floor(b, 1).unwrap().1.tiles[q].terrain,
+            Terrain::Ladder
+        );
+        // The map draws each the way it runs from here: the escalator up only.
+        let way = |level, p| {
+            use crate::render::map::TileMap;
+            MapRef::for_place(&city, &st.interiors, &st.constructs, floor(level), 0)
+                .unwrap()
+                .connector(p)
+                .map(|d| (d.kind, d.up, d.down))
+        };
+        let stair = citygen::ConnectorKind::Stair;
+        assert_eq!(way(0, p0), Some((stair, true, false)));
+        assert_eq!(way(1, p1), Some((stair, false, false)));
+        let ladder = citygen::ConnectorKind::Ladder;
+        assert_eq!(way(1, q), Some((ladder, true, false)));
+        assert_eq!(way(2, q), Some((ladder, false, true)));
+        // Up the escalator, three tiles on; there is no going back down it.
+        stand(&mut st, floor(0), p0);
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `1F`");
+        let at = |st: &AppState| st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        assert_eq!(at(&st), (floor(1), p1));
+        assert_eq!(
+            climb(&mut st, false).unwrap_err(),
+            "nothing leads down from here"
+        );
+        // Up the ladder and back down it, on its tile.
+        stand(&mut st, floor(1), q);
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `2F`");
+        assert_eq!(at(&st), (floor(2), q));
+        assert_eq!(climb(&mut st, false).unwrap(), "Entering `1F`");
+        assert_eq!(at(&st), (floor(1), q));
+    }
+
+    #[test]
+    fn the_lift_rides_only_where_it_stops() {
+        use crate::screens::popup::{Pick, WorldAct};
+        let (mut st, b, plan) = tower_edited(|plan| {
+            let top = plan.top();
+            assert_eq!(plan.links[0].kind, citygen::LinkKind::Lift);
+            plan.links[0]
+                .stops
+                .retain(|s| [0, 2, top].contains(&s.level));
+        });
+        let (top, city) = (plan.top(), st.city.clone().unwrap());
+        st.interiors.ensure(&city, b, 0).unwrap();
+        let lobby = Place::Floor {
+            building: b,
+            level: 0,
+        };
+        stand(&mut st, lobby, plan.lift_on(0).unwrap());
+        let rows: Vec<(i32, bool)> =
+            crate::interact::ride_rows(&st, &mut crate::interact::FREE_LETTERS.chars())
+                .unwrap()
+                .into_iter()
+                .map(|c| match c.pick {
+                    Pick::World(WorldAct::Lift(l)) => (l, c.enabled),
+                    _ => panic!("a ride row"),
+                })
+                .collect();
+        assert_eq!(rows, vec![(top, true), (2, true), (0, false)]);
+        assert_eq!(
+            ride(&mut st, b, 1).unwrap_err(),
+            "the lift doesn't stop there"
+        );
+        assert_eq!(ride(&mut st, b, 2).unwrap(), "Entering `2F`");
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(
+            (p.place, p.pos),
+            (
+                Place::Floor {
+                    building: b,
+                    level: 2
+                },
+                plan.lift_on(2).unwrap()
+            )
+        );
     }
 
     #[test]
@@ -942,7 +1289,7 @@ mod tests {
         // No shops in a tower: a shopkeeper there would take any station as before.
         assert!(!has_shops(lobby));
         // And that drone sits at no desk upstairs.
-        let top = plan.top;
+        let top = plan.top();
         i.ensure(&c, tower.id, top).unwrap();
         let (plan, floor) = i.floor(tower.id, top).unwrap();
         let upstairs = Placement::new(plan, floor, &w, &Homes::default());
@@ -1094,6 +1441,145 @@ mod tests {
         let mut i = Interiors::default();
         assert!(!i.ensure_homes(&c, &w, b));
         assert!(i.homes_of(b).is_none_or(|h| h.is_empty()));
+    }
+
+    /// The first hotel of the home city.
+    fn first_hotel(city: &City) -> BuildingId {
+        city.buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Hotel)
+            .expect("a hotel")
+            .id
+    }
+
+    #[test]
+    fn walking_into_a_hotel_finds_a_venue() {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let city = st.city.clone().unwrap();
+        st.player = Some(crate::walker::Player::spawn(&city, 1));
+        let hotel = first_hotel(&city);
+        let door = city
+            .portals(hotel)
+            .into_iter()
+            .find(|(k, _)| *k == StratumKind::Street)
+            .expect("a street door");
+        enter(&mut st, hotel, door).unwrap();
+        let plan = st.interiors.plan_of(hotel).unwrap();
+        assert!(plan.venue.is_some());
+        assert!(plan.links.len() >= 2, "{:?}", plan.links);
+        let t = citygen::venue::VenuePack::builtin()
+            .for_kind(BuildingKind::Hotel)
+            .unwrap();
+        assert_eq!(plan.lowest(), -(t.levels.below.len() as i32));
+        assert_eq!(st.interiors.generated(), 1);
+    }
+
+    #[test]
+    fn prepare_draws_no_floor_of_a_venue() {
+        let mut st = AppState::new();
+        st.enter_city(home_city());
+        let hotel = first_hotel(st.city.as_ref().unwrap());
+        crate::credentials::prepare(&mut st, hotel);
+        assert!(st.interiors.plan_of(hotel).unwrap().venue.is_some());
+        assert_eq!(st.interiors.generated(), 0);
+    }
+
+    #[test]
+    fn an_old_saves_hotel_keeps_the_classic_builder() {
+        /// A plan as saves wrote it before a building's levels were a list.
+        #[derive(serde::Serialize)]
+        struct OldPlan {
+            building: BuildingId,
+            kind: BuildingKind,
+            theme: citygen::Theme,
+            footprint: citygen::Rect,
+            size: citygen::Size,
+            lowest: i32,
+            top: i32,
+            bridge: Option<i32>,
+            roof: bool,
+            lift: Option<Pos>,
+            stair: Pos,
+            atrium: Option<citygen::Rect>,
+            home_level: Option<i32>,
+            clinic: Option<citygen::ClinicPlan>,
+        }
+        #[derive(serde::Serialize)]
+        struct OldInteriors {
+            plans: HashMap<BuildingId, OldPlan>,
+            floors: HashMap<(BuildingId, i32), Floor>,
+            homes: HashMap<BuildingId, Homes>,
+        }
+        let city = home_city();
+        let mut hotels = city
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Hotel)
+            .map(|b| b.id);
+        let (hotel, other) = (hotels.next().unwrap(), hotels.next().unwrap());
+        let classic = FloorPlan::classic(&city, hotel).unwrap();
+        let old = OldPlan {
+            building: classic.building,
+            kind: classic.kind,
+            theme: classic.theme,
+            footprint: classic.footprint,
+            size: classic.size,
+            lowest: classic.lowest(),
+            top: classic.top(),
+            bridge: classic.door_level(StratumKind::Skyways),
+            roof: classic.door_level(StratumKind::Heights).is_some(),
+            lift: classic.lift_on(classic.lowest()),
+            stair: classic.stair_on(classic.lowest()).unwrap(),
+            atrium: classic.atrium,
+            home_level: classic.home_level,
+            clinic: classic.clinic,
+        };
+        let saved = OldInteriors {
+            plans: HashMap::from([(hotel, old)]),
+            floors: HashMap::new(),
+            homes: HashMap::new(),
+        };
+        let bytes = rmp_serde::to_vec_named(&saved).unwrap();
+        let mut ints: Interiors = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(ints.plan_of(hotel).unwrap().venue.is_none());
+        assert_eq!(
+            ints.ensure(&city, hotel, 1).unwrap(),
+            &generate_floor(&city, &classic, 1)
+        );
+        // A hotel the save never saw is a venue.
+        assert!(ints.plan(&city, other).unwrap().venue.is_some());
+    }
+
+    #[test]
+    fn workers_stand_at_a_venues_stations() {
+        let c = home_city();
+        let people = sim::People::load().unwrap();
+        let mut w = sim::World::seed(&c, &people, &sim::SimParams::default(), 22 * 60, 0);
+        // On to ten in the morning.
+        for m in 1..=12 * 60 {
+            w.advance(&c, m * sim::TICKS_PER_MINUTE);
+            w.path_some(&c, usize::MAX);
+        }
+        // Nobody works at a hotel: the first office with a drone at work.
+        let (office, id) = c
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Office)
+            .find_map(|b| Some((b.id, receptionist(&w, &w.inside(b.id))?)))
+            .expect("a drone at work in an office at ten");
+        let mut i = Interiors::default();
+        i.ensure(&c, office, 0).unwrap();
+        let (plan, lobby) = i.floor(office, 0).unwrap();
+        assert!(plan.venue.is_some());
+        let desk = lobby
+            .stations
+            .iter()
+            .find(|s| s.role == Role::Reception)
+            .expect("a reception desk")
+            .pos;
+        let placement = Placement::new(plan, lobby, &w, &Homes::default());
+        assert_eq!(placement.person_at(desk), Some(id));
     }
 
     #[test]

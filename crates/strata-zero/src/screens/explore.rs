@@ -1703,7 +1703,8 @@ impl MapScreen {
     }
 
     /// Works out where the occupants stand when the player is on a floor; once per
-    /// place and world minute.
+    /// place and world minute. Nobody stands on a mission's copy: the real building
+    /// carries on unseen.
     fn refresh_placement(&mut self, st: &AppState) {
         let Some(p) = st.player.as_ref() else {
             self.placement = None;
@@ -1713,6 +1714,10 @@ impl MapScreen {
             self.placement = None;
             return;
         };
+        if crate::venues::copy_live(st, building) {
+            self.placement = None;
+            return;
+        }
         let Some(world) = st.world.as_ref() else {
             return;
         };
@@ -2390,10 +2395,10 @@ impl MapScreen {
     }
 
     /// A step onto a closed building's door goes inside; onto an exit, back out; onto
-    /// a locked door, nowhere.
+    /// a locked door or a grille you can't crawl through, nowhere.
     fn doorway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
-        let (target, place) = (player.pos.step(dir), player.place);
+        let (here, target, place) = (player.pos, player.pos.step(dir), player.place);
         let city = st.city.as_ref()?;
         match place {
             Place::Stratum(k) => {
@@ -2420,13 +2425,32 @@ impl MapScreen {
                 Some(ScreenCmd::Stay)
             }
             Place::Floor { building, level } => {
-                let (_, floor) = st.interiors.floor(building, level)?;
-                if let Some(exit) = floor.exit_at(target).copied() {
+                let exit = st
+                    .interiors
+                    .floor(building, level)?
+                    .1
+                    .exit_at(target)
+                    .copied();
+                if let Some(exit) = exit {
                     let result = crate::interiors::leave(st, &exit);
                     report(st, result);
                     return Some(ScreenCmd::Stay);
                 }
-                let here = player.pos;
+                // A venue's lock or grille, before any room's door.
+                match crate::venues::step_onto(st, building, level, here, target) {
+                    crate::venues::Meets::Held(why) => {
+                        st.warn(why);
+                        return Some(ScreenCmd::Stay);
+                    }
+                    crate::venues::Meets::Through(line) => {
+                        if let Some(line) = line {
+                            st.say(line);
+                        }
+                        return None;
+                    }
+                    crate::venues::Meets::Nothing => {}
+                }
+                let (_, floor) = st.interiors.floor(building, level)?;
                 let room = floor
                     .door_of(target)
                     .filter(|r| {
@@ -2458,7 +2482,10 @@ impl MapScreen {
                         });
                     let mut what = r.kind.label().to_string();
                     if r.number > 0 {
-                        what = format!("{what} {}", r.number);
+                        // A venue room by its label: B1-04 below the street.
+                        let number = crate::credentials::venue_door(st, building, level, r.number)
+                            .unwrap_or_else(|| r.number.to_string());
+                        what = format!("{what} {number}");
                     }
                     let (whose, lit) = match &owner {
                         Some(name) => (format!("{name}'s {what}"), format!("`{name}`'s {what}")),
@@ -2469,7 +2496,7 @@ impl MapScreen {
                             st.warn(format!("locked · {whose}"));
                             return Some(ScreenCmd::Stay);
                         }
-                        Some(How::Cracked) => {}
+                        Some(How::Cracked | How::Free) => {}
                         Some(How::Keycard) => st.say(format!("{lit} · the keycard opens it")),
                         Some(How::Code(c)) => st.say(format!("{lit} · you key in {c:04}")),
                     }
@@ -3729,6 +3756,8 @@ impl Screen for MapScreen {
             self.targeting = None;
         }
         crate::track::tick(st);
+        // Beside a venue's door or on its crawl's tile: its plan kept, for Space and Look.
+        crate::venues::keep_plans_here(st);
         // The asides run out on the clock, and all go once a scene, a rest or a fight is on.
         crate::missions::asides::prune(st);
         crate::missions::news::tick(st, self.mode == Mode::Walk);
@@ -4007,6 +4036,16 @@ impl Screen for MapScreen {
             overlays.push(&weather);
         }
         overlays.push(&digital);
+        // The venues' doors: a mission's flagged, and those onto floors the plan lacks shut.
+        let marks = if self.place.stratum().is_some() {
+            crate::venues::door_marks(st)
+        } else {
+            Vec::new()
+        };
+        let door_marks = crate::render::doors::DoorMarks { marks: &marks, vis };
+        if !marks.is_empty() {
+            overlays.push(&door_marks);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
         let scorch = ScorchOverlay { fx: &st.fx, vis };
@@ -5339,9 +5378,9 @@ mod tests {
     fn a_whole_street_fight() {
         let mut st = AppState::new();
         st.unlock_dev();
-        let mut title = crate::screens::title::Title::new(&st, 0);
-        title.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
-        let ScreenCmd::Switch { to: map, .. } = title.update(&mut st, &[key(KeyCode::Enter)])
+        let street = crate::screens::title::CombatMap::Street;
+        let ScreenCmd::Switch { to: map, .. } =
+            crate::screens::title::combat_start(&mut st, street)
         else {
             panic!("the lot")
         };
@@ -7904,7 +7943,8 @@ mod tests {
         let city = st.city.as_ref().unwrap().clone();
         let plan = st.interiors.plan(&city, b).unwrap().clone();
         st.interiors.ensure(&city, b, 0).unwrap();
-        let lift = plan.lift.expect("a tower has a lift bank");
+        let lift = plan.lift_on(0).expect("a tower has a lift bank");
+        let stair = plan.stair_on(0).expect("and a stairwell");
         stand(
             &mut st,
             &mut s,
@@ -7926,7 +7966,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("2F"), "{text}");
-        assert!(text.contains(&FloorPlan::label(plan.top)), "{text}");
+        assert!(text.contains(&FloorPlan::label(plan.top())), "{text}");
         assert!(text.contains("roof"), "{text}");
         // The 2F row rides there, and the log says so.
         for _ in 0..80 {
@@ -7943,10 +7983,10 @@ mod tests {
         assert_eq!(last(&st), Some("Entering 2F"));
         s.update(&mut st, &[]);
         // A ride to a floor never generated before works (and generates it).
-        assert!(st.interiors.floor(b, plan.top).is_none());
+        assert!(st.interiors.floor(b, plan.top()).is_none());
         assert_eq!(
-            crate::interiors::ride(&mut st, b, plan.top).unwrap(),
-            format!("Entering `{}`", FloorPlan::label(plan.top))
+            crate::interiors::ride(&mut st, b, plan.top()).unwrap(),
+            format!("Entering `{}`", FloorPlan::label(plan.top()))
         );
         s.update(&mut st, &[]);
         let (place, pos) = player(&st);
@@ -7954,18 +7994,18 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             }
         );
         assert_eq!(pos, lift);
-        assert!(st.interiors.floor(b, plan.top).is_some());
+        assert!(st.interiors.floor(b, plan.top()).is_some());
         assert_eq!(s.place, place);
         // Stairs: one floor at a time, same tile.
-        stand(&mut st, &mut s, place, plan.stair);
+        stand(&mut st, &mut s, place, stair);
         s.update(&mut st, &[key(KeyCode::Char('<'))]);
         assert_eq!(
             last(&st),
-            Some(format!("Entering {}", FloorPlan::label(plan.top - 1)).as_str())
+            Some(format!("Entering {}", FloorPlan::label(plan.top() - 1)).as_str())
         );
         assert_eq!(st.log.latest().unwrap().marks.len(), 1, "the floor is lit");
         let (place, pos) = player(&st);
@@ -7973,16 +8013,16 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.top - 1
+                level: plan.top() - 1
             }
         );
-        assert_eq!(pos, plan.stair);
+        assert_eq!(pos, stair);
         s.update(&mut st, &[key(KeyCode::Char('>'))]);
         assert_eq!(
             player(&st).0,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             }
         );
         s.update(&mut st, &[key(KeyCode::Char('>'))]);
@@ -7990,7 +8030,7 @@ mod tests {
             player(&st).0,
             Place::Floor {
                 building: b,
-                level: plan.top
+                level: plan.top()
             },
             "no floor above the top"
         );
@@ -8000,12 +8040,12 @@ mod tests {
             last(&st)
         );
         // Off the stair, > and < lead nowhere inside.
-        let (_, floor) = st.interiors.floor(b, plan.top).unwrap();
+        let (_, floor) = st.interiors.floor(b, plan.top()).unwrap();
         let open = floor
             .tiles
             .iter()
             .find(|(p, t)| {
-                t.terrain == citygen::Terrain::Floor && t.feature.is_none() && *p != plan.stair
+                t.terrain == citygen::Terrain::Floor && t.feature.is_none() && *p != stair
             })
             .unwrap()
             .0;
@@ -8014,7 +8054,7 @@ mod tests {
             &mut s,
             Place::Floor {
                 building: b,
-                level: plan.top,
+                level: plan.top(),
             },
             open,
         );
@@ -8054,8 +8094,8 @@ mod tests {
                 assert_eq!(building, b.id);
                 let plan = st.interiors.plan_of(b.id).unwrap().clone();
                 let expected = match k {
-                    StratumKind::Heights => plan.top,
-                    StratumKind::Skyways => plan.bridge.unwrap(),
+                    StratumKind::Heights => plan.top(),
+                    StratumKind::Skyways => plan.door_level(StratumKind::Skyways).unwrap(),
                     StratumKind::Undercity => -1,
                     _ => unreachable!(),
                 };
@@ -8604,20 +8644,21 @@ mod tests {
             .filter(|b| b.kind.is_closed())
             .find(|b| {
                 let plan = FloorPlan::new(&city, b.id).unwrap();
-                plan.lift.is_none() && plan.floors() >= 2
+                plan.lift_on(0).is_none() && plan.floors() >= 2
             })
             .expect("a two-floor building without a lift")
             .id;
         let plan = st.interiors.plan(&city, b).unwrap().clone();
-        st.interiors.ensure(&city, b, plan.lowest).unwrap();
+        st.interiors.ensure(&city, b, plan.lowest()).unwrap();
+        let stair = plan.stair_on(plan.lowest()).unwrap();
         stand(
             &mut st,
             &mut s,
             Place::Floor {
                 building: b,
-                level: plan.lowest,
+                level: plan.lowest(),
             },
-            plan.stair,
+            stair,
         );
         let ScreenCmd::Push { to: mut here, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
@@ -8626,7 +8667,10 @@ mod tests {
         st.tick += 40;
         let text = draw_screen(&*here, &st, 120, 40);
         assert!(
-            text.contains(&format!(">  Go up: {}", FloorPlan::label(plan.lowest + 1))),
+            text.contains(&format!(
+                ">  Go up: {}",
+                FloorPlan::label(plan.lowest() + 1)
+            )),
             "{text}"
         );
         here.update(&mut st, &[key(KeyCode::Char('>'))]);
@@ -8636,10 +8680,10 @@ mod tests {
             place,
             Place::Floor {
                 building: b,
-                level: plan.lowest + 1
+                level: plan.lowest() + 1
             }
         );
-        assert_eq!(pos, plan.stair, "stairs keep the tile");
+        assert_eq!(pos, stair, "stairs keep the tile");
     }
 
     #[test]
@@ -8959,6 +9003,16 @@ mod tests {
             last(&st).is_some_and(|l| l.starts_with("locked")),
             "{:?}",
             last(&st)
+        );
+        let lift = st.interiors.plan_of(b).unwrap().lift_on(1).unwrap();
+        stand(
+            &mut st,
+            &mut s,
+            Place::Floor {
+                building: b,
+                level: 1,
+            },
+            lift,
         );
         assert_eq!(
             crate::interiors::ride(&mut st, b, 0).unwrap_err(),

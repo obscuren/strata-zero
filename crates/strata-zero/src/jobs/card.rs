@@ -412,6 +412,7 @@ fn door_line(st: &AppState, b: BuildingId, level: i32, number: u16) -> (String, 
         Some(How::Code(c)) => (format!("door code {c:04}"), DONE),
         Some(How::Keycard) => ("you hold its keycard".to_string(), DONE),
         Some(How::Cracked) => ("the lock is cracked".to_string(), DONE),
+        Some(How::Free) => ("it opens without a key".to_string(), DONE),
         None => (
             format!("door code not known · {}", super::generate::how_in(st, b)),
             MAGENTA,

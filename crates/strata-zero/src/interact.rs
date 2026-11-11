@@ -10,7 +10,8 @@ use crate::render::people::card_lines;
 use crate::screens::popup::{Choice, Header, Pick, Popup, WorldAct};
 use crate::ui::chrome::{CYAN, MAGENTA, TEXT};
 use crate::ui::hud::{AMBER, capitalised};
-use citygen::{Dir, Feature, FloorPlan, Furniture, Place, Pos};
+use citygen::venue::LockKind;
+use citygen::{Dir, Feature, FloorPlan, Furniture, LinkKind, Place, Pos};
 use ratatui::style::Color;
 
 /// Letters for take, ride and program rows: no verb letter, none of the window's
@@ -256,6 +257,34 @@ pub fn gather(
         }
     }
 
+    // A venue's locked door in from the city beside you: its keypad.
+    if let Some(k) = place.stratum() {
+        let now = st.net.now(st);
+        for d in pos.neighbors4() {
+            let Some((building, level, lock, name)) = crate::venues::locked_door_in(st, k, d)
+            else {
+                continue;
+            };
+            let number = lock.number;
+            let mut row = Choice::on(
+                'i',
+                "Interact",
+                "Keypad",
+                AMBER,
+                Pick::Keypad {
+                    building,
+                    level,
+                    number,
+                },
+            );
+            if let Some(until) = st.journal.keypad_locked_until(building, level, number, now) {
+                row = row.tail(format!(" · locked {}m", until.saturating_sub(now).max(1)));
+            }
+            let head = header(capitalised(&name), mark_tile(st, &map, d));
+            add(&mut subs, &mut here, d, Some(head), None, vec![row]);
+        }
+    }
+
     // A ripperdoc's chair beside you: sit in it, while the doc is in.
     if let Place::Floor { building, level } = place
         && let Some(chair) = st
@@ -301,15 +330,25 @@ pub fn gather(
         }
     }
 
-    // A locked flat's door beside you: its keypad.
+    // A locked flat's door beside you, a venue's locked room's but your home's, or a
+    // keypad lock's unless you stand on its free side: its keypad. A locked room opens
+    // from inside with none.
     if let Place::Floor { building, level } = place
-        && let Some((_, floor)) = st.interiors.floor(building, level)
+        && let Some((plan, floor)) = st.interiors.floor(building, level)
     {
         let now = st.net.now(st);
+        let venue = plan.venue.is_some();
         for d in pos.neighbors4() {
-            let Some(r) = floor.door_of(d).filter(|r| {
-                r.private && r.kind == citygen::RoomKind::Flat && !r.rect.contains(pos)
-            }) else {
+            let lock = (floor.lock_at(d))
+                .filter(|l| l.kind == LockKind::Keypad && l.free_from != Some(pos))
+                .map(|l| l.number);
+            let padded = |r: &citygen::Room| {
+                r.kind == citygen::RoomKind::Flat || (venue && r.kind != citygen::RoomKind::Home)
+            };
+            let flat = (floor.door_of(d))
+                .filter(|r| r.private && padded(r) && !r.rect.contains(pos))
+                .map(|r| r.number);
+            let Some(number) = lock.or(flat) else {
                 continue;
             };
             let mut row = Choice::on(
@@ -320,18 +359,13 @@ pub fn gather(
                 Pick::Keypad {
                     building,
                     level,
-                    number: r.number,
+                    number,
                 },
             );
-            if let Some(until) = st
-                .journal
-                .keypad_locked_until(building, level, r.number, now)
-            {
+            if let Some(until) = st.journal.keypad_locked_until(building, level, number, now) {
                 row = row.tail(format!(" · locked {}m", until.saturating_sub(now).max(1)));
             }
-            let name = capitalised(&crate::credentials::flat_label(
-                st, building, level, r.number,
-            ));
+            let name = capitalised(&crate::credentials::door_label(st, building, level, number));
             add(
                 &mut subs,
                 &mut here,
@@ -504,38 +538,67 @@ pub fn gather(
                 Pick::World(WorldAct::Down),
             ));
         }
+        // A crawl's grille in a building, this tile outside it.
+        if let Some(into) = crate::venues::crawl_in_at(st, k, pos) {
+            fixture = Some("Grille");
+            here_rows.push(crawl_row(st, "Crawl in", WorldAct::Crawl(Some(into))));
+        }
     }
-    // Inside: the lift panel on a lift bank, the next floors on the stairs.
+    // Inside: the lift panel on a lift bank, a crawl in's grille's way back out, the next
+    // stops on anything else (a crawl's when you can crawl).
     if let Place::Floor { building, level } = place
-        && let Some((plan, floor)) = st.interiors.floor(building, level)
+        && let Some((plan, _)) = st.interiors.floor(building, level)
     {
-        match floor.tiles.get(pos).map(|t| t.terrain) {
-            Some(citygen::Terrain::Lift) => {
+        if crate::venues::crawl_way_at(plan, level, pos).is_some() {
+            fixture = Some("Grille");
+            here_rows.push(crawl_row(st, "Crawl out", WorldAct::Crawl(None)));
+        }
+        // A grille beside you, while you can't crawl: the Tech it takes.
+        if !crate::venues::can_crawl(st) {
+            for d in pos
+                .neighbors4()
+                .filter(|d| crate::venues::grille_at(plan, level, *d))
+            {
+                let shut = crawl_row(st, "Crawl", WorldAct::Climb(true));
+                let head = header("Grille", mark_tile(st, &map, d));
+                add(&mut subs, &mut here, d, Some(head), None, vec![shut]);
+            }
+        }
+    }
+    if let Place::Floor { building, level } = place
+        && let Some((plan, _)) = st.interiors.floor(building, level)
+        && let Some(link) = plan.link_at(level, pos)
+    {
+        match plan.links[link].kind {
+            LinkKind::Lift => {
                 fixture = Some("Lift");
                 here_rows.extend(ride_rows(st, &mut letters).unwrap_or_default());
             }
-            Some(citygen::Terrain::Stair) => {
-                fixture = Some("Stairwell");
-                if level < plan.top {
+            LinkKind::Crawl if !crate::venues::can_crawl(st) => {
+                fixture = Some(link_name(LinkKind::Crawl));
+                here_rows.push(crawl_row(st, "Crawl", WorldAct::Climb(true)));
+            }
+            kind => {
+                fixture = Some(link_name(kind));
+                if let Some(up) = plan.next_stop(link, level, true) {
                     here_rows.push(Choice::on(
                         '>',
                         "Go up",
-                        FloorPlan::label(level + 1),
+                        FloorPlan::label(up),
                         TEXT,
                         Pick::World(WorldAct::Climb(true)),
                     ));
                 }
-                if level > plan.lowest {
+                if let Some(down) = plan.next_stop(link, level, false) {
                     here_rows.push(Choice::on(
                         '<',
                         "Go down",
-                        FloorPlan::label(level - 1),
+                        FloorPlan::label(down),
                         TEXT,
                         Pick::World(WorldAct::Climb(false)),
                     ));
                 }
             }
-            _ => {}
         }
     }
     here.choices.splice(0..0, here_rows);
@@ -558,17 +621,45 @@ pub fn gather(
     subs
 }
 
-/// The lift panel's rows: every floor of the building, the current one greyed, the one
-/// the track wants you on marked `⌖` in cyan.
+/// What a link's landing is called: the window's header and the Look's name.
+pub fn link_name(kind: LinkKind) -> &'static str {
+    match kind {
+        LinkKind::Lift => "Lift",
+        LinkKind::Stair => "Stairwell",
+        LinkKind::Escalator => "Escalator",
+        LinkKind::Ladder => "Ladder",
+        LinkKind::Crawl => "Grille",
+    }
+}
+
+/// An Interact row through a crawl's grille, `act` doing it: greyed with the Tech it takes
+/// while you can't crawl.
+fn crawl_row(st: &AppState, thing: &str, act: WorldAct) -> Choice {
+    if crate::venues::can_crawl(st) {
+        return Choice::on('i', "Interact", thing, CYAN, Pick::World(act));
+    }
+    Choice {
+        thing: Some((thing.to_string(), CYAN)),
+        ..Choice::disabled('i', "Interact")
+    }
+    .tail(format!(" · it takes Tech {}", crate::venues::crawl_tech()))
+}
+
+/// The lift panel's rows: every floor the lift under you stops at, top first, yours
+/// greyed, the one the track wants you on marked `⌖` in cyan, and one whose card you lack
+/// greyed with the card it wants.
 pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Choice>> {
     let player = st.player.as_ref()?;
     let Place::Floor { building, level } = player.place else {
         return None;
     };
     let plan = st.interiors.plan_of(building)?;
+    let link = plan
+        .link_at(level, player.pos)
+        .filter(|l| plan.links[*l].kind == LinkKind::Lift)?;
     let wanted = crate::track::floor_wanted(st, building).filter(|w| *w != level);
     Some(
-        crate::interiors::floor_rows(plan, level)
+        crate::interiors::floor_rows(plan, link, level)
             .into_iter()
             .rev()
             .map(|(l, label)| {
@@ -582,9 +673,18 @@ pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Cho
                 } else {
                     (floor, TEXT)
                 };
+                let card = crate::venues::ride_card(plan, link, l);
+                let carded =
+                    l != level && crate::credentials::opens_stop(st, building, card).is_none();
+                let marks = if carded {
+                    let zone = crate::venues::zone_name(plan, card);
+                    format!("{marks} · {zone} card")
+                } else {
+                    marks
+                };
                 let mut c = Choice::on(key, "Ride", floor, colour, Pick::World(WorldAct::Lift(l)))
                     .tail(marks);
-                c.enabled = l != level;
+                c.enabled = l != level && !carded;
                 c
             })
             .collect(),
@@ -804,7 +904,7 @@ mod tests {
             let city = st.city.as_ref().unwrap();
             st.interiors.ensure(city, b, 0).unwrap();
             st.interiors.ensure(city, b, level).unwrap();
-            st.interiors.plan_of(b).unwrap().lift.unwrap()
+            st.interiors.plan_of(b).unwrap().lift_on(0).unwrap()
         };
         let stand = |st: &mut AppState, level: i32| {
             let p = st.player.as_mut().unwrap();

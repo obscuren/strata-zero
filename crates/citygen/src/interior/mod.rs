@@ -5,6 +5,7 @@ mod floor;
 mod home;
 mod layouts;
 mod plan;
+pub mod venue;
 
 pub use floor::*;
 pub use home::{Home, home};
@@ -14,20 +15,26 @@ use crate::pathing::components;
 use crate::tile::{Feature, Terrain};
 use crate::world::City;
 
-/// Builds one floor of a plan.
+/// Builds one floor of a plan: a venue's level drawn from its layout, else today's
+/// builder's floor.
 pub fn generate_floor(city: &City, plan: &FloorPlan, level: i32) -> Floor {
+    if let Some(floor) = (plan.venue.as_deref()).and_then(|v| venue::draw_level(v, level)) {
+        return floor;
+    }
     layouts::generate(city, plan, level)
 }
 
 /// The rules every floor keeps: one walkable piece that holds the shafts and the
-/// doorsteps, exits that are doors on the border with a clear doorstep, locked
-/// rooms with a door, nothing standing where people must pass.
+/// doorsteps, a door onto each stratum the plan says the floor opens onto, exits that
+/// are doors on the border with a clear doorstep, locked rooms with a door, nothing
+/// standing where people must pass.
 pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
     let size = floor.tiles.size();
-    if size != plan.size {
+    let want = plan.size_of(floor.level);
+    if size != want {
         return Err(format!(
             "floor {} is {:?}, the plan says {:?}",
-            floor.level, size, plan.size
+            floor.level, size, want
         ));
     }
     let comps = components(size, |p| floor.tiles[p].is_walkable());
@@ -44,16 +51,26 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
         }
         Ok(())
     };
-    for p in plan.lift_bank() {
-        if floor.tiles[p].terrain != Terrain::Lift {
-            return Err(format!("no lift at {p:?} on floor {}", floor.level));
+    for link in &plan.links {
+        let want = link.kind.terrain();
+        for p in link.tiles(floor.level) {
+            if floor.tiles[p].terrain != want {
+                return Err(format!(
+                    "no {} at {p:?} on floor {}",
+                    want.label(),
+                    floor.level
+                ));
+            }
         }
     }
-    if plan.floors() >= 2 && floor.tiles[plan.stair].terrain != Terrain::Stair {
-        return Err(format!(
-            "no stair at {:?} on floor {}",
-            plan.stair, floor.level
-        ));
+    // Each stratum the plan says the level's doors open onto has a door here.
+    for d in plan.doors.iter().filter(|d| d.level == floor.level) {
+        if !floor.exits.iter().any(|e| e.stratum == d.stratum) {
+            return Err(format!(
+                "floor {} has no door onto the {:?}",
+                floor.level, d.stratum
+            ));
+        }
     }
     let frame = size.rect();
     let doorsteps: Vec<crate::geom::Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
@@ -125,22 +142,25 @@ pub fn validate_floor(plan: &FloorPlan, floor: &Floor) -> Result<(), String> {
             ));
         }
     }
-    // Every exit reaches the shafts without crossing a locked room.
-    if plan.floors() >= 2 {
-        let shafts: Vec<crate::geom::Pos> =
-            plan.lift_bank().into_iter().chain([plan.stair]).collect();
+    // Every exit reaches a landing without crossing a locked room: the roof door's
+    // doorstep is one.
+    let landings = plan.landings(floor.level);
+    if !landings.is_empty() {
         for e in &floor.exits {
             let step = floor.doorstep(e);
+            if landings.contains(&step) {
+                continue;
+            }
             let reached = crate::pathing::bfs_nearest(
                 size,
                 step,
                 |p| floor.tiles[p].is_walkable() && !private.iter().any(|r| r.rect.contains(p)),
-                |p| shafts.contains(&p),
+                |p| landings.contains(&p),
                 4096,
             );
             if reached.is_none() {
                 return Err(format!(
-                    "the {:?} exit at {:?} cannot reach the shafts without a locked room",
+                    "the {:?} exit at {:?} cannot reach a landing without a locked room",
                     e.stratum, e.at
                 ));
             }
@@ -163,6 +183,276 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    fn medium(seed: u64) -> City {
+        Generator::run(GenParams {
+            seed,
+            size: SizePreset::Medium,
+            districts: 7,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// A floor as one number: what is laid on it and where, not how it is lit.
+    pub(crate) fn floor_fingerprint(f: &Floor) -> u64 {
+        use std::fmt::Write;
+        let mut text = String::new();
+        for (_, t) in f.tiles.iter() {
+            let _ = writeln!(text, "{:?} {:?}", t.terrain, t.feature);
+        }
+        for r in &f.rooms {
+            let _ = writeln!(
+                text,
+                "{:?} {:?} {:?} {:?} {:?}",
+                r.rect, r.kind, r.door, r.private, r.number
+            );
+        }
+        for e in &f.exits {
+            let _ = writeln!(text, "{e:?}");
+        }
+        for s in &f.stations {
+            let _ = writeln!(text, "{s:?}");
+        }
+        text.as_bytes().chunks(8).fold(0, |h, chunk| {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            crate::rng::hash64(h, u64::from_le_bytes(word))
+        })
+    }
+
+    /// Today's floors as one number per city: every closed building's lowest, ground,
+    /// bridge and top floors. Levels as a list, doors by stratum and links between
+    /// levels describe the same buildings, so these stay put.
+    #[test]
+    fn classic_floors_are_pinned() {
+        const PINNED: [u64; 2] = [16392843263592621219, 8103014452885745522];
+        for (i, c) in [city(), medium(8)].iter().enumerate() {
+            let mut h = 0;
+            for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+                let plan = FloorPlan::classic(c, b.id).unwrap();
+                let mut levels = vec![
+                    plan.lowest(),
+                    0,
+                    plan.top(),
+                    plan.door_level(StratumKind::Skyways).unwrap_or(0),
+                ];
+                levels.sort();
+                levels.dedup();
+                for l in levels {
+                    h = crate::rng::hash64(h, floor_fingerprint(&generate_floor(c, &plan, l)));
+                }
+            }
+            assert_eq!(h, PINNED[i], "city {i}");
+        }
+    }
+
+    /// A plan as saves wrote it before a building's levels were a list.
+    #[derive(serde::Serialize)]
+    struct OldPlan {
+        building: crate::ids::BuildingId,
+        kind: BuildingKind,
+        theme: crate::world::Theme,
+        footprint: crate::geom::Rect,
+        size: crate::geom::Size,
+        lowest: i32,
+        top: i32,
+        bridge: Option<i32>,
+        roof: bool,
+        lift: Option<crate::geom::Pos>,
+        stair: crate::geom::Pos,
+        atrium: Option<crate::geom::Rect>,
+        home_level: Option<i32>,
+        clinic: Option<ClinicPlan>,
+    }
+
+    impl OldPlan {
+        fn of(p: &FloorPlan) -> OldPlan {
+            OldPlan {
+                building: p.building,
+                kind: p.kind,
+                theme: p.theme,
+                footprint: p.footprint,
+                size: p.size,
+                lowest: p.lowest(),
+                top: p.top(),
+                bridge: p.door_level(StratumKind::Skyways),
+                roof: p.door_level(StratumKind::Heights).is_some(),
+                lift: p
+                    .links
+                    .iter()
+                    .find(|l| l.kind == LinkKind::Lift)
+                    .map(|l| l.stops[0].at),
+                stair: p.stair_on(p.lowest()).unwrap_or(p.anchor(0)),
+                atrium: p.atrium,
+                home_level: p.home_level,
+                clinic: p.clinic,
+            }
+        }
+    }
+
+    #[test]
+    fn an_old_plan_reads_back_the_same() {
+        let c = city();
+        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            let bytes = rmp_serde::to_vec_named(&OldPlan::of(&plan)).unwrap();
+            let back: FloorPlan = rmp_serde::from_slice(&bytes).unwrap();
+            // An old save doesn't say whether the city put a door by the basement: its
+            // basement opens onto the tunnel.
+            let mut want = plan.clone();
+            if plan.lowest() == -1 && plan.door_level(StratumKind::Undercity).is_none() {
+                let tunnel = LevelDoor {
+                    level: -1,
+                    stratum: StratumKind::Undercity,
+                };
+                want.doors.insert(0, tunnel);
+            }
+            assert_eq!(back, want, "{:?}", b.id);
+            let again: FloorPlan =
+                rmp_serde::from_slice(&rmp_serde::to_vec_named(&plan).unwrap()).unwrap();
+            assert_eq!(again, plan);
+        }
+    }
+
+    #[test]
+    fn a_level_list_steps_over_its_gaps() {
+        let c = city();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CorpTower)
+            .unwrap();
+        let mut plan = FloorPlan::classic(&c, b.id).unwrap();
+        plan.levels.retain(|l| ![2, 3].contains(l));
+        assert_eq!(plan.next_level(1, true), Some(4));
+        assert_eq!(plan.next_level(4, false), Some(1));
+        assert_eq!(plan.next_level(plan.top(), true), None);
+        assert!(!plan.has_level(2) && plan.has_level(4));
+        assert_eq!(plan.floors(), plan.levels.len() as i32);
+    }
+
+    #[test]
+    fn classic_plans_have_one_lift_and_one_stair() {
+        let c = city();
+        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            let lifts: Vec<_> = plan
+                .links
+                .iter()
+                .filter(|l| l.kind == LinkKind::Lift)
+                .collect();
+            let stairs: Vec<_> = plan
+                .links
+                .iter()
+                .filter(|l| l.kind == LinkKind::Stair)
+                .collect();
+            assert_eq!(lifts.len(), usize::from(plan.floors() >= 3));
+            assert_eq!(stairs.len(), usize::from(plan.floors() >= 2));
+            for l in lifts.iter().chain(&stairs) {
+                assert_eq!(
+                    l.stops.iter().map(|s| s.level).collect::<Vec<_>>(),
+                    plan.levels
+                );
+                assert!(
+                    l.stops
+                        .iter()
+                        .all(|s| s.at == l.stops[0].at && s.card == 0 && s.on && s.off)
+                );
+            }
+            if let Some(l) = lifts.first() {
+                assert_eq!(plan.links[0].kind, LinkKind::Lift, "the lift comes first");
+                assert_eq!(l.tiles(0), vec![l.stops[0].at, l.stops[0].at.offset(1, 0)]);
+            }
+        }
+    }
+
+    /// The classic plan of a building on levels 0 to 4.
+    fn five_floors() -> FloorPlan {
+        let c = medium(8);
+        c.buildings
+            .iter()
+            .filter(|b| b.kind.is_closed())
+            .map(|b| FloorPlan::classic(&c, b.id).unwrap())
+            .find(|p| p.levels == (0..=4).collect::<Vec<_>>())
+            .expect("a five-floor building")
+    }
+
+    #[test]
+    fn next_stop_and_rides_follow_on_and_off() {
+        let mut plan = five_floors();
+        let p = crate::geom::Pos::new(3, 3);
+        let stop = |level, on, off| LinkStop {
+            level,
+            at: p,
+            card: 0,
+            on,
+            off,
+        };
+        plan.links = vec![
+            // An up escalator.
+            LevelLink {
+                kind: LinkKind::Escalator,
+                stops: vec![stop(0, true, false), stop(1, false, true)],
+                name: None,
+            },
+            // A fire stair you leave only at its ends.
+            LevelLink {
+                kind: LinkKind::Stair,
+                stops: (0..=4).map(|l| stop(l, true, l == 0 || l == 4)).collect(),
+                name: None,
+            },
+            // A lift that passes 1F and 3F.
+            LevelLink {
+                kind: LinkKind::Lift,
+                stops: [0, 2, 4].into_iter().map(|l| stop(l, true, true)).collect(),
+                name: None,
+            },
+        ];
+        assert_eq!(plan.next_stop(0, 0, true), Some(1));
+        assert_eq!(plan.next_stop(0, 1, false), None);
+        assert_eq!(plan.next_stop(1, 2, false), Some(0));
+        assert_eq!(plan.next_stop(1, 2, true), Some(4));
+        assert_eq!(plan.rides(2, 0), vec![2, 4]);
+        assert_eq!(plan.rides(2, 1), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn links_skip_a_stop_on_a_level_the_plan_lacks() {
+        let mut plan = five_floors();
+        plan.levels.retain(|l| ![2, 3].contains(l));
+        let (lift, stair) = (0, 1);
+        assert_eq!(plan.links[lift].kind, LinkKind::Lift);
+        assert_eq!(plan.links[stair].kind, LinkKind::Stair);
+        assert_eq!(plan.next_stop(stair, 1, true), Some(4));
+        assert_eq!(plan.next_stop(stair, 4, false), Some(1));
+        let rides = plan.rides(lift, 0);
+        assert!(!rides.contains(&2) && !rides.contains(&3), "{rides:?}");
+        assert_eq!(rides, vec![1, 4]);
+    }
+
+    #[test]
+    fn each_level_says_which_stratum_its_doors_open_onto() {
+        let c = city();
+        for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            assert_eq!(plan.door_stratum(0), Some(StratumKind::Street));
+            assert_eq!(plan.door_level(StratumKind::Street), Some(0));
+            let has = |k: StratumKind| c.portals(b.id).iter().any(|(s, _)| *s == k);
+            // A basement opens onto the tunnel only where the city put a door to it.
+            assert_eq!(
+                plan.door_level(StratumKind::Undercity),
+                (plan.lowest() == -1 && has(StratumKind::Undercity)).then_some(-1)
+            );
+            let skyways = has(StratumKind::Skyways);
+            assert_eq!(plan.door_level(StratumKind::Skyways).is_some(), skyways);
+            assert_eq!(
+                plan.door_level(StratumKind::Heights),
+                (b.span.hi == StratumKind::Heights).then_some(plan.top())
+            );
+            assert_eq!(plan.door_level(StratumKind::Net), None);
+        }
     }
 
     #[test]
@@ -236,11 +526,11 @@ mod tests {
             .iter()
             .filter(|b| b.kind.is_closed() && b.kind != BuildingKind::Clinic)
         {
-            let plan = FloorPlan::new(&c, b.id).expect("a plan for a closed building");
+            let plan = FloorPlan::classic(&c, b.id).expect("a plan for a closed building");
             assert_eq!(plan.size.w as i32, (b.footprint.w * 3).max(12));
             assert_eq!(plan.size.h as i32, (b.footprint.h * 3).max(9));
             assert_eq!(
-                plan.lowest,
+                plan.lowest(),
                 if b.span.contains(StratumKind::Undercity) {
                     -1
                 } else {
@@ -248,11 +538,11 @@ mod tests {
                 }
             );
             match b.span.hi {
-                StratumKind::Street => assert!(plan.top <= 2),
-                StratumKind::Skyways => assert!((3..=8).contains(&plan.top)),
+                StratumKind::Street => assert!(plan.top() <= 2),
+                StratumKind::Skyways => assert!((3..=8).contains(&plan.top())),
                 StratumKind::Heights => {
-                    assert!(plan.top >= 7);
-                    assert!(plan.roof);
+                    assert!(plan.top() >= 7);
+                    assert_eq!(plan.door_level(StratumKind::Heights), Some(plan.top()));
                     seen_tall = true;
                 }
                 _ => unreachable!(),
@@ -261,11 +551,14 @@ mod tests {
                 .portals(b.id)
                 .iter()
                 .any(|(k, _)| *k == StratumKind::Skyways);
-            assert_eq!(plan.bridge.is_some(), has_bridge_door);
-            if let Some(f) = plan.bridge {
-                assert!(f >= 1 && f <= plan.top);
+            assert_eq!(
+                plan.door_level(StratumKind::Skyways).is_some(),
+                has_bridge_door
+            );
+            if let Some(f) = plan.door_level(StratumKind::Skyways) {
+                assert!(f >= 1 && f <= plan.top());
             }
-            assert_eq!(plan.lift.is_some(), plan.floors() >= 3);
+            assert_eq!(plan.lift_on(0).is_some(), plan.floors() >= 3);
             assert_eq!(plan.levels().count() as i32, plan.floors());
         }
         assert!(seen_tall);
@@ -338,7 +631,7 @@ mod tests {
                     && b.span.contains(StratumKind::Skyways)
             })
             .expect("a residential block with a skyways level");
-        let plan = FloorPlan::new(&c, b.id).unwrap();
+        let plan = FloorPlan::classic(&c, b.id).unwrap();
         let f = generate_floor(&c, &plan, 2);
         validate_floor(&plan, &f).unwrap();
         let flats: Vec<&Room> = f
@@ -353,10 +646,10 @@ mod tests {
             assert!(r.number >= 201 && r.number < 300, "{}", r.number);
         }
         assert!(f.rooms.iter().any(|r| r.kind == RoomKind::Corridor));
-        if plan.bridge != Some(2) {
+        if plan.door_level(StratumKind::Skyways) != Some(2) {
             assert!(f.exits.is_empty());
         }
-        if let Some(bf) = plan.bridge {
+        if let Some(bf) = plan.door_level(StratumKind::Skyways) {
             let bridge = generate_floor(&c, &plan, bf);
             validate_floor(&plan, &bridge).unwrap();
             assert_eq!(bridge.exits.len(), 1);
@@ -378,7 +671,7 @@ mod tests {
             })
             .expect("a tower with a basement");
         let plan = FloorPlan::new(&c, b.id).unwrap();
-        let top = generate_floor(&c, &plan, plan.top);
+        let top = generate_floor(&c, &plan, plan.top());
         validate_floor(&plan, &top).unwrap();
         let roof = top
             .exits
@@ -408,11 +701,75 @@ mod tests {
     }
 
     #[test]
+    fn a_roof_no_stair_reaches_keeps_its_door_beside_a_landing() {
+        let c = city();
+        let towers = c
+            .buildings
+            .iter()
+            .filter(|b| b.kind.is_closed() && b.span.contains(StratumKind::Heights));
+        let mut roofs = 0;
+        for b in towers {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            // The roof reached by the lift alone, then by a ladder alone.
+            let mut lifted = plan.clone();
+            lifted.links.retain(|l| l.kind == LinkKind::Lift);
+            let mut laddered = plan.clone();
+            laddered.links.retain(|l| l.kind == LinkKind::Stair);
+            laddered.links[0].kind = LinkKind::Ladder;
+            for plan in [lifted, laddered] {
+                roofs += 1;
+                let kinds = (
+                    b.kind,
+                    plan.links.iter().map(|l| l.kind).collect::<Vec<_>>(),
+                );
+                let top = generate_floor(&c, &plan, plan.top());
+                validate_floor(&plan, &top).unwrap_or_else(|e| panic!("{kinds:?}: {e}"));
+                let roof = top
+                    .exits
+                    .iter()
+                    .find(|e| e.stratum == StratumKind::Heights)
+                    .unwrap_or_else(|| panic!("{kinds:?}: the roof door is gone"));
+                let landings = plan.landings(plan.top());
+                assert!(!landings.contains(&roof.at), "{kinds:?}: {roof:?}");
+                let step = top.doorstep(roof);
+                assert!(
+                    landings.contains(&step) || step.neighbors4().any(|p| landings.contains(&p)),
+                    "{kinds:?}: the roof door at {:?} stands by no landing",
+                    roof.at
+                );
+                assert_eq!(top.tiles[roof.at].terrain, Terrain::Door);
+            }
+        }
+        assert!(roofs > 0);
+    }
+
+    #[test]
+    fn a_floor_without_its_planned_door_fails_validation() {
+        let c = city();
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind.is_closed() && b.span.contains(StratumKind::Heights))
+            .expect("a tower");
+        let plan = FloorPlan::classic(&c, b.id).unwrap();
+        let mut top = generate_floor(&c, &plan, plan.top());
+        validate_floor(&plan, &top).unwrap();
+        top.exits.retain(|e| e.stratum != StratumKind::Heights);
+        let e = validate_floor(&plan, &top).unwrap_err();
+        assert!(e.contains("Heights"), "{e}");
+    }
+
+    #[test]
     fn every_floor_of_the_fixture_validates_and_repeats() {
         let c = city();
         for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
             let plan = FloorPlan::new(&c, b.id).unwrap();
-            for level in [plan.lowest, 0, plan.top, plan.bridge.unwrap_or(0)] {
+            for level in [
+                plan.lowest(),
+                0,
+                plan.top(),
+                plan.door_level(StratumKind::Skyways).unwrap_or(0),
+            ] {
                 let a = generate_floor(&c, &plan, level);
                 validate_floor(&plan, &a).unwrap_or_else(|e| panic!("{:?} {level}: {e}", b.id));
                 let again = generate_floor(&c, &plan, level);
@@ -498,7 +855,7 @@ mod tests {
             &[RoomKind::Bar, RoomKind::Stage],
             &[Role::Bar, Role::Table],
         );
-        assert_eq!(plan.top, 1);
+        assert_eq!(plan.top(), 1);
         let (city, _) = find(BuildingKind::Club);
         let vip = generate_floor(city, &plan, 1);
         validate_floor(&plan, &vip).unwrap();
@@ -552,9 +909,9 @@ mod tests {
         for c in &cities {
             for b in c.buildings.iter().filter(|b| b.kind.is_closed()) {
                 let plan = FloorPlan::new(c, b.id).unwrap();
-                let mut levels = vec![plan.lowest, 0, plan.top];
-                levels.extend(plan.bridge);
-                levels.push(1.min(plan.top));
+                let mut levels = vec![plan.lowest(), 0, plan.top()];
+                levels.extend(plan.door_level(StratumKind::Skyways));
+                levels.push(1.min(plan.top()));
                 levels.sort();
                 levels.dedup();
                 for level in levels {
@@ -682,7 +1039,7 @@ mod tests {
                 );
             }
             println!(
-                "{kind:?} {} door {},{} outside {},{} doorstep {},{} lift {:?} stair {},{} top {} floors {}..={} bridge {:?} roof {}",
+                "{kind:?} {} door {},{} outside {},{} doorstep {},{} lift {:?} stair {:?} top {} floors {}..={} bridge {:?} roof {}",
                 b.name.clone().unwrap_or_default(),
                 door.x,
                 door.y,
@@ -690,14 +1047,13 @@ mod tests {
                 outside.y,
                 lobby.doorstep(exit).x,
                 lobby.doorstep(exit).y,
-                plan.lift,
-                plan.stair.x,
-                plan.stair.y,
-                plan.top,
-                plan.lowest,
-                plan.top,
-                plan.bridge,
-                plan.roof
+                plan.lift_on(0),
+                plan.stair_on(0),
+                plan.top(),
+                plan.lowest(),
+                plan.top(),
+                plan.door_level(StratumKind::Skyways),
+                plan.door_level(StratumKind::Heights).is_some()
             );
         }
     }
@@ -751,8 +1107,8 @@ mod tests {
             BuildingKind::Hotel,
         ] {
             let b = c.buildings.iter().find(|b| b.kind == kind).unwrap();
-            let plan = FloorPlan::new(&c, b.id).unwrap();
-            for level in [plan.lowest, 0, 2.min(plan.top), plan.top] {
+            let plan = FloorPlan::classic(&c, b.id).unwrap();
+            for level in [plan.lowest(), 0, 2.min(plan.top()), plan.top()] {
                 dump(&plan, &generate_floor(&c, &plan, level));
             }
         }
@@ -786,8 +1142,8 @@ mod tests {
                 println!("no {kind:?} in four cities");
                 continue;
             };
-            let plan = FloorPlan::new(city, b.id).unwrap();
-            for level in 0..=plan.top {
+            let plan = FloorPlan::classic(city, b.id).unwrap();
+            for level in 0..=plan.top() {
                 dump(&plan, &generate_floor(city, &plan, level));
             }
         }
@@ -820,7 +1176,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("seed {seed}: {:?}", b.id));
                 fronts.insert(cp.front);
                 turns.insert(cp.turn.quarters);
-                assert_eq!(plan.lowest, -(cp.front.floors() as i32 - 1));
+                assert_eq!(plan.lowest(), -(cp.front.floors() as i32 - 1));
                 let chair_level = if cp.front == Front::Laundromat { -1 } else { 0 };
                 assert_eq!(
                     plan.work_floors(),
@@ -850,7 +1206,7 @@ mod tests {
                         assert!(chairs.is_empty(), "{what}");
                     }
                     // Every door of the building on this floor's stratum has its own exit.
-                    let stratum = plan.exit_stratum(level);
+                    let stratum = plan.door_stratum(level);
                     let doors: Vec<Pos> = c
                         .portals(b.id)
                         .into_iter()
@@ -891,9 +1247,10 @@ mod tests {
                             );
                         }
                     }
-                    if plan.floors() >= 2 {
-                        assert_eq!(f.tiles[plan.stair].terrain, Terrain::Stair, "{what}");
+                    if let Some(stair) = plan.stair_on(level) {
+                        assert_eq!(f.tiles[stair].terrain, Terrain::Stair, "{what}");
                     }
+                    assert_eq!(plan.stair_on(level).is_some(), plan.floors() >= 2);
                 }
             }
         }
@@ -912,7 +1269,8 @@ mod tests {
                 continue;
             };
             seen.insert(b.kind);
-            let any = (plan.lowest..=plan.top)
+            let any = plan
+                .levels()
                 .any(|l| generate_floor(&c, &plan, l).rooms.iter().any(|r| r.private));
             assert!(any, "{:?} ({:?}) has nothing locked", b.kind, b.id);
         }
@@ -953,7 +1311,8 @@ mod tests {
                 let a = plan.atrium.unwrap();
                 assert_eq!(a, plan.size.rect().inset(BAND + 1 + WALK));
                 assert!(
-                    !a.contains(plan.stair) && plan.lift_bank().iter().all(|p| !a.contains(*p))
+                    plan.levels()
+                        .all(|l| plan.landings(l).iter().all(|p| !a.contains(*p)))
                 );
                 assert_eq!(plan.floor_type(0), FloorType::Plaza);
                 for level in plan.levels() {
@@ -985,7 +1344,7 @@ mod tests {
                         }
                     }
                 }
-                assert!(plan.corridor_floors().len() as i32 >= plan.top);
+                assert!(plan.corridor_floors().len() as i32 >= plan.top());
             }
         }
         assert_eq!(
@@ -1030,6 +1389,64 @@ mod tests {
                 assert!(under.iter().all(|p| f.tiles[p].terrain != Terrain::Atrium));
             }
         }
+    }
+
+    #[test]
+    fn hotels_and_offices_are_venues_and_towers_are_not() {
+        let c = medium(8);
+        let mut seen = 0;
+        for b in &c.buildings {
+            let Some(plan) = FloorPlan::new(&c, b.id) else {
+                continue;
+            };
+            let venue = venue::VenuePack::builtin().for_kind(b.kind).is_some();
+            assert_eq!(plan.venue.is_some(), venue, "{:?} {:?}", b.kind, b.id);
+            seen += usize::from(venue);
+        }
+        assert!(seen > 0);
+    }
+
+    /// A building whose layout can't be laid keeps today's builder: few do.
+    #[test]
+    fn few_venues_fall_back_to_the_classic_builder() {
+        let (mut venues, mut classic) = (0, 0);
+        for c in [city(), medium(8), medium(11)] {
+            for b in &c.buildings {
+                if venue::VenuePack::builtin().for_kind(b.kind).is_none() {
+                    continue;
+                }
+                let plan = FloorPlan::new(&c, b.id).expect("a plan for a closed building");
+                venues += 1;
+                classic += usize::from(plan.venue.is_none());
+            }
+        }
+        assert!(venues > 0);
+        assert!(
+            classic * 20 < venues,
+            "{classic} of {venues} hotels and offices fall back"
+        );
+    }
+
+    #[test]
+    fn a_venue_that_cant_be_laid_keeps_the_classic_builder() {
+        let c = medium(8);
+        let b = c
+            .buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::Hotel)
+            .unwrap()
+            .id;
+        let builtin = venue::VenuePack::builtin();
+        let mut t = builtin.for_kind(BuildingKind::Hotel).unwrap().clone();
+        // A link into no zone: the links stage refuses it.
+        t.links[0].zone = String::new();
+        let pack = venue::VenuePack {
+            types: vec![t],
+            ..builtin.clone()
+        };
+        let plan = FloorPlan::laid_by(&pack, &c, b).expect("a plan all the same");
+        assert!(plan.venue.is_none());
+        assert_eq!(plan, FloorPlan::classic(&c, b).unwrap());
     }
 
     #[test]

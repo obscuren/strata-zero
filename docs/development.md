@@ -10,7 +10,7 @@ crates/citygen       world model + city generator + interiors (no terminal depen
 crates/game          characters, items, abilities, the build rules (no terminal dependencies)
 crates/sim           the living city: people, places, paths and the world's minute
 crates/strata-zero   the game: ratatui app, screens, renderer, walking and jacking in, the `gen` CLI
-flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines) · broadcasts.ron (what the city says as you drop in)
+flavor/              names.ron (names, handles, signage glyphs) · style.ron (palettes, glyph sets) · content.ron (game content) · people.ron (professions and their lines) · broadcasts.ron (what the city says as you drop in) · sites.ron (venue types: hotels, offices, metro stations)
 manual/              the player's manual, a chapter a file (format in manual/README.md): the game's MANUAL booklet and stratazero.io/manual
 docs/superpowers/specs   design specs
 docs/superpowers/plans   implementation plans
@@ -131,13 +131,39 @@ open -a "Strata Zero" --args --dev   # the Mac app
 ```
 
 It then starts on, `` ` `` flips it, Settings has a row for it, `?` lists its keys,
-and the title has NEW GAME (DEBUG) and NEW GAME · COMBAT while it is on. The
+and the title has NEW GAME (DEBUG) and DEVELOPER while it is on. The
 overworld and the Net overworld take the keys that need no street: `` ` ``, the `:`
 console (`tp X Y` moves you over the world there) and F5's inspector of the tile.
 The game opens on a five-second splash (`screens/splash.rs`) before the title, in
 dev mode too; any key skips it.
 `STRATA_DEV` reaches the game only when a shell starts it: the Mac app opened from
 the Finder or the Dock never sees it.
+
+The title's test starts:
+
+- **NEW GAME (DEBUG)**: D'SHAWN, maxed out, straight into a fresh city, a run of his
+  own. He is never overburdened: he takes whatever he finds, however much he carries.
+- **DEVELOPER** opens a menu of its own in the title's rows' place (`esc` goes back):
+  - a row per venue type in `flavor/sites.ron` (HOTEL, OFFICE, METRO STATION). `←` `→`
+    pick its size, SMALL · MEDIUM · LARGE, and `tab` picks PLAIN or MISSION. `enter`
+    makes NEW GAME (DEBUG)'s start, lays the type on the largest closed building away
+    from home that has ways in enough for the size (raised to the type's own height
+    when it's too low), begins a mission's copy there on MISSION, and stands you on the
+    street at its main door;
+  - COMBAT, `←` `→` picking NET (jacked into a construct with grey ICE on patrol) or
+    STREET (on the lot at dusk with a goon and a dummy);
+  - LOAD CITY: a saved city from `cities/`, a run started over in it.
+
+The `:` console's `site <type> [size] [objective] [security] [seed]`, standing at a
+closed building's door, lays that type on the building (any kind, not your own) and
+begins a mission's copy there: small, the type's first objective, security 128 and the
+tick as seed unless given. The copy's doors are flagged in magenta, its doors onto
+floors it doesn't keep are barred (`▮`), and its lifts pass those floors. `site` lists
+the types, `tab` completes their ids, sizes and objectives, and `site end` ends the copy
+at that door (or the only one there is) once you're out of it. Shots of every type at
+every size, plain and as a copy, are the `#[ignore]` test `site_shots`
+(`screens/shots.rs`); the checker over every type is `crates/citygen/tests/venues.rs`.
+The design is `docs/superpowers/specs/2026-11-10-site-generator-design.md`.
 
 ## Develop
 

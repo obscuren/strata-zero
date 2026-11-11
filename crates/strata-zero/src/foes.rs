@@ -4,7 +4,7 @@
 use crate::app::AppState;
 use crate::render::Visibility;
 use citygen::pathing::{astar, bresenham};
-use citygen::{City, Place, Pos, Terrain, Tile};
+use citygen::{BuildingId, City, Place, Pos, Terrain, Tile};
 use game::ItemId;
 
 pub const GOON_HP: u8 = 30;
@@ -49,6 +49,19 @@ pub struct Foe {
     /// so it defaults: a foe they hold is no ICE.
     #[serde(default)]
     pub ice: Option<crate::grid::GridIce>,
+    /// A guard's post in a mission's copy of a venue. After the first saves, so it
+    /// defaults: a foe they hold has none.
+    #[serde(default)]
+    pub post: Option<Post>,
+}
+
+/// A guard's post in a mission's copy: whose it is, its zone (the card it carries) and
+/// its patrol, recorded for when guards act on floors (#33).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Post {
+    pub building: BuildingId,
+    pub zone: u8,
+    pub patrol: Vec<Pos>,
 }
 
 impl Foe {
@@ -71,6 +84,7 @@ impl Foe {
             chrome: true,
             marked: false,
             ice: None,
+            post: None,
         }
     }
 
@@ -93,6 +107,7 @@ impl Foe {
             chrome: true,
             marked: false,
             ice: None,
+            post: None,
         }
     }
 

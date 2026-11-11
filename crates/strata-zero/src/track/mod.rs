@@ -240,6 +240,14 @@ pub fn refollow(st: &mut AppState) {
     tick(st);
 }
 
+/// Has the next tick make the walk again although neither you nor the target moved: the
+/// floors under it changed (a mission's copy taken or ended).
+pub fn rewalk(st: &mut AppState) {
+    if let Some(t) = st.track.as_mut() {
+        t.walk = Walk::unmade();
+    }
+}
+
 /// Stops tracking, and logs it.
 pub fn stop(st: &mut AppState) {
     end(st, |label| format!("⌖ stopped tracking {label}"));
@@ -282,9 +290,27 @@ fn end(st: &mut AppState, line: impl FnOnce(&str) -> String) -> Option<String> {
 /// its pulses fired and dropped.
 pub fn tick(st: &mut AppState) {
     follow(st);
+    keep_plan(st);
     let now = st.tick;
     if let Some(t) = st.track.as_mut() {
         t.pulse(now);
+    }
+}
+
+/// Keeps the plan of the building the target is in or on a floor of, so the next beat's
+/// `locate` and the doors in borrow it instead of making it again: a venue's plan is a
+/// whole layout.
+fn keep_plan(st: &mut AppState) {
+    let building = match st.track.as_ref().map(|t| t.walk.target) {
+        Some(Target::Spot {
+            place: Place::Floor { building, .. },
+            ..
+        })
+        | Some(Target::Building(building)) => building,
+        _ => return,
+    };
+    if let Some(city) = st.city.as_ref() {
+        st.interiors.plan(city, building);
     }
 }
 
@@ -1367,7 +1393,7 @@ pub(crate) mod tests {
         set(&mut st, src).unwrap();
         tick(&mut st);
         assert!(st.track.is_some());
-        let lift = st.interiors.floor(home, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(home, 0).unwrap().0.lift_on(0).unwrap();
         put(
             &mut st,
             Place::Floor {
@@ -1426,11 +1452,48 @@ pub(crate) mod tests {
                 continue;
             };
             let plan = citygen::FloorPlan::new(city, b).unwrap();
-            if crate::interiors::level_for(&plan, StratumKind::Street) != Some(level) {
+            if plan.door_level(StratumKind::Street) != Some(level) {
                 return (who, b, door);
             }
         }
         panic!("a drone at work upstairs");
+    }
+
+    /// Laying out a venue is no small thing: tracking someone at work in an office nobody
+    /// has walked into keeps its plan on the first beat, and the beats after borrow it.
+    #[test]
+    fn tracking_someone_in_an_unplanned_office_keeps_its_plan() {
+        let mut st = outside();
+        let city = st.city.clone().unwrap();
+        let drones: Vec<(PersonId, BuildingId)> = (st.world.as_ref().unwrap().people().iter())
+            .filter(|p| p.profession == "corp_drone")
+            .filter_map(|p| match p.work {
+                sim::Work::Building(b)
+                    if city.building(b).kind == citygen::BuildingKind::Office =>
+                {
+                    Some((p.id, b))
+                }
+                _ => None,
+            })
+            .collect();
+        let (who, b) = drones
+            .into_iter()
+            .find(|&(who, _)| {
+                st.world.as_mut().unwrap().keep_at_work(who);
+                matches!(
+                    crate::interiors::drawn_at(&st, who),
+                    Some((Place::Floor { .. }, _))
+                )
+            })
+            .expect("a drone at work in an office");
+        assert!(st.interiors.plan_of(b).is_none(), "nobody has been in");
+        set(&mut st, Source::Listing(ListingId::Person(who))).unwrap();
+        tick(&mut st);
+        let plan = st.interiors.plan_of(b).expect("kept on the first beat");
+        assert!(plan.venue.is_some());
+        let kept: *const citygen::FloorPlan = plan;
+        tick(&mut st);
+        assert!(std::ptr::eq(st.interiors.plan_of(b).unwrap(), kept));
     }
 
     #[test]
@@ -1467,6 +1530,9 @@ pub(crate) mod tests {
         assert!(st.track.is_some(), "entering is not reaching them");
         assert_eq!(floor_wanted(&st, b), Some(level));
         // On their floor, the walk ends at them.
+        let lobby = st.player.as_ref().unwrap().place;
+        let lift = st.interiors.plan_of(b).unwrap().lift_on(0).unwrap();
+        put(&mut st, lobby, lift);
         crate::interiors::ride(&mut st, b, level).unwrap();
         tick(&mut st);
         let leg = leg_now(&st).unwrap().unwrap().clone();
@@ -1772,7 +1838,7 @@ pub(crate) mod tests {
             building: b,
             level: 0,
         };
-        let lift = st.interiors.floor(b, 0).unwrap().0.lift.unwrap();
+        let lift = st.interiors.floor(b, 0).unwrap().0.lift_on(0).unwrap();
         put(&mut st, lobby, lift);
         st.tick = 500;
         set(&mut st, street_spot(to, 1)).unwrap();
