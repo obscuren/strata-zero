@@ -1238,7 +1238,8 @@ impl Character {
     /// `c` lacks, as a run saved by a build that had them comes back in one that
     /// doesn't. A worn item, an installed piece or a fitted one goes with its copy, and
     /// what that copy held that `c` has (its fitted pieces, its stickers) comes out
-    /// into the pack. A line for each thing gone, naming its id.
+    /// into the pack; the rig's rack likewise, leaving the stock rig. A line for each
+    /// thing gone, naming its id.
     pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
         let mut lost = Vec::new();
         // What comes out of the pieces taken away, for the pack.
@@ -1281,6 +1282,23 @@ impl Character {
         for k in self.chrome_copies.values_mut() {
             k.forget_unknown(c, &mut lost, &mut out);
         }
+        // The rig: a sled `c` lacks empties its bay; a fitted rack it lacks gives up its
+        // sleds to the pack and leaves the stock rig.
+        if let Some(mut rig) = self.rig.take() {
+            if self.frames.first().is_none_or(|f| c.item(f).is_some()) {
+                rig.forget_unknown(c, &mut lost, &mut out);
+                self.rig = Some(rig);
+            } else {
+                rig.salvage(c, &mut lost, &mut out);
+            }
+        }
+        self.frames.retain(|f| {
+            let known = c.item(f).is_some();
+            if !known {
+                lost.push(item_lost(f));
+            }
+            known
+        });
         for s in out {
             self.stow(s);
         }
@@ -3429,6 +3447,63 @@ mod tests {
             .into_iter()
             .map(|(_, s)| s.map(|i| i.0))
             .collect()
+    }
+
+    #[test]
+    fn a_rig_forgets_the_sleds_and_racks_a_build_lacks() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.set_frame(&c, &ItemId::new("rack_lotus"));
+        let piece = pack_copy_of(&mut ch, &c, "sled_tinman");
+        ap(
+            &mut ch,
+            &c,
+            Action::Fit {
+                host: Host::Rig,
+                socket: 1,
+                piece,
+            },
+        )
+        .unwrap();
+        ch.frames.push(ItemId::new("rack_halcyon"));
+        let mut less = c.clone();
+        less.items
+            .retain(|i| i.id.0 != "sled_tinman" && i.id.0 != "rack_halcyon");
+        let lost = ch.forget_unknown(&less);
+        assert!(
+            lost.contains(&"an item (sled_tinman)".to_string()),
+            "{lost:?}"
+        );
+        assert!(
+            lost.contains(&"an item (rack_halcyon)".to_string()),
+            "{lost:?}"
+        );
+        assert_eq!(ch.rig_frame(), ItemId::new("rack_lotus"), "the rack stays");
+        assert_eq!(
+            rig_ids(&ch, &less)[1],
+            None,
+            "the unknown sled's bay is empty"
+        );
+        assert!(rig_ids(&ch, &less).contains(&Some("sled_zb8".into())));
+        assert!(!ch.frames.contains(&ItemId::new("rack_halcyon")));
+        assert!(ch.forget_unknown(&less).is_empty(), "once");
+    }
+
+    #[test]
+    fn a_rig_on_an_unknown_rack_is_the_stock_one_its_sleds_in_the_pack() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.set_frame(&c, &ItemId::new("rack_civitas"));
+        let mut less = c.clone();
+        less.items.retain(|i| i.id.0 != "rack_civitas");
+        let lost = ch.forget_unknown(&less);
+        assert_eq!(lost, ["an item (rack_civitas)".to_string()]);
+        assert!(ch.rig.is_none(), "the stock rig");
+        assert!(!ch.frames.contains(&ItemId::new("rack_civitas")));
+        assert_eq!(ch.rig_frame(), ItemId::new(STOCK_FRAME));
+        for sled in STOCK_SLEDS {
+            assert_eq!(ch.count(&ItemId::new(sled)), 1, "{sled} in the pack");
+        }
     }
 
     #[test]
