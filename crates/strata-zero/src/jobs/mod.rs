@@ -596,12 +596,11 @@ fn credit_done_work(st: &mut AppState, id: JobId) {
             } else {
                 citygen::net::NodeKind::Server
             };
-            let copied = st.city.as_ref().is_some_and(|c| {
-                c.net.nodes.iter().any(|n| {
-                    n.building == Some(building)
-                        && n.kind == kind
-                        && st.net.copied(game::HackTarget::Node(n.id), now)
-                })
+            // Its node on the city's Net or on a site's own: the hack's building and kind.
+            let copied = st.net.live(now).any(|h| {
+                h.building == building
+                    && h.op == game::Op::Copy
+                    && h.kind == game::Target::Node(kind)
             });
             if copied {
                 send(st, Event::Copied { building, vault });
@@ -1370,6 +1369,33 @@ mod tests {
         assert!(
             st.jobs.get(p).unwrap().objectives[0].done,
             "the standing backdoor counts"
+        );
+    }
+
+    #[test]
+    fn a_sites_server_copied_before_taking_counts() {
+        let (mut st, b) = crate::sitenet::testutil::office_plain();
+        let fx = a_fixer(&st);
+        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        let mut job = (0..40)
+            .find_map(|n| crate::jobs::generate(&mut st, fx, KindTag::Copy, n))
+            .expect("a copy job");
+        job.kind = Kind::Copy {
+            building: b,
+            vault: false,
+        };
+        let id = st.jobs.push(job);
+        // Copied from inside the site's own Net while the job was only on offer.
+        let net = crate::sitenet::net_of(&st, b).expect("a site's Net");
+        let server = (net.nodes.iter())
+            .find(|n| n.kind == citygen::NodeKind::Server)
+            .expect("its server")
+            .node;
+        crate::sitenet::testutil::hack(&mut st, server, citygen::NodeKind::Server, game::Op::Copy);
+        crate::jobs::take_job(&mut st, id).unwrap();
+        assert!(
+            st.jobs.get(id).unwrap().objectives[0].done,
+            "the site's server copied counts"
         );
     }
 }
