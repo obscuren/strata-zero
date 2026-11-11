@@ -37,7 +37,7 @@ Load programs into your deck from its blueprint, before you jack in (The deck). 
 | Program | Works on |
 |---|---|
 | Crack | any node but a hub, or ICE |
-| Spoof | locks, lifts, cameras, ad boards, lamp grids, terminals, gate switches |
+| Spoof | locks, lifts, cameras, ad boards, lamp grids, terminals, gate switches (the switch box of a line of turnstiles) |
 | Blind | a camera |
 | Copy | a server or a data vault |
 | Backdoor | a server |
@@ -169,6 +169,8 @@ On a hotel's or office's Net, the map shows the building in section: the **tower
 - The firewall is a red double line round the levels on the riser, with `FIREWALL · 3 locks` on its top edge and its locks on `L`'s outer wall.
 - A level you can't reach from where you stand is dimmed and says `out of reach`. One across an air gap says `AIR GAP`.
 - Each level's name stands on its left. The open level's also says how many nodes it has, `11 ▪`, and how many of them you hold, `4 held`. When the map is too narrow for them, they show on one line in its top-left corner.
+
+On the tower the marks are:
 
 | Mark | What it is |
 |---|---|
