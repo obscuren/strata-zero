@@ -169,6 +169,13 @@ impl LevelLink {
         }
     }
 
+    /// Whether `p` is one of its landing tiles on `level`, as `tiles` has them, with
+    /// nothing allocated.
+    pub fn lands_on(&self, level: i32, p: Pos) -> bool {
+        self.stop(level)
+            .is_some_and(|s| s.at == p || (self.kind == LinkKind::Lift && s.at.offset(1, 0) == p))
+    }
+
     /// The link with only the stops on levels `keeps` takes, running the way it ran: a
     /// one-way link's new first and last stops take its ends' flags, which say its way
     /// (`one_way`). That changes no ride: one up never lets you off at its lowest stop
@@ -812,7 +819,7 @@ impl FloorPlan {
 
     /// The link with a landing tile at `p` on `level`.
     pub fn link_at(&self, level: i32, p: Pos) -> Option<usize> {
-        self.links.iter().position(|l| l.tiles(level).contains(&p))
+        self.links.iter().position(|l| l.lands_on(level, p))
     }
 
     /// Every link's landing tiles on a level, in link order.

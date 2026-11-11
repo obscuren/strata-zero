@@ -437,6 +437,10 @@ impl TileMap for FloorMap<'_> {
     }
 
     fn connector(&self, p: Pos) -> Option<ConnDir> {
+        // Asked of every tile drawn, every frame: only a landing's terrain can be one.
+        if !self.floor.tiles.get(p)?.is_connector() {
+            return None;
+        }
         let level = self.floor.level;
         let link = self.plan.link_at(level, p)?;
         let kind = match self.plan.links[link].kind {
@@ -740,5 +744,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// The connector is asked of every tile drawn, every frame: it answers on each tile of
+    /// every landing (a lift's bank both) and nowhere else, in a venue and a tower alike.
+    #[test]
+    fn a_connector_stands_on_every_landing_and_only_there() {
+        let c = city();
+        let mut interiors = Interiors::default();
+        let towers = (c.buildings.iter())
+            .filter(|b| matches!(b.kind, BuildingKind::CorpTower | BuildingKind::Office))
+            .map(|b| b.id);
+        let mut landings = 0;
+        for b in towers {
+            let levels: Vec<i32> = interiors.plan(&c, b).unwrap().levels().collect();
+            for level in levels {
+                interiors.ensure(&c, b, level).unwrap();
+                let (plan, floor) = interiors.floor(b, level).unwrap();
+                let map = FloorMap {
+                    city: &c,
+                    plan,
+                    floor,
+                };
+                for (p, _) in floor.tiles.iter() {
+                    let on = (plan.links.iter()).position(|l| l.tiles(level).contains(&p));
+                    assert_eq!(plan.link_at(level, p), on, "{b:?} {level} {p:?}");
+                    assert_eq!(
+                        map.connector(p).is_some(),
+                        on.is_some(),
+                        "{b:?} {level} {p:?}"
+                    );
+                    landings += usize::from(on.is_some());
+                }
+            }
+        }
+        assert!(landings > 0);
     }
 }
