@@ -217,7 +217,9 @@ are in `sitenet.rs`.
   `Construct.levels` and `Construct.devices`. Both are `#[serde(default)]`: empty in every
   other construct, and in one saved before. Its ICE is saved with it: where each piece
   stands and whether it's lifted in its `guards`, each piece's state in `NetState.ice`, a
-  hack on a piece as a `HackTarget::Guard` indexed across all its levels.
+  hack on a piece as a `HackTarget::Guard` indexed across all its levels. Making it keeps
+  the site's plan in `Interiors.plans`, as walking in does, so a run saved on a site's Net
+  holds the plan its construct was made from.
 - **The firewall's broken locks** are `NetState.firewalls` (`#[serde(default)]`): per
   building, each lock broken and the game minute it closes again. It is the one record of
   a broken lock: no `Hack` is pushed for one.
