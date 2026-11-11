@@ -14,11 +14,19 @@ use std::borrow::Cow;
 mod firewall;
 mod locks;
 mod nodes;
+mod panel;
 mod walk;
+mod ways;
 pub use firewall::*;
 pub use locks::*;
 pub use nodes::*;
+#[expect(
+    unused_imports,
+    reason = "the site's Net panel reads it from Task 15 on"
+)]
+pub use panel::*;
 pub use walk::*;
+pub use ways::*;
 
 /// Whether building `b` is a site: its plan is a venue's (Ruling 14). The session's plan
 /// when it holds one, so an old save's hotel kept on the classic builder is none; else a
@@ -61,10 +69,6 @@ fn worked_out(st: &AppState, b: BuildingId) -> Option<(Cow<'_, FloorPlan>, SiteN
 
 /// Site `b`'s Net, worked out now from its plan, a live copy's layer and its security;
 /// never kept. None for a building that is no site.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "HELIX and the panel read it from Task 13 on")
-)]
 pub fn net_of(st: &AppState, b: BuildingId) -> Option<SiteNet> {
     worked_out(st, b).map(|(_, net)| net)
 }

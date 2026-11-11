@@ -289,3 +289,107 @@ fn floor_lock(st: &AppState, b: BuildingId, level: i32, door: SiteNode) -> Optio
     let floor = crate::interiors::floor_now(st, &plan, level)?;
     floor.lock_at(door.at).copied()
 }
+
+/// The tiles of site `b`'s floor `level` you may stand on beside `at` (Chebyshev 1):
+/// walkable, nobody standing there. The floor is made.
+fn floor_tiles_beside(st: &mut AppState, b: BuildingId, level: i32, at: Pos) -> Vec<Pos> {
+    let city = st.city.clone().expect("a city");
+    let floor = st.interiors.ensure(&city, b, level).expect("a kept level");
+    let place = Place::Floor { building: b, level };
+    let open: Vec<Pos> = (at.neighbors8())
+        .filter(|p| floor.tiles.get(*p).is_some_and(|t| t.is_walkable()))
+        .collect();
+    (open.into_iter())
+        .filter(|p| crate::foes::foe_at(st, place, *p).is_none())
+        .collect()
+}
+
+/// You on foot at `place`, on tile `at`.
+fn stand_on(st: &mut AppState, place: Place, at: Pos) {
+    let p = st.player.as_mut().expect("you");
+    assert!(!p.jacked_in(), "on foot");
+    crate::constructs::land(st, place, at);
+}
+
+/// You on foot on site `b`'s floor `level`, on tile `at`.
+fn stand_on_floor(st: &mut AppState, b: BuildingId, level: i32, at: Pos) {
+    stand_on(st, Place::Floor { building: b, level }, at);
+}
+
+/// You on foot on site `b`'s floor beside the wall tile of its node `node`: on the tile in
+/// front of it, else another beside it.
+fn stand_beside_on_floor(st: &mut AppState, node: SiteNode) {
+    let net = crate::sitenet::net_of(st, node.building).expect("a site's Net");
+    let front = net.node(node).expect("its node").net;
+    let mut tiles = floor_tiles_beside(st, node.building, node.level, node.at);
+    tiles.sort_by_key(|p| *p != front);
+    let at = *tiles.first().expect("a tile beside it");
+    stand_on_floor(st, node.building, node.level, at);
+}
+
+/// You on foot on L of site `b`, beside the wall tile of its public kiosk (the terminals
+/// pass's public one): its node.
+pub(crate) fn stand_beside_the_kiosk(st: &mut AppState, b: BuildingId) -> SiteNode {
+    let plan = crate::interiors::plan_now(st, b)
+        .expect("a plan")
+        .into_owned();
+    let v = plan.venue.as_deref().expect("a venue's plan");
+    let floor = citygen::venue::draw_level(v, 0).expect("its L");
+    let t = VenuePack::builtin().by_id(&v.type_id);
+    let kiosk = (citygen::venue::terminals(v, t, 0, &floor, false).into_iter())
+        .find(|d| d.public)
+        .expect("L's public kiosk");
+    let node = SiteNode {
+        building: b,
+        level: 0,
+        at: kiosk.at,
+    };
+    stand_beside_on_floor(st, node);
+    node
+}
+
+/// You on foot beside the wall tile of site `b`'s first gate switch, on its level: its
+/// node.
+pub(crate) fn stand_beside_the_switch(st: &mut AppState, b: BuildingId) -> SiteNode {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let node = (net.nodes.iter())
+        .find(|n| n.kind == NodeKind::GateSwitch)
+        .expect("a gate switch")
+        .node;
+    stand_beside_on_floor(st, node);
+    node
+}
+
+/// You on foot beside a camera of site `b` on its floor, on a tile with no terminal or
+/// gate switch beside it: the camera's node.
+pub(crate) fn stand_beside_a_camera(st: &mut AppState, b: BuildingId) -> SiteNode {
+    let net = crate::sitenet::net_of(st, b).expect("a site's Net");
+    let ports: Vec<SiteNode> = (net.nodes.iter())
+        .filter(|n| matches!(n.kind, NodeKind::Terminal | NodeKind::GateSwitch))
+        .map(|n| n.node)
+        .collect();
+    let cameras = (net.nodes.iter()).filter(|n| n.kind == NodeKind::Camera);
+    for cam in cameras.map(|n| n.node) {
+        let lone =
+            |p: &Pos| !(ports.iter()).any(|d| d.level == cam.level && d.at.chebyshev(*p) <= 1);
+        let tiles = floor_tiles_beside(st, b, cam.level, cam.at);
+        if let Some(at) = tiles.into_iter().find(lone) {
+            stand_on_floor(st, b, cam.level, at);
+            return cam;
+        }
+    }
+    panic!("no camera of {b:?} with a tile beside it away from its ports");
+}
+
+/// You at home, on foot in the flat beside the rig.
+pub(crate) fn stand_at_the_rig(st: &mut AppState) {
+    let h = st.home.expect("a home");
+    let city = st.city.clone().expect("a city");
+    let floor = (st.interiors)
+        .ensure(&city, h.home.building, h.home.level)
+        .expect("the flat's floor");
+    let at = (h.home.rig.neighbors8())
+        .find(|q| h.home.rect.contains(*q) && floor.tiles[*q].is_walkable())
+        .expect("a tile beside the rig");
+    stand_on(st, h.place(), at);
+}

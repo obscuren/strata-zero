@@ -121,10 +121,24 @@ pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, Strin
     Ok(format!("Entering `{name}`"))
 }
 
-/// Out through the entry, onto the gate tile on the Net.
+/// Whether a step from `here` onto `to` in construct `k` leads out through its gate: from
+/// the entry, off the map; in a site's, off the gate's level.
+pub fn leads_out(k: &Construct, here: Pos, to: Pos) -> bool {
+    here == k.entry
+        && match k.level_at(k.entry) {
+            Some(gate) => !gate.area.contains(to),
+            None => !k.tiles.in_bounds(to),
+        }
+}
+
+/// Out through the entry, onto the gate tile on the Net; a site's gate is its firewall's
+/// (`sitenet::out`).
 pub fn leave_construct(st: &mut AppState) -> Result<String, String> {
-    let city = st.city.as_ref().ok_or("no city")?;
     let player = st.player.as_ref().ok_or("no body")?;
+    if let Place::SiteNet { .. } = player.place {
+        return crate::sitenet::out(st);
+    }
+    let city = st.city.as_ref().ok_or("no city")?;
     let Place::Construct(b) = player.place else {
         return Err("not in a construct".to_string());
     };

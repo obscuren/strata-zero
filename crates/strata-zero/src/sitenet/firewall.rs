@@ -62,13 +62,7 @@ pub fn through(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if let Some(why) = shut(st, b) {
         return Err(why);
     }
-    super::ensure_construct(st, b)?;
-    let k = st
-        .constructs
-        .site(b)
-        .ok_or("that building has no Net of its own")?;
-    let level = k.level_at(k.entry).ok_or("the gate is gone")?.level;
-    super::walk::land_on_hub(st, b, level)?;
+    let level = super::land_on_gs_hub(st, b)?;
     Ok(format!(
         "Entering `{}` · {} hub",
         crate::net::building_name(st, b),
@@ -298,6 +292,28 @@ mod tests {
         let end = now + 10 + game::HACK_MINUTES;
         st.net.minute(end, None, &mut st.constructs, &roots);
         assert!(!st.net.firewalls.contains_key(&b));
+    }
+
+    #[test]
+    fn a_lock_broken_on_alert_closes_when_the_alert_ends() {
+        let (mut st, b) = office_copy(190);
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + 10);
+        st.net.break_lock(b, 0, now);
+        assert_eq!(st.net.firewalls[&b], vec![(0, now + 10)]);
+        assert_eq!(st.net.broken_locks(b, now + 9), vec![0]);
+        assert!(st.net.broken_locks(b, now + 10).is_empty());
+        // As every other hack landing then.
+        let (_, door) = a_door_node(&st, b);
+        hack(&mut st, door, NodeKind::DoorLock, Op::Crack);
+        let h = st.net.hacks.last().unwrap();
+        assert_eq!(h.until, Some(now + 10));
+        // Broken after the alert, its whole hour.
+        st.net.break_lock(b, 1, now + 20);
+        assert_eq!(
+            st.net.broken_locks(b, now + 20 + game::HACK_MINUTES - 1),
+            vec![1]
+        );
     }
 
     #[test]

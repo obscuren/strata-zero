@@ -6,7 +6,9 @@ use crate::constructs::Constructs;
 use crate::render::map::MapRef;
 use citygen::pathing::{astar, bresenham};
 use citygen::rng::hash64;
-use citygen::{BuildingId, City, Construct, IceGrade, NodeKind, Place, Pos, StratumKind, Terrain};
+use citygen::{
+    BuildingId, City, Construct, FloorPlan, IceGrade, NodeKind, Place, Pos, StratumKind, Terrain,
+};
 use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
     TraceEvent, applies, difficulty, power, succeeds,
@@ -640,17 +642,25 @@ impl NetState {
             .filter(move |h| h.until.is_none_or(|u| now < u))
     }
 
+    /// When a hack landing on building `b` at minute `now` ends: its hour, or the end of
+    /// the building's alert, whichever is sooner.
+    fn hack_end(&self, b: BuildingId, now: u64) -> u64 {
+        let hour = now + HACK_MINUTES;
+        (self.traces.get(&b))
+            .and_then(|t| t.alert_until)
+            .filter(|u| now < *u)
+            .map_or(hour, |u| u.min(hour))
+    }
+
     /// Records a landed hack; a backdoor's hack is logged without an end.
     pub fn land(&mut self, b: BuildingId, target: HackTarget, kind: Target, op: Op, now: u64) {
         // A hack lasts an hour, or until the building's alert ends, whichever is
         // sooner; a broken piece stays down the whole hour whatever the alert does.
-        let alert_end = self
-            .traces
-            .get(&b)
-            .and_then(|t| t.alert_until)
-            .filter(|u| now < *u && op != Op::Attack);
-        let until = (op != Op::Backdoor)
-            .then(|| alert_end.map_or(now + HACK_MINUTES, |u| u.min(now + HACK_MINUTES)));
+        let until = match op {
+            Op::Backdoor => None,
+            Op::Attack => Some(now + HACK_MINUTES),
+            _ => Some(self.hack_end(b, now)),
+        };
         self.hacks.push(Hack {
             building: b,
             target,
@@ -743,12 +753,14 @@ impl NetState {
         locks
     }
 
-    /// Site `b`'s firewall lock `lock` broken at minute `now`, for `HACK_MINUTES`: broken
-    /// again, its hour starts over.
+    /// Site `b`'s firewall lock `lock` broken at minute `now`, as a hack lands: for
+    /// `HACK_MINUTES`, or until the building's alert ends, whichever is sooner. Broken
+    /// again, its time starts over.
     pub fn break_lock(&mut self, b: BuildingId, lock: u8, now: u64) {
+        let until = self.hack_end(b, now);
         let locks = self.firewalls.entry(b).or_default();
         locks.retain(|(l, _)| *l != lock);
-        locks.push((lock, now + HACK_MINUTES));
+        locks.push((lock, until));
         locks.sort_unstable();
     }
 
@@ -1745,7 +1757,43 @@ fn spring(st: &mut AppState, b: BuildingId) {
     st.warn("honeypot · they were waiting · trace running");
 }
 
-/// Jack in from the rig and land at a backdoor's gate.
+/// Where a backdoor on `b` lands you: a site's G hub, past its firewall, else the
+/// building's gate on the grid. What can stop it is settled here, before the key is used:
+/// a site's construct is made and the hub's tile found.
+enum Landing {
+    Hub,
+    Gate(Pos),
+}
+
+impl Landing {
+    fn of(st: &mut AppState, b: BuildingId) -> Result<Landing, String> {
+        if crate::sitenet::is_site(st, b) {
+            crate::sitenet::gs_hub(st, b)?;
+            return Ok(Landing::Hub);
+        }
+        let city = st.city.as_ref().ok_or("no city")?;
+        let gate = crate::constructs::city_gate(city, b).ok_or("that gate is gone")?;
+        Ok(Landing::Gate(gate))
+    }
+
+    /// You there, already on the Net; what the log calls it: `` `Kiroflux`'s gate ``.
+    fn land(self, st: &mut AppState, b: BuildingId) -> Result<String, String> {
+        let name = building_name(st, b);
+        match self {
+            Landing::Hub => {
+                let level = crate::sitenet::land_on_gs_hub(st, b)?;
+                Ok(format!("`{name}`'s {} hub", FloorPlan::label(level)))
+            }
+            Landing::Gate(gate) => {
+                crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
+                Ok(format!("`{name}`'s gate"))
+            }
+        }
+    }
+}
+
+/// Jack in from the rig and land at a backdoor's gate; a site's backdoor lands you on
+/// its G hub.
 pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
@@ -1766,7 +1814,7 @@ pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if !city.walkable(StratumKind::Net, port) {
         return Err("the port is dead".to_string());
     }
-    let gate = crate::constructs::city_gate(city, b).ok_or("that gate is gone")?;
+    let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
     let bonus = st.sight_bonus();
     let city = st.city.as_ref().ok_or("no city")?;
@@ -1775,39 +1823,32 @@ pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     player
         .jack_in(city, home.as_ref(), bonus)
         .map_err(|e| e.to_string())?;
-    player.pos = gate;
-    player.update_fov(&MapRef::stratum_of(city, StratumKind::Net), bonus);
+    let there = landing.land(st, b)?;
     after_jack_in(st, from, Some(b));
     st.repaint = true;
     if trap {
         spring(st, b);
     }
-    Ok(format!(
-        "jacked in · `{}`'s gate · via your backdoor",
-        building_name(st, b)
-    ))
+    Ok(format!("jacked in · {there} · via your backdoor"))
 }
 
-/// From the server of a construct you hold, onto another backdoor's gate.
+/// From the server of a construct you hold, onto another backdoor's gate; a site's
+/// backdoor lands you on its G hub.
 pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if st.backdoors.route.is_none() {
         return Err("no route home".to_string());
     }
-    let gate = st
-        .city
-        .as_ref()
-        .and_then(|c| crate::constructs::city_gate(c, b))
-        .ok_or("that gate is gone")?;
+    let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
     if st.net.run.take().is_some() {
         st.say("run aborted");
     }
-    crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
+    let there = landing.land(st, b)?;
     st.backdoors.hop(b);
     if trap {
         spring(st, b);
     }
-    Ok(format!("hop · `{}`'s gate", building_name(st, b)))
+    Ok(format!("hop · {there}"))
 }
 
 /// Whether a piece at `from` sees a player: on the spine (any open tile of a site's
@@ -3232,8 +3273,17 @@ pub fn hunted(st: &AppState) -> bool {
     })
 }
 
+/// Whether you stand on a floor of a site, where its terminals and gate switches are the
+/// ports (`sitenet::device_in_reach`).
+fn on_a_sites_floor(st: &AppState) -> bool {
+    matches!(
+        st.player.as_ref().map(|p| p.place),
+        Some(Place::Floor { building, .. }) if crate::sitenet::is_site(st, building)
+    )
+}
+
 /// Why the port refuses to jack in right now: a fight on foot, the deck cooling, or
-/// a lockdown.
+/// a lockdown (on a site's floor, the building's alarm locks its terminals and switches).
 pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     if engaged_on_foot(st) {
         return Some("not with a gun on you".to_string());
@@ -3246,6 +3296,10 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     let player = st.player.as_ref()?;
     if st.home.is_some_and(|h| h.place() == player.place) && st.backdoors.seized(now) {
         return Some("the rig is gone · evidence".to_string());
+    }
+    if on_a_sites_floor(st) {
+        let (b, ..) = crate::sitenet::device_in_reach(st)?;
+        return st.net.alert(b, now).then(|| "port locked down".to_string());
     }
     let port = player.terminal_in_reach(city, st.home.as_ref())?;
     // The rig at home is your own line: no building's lockdown reaches it.
@@ -3265,9 +3319,14 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     (locked || district).then(|| "port locked down".to_string())
 }
 
-/// Jacks in at the terminal in reach: the refusal when the port refuses, else the
-/// line the log reads.
+/// Jacks in at the terminal in reach (on a site's floor its terminal or gate switch,
+/// `sitenet::jack_in_on_floor`): the refusal when the port refuses, else the line the log
+/// reads.
 pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
+    // It asks the port itself.
+    if on_a_sites_floor(st) {
+        return crate::sitenet::jack_in_on_floor(st);
+    }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
     }

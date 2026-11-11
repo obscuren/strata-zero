@@ -6,7 +6,7 @@
 use crate::app::AppState;
 use crate::venues::Meets;
 use citygen::venue::VenueLayout;
-use citygen::{BuildingId, FloorPlan, NodeKind, Place, Pos};
+use citygen::{BuildingId, Construct, FloorPlan, NodeKind, Place, Pos};
 
 /// A step on a site's Net from `here` onto `target`: a door node holds you until it's
 /// cracked, but from its free side; a turnstile until its switch is held.
@@ -124,21 +124,32 @@ pub fn riser(st: &mut AppState, up: bool) -> Result<String, String> {
     Ok(line)
 }
 
-/// You onto level `level`'s hub of site `b`'s Net; with ICE on it, onto the free tile
-/// beside it, the nearest first. The riser lands you so, and the firewall's gate.
-pub(super) fn land_on_hub(st: &mut AppState, b: BuildingId, level: i32) -> Result<(), String> {
-    let k = st.constructs.site(b).ok_or("no Net here")?;
-    let hub = k.net_level(level).ok_or("no hub on that level")?.hub;
+/// Where you land on tile `at` of level `level` of a site's construct `k`: on it, or with
+/// ICE on it, the free tile beside it on its level, the nearest first.
+pub(super) fn landing(k: &Construct, level: i32, at: Pos) -> Option<Pos> {
     let free = |p: Pos| {
         k.tiles.get(p).is_some_and(|t| t.is_walkable())
             && k.guard_at(p).is_none()
             && k.level_at(p).is_some_and(|l| l.level == level)
     };
-    let at = std::iter::once(hub)
-        .chain(hub.neighbors8())
+    std::iter::once(at)
+        .chain(at.neighbors8())
         .filter(|p| free(*p))
-        .min_by_key(|p| p.manhattan(hub))
-        .ok_or("ICE holds the hub")?;
+        .min_by_key(|p| p.manhattan(at))
+}
+
+/// Where you land on level `level`'s hub of site construct `k` (`landing`).
+pub(super) fn hub_landing(k: &Construct, level: i32) -> Result<Pos, String> {
+    let hub = k.net_level(level).ok_or("no hub on that level")?.hub;
+    landing(k, level, hub).ok_or_else(|| "ICE holds the hub".to_string())
+}
+
+/// You onto level `level`'s hub of site `b`'s Net; with ICE on it, onto the free tile
+/// beside it, the nearest first. The riser lands you so, and onto G's hub the firewall's
+/// gate, a backdoor and a hop (`land_on_gs_hub`).
+pub(super) fn land_on_hub(st: &mut AppState, b: BuildingId, level: i32) -> Result<(), String> {
+    let k = st.constructs.site(b).ok_or("no Net here")?;
+    let at = hub_landing(k, level)?;
     crate::constructs::land(st, Place::SiteNet { building: b, level }, at);
     Ok(())
 }
