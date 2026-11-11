@@ -14,6 +14,8 @@ pub enum Host {
     Worn(Slot),
     Site(Site),
     Pack(CopyId),
+    /// The rig's rack on the desk: the bays take sleds.
+    Rig,
 }
 
 /// Everything a menu can ask for.
@@ -475,6 +477,10 @@ pub fn apply(
             socket,
             piece,
         } => {
+            // The stock rig is made the first time it is touched.
+            if host == Host::Rig {
+                ch.rig_copy_mut(c);
+            }
             // Every refusal comes before the first change.
             let host_item = ch
                 .host_item(host)
@@ -574,6 +580,9 @@ pub fn apply(
             }
         }
         Action::Unfit { host, socket } => {
+            if host == Host::Rig {
+                ch.rig_copy_mut(c);
+            }
             let host_id = ch
                 .host_item(host)
                 .cloned()

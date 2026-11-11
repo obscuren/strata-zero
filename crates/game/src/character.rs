@@ -313,6 +313,39 @@ pub struct Character {
     /// overburdened, so a test start takes what it finds whatever it carries.
     #[serde(default)]
     pub dev: bool,
+    /// The fitted rack's copy, its sleds in `fitted`; `None` is the stock rig (see
+    /// `rig_copy_mut`).
+    #[serde(default)]
+    pub rig: Option<ItemCopy>,
+    /// The racks standing in the flat. Once the rig exists the first is the fitted one.
+    #[serde(default)]
+    pub frames: Vec<ItemId>,
+    /// Rig rewards earned so far, counted across the run.
+    #[serde(default)]
+    pub rig_rewards: RigRewards,
+}
+
+/// The rack every runner starts with.
+pub const STOCK_FRAME: &str = "rack_zenbo";
+/// What the stock rack holds, in bay order: core, relay, line.
+pub const STOCK_SLEDS: [&str; 3] = ["sled_zb8", "sled_r3", "sled_cu1"];
+
+/// What the run has paid out in rig parts, so no reward is given twice and the rare
+/// ones stay rare.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RigRewards {
+    /// The fixers (or other sources) already paid, by id.
+    #[serde(default)]
+    pub paid: BTreeSet<String>,
+    /// Sleds given so far.
+    #[serde(default)]
+    pub sleds: u8,
+    /// Racks given so far.
+    #[serde(default)]
+    pub racks: u8,
+    /// Whether the Halcyon frame has been given.
+    #[serde(default)]
+    pub halcyon: bool,
 }
 
 /// What a piece of chrome takes of the load, with what is fitted in its copy; what is
@@ -381,6 +414,9 @@ impl Character {
             loaded: Vec::new(),
             next_copy: 0,
             dev: false,
+            rig: None,
+            frames: Vec::new(),
+            rig_rewards: RigRewards::default(),
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
@@ -1543,6 +1579,7 @@ impl Character {
             Host::Worn(slot) => self.equipped(slot),
             Host::Site(site) => self.chrome_at(site),
             Host::Pack(id) => self.copy_in_pack(id).map(|s| &s.item),
+            Host::Rig => Some(self.rig_frame_ref()),
         }
     }
 
@@ -1552,6 +1589,7 @@ impl Character {
             Host::Worn(slot) => self.worn_copy(slot),
             Host::Site(site) => self.chrome_copy(site),
             Host::Pack(id) => self.copy_in_pack(id)?.copy.as_ref(),
+            Host::Rig => self.rig.as_ref(),
         }
     }
 
@@ -1585,7 +1623,98 @@ impl Character {
                 .inventory
                 .iter_mut()
                 .find_map(|s| s.copy.as_mut().filter(|k| k.id == id)),
+            Host::Rig => Some(self.rig_copy_mut(c)),
         }
+    }
+
+    fn rig_frame_ref(&self) -> &ItemId {
+        static STOCK: std::sync::OnceLock<ItemId> = std::sync::OnceLock::new();
+        match (&self.rig, self.frames.first()) {
+            (Some(_), Some(f)) => f,
+            _ => STOCK.get_or_init(|| ItemId::new(STOCK_FRAME)),
+        }
+    }
+
+    /// The rack the rig is: the stock one until a rig exists.
+    pub fn rig_frame(&self) -> ItemId {
+        self.rig_frame_ref().clone()
+    }
+
+    /// The rig's copy to change. The first time it is needed it is the stock rig: the
+    /// Zenbo half-rack with ZB-8, R-3 and CU-1 fitted, and `frames` holds it.
+    pub fn rig_copy_mut(&mut self, c: &Content) -> &mut ItemCopy {
+        if self.rig.is_none() {
+            let frame = ItemId::new(STOCK_FRAME);
+            let mut copy = self.new_copy(c, &frame);
+            let bays = c
+                .item(&frame)
+                .map_or(STOCK_SLEDS.len(), |i| i.sockets.len());
+            copy.fitted.resize(bays.max(STOCK_SLEDS.len()), None);
+            for (bay, sled) in STOCK_SLEDS.iter().enumerate() {
+                let id = ItemId::new(sled);
+                let k = self.new_copy(c, &id);
+                copy.fitted[bay] = Some(Stack {
+                    item: id,
+                    qty: 1,
+                    copy: Some(k),
+                });
+            }
+            self.frames.retain(|f| f != &frame);
+            self.frames.insert(0, frame);
+            self.rig = Some(copy);
+        }
+        self.rig.as_mut().expect("the rig was just made")
+    }
+
+    /// The rig's bays in order: each one's kind and the sled in it. The stock list
+    /// until a rig exists.
+    pub fn rig_fitted(&self, c: &Content) -> Vec<(SocketKind, Option<ItemId>)> {
+        let kinds = c
+            .item(&self.rig_frame())
+            .map(|i| i.sockets.clone())
+            .unwrap_or_default();
+        kinds
+            .into_iter()
+            .enumerate()
+            .map(|(bay, kind)| {
+                let sled = match &self.rig {
+                    Some(k) => k
+                        .fitted
+                        .get(bay)
+                        .and_then(|s| s.as_ref())
+                        .map(|s| s.item.clone()),
+                    None => STOCK_SLEDS.get(bay).map(|s| ItemId::new(s)),
+                };
+                (kind, sled)
+            })
+            .collect()
+    }
+
+    /// Fits another rack as the rig: its sleds move into the new bays of their kind, in
+    /// order, and those with no bay go to the pack. Returns the ids sent there.
+    pub fn set_frame(&mut self, c: &Content, frame: &ItemId) -> Vec<ItemId> {
+        let Some(kinds) = c.item(frame).map(|i| i.sockets.clone()) else {
+            return Vec::new();
+        };
+        let old = std::mem::take(&mut self.rig_copy_mut(c).fitted);
+        let mut bays: Vec<Option<Stack>> = vec![None; kinds.len()];
+        let mut out = Vec::new();
+        for stack in old.into_iter().flatten() {
+            let kind = c.item(&stack.item).and_then(Item::fits_socket);
+            let at = (0..kinds.len()).find(|&b| bays[b].is_none() && Some(kinds[b]) == kind);
+            match at {
+                Some(b) => bays[b] = Some(stack),
+                None => out.push(stack),
+            }
+        }
+        self.rig_copy_mut(c).fitted = bays;
+        self.frames.retain(|f| f != frame);
+        self.frames.insert(0, frame.clone());
+        let ids = out.iter().map(|s| s.item.clone()).collect();
+        for s in out {
+            self.stow(s);
+        }
+        ids
     }
 
     /// How many of an item sit in the inventory (equipped items do not count).
@@ -1658,6 +1787,7 @@ impl Character {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Action;
     use crate::build::Build;
 
     fn vex(c: &Content) -> Character {
@@ -3275,5 +3405,142 @@ mod tests {
             .filter(|s| docked.contains(&s.item))
             .all(|s| s.copy.is_some());
         assert!(pack_bots, "each bot keeps its copy");
+    }
+    fn ap(ch: &mut Character, c: &Content, action: Action) -> Result<crate::Outcome, String> {
+        let at = crate::At {
+            place: citygen::Place::Stratum(citygen::StratumKind::Street),
+            pos: citygen::Pos::new(5, 5),
+        };
+        crate::apply(ch, &mut crate::Ground::default(), c, at, 0, action)
+    }
+
+    fn pack_copy_of(ch: &mut Character, c: &Content, id: &str) -> CopyId {
+        ch.give_item(c, ItemId::new(id), 1);
+        ch.inventory
+            .iter()
+            .rev()
+            .find(|s| s.item.0 == id)
+            .and_then(|s| s.copy_id())
+            .unwrap()
+    }
+
+    fn rig_ids(ch: &Character, c: &Content) -> Vec<Option<String>> {
+        ch.rig_fitted(c)
+            .into_iter()
+            .map(|(_, s)| s.map(|i| i.0))
+            .collect()
+    }
+
+    #[test]
+    fn a_save_without_a_rig_has_the_stock_one() {
+        let c = Content::load().unwrap();
+        let ch = vex(&c);
+        let text = ron::to_string(&ch).unwrap();
+        let at = text.find(",rig:").expect("rig is saved");
+        let old: Character = ron::from_str(&format!("{})", &text[..at])).unwrap();
+        assert_eq!(old.rig, None);
+        assert!(old.frames.is_empty());
+        assert_eq!(old.rig_rewards, RigRewards::default());
+        let stock: Vec<(SocketKind, Option<ItemId>)> = vec![
+            (SocketKind::Core, Some(ItemId::new("sled_zb8"))),
+            (SocketKind::Relay, Some(ItemId::new("sled_r3"))),
+            (SocketKind::Line, Some(ItemId::new("sled_cu1"))),
+        ];
+        assert_eq!(old.rig_fitted(&c), stock);
+        assert_eq!(old.rig_frame(), ItemId::new(STOCK_FRAME));
+        let mut old = old;
+        old.rig_copy_mut(&c);
+        assert_eq!(old.frames, vec![ItemId::new("rack_zenbo")]);
+        assert_eq!(old.rig_fitted(&c), stock);
+    }
+
+    #[test]
+    fn fitting_a_sled_into_the_rig() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let piece = pack_copy_of(&mut ch, &c, "sled_tinman");
+        ap(
+            &mut ch,
+            &c,
+            Action::Fit {
+                host: Host::Rig,
+                socket: 0,
+                piece,
+            },
+        )
+        .unwrap();
+        assert_eq!(rig_ids(&ch, &c)[0].as_deref(), Some("sled_tinman"));
+        assert_eq!(ch.count(&ItemId::new("sled_zb8")), 1, "ZB-8 in the pack");
+        ap(
+            &mut ch,
+            &c,
+            Action::Unfit {
+                host: Host::Rig,
+                socket: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(rig_ids(&ch, &c)[0], None);
+        assert_eq!(ch.count(&ItemId::new("sled_tinman")), 1);
+    }
+
+    #[test]
+    fn a_wrong_kind_is_refused() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let piece = pack_copy_of(&mut ch, &c, "sled_longwire");
+        let r = ap(
+            &mut ch,
+            &c,
+            Action::Fit {
+                host: Host::Rig,
+                socket: 0,
+                piece,
+            },
+        );
+        assert!(r.is_err());
+        assert_eq!(ch.count(&ItemId::new("sled_longwire")), 1);
+    }
+
+    #[test]
+    fn set_frame_moves_sleds() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let out = ch.set_frame(&c, &ItemId::new("rack_civitas"));
+        assert!(out.is_empty());
+        assert_eq!(ch.rig_frame(), ItemId::new("rack_civitas"));
+        assert_eq!(
+            rig_ids(&ch, &c),
+            vec![
+                Some("sled_zb8".into()),
+                Some("sled_r3".into()),
+                Some("sled_cu1".into()),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_smaller_frame_sends_extras_to_the_pack() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.set_frame(&c, &ItemId::new("rack_lotus"));
+        let piece = pack_copy_of(&mut ch, &c, "sled_tinman");
+        ap(
+            &mut ch,
+            &c,
+            Action::Fit {
+                host: Host::Rig,
+                socket: 1,
+                piece,
+            },
+        )
+        .unwrap();
+        assert_eq!(rig_ids(&ch, &c)[1].as_deref(), Some("sled_tinman"));
+        let out = ch.set_frame(&c, &ItemId::new("rack_zenbo"));
+        assert_eq!(out, vec![ItemId::new("sled_tinman")]);
+        assert_eq!(ch.count(&ItemId::new("sled_tinman")), 1);
+        assert_eq!(rig_ids(&ch, &c).len(), 3);
+        assert_eq!(rig_ids(&ch, &c)[0].as_deref(), Some("sled_zb8"));
     }
 }
