@@ -202,7 +202,7 @@ impl Workbench {
         let had = r
             .inputs
             .iter()
-            .map(|(id, _)| st.character.count(id))
+            .map(|(id, _)| st.character.count_for(&st.content, id))
             .collect();
         let result = perform(st, Action::Build(id));
         if result.is_ok() {
@@ -287,7 +287,7 @@ fn inputs(st: &AppState, r: &Recipe) -> Vec<Input> {
                 icon: item.map_or('?', |i| kind_icon(i.kind)),
                 name: item.map_or_else(|| id.to_string(), |i| i.name.clone()),
                 need: *need,
-                have: st.character.count(id),
+                have: st.character.count_for(&st.content, id),
             }
         })
         .collect()
@@ -1470,6 +1470,23 @@ mod tests {
             "{}",
             row(&b, 23)
         );
+    }
+
+    #[test]
+    fn a_sifted_shard_counts_for_its_twin_on_the_drawing() {
+        let mut st = dshawn();
+        let c = st.content.clone();
+        let r = c.recipe(&game::RecipeId::new("hydra_build")).unwrap();
+        let shard = |st: &AppState| {
+            inputs(st, r)
+                .into_iter()
+                .find(|i| i.id == ItemId::new("vault_data"))
+                .unwrap()
+        };
+        assert_eq!(shard(&st).have, 0);
+        st.character.give(ItemId::new("vault_data_sifted"), 1);
+        assert_eq!(shard(&st).have, 1, "the sifted one stands in");
+        assert!(shard(&st).on_hand());
     }
 
     #[test]

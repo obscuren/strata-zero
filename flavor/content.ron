@@ -259,8 +259,10 @@ Content(
         Item(id: "prog_keepalive", name: "Keepalive", kind: Component, weight: 0.05, value: 400,
              desc: "keepalive \u{b7} a rig program on a shard. It pings a backdoor every hour so the door forgets to shut."),
         Item(id: "paydata_sifted", name: "Paydata shard \u{b7} sifted", kind: Component, weight: 0.05, value: 300,
+             stands_for: Some("paydata"),
              desc: "A paydata shard your rig has been through. Nothing left to learn from it, but it still sells."),
         Item(id: "vault_data_sifted", name: "Vault dump \u{b7} sifted", kind: Component, weight: 0.05, value: 1500,
+             stands_for: Some("vault_data"),
              desc: "A vault dump gone over twice by the rig. Still warm, and now yours to sell."),
         // Stickers: decals for anything worn with a drawing; they change nothing but its look.
         Item(id: "sticker_no_future", name: "No Future", kind: Sticker, weight: 0.0, value: 5,

@@ -97,7 +97,7 @@ Your rig can work while you're out or asleep. `run <job> [target]` starts a job 
 
 | Job | What it does |
 |---|---|
-| `sift` | digs through a paydata shard or a vault dump from your pack: 6 hours (10 for a vault). It finds the door codes of 2 flats (4 for a vault) and, one time in three, a stash left on a flat's floor, marked on your MAP. The shard comes back sifted, still worth the same, and can't be sifted again |
+| `sift` | digs through a paydata shard or a vault dump from your pack: 6 hours (10 for a vault). It finds the door codes of 2 flats (4 for a vault) and, one time in three, a stash left on a flat's floor, marked on your MAP. The shard comes back sifted, still worth the same, and can't be sifted again. A sifted shard still hands in wherever its shard does and still builds at the workbench in its place; an unsifted one is used first |
 | `rent` | sells the spare cycles: ¤6 an hour, paid as it goes |
 | `sniff <host>` | listens on a Net backdoor you hold and learns a flat's door code every 3 hours |
 | `keepalive <host>` | holds a Net backdoor's life still while it runs |

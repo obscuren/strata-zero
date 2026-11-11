@@ -460,6 +460,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         stickers: Vec::new(),
         bot: None,
         frame: None,
+        stands_for: None,
     }
 }
 

@@ -475,6 +475,11 @@ impl Content {
                 })
         };
         for i in &self.items {
+            if let Some(twin) = &i.stands_for {
+                need_item(format!("item {} stands_for", i.id), twin)?;
+            }
+        }
+        for i in &self.items {
             match (i.kind, i.program) {
                 (ItemKind::Program, None) => {
                     return Err(ContentError::ProgramInvalid {
@@ -1642,6 +1647,13 @@ mod tests {
         ));
 
         let mut c = good.clone();
+        c.items[0].stands_for = Some(ItemId::new("unobtainium"));
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::UnknownItem { .. })
+        ));
+
+        let mut c = good.clone();
         let dup = c.items[0].clone();
         c.items.push(dup);
         assert!(matches!(c.validate(), Err(ContentError::DuplicateId(_))));
@@ -2750,6 +2762,13 @@ mod tests {
             "vault_data_sifted",
         ] {
             assert!(c.item(&ItemId::new(id)).is_some(), "{id}");
+        }
+        for (sifted, twin) in [
+            ("paydata_sifted", "paydata"),
+            ("vault_data_sifted", "vault_data"),
+        ] {
+            let item = c.item(&ItemId::new(sifted)).unwrap();
+            assert_eq!(item.stands_for, Some(ItemId::new(twin)), "{sifted}");
         }
     }
 

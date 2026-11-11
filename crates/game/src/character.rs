@@ -81,6 +81,14 @@ impl ItemCopy {
     }
 }
 
+/// The items that stand for `id` when it's short, in the content's order.
+pub fn stand_ins<'a>(c: &'a Content, id: &'a ItemId) -> impl Iterator<Item = &'a ItemId> {
+    c.items
+        .iter()
+        .filter(move |i| i.stands_for.as_ref() == Some(id))
+        .map(|i| &i.id)
+}
+
 /// What a save's reader says of an item this build's content lacks.
 fn item_lost(id: &ItemId) -> String {
     format!("an item ({id})")
@@ -1733,6 +1741,12 @@ impl Character {
             self.stow(s);
         }
         ids
+    }
+
+    /// How many of an item the workbench can use: those in the pack, and the items
+    /// that stand for it (`Item::stands_for`).
+    pub fn count_for(&self, c: &Content, id: &ItemId) -> u32 {
+        stand_ins(c, id).map(|i| self.count(i)).sum::<u32>() + self.count(id)
     }
 
     /// How many of an item sit in the inventory (equipped items do not count).

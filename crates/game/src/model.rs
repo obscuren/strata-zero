@@ -1008,6 +1008,10 @@ pub struct Item {
     /// A rack's head unit (frames only).
     #[serde(default)]
     pub frame: Option<FrameSpec>,
+    /// The item it does for at the workbench when that one is short, as a rig's sifted
+    /// shard does for the shard it was.
+    #[serde(default)]
+    pub stands_for: Option<ItemId>,
 }
 
 impl Item {
