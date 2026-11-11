@@ -9,10 +9,8 @@ use game::{Character, Content, Mod};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RigSpec {
     /// Programs the rig runs at once.
-    #[allow(dead_code)] // read by the programs, later
     pub seats: u8,
     /// Clock, in percent; 100 is stock.
-    #[allow(dead_code)] // read by the programs, later
     pub speed: u16,
     /// Backdoors the rig can keep.
     pub lines: usize,
@@ -23,7 +21,7 @@ pub struct RigSpec {
 }
 
 /// The stock Zenbo rig: ZB-8, R-3 and CU-1.
-#[allow(dead_code)] // the tests' yardstick
+#[cfg(test)] // the tests' yardstick
 pub const STOCK: RigSpec = RigSpec {
     seats: 1,
     speed: 100,

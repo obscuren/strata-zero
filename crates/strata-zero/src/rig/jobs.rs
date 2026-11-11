@@ -220,7 +220,11 @@ pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
         }
         JobKind::Rent => {}
     }
-    if st.backdoors.jobs.running.len() >= crate::rig::of(st).seats as usize {
+    let seats = crate::rig::of(st).seats as usize;
+    if seats == 0 {
+        return Err("run: no core in the rig".to_string());
+    }
+    if st.backdoors.jobs.running.len() >= seats {
         return Err("run: every seat is busy · kill a job, or fit a bigger core".to_string());
     }
     if let JobKind::Sift { shard } = &kind {
@@ -1424,6 +1428,18 @@ mod tests {
         );
         assert_eq!(st.character.count(&paydata), 1);
         assert_eq!(kill(&mut st, n), Err(format!("kill: no job {n}")));
+    }
+
+    #[test]
+    fn no_core_no_run() {
+        let mut st = state_home();
+        let c = st.content.clone();
+        st.character.rig_copy_mut(&c).fitted[0] = None;
+        assert_eq!(crate::rig::of(&st).seats, 0);
+        assert_eq!(
+            start(&mut st, JobKind::Rent),
+            Err("run: no core in the rig".to_string())
+        );
     }
 
     #[test]

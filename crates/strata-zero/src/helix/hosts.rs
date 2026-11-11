@@ -213,9 +213,8 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
     host
 }
 
-/// Keeps the rig's `/net` in step with its lines: the home block and every backdoor
-/// not burned, one entry each; a burned one's entry goes.
-/// `/opt/jobs`: a file for each program the rig has installed.
+/// Keeps the rig's `/opt/jobs` in step with its programs: a file for each one
+/// installed.
 fn sync_rig_jobs(st: &mut AppState) {
     let me = rig_user(st);
     let names: Vec<String> = st.backdoors.jobs.programs.iter().cloned().collect();
@@ -232,6 +231,8 @@ fn sync_rig_jobs(st: &mut AppState) {
     }
 }
 
+/// Keeps the rig's `/net` in step with its lines: the home block and every backdoor
+/// not burned, one entry each; a burned one's entry goes.
 fn sync_rig_net(st: &mut AppState) {
     let want: BTreeSet<BuildingId> = st
         .home

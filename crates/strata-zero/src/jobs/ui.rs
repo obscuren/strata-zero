@@ -383,7 +383,14 @@ pub fn rig_rewards(
     for item in got {
         // Hardware gets a copy of its own, as the Keyjack's fuse does; a shard just stacks.
         st.character.give_item(&st.content, item.clone(), 1);
-        let words = named(st, &item);
+        // a rig program comes on a shard, and is named as `run` takes it
+        let words = match program {
+            Some((_, p)) if item.0 == p => {
+                let n = st.content.item(&item).map_or(p, |i| i.name.as_str());
+                format!("a {} shard", n.to_lowercase())
+            }
+            _ => named(st, &item),
+        };
         out.push((item, words));
     }
     for rack in racks {
@@ -392,7 +399,7 @@ pub fn rig_rewards(
         let said = st.flavor.line(Say::Rack, roll).to_string();
         let words = named(st, &rack);
         let now = st.net.now(st);
-        st.journal.mails.push(crate::credentials::Mail {
+        let mail = crate::credentials::Mail {
             from: name.clone(),
             subject: words.clone(),
             body: vec![said],
@@ -400,7 +407,13 @@ pub fn rig_rewards(
             at: now,
             job: None,
             story: None,
-        });
+        };
+        // The rack is at your door at home: the mail lands in the home city's journal,
+        // set aside while you're in another.
+        match st.away.as_deref_mut() {
+            Some(home) => home.journal.mails.push(mail),
+            None => st.journal.mails.push(mail),
+        }
         out.push((rack, words));
     }
     out
@@ -672,6 +685,29 @@ mod tests {
     }
 
     #[test]
+    fn a_rack_sent_while_away_is_mailed_home() {
+        use crate::jobs::PLANT_AT;
+        let mut st = state_home();
+        let (a, _) = two_fixers(&st);
+        // Home set aside, as in another city: its journal goes with it.
+        let mut home = state_home();
+        st.away = crate::outside::set_aside(&mut home).map(Box::new);
+        let mails = st.journal.mails.len();
+        let home_mails = st.away.as_ref().unwrap().journal.mails.len();
+        rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        assert_eq!(st.character.frames, vec![ItemId::new("rack_civitas")]);
+        assert_eq!(st.journal.mails.len(), mails, "not in this city's journal");
+        let journal = &st.away.as_ref().unwrap().journal;
+        assert_eq!(journal.mails.len(), home_mails + 1);
+        let mail = journal.mails.last().unwrap();
+        assert!(
+            mail.body.iter().any(|l| l.contains("it's at your door")),
+            "{:?}",
+            mail.body
+        );
+    }
+
+    #[test]
     fn inner_circle_sends_the_halcyon_once() {
         use crate::jobs::VAULT_AT;
         let mut st = state_home();
@@ -705,10 +741,15 @@ mod tests {
         };
         let got = rig_rewards(&mut st, a, 0, 1, &plant);
         assert_eq!(got[0].0, ItemId::new("prog_sniff"));
+        assert_eq!(got[0].1, "a sniff shard");
         assert_eq!(sleds_in_pack(&st, "prog_sniff"), 1);
         assert!(rig_rewards(&mut st, a, 2, 3, &plant).is_empty());
         let got = rig_rewards(&mut st, a, 2, 3, &copy);
-        assert!(got.iter().any(|(i, _)| *i == ItemId::new("prog_keepalive")));
+        assert!(
+            got.iter()
+                .any(|(i, w)| *i == ItemId::new("prog_keepalive") && w == "a keepalive shard"),
+            "{got:?}"
+        );
         assert_eq!(sleds_in_pack(&st, "prog_keepalive"), 1);
         assert!(
             rig_rewards(&mut st, a, 3, 4, &copy)

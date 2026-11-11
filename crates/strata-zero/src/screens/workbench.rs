@@ -1498,7 +1498,7 @@ mod tests {
         assert_eq!(
             recipe_id(&st, &d),
             "wire_shiv",
-            "→ wraps through all all twenty-one"
+            "→ wraps through all twenty-one"
         );
         press(&mut d, &mut st, KeyCode::Left, 1);
         assert_eq!(recipe_id(&st, &d), "ratchet_build", "← wraps to the last");

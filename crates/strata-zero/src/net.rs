@@ -919,6 +919,15 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
     }
 }
 
+/// What the tripwire's call says of a trace `hops` relays out.
+fn tripwire_line(hops: usize) -> String {
+    match hops {
+        0 => "trace on your line · straight to your door".to_string(),
+        1 => "trace on your line · 1 hop out".to_string(),
+        n => format!("trace on your line · {n} hops out"),
+    }
+}
+
 /// Why a Backdoor program may not be planted here, in the shell's words.
 pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
     let now = st.net.now(st);
@@ -1647,7 +1656,7 @@ pub fn tick_backdoors(st: &mut AppState) {
                         story: None,
                         from: "zenbo".to_string(),
                         lines: vec![
-                            format!("trace on your line · {hops} hops out"),
+                            tripwire_line(hops),
                             "burn the route or ride it out".to_string(),
                         ],
                         rang: 0,
@@ -4317,10 +4326,20 @@ pub(crate) mod tests {
         assert_eq!(
             calls_from_zenbo(&st),
             vec![vec![
-                "trace on your line · 1 hops out".to_string(),
+                "trace on your line · 1 hop out".to_string(),
                 "burn the route or ride it out".to_string()
             ]]
         );
+    }
+
+    #[test]
+    fn the_tripwire_counts_its_hops() {
+        assert_eq!(
+            tripwire_line(0),
+            "trace on your line · straight to your door"
+        );
+        assert_eq!(tripwire_line(1), "trace on your line · 1 hop out");
+        assert_eq!(tripwire_line(3), "trace on your line · 3 hops out");
     }
 
     #[test]
