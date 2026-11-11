@@ -122,7 +122,6 @@ impl JobKind {
 impl RigJobs {
     /// The boot says how many jobs did work since the last boot, and starts counting
     /// again.
-    #[allow(dead_code)] // the boot line's, later
     pub fn boot(&mut self) -> u32 {
         let n = self.worked_since_boot;
         self.worked_since_boot = 0;
@@ -180,7 +179,6 @@ fn sift_hours(shard: &ItemId) -> u64 {
 }
 
 /// Starts a job in a free seat; its number.
-#[allow(dead_code)] // HELIX's `run`, later
 pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
     let now = st.net.now(st);
     advance(st, now);
@@ -244,7 +242,6 @@ pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
 
 /// Stops job `n`: `killed 2 · sift · paydata shard`. A shard being sifted comes back
 /// as it went in.
-#[allow(dead_code)] // HELIX's `kill`, later
 pub fn kill(st: &mut AppState, n: u32) -> Result<String, String> {
     let now = st.net.now(st);
     advance(st, now);

@@ -196,6 +196,7 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
     };
     if id == HostId::Rig {
         sync_rig_net(st);
+        sync_rig_jobs(st);
     }
     if let HostId::Building(b) = id {
         sync_site_cams(st, b);
@@ -214,6 +215,23 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
 
 /// Keeps the rig's `/net` in step with its lines: the home block and every backdoor
 /// not burned, one entry each; a burned one's entry goes.
+/// `/opt/jobs`: a file for each program the rig has installed.
+fn sync_rig_jobs(st: &mut AppState) {
+    let me = rig_user(st);
+    let names: Vec<String> = st.backdoors.jobs.programs.iter().cloned().collect();
+    let Some(host) = st.helix.hosts.get_mut(&HostId::Rig) else {
+        return;
+    };
+    host.fs.mkdir_as("/opt/jobs", &me, Mode::RW_R);
+    for n in names {
+        let path = format!("/opt/jobs/{n}");
+        if host.fs.resolve("/", "/", &path).is_err() {
+            host.fs
+                .put(&path, &format!("run {n} · man {n}\n"), &me, Mode::RW_R);
+        }
+    }
+}
+
 fn sync_rig_net(st: &mut AppState) {
     let want: BTreeSet<BuildingId> = st
         .home

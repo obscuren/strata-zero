@@ -1068,6 +1068,21 @@ const PAGES: &[(&str, &str, &str)] = &[
         "route prints the chain of backdoors between the rig and you while you are jacked in from home, each with its health, and the trace walking it back when there is one. Rig only.",
     ),
     (
+        "run",
+        "start a job on the rig",
+        "run <job> [target] starts one of the rig's programs in a free seat; ls /opt/jobs lists the ones installed. run sniff <host> and run keepalive <host> work a backdoor by its /net name, prefix or number; run sift [shard] digs through a paydata shard in your pack; run rent sells the spare cycles. Jobs go on while you are away. Rig only.",
+    ),
+    (
+        "ps",
+        "list the rig's jobs",
+        "ps prints the jobs running on the rig, how long each has been up and what it has found, then how many seats of the core are busy. Rig only.",
+    ),
+    (
+        "kill",
+        "end a job",
+        "kill <n> ends job n of ps and frees its seat. A shard being sifted comes back to your pack. Rig only.",
+    ),
+    (
         "alarm",
         "silence the alarm",
         "alarm off stops the alarm. It writes /dev/alarm, which only root may. On a hotel's or an office's host it wants root too (crack its server).",
