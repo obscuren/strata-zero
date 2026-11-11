@@ -839,11 +839,11 @@ mod tests {
         let p = k.interact(&mut st).expect("popup");
         let labels: Vec<_> = p.choices().iter().map(|c| c.label.clone()).collect();
         assert!(labels.iter().any(|l| l == "Unequip"), "{labels:?}");
-        assert!(labels.iter().any(|l| l == "Inspect"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Inspect / Mod"), "{labels:?}");
         to_row(&mut k, &st, "Stim patch");
         let p = k.interact(&mut st).expect("popup");
         let labels: Vec<_> = p.choices().iter().map(|c| c.label.clone()).collect();
-        assert_eq!(labels, ["Inspect", "Use", "Drop one"]);
+        assert_eq!(labels, ["Inspect / Mod", "Use", "Drop one"]);
     }
 
     #[test]
