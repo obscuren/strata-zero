@@ -321,6 +321,16 @@ fn change(before: RigSpec, after: RigSpec) -> Option<(String, Color)> {
 }
 
 /// What a sled gives, a line a mod: `seats     2`.
+/// What the rig goes without while no sled of `kind` is fitted.
+fn without(kind: SocketKind) -> Option<&'static str> {
+    match kind {
+        SocketKind::Core => Some("no seats · no job runs"),
+        SocketKind::Relay => Some("no lines · no backdoor plants"),
+        SocketKind::Line => Some("no hold · a Net backdoor won't plant"),
+        _ => None,
+    }
+}
+
 fn gives(item: &Item) -> Vec<String> {
     let mods: &[Mod] = item.hardware.as_ref().map_or(&[], |h| h.mods.as_slice());
     mods.iter()
@@ -736,7 +746,10 @@ fn draw_side(
             Some((kind, None)) => (
                 format!("{} · empty", kind.label().to_uppercase()),
                 Some(format!("takes {}", kind.takes())),
-                vec![("nothing fitted".to_string(), FAINT)],
+                std::iter::once("nothing fitted")
+                    .chain(without(*kind))
+                    .map(|l| (l.to_string(), FAINT))
+                    .collect(),
             ),
             None => (String::new(), None, Vec::new()),
         }
@@ -1270,6 +1283,21 @@ mod tests {
         st.at_desk = true;
         map.update(&mut st, &[]);
         assert!(!st.at_desk);
+    }
+
+    #[test]
+    fn an_empty_line_bay_says_plants_wont_hold() {
+        let mut st = state_home();
+        let c = st.content.clone();
+        st.character.rig_copy_mut(&c).fitted[2] = None;
+        let mut d = Desk::open(&st);
+        d.row = 3;
+        let text = drawn(&d, &st, 120, 40);
+        assert!(text.contains("nothing fitted"), "{text}");
+        assert!(
+            text.contains("no hold · a Net backdoor won't plant"),
+            "{text}"
+        );
     }
 
     #[test]

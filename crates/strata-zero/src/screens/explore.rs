@@ -14414,6 +14414,42 @@ mod tests {
     }
 
     #[test]
+    fn the_backdoor_program_is_greyed_with_no_line_sled() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character
+            .unload(&st.content, &ItemId::new("crack"))
+            .unwrap();
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        crate::screens::console::run(&mut st, at, "program backdoor").unwrap();
+        // the LINE bay pulled: a backdoor planted now would be dead on arrival
+        let c = st.content.clone();
+        st.character.rig_copy_mut(&c).fitted[2] = None;
+        assert_eq!(crate::rig::of(&st).hold_days, 0);
+        let why = "no line in the rig · nothing holds";
+        let all = crate::interact::run_rows(&st, b, here, None, &mut FREE_LETTERS.chars());
+        let row = all.iter().find(|c| c.label == "Backdoor").expect("a row");
+        assert!(!row.enabled);
+        assert!(row.tail.ends_with(why), "{:?}", row.tail);
+        let target = game::HackTarget::Node(server);
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("backdoor"), target).unwrap_err(),
+            why
+        );
+        assert!(st.backdoors.live(b).is_none());
+    }
+
+    #[test]
     fn a_jump_puts_the_free_camera_on_the_tile_with_the_inspector_on() {
         let mut st = state();
         let city = st.city.take().unwrap();

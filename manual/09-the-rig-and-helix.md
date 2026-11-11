@@ -56,7 +56,7 @@ The rack is the frame, and its bays take **sleds**, small cards that slide in. E
 | `LINE` | hold: how many days a planted Net backdoor lasts |
 | `FIREWALL` | a stronger fight against a trace |
 
-The stock rig is a Zenbo half-rack with a ZB-8 core (1 seat), an R-3 relay (3 lines) and a CU-1 copper line (3 days). It has no firewall. A rig with no relay holds no lines, and you can't plant.
+The stock rig is a Zenbo half-rack with a ZB-8 core (1 seat), an R-3 relay (3 lines) and a CU-1 copper line (3 days). It has no firewall. A rig with no relay holds no lines, and you can't plant. With no line sled nothing holds, so a Net backdoor won't plant either; a key from the shell still goes in, on its own clock.
 
 | Key | What it does |
 |---|---|

@@ -490,7 +490,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             let seed = st.city.as_ref().map_or(0, |c| c.seed);
             let rig = crate::rig::of(st);
             st.backdoors
-                .can_plant(b, now, rig.lines)
+                .can_plant_net(b, now, rig.lines, rig.hold_days)
                 .map_err(|r| r.words())?;
             st.backdoors.plant_net(b, 1, seed, now, rig.hold_days);
             Ok(format!("backdoor on `{}`", crate::net::building_name(st, b)))

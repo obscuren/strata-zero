@@ -142,6 +142,8 @@ pub enum Refusal {
     Full(usize),
     NoRelay,
     Already,
+    /// No LINE sled: a Net backdoor would hold no time at all.
+    NoHold,
 }
 
 impl Refusal {
@@ -152,6 +154,7 @@ impl Refusal {
             Refusal::Full(n) => format!("the rig holds {n} lines · burn one first"),
             Refusal::NoRelay => "no relay in the rig · no lines".to_string(),
             Refusal::Already => "already planted here".to_string(),
+            Refusal::NoHold => "no line in the rig · nothing holds".to_string(),
         }
     }
 }
@@ -274,6 +277,22 @@ impl Backdoors {
         }
         if self.held(b).is_some() {
             return Err(Refusal::Already);
+        }
+        Ok(())
+    }
+
+    /// `can_plant` for a Net backdoor, which lasts the rig's `hold_days`: with none it
+    /// would be dead as it went in, so it doesn't.
+    pub fn can_plant_net(
+        &self,
+        b: BuildingId,
+        now: u64,
+        lines: usize,
+        hold_days: u64,
+    ) -> Result<(), Refusal> {
+        self.can_plant(b, now, lines)?;
+        if hold_days == 0 {
+            return Err(Refusal::NoHold);
         }
         Ok(())
     }
@@ -849,6 +868,24 @@ mod tests {
         let bd = Backdoors::default();
         assert_eq!(bd.can_plant(b(1), 0, 0), Err(Refusal::NoRelay));
         assert_eq!(Refusal::NoRelay.words(), "no relay in the rig · no lines");
+    }
+
+    #[test]
+    fn no_line_no_net_plant() {
+        let bd = Backdoors::default();
+        assert_eq!(
+            bd.can_plant_net(b(1), 0, STOCK_LINES, 0),
+            Err(Refusal::NoHold)
+        );
+        assert_eq!(
+            Refusal::NoHold.words(),
+            "no line in the rig · nothing holds"
+        );
+        assert_eq!(bd.can_plant_net(b(1), 0, STOCK_LINES, 3), Ok(()));
+        // a key holds by its own clock, so it still goes in
+        assert_eq!(bd.can_plant(b(1), 0, STOCK_LINES), Ok(()));
+        // the rig's own refusals come first
+        assert_eq!(bd.can_plant_net(b(1), 0, 0, 0), Err(Refusal::NoRelay));
     }
 
     #[test]

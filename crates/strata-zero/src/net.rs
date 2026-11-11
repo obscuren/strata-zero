@@ -922,9 +922,9 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
 /// Why a Backdoor program may not be planted here, in the shell's words.
 pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
     let now = st.net.now(st);
-    let lines = crate::rig::of(st).lines;
+    let rig = crate::rig::of(st);
     st.backdoors
-        .can_plant(b, now, lines)
+        .can_plant_net(b, now, rig.lines, rig.hold_days)
         .err()
         .map(|r| r.words())
 }
@@ -1309,6 +1309,10 @@ fn land(
             }
         }
         (Op::Backdoor, _) => {
+            // The rig may have changed under a run in flight: a refused plant plants nothing.
+            if let Some(why) = plant_net_refusal(st, b) {
+                return format!("backdoor refused · {why}");
+            }
             let seed = st.city.as_ref().map_or(0, |c| c.seed);
             let rig = crate::rig::of(st);
             st.backdoors.plant_net(b, rating, seed, now, rig.hold_days);
