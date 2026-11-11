@@ -528,19 +528,30 @@ pub fn lift_state(st: &AppState, b: BuildingId) -> String {
     }
 }
 
+/// Building `b`'s cameras as its host numbers them, `/dev/cam0` first: on a site the
+/// riser's in the Net's order (as `loop_cam` takes them), elsewhere its nodes on the
+/// city's Net.
+fn cameras(st: &AppState, b: BuildingId) -> Vec<NetNode> {
+    if crate::sitenet::is_site(st, b) {
+        (riser_nodes(st, b, &[NodeKind::Camera]).into_iter())
+            .map(|(n, _)| NetNode::Site(n))
+            .collect()
+    } else {
+        (nodes_of(st, b, NodeKind::Camera).into_iter())
+            .map(NetNode::City)
+            .collect()
+    }
+}
+
+/// How many `/dev/cam*` building `b`'s host holds: one per camera it numbers.
+pub fn cam_count(st: &AppState, b: BuildingId) -> usize {
+    cameras(st, b).len()
+}
+
 /// `/dev/cam{i}`: camera `i`, on a site the `i`th on the riser in the Net's order.
 pub fn cam_state(st: &AppState, b: BuildingId, i: usize) -> String {
     let now = st.net.now(st);
-    let node = if crate::sitenet::is_site(st, b) {
-        let cams = riser_nodes(st, b, &[NodeKind::Camera]);
-        cams.get(i).map(|(n, _)| NetNode::Site(*n))
-    } else {
-        nodes_of(st, b, NodeKind::Camera)
-            .get(i)
-            .copied()
-            .map(NetNode::City)
-    };
-    let Some(node) = node else {
+    let Some(node) = cameras(st, b).get(i).copied() else {
         return format!("cam{i}: absent");
     };
     if !st.net.blinded(node, now) {

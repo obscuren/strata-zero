@@ -615,6 +615,7 @@ mod tests {
     use crate::helix::shell::{complete, prompt, run};
     use crate::sitenet::testutil::{crack_server, shell_on, street_shell_listing};
     use citygen::{BuildingKind, GenParams, Generator, NodeKind, SizePreset};
+    use std::collections::BTreeSet;
 
     /// A city, a residential building with people home and a server, and its district.
     fn state() -> (AppState, BuildingId, citygen::DistrictId) {
@@ -1514,6 +1515,71 @@ mod tests {
             text(&go(&mut st, &mut sh, "cat /dev/door")),
             format!("locks: {k}/{k} released")
         );
+    }
+
+    #[test]
+    fn man_says_what_a_sites_host_wants() {
+        let (mut st, _, d) = state();
+        let mut sh = new_shell(&mut st, HostId::District(d));
+        let page = |st: &mut AppState, sh: &mut Shell, cmd: &str| {
+            go(st, sh, &format!("man {cmd}")).lines.join(" ")
+        };
+        for cmd in ["door", "lift", "cam", "alarm"] {
+            let man = page(&mut st, &mut sh, cmd);
+            assert!(
+                man.contains("On a hotel's or an office's host it wants root"),
+                "{cmd}: {man}"
+            );
+        }
+        let ssh = page(&mut st, &mut sh, "ssh");
+        assert!(ssh.contains("while its firewall stands"), "{ssh}");
+    }
+
+    /// The `cam*` devices `ls /dev` lists on the shell's host.
+    fn cam_devices(st: &mut AppState, sh: &mut Shell) -> BTreeSet<String> {
+        let ls = go(st, sh, "ls /dev");
+        (ls.lines.into_iter())
+            .filter(|l| l.starts_with("cam"))
+            .collect()
+    }
+
+    #[test]
+    fn a_sites_camera_devices_follow_the_cameras_on_its_riser() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let copy = st.interiors.copy(b).unwrap().clone();
+        // The host first opened while the plain office stands: no cameras of its own.
+        crate::venues::end(&mut st, b).unwrap();
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(cam_devices(&mut st, &mut sh), BTreeSet::new());
+        // The job begins: one device per camera on the riser, in the Net's order.
+        crate::venues::begin(&mut st, b, copy.inputs).unwrap();
+        crack_server(&mut st, b);
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(sh.user, "root");
+        let net = crate::sitenet::net_of(&st, b).unwrap();
+        let riser: Vec<citygen::SiteNode> = (net.nodes.iter())
+            .filter(|n| n.kind == NodeKind::Camera && net.on_riser(n.node.level))
+            .map(|n| n.node)
+            .collect();
+        let n = riser.len();
+        assert!(n > 1, "cameras up the riser");
+        let want: BTreeSet<String> = (0..n).map(|i| format!("cam{i}")).collect();
+        assert_eq!(cam_devices(&mut st, &mut sh), want);
+        // Each loops its own camera.
+        let k = n - 1;
+        let out = text(&go(&mut st, &mut sh, &format!("echo loop > /dev/cam{k}")));
+        assert_eq!(out, "1 CAMERA LOOPED · 60 MIN");
+        let now = st.net.now(&st);
+        for (i, c) in riser.iter().enumerate() {
+            let blind = st.net.blinded(citygen::NetNode::Site(*c), now);
+            assert_eq!(blind, i == k, "cam{i}");
+        }
+        let cat = text(&go(&mut st, &mut sh, &format!("cat /dev/cam{k}")));
+        assert!(cat.starts_with(&format!("cam{k}: looped (until ")), "{cat}");
+        // The job ends: its cameras go from the host's list.
+        crate::venues::end(&mut st, b).unwrap();
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(cam_devices(&mut st, &mut sh), BTreeSet::new());
     }
 
     #[test]

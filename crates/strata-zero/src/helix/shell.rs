@@ -1024,7 +1024,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "ssh",
         "log in to another machine",
-        "ssh host moves your shell to another machine, by name, by the start of its name or by its scan number. exit brings you back.",
+        "ssh host moves your shell to another machine, by name, by the start of its name or by its scan number. exit brings you back. A hotel's or an office's host turns you away while its firewall stands.",
     ),
     ("connect", "ssh by another name", "connect host is ssh."),
     (
@@ -1040,17 +1040,17 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "door",
         "work the door locks",
-        "door release asks the door locks to let go for a while. It writes /dev/door, so you need the right to.",
+        "door release asks the door locks to let go for a while. It writes /dev/door, so you need the right to. On a hotel's or an office's host it wants root (crack its server) and lets go every lock on the floors its riser joins, never across an air gap.",
     ),
     (
         "lift",
         "call the lifts",
-        "lift answer makes the lifts answer you. It writes /dev/lift.",
+        "lift answer makes the lifts answer you. It writes /dev/lift. On a hotel's or an office's host it wants root (crack its server) and calls every lift on its riser.",
     ),
     (
         "cam",
         "blind a camera",
-        "cam loop [n] loops a camera feed for a while. It writes /dev/camN.",
+        "cam loop [n] loops a camera feed for a while. It writes /dev/camN. On a hotel's or an office's host it wants root (crack its server), and its cameras are the ones on the floors its riser joins.",
     ),
     (
         "backdoor",
@@ -1070,7 +1070,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "alarm",
         "silence the alarm",
-        "alarm off stops the alarm. It writes /dev/alarm, which only root may.",
+        "alarm off stops the alarm. It writes /dev/alarm, which only root may. On a hotel's or an office's host it wants root too (crack its server).",
     ),
     (
         "plan",
