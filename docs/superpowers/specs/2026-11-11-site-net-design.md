@@ -337,7 +337,9 @@ User standing runs building-wide commands (`door release`, `lift answer`, `cam l
 firewall and open everything from the chair. So on a site:
 - `ssh` into its host from outside the site's Net is refused while any firewall lock is
   whole: "FIREWALL · 3 LOCKS". From a terminal on the site's own Net, or with the
-  firewall broken, it connects as today.
+  firewall broken, it connects as today. Root on the site (a Net backdoor, or its server
+  cracked) gets you back in through a standing firewall (changed after play: at first
+  root was refused too; a reverse shell or the like may take ssh's place later).
 - The four building-wide commands need root on a site, which means a cracked server.
   With root they act on every device of their kind on the riser's levels, but not across
   an air gap.
@@ -490,7 +492,7 @@ Tests, beside the code they test:
   - one through the firewall;
   - the building on the city's Net with a lock broken.
 - **HELIX.** `ssh` to a site's host from the street is refused while its firewall
-  stands, and a building-wide command needs root.
+  stands, unless you hold root on it, and a building-wide command needs root.
 
 ## Calls I made
 
@@ -520,8 +522,8 @@ Tests, beside the code they test:
     copy starts or ends, the site's hacks, holds and broken locks are dropped.
 14. A site's city-Net server, vault and lift nodes are inside the firewall now. Its face's
     cameras and terminals stay on the street's Net.
-15. HELIX on a site: `ssh` from outside is refused while the firewall stands, and the four
-    building-wide commands need root.
+15. HELIX on a site: `ssh` from outside is refused while the firewall stands, unless you
+    hold root on it, and the four building-wide commands need root.
 16. Floor cameras watch and warm the trace now, ahead of #36.
 17. A turret, a container lock and a hub are nodes now. What they do comes with #97, #96
     and #73.

@@ -184,9 +184,12 @@ impl AppIo<'_> {
                 let b = list[*i];
                 // A site's host sits behind its firewall: from outside its Net, refused
                 // while a lock is whole, before a key is tried (Ruling 15 of the plan
-                // `docs/superpowers/plans/2026-11-11-site-net.md`). A shell on one of its
-                // own terminals is on the host already.
-                if crate::sitenet::is_site(self.st, b) && !crate::sitenet::firewall_open(self.st, b)
+                // `docs/superpowers/plans/2026-11-11-site-net.md`), unless you hold root
+                // on it, a Net backdoor or its server cracked: root gets you back in. A
+                // shell on one of its own terminals is on the host already.
+                if crate::sitenet::is_site(self.st, b)
+                    && !crate::sitenet::firewall_open(self.st, b)
+                    && access::tier_on(self.st, b) < access::Tier::Admin
                 {
                     let n = crate::sitenet::broken(self.st, b).len();
                     return Err(format!(
@@ -1458,11 +1461,11 @@ mod tests {
     }
 
     #[test]
-    fn a_sites_firewall_refuses_ssh_from_the_rig_before_the_key_is_spent() {
+    fn a_sites_firewall_refuses_ssh_from_the_rig_before_a_users_key_is_spent() {
         let (mut st, b) = crate::sitenet::testutil::office_copy(190);
         let seed = st.city.as_ref().unwrap().seed;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(b, 99, seed, now);
+        st.backdoors.plant_key(b, "kade", 190, seed, now);
         let mut sh = new_shell(&mut st, HostId::Rig);
         let host = hostname(&st, HostId::Building(b));
         let out = go(&mut st, &mut sh, &format!("ssh {host}"));
@@ -1471,6 +1474,27 @@ mod tests {
         assert_eq!(sh.host, HostId::Rig);
         assert_eq!(st.backdoors.held(b).unwrap().spent, 0, "the key unspent");
         assert!(st.backdoors.logins.is_empty());
+    }
+
+    #[test]
+    fn root_on_a_site_gets_ssh_back_in_through_its_standing_firewall() {
+        // A Net backdoor on its server, from the rig.
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let seed = st.city.as_ref().unwrap().seed;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(b, 99, seed, now);
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        let host = hostname(&st, HostId::Building(b));
+        let out = go(&mut st, &mut sh, &format!("ssh {host}"));
+        assert!(!crate::sitenet::firewall_open(&st, b));
+        assert_eq!(sh.host, HostId::Building(b), "{:?}", text(&out));
+        // Its server cracked, from a street terminal.
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        crack_server(&mut st, b);
+        let (mut sh, n) = street_shell_listing(&mut st, b);
+        let out = go(&mut st, &mut sh, &format!("ssh {n}"));
+        assert!(!crate::sitenet::firewall_open(&st, b));
+        assert_eq!(sh.host, HostId::Building(b), "{:?}", text(&out));
     }
 
     #[test]

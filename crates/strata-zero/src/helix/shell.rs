@@ -1024,7 +1024,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "ssh",
         "log in to another machine",
-        "ssh host moves your shell to another machine, by name, by the start of its name or by its scan number. exit brings you back. A hotel's or an office's host turns you away while its firewall stands.",
+        "ssh host moves your shell to another machine, by name, by the start of its name or by its scan number. exit brings you back. A hotel's or an office's host turns you away while its firewall stands, unless you hold root on it.",
     ),
     ("connect", "ssh by another name", "connect host is ssh."),
     (
