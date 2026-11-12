@@ -2745,8 +2745,13 @@ impl MapScreen {
                     _ => return None,
                 };
                 let result = crate::constructs::enter_construct(st, b);
+                let crossed = result.is_ok();
                 report(st, result);
-                self.follow_player(st);
+                // Refused (a whole firewall, an alert), you stay where you were and so
+                // does the camera.
+                if crossed {
+                    self.follow_player(st);
+                }
                 Some(ScreenCmd::Stay)
             }
             // Out through the entry: a step off it outward; on a site's Net the step onto
@@ -2763,8 +2768,11 @@ impl MapScreen {
                     return Some(ScreenCmd::Stay);
                 }
                 let result = crate::constructs::leave_construct(st);
+                let crossed = result.is_ok();
                 report(st, result);
-                self.follow_player(st);
+                if crossed {
+                    self.follow_player(st);
+                }
                 Some(ScreenCmd::Stay)
             }
             _ => None,
@@ -3089,8 +3097,11 @@ impl MapScreen {
                 return;
             }
             let result = crate::constructs::leave_construct(st);
+            let out = result.is_ok();
             report(st, result);
-            self.follow_player(st);
+            if out {
+                self.follow_player(st);
+            }
             return;
         }
         let open = here.is_some_and(|me| me.chebyshev(next) <= 1)
@@ -12773,13 +12784,16 @@ mod tests {
         let gate = crate::constructs::city_gate(st.city.as_ref().unwrap(), b).unwrap();
         let toward = |from: Pos, to: Pos| Dir::ALL.into_iter().find(|d| from.step(*d) == to);
         let onto_gate = toward(player(&st).1, gate).unwrap();
-        // A lock whole: the gate refuses you on the grid.
+        // A lock whole: the gate refuses you on the grid, and the camera stays put.
+        s.cam.snap(Pos::new(gate.x + 9, gate.y + 5));
+        let cam = format!("{:?}", s.cam);
         assert!(matches!(
             s.gateway(&mut st, onto_gate),
             Some(ScreenCmd::Stay)
         ));
         assert_eq!(last(&st), Some("FIREWALL · 3 locks · 0/3 broken"));
         assert_eq!(player(&st).0, Place::Stratum(StratumKind::Net));
+        assert_eq!(format!("{:?}", s.cam), cam, "no jump on a refusal");
         let now = st.net.now(&st);
         for i in 0..3 {
             st.net.break_lock(b, i, now);
