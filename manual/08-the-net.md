@@ -132,7 +132,7 @@ ICE keeps the levels, more of it the higher the building's security: white ICE b
 
 ## The firewall
 
-From the city's Net, a hotel or office stands behind a **firewall**. Its locks stand on the grid against the building's edge, spread round it, one of them on the gate: `▮` while whole, `▯` once broken. How many it has goes by the building's security:
+From the city's Net, a hotel or office stands behind a **firewall**. Its locks stand in the building's own walls, spread round it, one of them the gate: `▮` while whole, `▯` once broken. How many it has goes by the building's security:
 
 | Security | SEC | Locks |
 |---|---|---|

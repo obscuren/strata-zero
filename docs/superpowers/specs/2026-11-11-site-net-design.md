@@ -219,9 +219,11 @@ From the city's Net, a site is a building behind a firewall.
   | 160–229 | 3 |
   | 230 and up | 4 |
 
-- **Where they are.** The locks stand on the building's edge on the Net, each on a tile
-  of the open grid against the edge, spread around the building as far as they'll go. The
-  building's gate tile is always one of them. Only the gate has a lane today; no new
+- **Where they are.** The locks stand in the building's own walls on the Net, each on a
+  wall tile with open grid beside it outside (where a runner stands to crack it), spread
+  around the building as far as they'll go. The building's gate tile is always one of
+  them. (Changed after play: they first stood on the open grid against the edge, which
+  read as outside the building.) Only the gate has a lane today; no new
   lanes are laid. They are worked out from the Net map as it is, not added when the city
   is made. So a city in an old save gets them too.
 - **Cracking one.**

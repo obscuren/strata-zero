@@ -64,23 +64,24 @@ fn fill(pool: &mut Vec<Pos>, placed: &mut Vec<Pos>, count: usize) {
     }
 }
 
-/// `outside`'s rule on a footprint, its gate and which tiles are open grid: after the
-/// gate, each lock stands on the open tile beside the edge farthest from the locks placed;
-/// with none left, on the footprint's own border (corners spared) the same way.
+/// `outside`'s rule on a footprint, its gate and which tiles are open grid: every lock
+/// stands in the building's own wall, its footprint's border (corners spared). After the
+/// gate, each takes the wall tile farthest from the locks placed among those with open grid
+/// beside them outside, where a runner can stand to crack it; with none left, any of the
+/// border the same way.
 pub(crate) fn spread(fp: Rect, gate: Pos, open: impl Fn(Pos) -> bool, count: usize) -> Vec<Pos> {
-    let edge: Vec<Pos> = fp.border().filter(|p| !is_corner(fp, *p)).collect();
-    let mut beside: Vec<Pos> = edge
-        .iter()
-        .flat_map(|p| p.neighbors4())
-        .filter(|p| !fp.contains(*p) && open(*p))
+    let mut edge: Vec<Pos> = fp
+        .border()
+        .filter(|p| !is_corner(fp, *p) && *p != gate)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    beside.sort_by_key(|p| (p.y, p.x));
+    edge.sort_by_key(|p| (p.y, p.x));
+    let (mut reached, mut rest): (Vec<Pos>, Vec<Pos>) = edge
+        .into_iter()
+        .partition(|p| p.neighbors4().any(|q| !fp.contains(q) && open(q)));
     let mut placed = vec![gate];
-    fill(&mut beside, &mut placed, count);
-    let mut rest: Vec<Pos> = edge.into_iter().filter(|p| *p != gate).collect();
-    rest.sort_by_key(|p| (p.y, p.x));
+    fill(&mut reached, &mut placed, count);
     fill(&mut rest, &mut placed, count);
     placed
 }
@@ -167,8 +168,8 @@ mod tests {
                     assert_eq!(spots[0], gate);
                     assert_eq!(spots.iter().collect::<BTreeSet<_>>().len(), n, "distinct");
                     for p in &spots[1..] {
-                        let edge = !fp.contains(*p) && fp.border().any(|q| q.manhattan(*p) == 1);
-                        assert!(edge || fp.border().any(|q| q == *p), "{p:?}");
+                        assert!(fp.border().any(|q| q == *p), "in the wall: {p:?}");
+                        assert!(!is_corner(fp, *p), "no corner: {p:?}");
                     }
                     assert_eq!(outside(&c, b.id, n), spots);
                 }
@@ -196,10 +197,19 @@ mod tests {
     fn the_locks_spread_round_the_building() {
         let fp = Rect::new(10, 10, 8, 6);
         let spots = spread(fp, Pos::new(13, 10), |p| !fp.contains(p), 2);
-        assert!(
-            spots[1].y > 15,
-            "the second lock goes to the far side: {spots:?}"
+        assert_eq!(
+            spots[1].y, 15,
+            "the second lock goes into the far wall: {spots:?}"
         );
+    }
+
+    #[test]
+    fn a_lock_takes_a_wall_tile_a_runner_can_stand_beside() {
+        // Open grid only east of the building: the second lock goes into the east wall.
+        let fp = Rect::new(10, 10, 8, 6);
+        let spots = spread(fp, Pos::new(13, 10), |p| p.x >= fp.right(), 2);
+        assert_eq!(spots[1].x, fp.right() - 1, "{spots:?}");
+        assert!(fp.contains(spots[1]));
     }
 
     #[test]
