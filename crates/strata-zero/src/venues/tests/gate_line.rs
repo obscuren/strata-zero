@@ -138,12 +138,26 @@ fn a_stations_paid_gate_opens_to_a_crack_until_an_alarm_locks_it_down() {
             "mission {mission}: {:?}",
             last(&st)
         );
-        // An alarm locks the building down, crack or none, and the gate says so.
-        st.net.trace(b).alert_until = Some(now + 30);
+        // An alarm locks the building down, the crack dropped, and the gate says so.
+        crate::net::lock_down(&mut st, b);
         step_onto_from(&mut st, place, from, lock.at);
         assert_eq!(at(&st), (place, from), "shut in the alarm");
         assert_eq!(last(&st), Some("locked down · paid door"));
-        // The paid side's card still opens it.
+        // A crack landed since the alarm opens it again: a way out of a lockdown.
+        let now = st.net.now(&st);
+        st.net.land(
+            b,
+            game::HackTarget::Site(node),
+            game::Target::Node(citygen::NodeKind::GateSwitch),
+            game::Op::Crack,
+            now,
+        );
+        step_onto_from(&mut st, place, from, lock.at);
+        assert_eq!(at(&st), (place, lock.at), "re-cracked: {:?}", last(&st));
+        // Locked down again, the paid side's card still opens it.
+        crate::net::lock_down(&mut st, b);
+        step_onto_from(&mut st, place, from, lock.at);
+        assert_eq!(at(&st), (place, from), "shut in the second alarm");
         st.character.give(zone_card_id(b, lock.zone), 1);
         step_onto_from(&mut st, place, from, lock.at);
         assert_eq!(at(&st), (place, lock.at), "{:?}", last(&st));

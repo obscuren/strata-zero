@@ -1,7 +1,7 @@
 //! What a site's nodes open on its floors: each door, private room's keypad, lift and line
 //! of turnstiles opens to a hack on its own node, never the whole building; a street
-//! door's lock on the city's Net opens only its own door. An alarm shuts them all; a lift
-//! answers in one to a spoof landed since. The spec's "What a node does":
+//! door's lock on the city's Net opens only its own door. An alarm shuts them all; a lock opens
+//! in one to a crack landed since, and a lift answers to a spoof landed since. The spec's "What a node does":
 //! `docs/superpowers/specs/2026-11-11-site-net-design.md`.
 
 use crate::app::AppState;
@@ -17,6 +17,24 @@ const OPENS: [Op; 2] = [Op::Crack, Op::Spoof];
 pub fn hacked(st: &AppState, node: SiteNode, ops: &[Op]) -> bool {
     let now = st.net.now(st);
     (st.net.live(now)).any(|h| h.target == HackTarget::Site(node) && ops.contains(&h.op))
+}
+
+/// Whether a live hack on site `b` holds a lock open now: any, off alert; in an alarm only
+/// one landed since it went off, so a runner can crack a way out of a lockdown.
+fn opens_now(st: &AppState, b: BuildingId, h: &Hack) -> bool {
+    let now = st.net.now(st);
+    st.net.alarm_since(b, now).is_none_or(|since| h.at >= since)
+}
+
+/// Whether a lock's own node of a site is held open now: a crack or spoof on it, landed
+/// since the alarm when there is one.
+pub fn opened(st: &AppState, node: SiteNode) -> bool {
+    let now = st.net.now(st);
+    (st.net.live(now)).any(|h| {
+        h.target == HackTarget::Site(node)
+            && OPENS.contains(&h.op)
+            && opens_now(st, node.building, h)
+    })
 }
 
 /// The live hacks of `ops` on a `kind` node of site `b`'s own Net.
@@ -36,10 +54,10 @@ fn site_hacks<'a>(
 }
 
 /// Whether the Net holds `lock` open: a hack on its own node, on its line's switch for a
-/// turnstile, or, for a way in's lock at a city-map door, on that door's city lock; never
-/// in an alarm.
+/// turnstile, or, for a way in's lock at a city-map door, on that door's city lock; in an alarm
+/// only one landed since it went off.
 pub fn lock_open(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> bool {
-    if !lock.ways.has(Ways::NET) || st.net.alert(b, st.net.now(st)) {
+    if !lock.ways.has(Ways::NET) {
         return false;
     }
     let own = SiteNode {
@@ -47,7 +65,7 @@ pub fn lock_open(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> b
         level,
         at: lock.at,
     };
-    if hacked(st, own, &OPENS) {
+    if opened(st, own) {
         return true;
     }
     let Some(plan) = crate::interiors::plan_now(st, b) else {
@@ -60,13 +78,14 @@ pub fn lock_open(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> b
         // Each held switch's line is read off the layout (`switch_line`), the level drawn
         // only where two lines' ends meet: the track asks this at every step of a route.
         return site_hacks(st, b, NodeKind::GateSwitch, &OPENS)
-            .filter(|(s, _)| s.level == level)
+            .filter(|(s, h)| s.level == level && opens_now(st, b, h))
             .any(|(s, _)| switch_line(v, level, s.at) == Some(piece));
     }
     // A way in's lock: the city's door locks held now, before the city's nodes are searched.
     let now = st.net.now(st);
     let held: Vec<NodeId> = (st.net.live(now))
         .filter(|h| h.kind == Target::Node(NodeKind::DoorLock) && OPENS.contains(&h.op))
+        .filter(|h| h.building == b && opens_now(st, b, h))
         .filter_map(|h| match h.target {
             HackTarget::Node(id) => Some(id),
             _ => None,
@@ -85,11 +104,8 @@ pub fn lock_open(st: &AppState, b: BuildingId, level: i32, lock: &DoorLock) -> b
 }
 
 /// Whether the Net holds private room `number` on `level` open: a hack on its door's
-/// node; never in an alarm.
+/// node; in an alarm only one landed since it went off.
 pub fn room_open(st: &AppState, b: BuildingId, level: i32, number: u16) -> bool {
-    if st.net.alert(b, st.net.now(st)) {
-        return false;
-    }
     let door = crate::interiors::plan_now(st, b)
         .and_then(|plan| plan.venue.as_deref()?.room_door(level, number));
     door.is_some_and(|at| {
@@ -98,7 +114,7 @@ pub fn room_open(st: &AppState, b: BuildingId, level: i32, number: u16) -> bool 
             level,
             at,
         };
-        hacked(st, node, &OPENS)
+        opened(st, node)
     })
 }
 

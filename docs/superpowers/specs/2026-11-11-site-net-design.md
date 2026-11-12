@@ -344,7 +344,7 @@ firewall and open everything from the chair. So on a site:
 **An alarm** works as today, on the site's trace:
 - it drops every hack on the site's nodes and every broken firewall lock;
 - a backdoor holds;
-- doors relock, and say "locked down".
+- doors relock, and say "locked down"; a crack on a door's own node landed after the alarm went off opens it again until the alarm ends, so a runner can crack a way out (changed after play: at first no crack opened a door in an alarm).
 
 ### Cameras on floors
 

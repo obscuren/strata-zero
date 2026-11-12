@@ -1038,11 +1038,11 @@ fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)
 /// `locked`. The card is drawn every frame: the way in's lock is read off the layout, no
 /// floor drawn for it.
 fn door_state(st: &AppState, b: citygen::BuildingId, d: &citygen::NetDevice) -> &'static str {
+    if crate::sitenet::opened(st, d.node) {
+        return "cracked";
+    }
     if st.net.alert(b, st.net.now(st)) {
         return "locked down";
-    }
-    if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
-        return "cracked";
     }
     let (level, at) = (d.node.level, d.node.at);
     let way_in = crate::interiors::plan_now(st, b).and_then(|plan| {

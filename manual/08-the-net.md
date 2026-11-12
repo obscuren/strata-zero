@@ -58,7 +58,7 @@ A program takes several turns. Each turn it rolls your power against the node's 
 ### What a landed program does
 
 - A cracked or spoofed lock opens the building's doors for an hour. A lift control makes the lifts answer you.
-- In a hotel or office, each node works its own device and no other. A door's lock opens that one door. A gate switch opens its line of turnstiles. A spoofed lift stops at every floor it serves without asking for a card, and one you spoof during an alarm answers you. A turret or a container's lock stays cracked for the hour, and the `HELD` list shows it.
+- In a hotel or office, each node works its own device and no other. A door's lock opens that one door; in an alarm, a crack you land after it went off opens it again, until the alarm ends. A gate switch opens its line of turnstiles. A spoofed lift stops at every floor it serves without asking for a card, and one you spoof during an alarm answers you. A turret or a container's lock stays cracked for the hour, and the `HELD` list shows it.
 - A blinded camera sees nothing.
 - A cracked server makes you root on its host for the hour (The rig and HELIX).
 - Copying a server gives you a paydata shard, and the building's door codes go into your journal. Copying a vault gives you its dump.

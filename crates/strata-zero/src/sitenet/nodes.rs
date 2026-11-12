@@ -25,9 +25,17 @@ pub fn landed(
         .and_then(|c| c.device(node))
         .map_or_else(|| k.label().to_string(), |d| d.name.clone());
     let done = op.done_label();
+    // In an alarm a crack opens its lock until the alarm ends (`NetState::land`).
+    let alarm = st.net.alert(b, now);
     Some(match (k, op) {
+        (NodeKind::DoorLock, Op::Crack | Op::Spoof) if alarm => {
+            format!("lock {done} · {name} opens through the alarm")
+        }
         (NodeKind::DoorLock, Op::Crack | Op::Spoof) => {
             format!("lock {done} · {name} opens for an hour")
+        }
+        (NodeKind::GateSwitch, Op::Crack | Op::Spoof) if alarm => {
+            format!("gate switch {done} · the {name} let you through the alarm")
         }
         (NodeKind::GateSwitch, Op::Crack | Op::Spoof) => {
             format!("gate switch {done} · the {name} let you through for an hour")
@@ -282,10 +290,14 @@ mod tests {
         );
         assert!(lock_open(&st, b, level, &lock));
         assert_eq!(second(&st).as_deref(), Some("door lock · open"));
-        // In an alarm it's locked down, a crack landed since too, as a step finds it.
+        // An alarm locks it down, the city's crack dropped; a crack on its own node landed
+        // since opens it again, as a step finds it.
         crate::net::lock_down(&mut st, b);
-        hack(&mut st, door.node, NodeKind::DoorLock, Op::Crack);
         assert_eq!(second(&st).as_deref(), Some("door lock · locked down"));
+        assert!(!lock_open(&st, b, level, &lock));
+        hack(&mut st, door.node, NodeKind::DoorLock, Op::Crack);
+        assert_eq!(second(&st).as_deref(), Some("door lock · cracked"));
+        assert!(lock_open(&st, b, level, &lock));
     }
 
     #[test]
