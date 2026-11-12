@@ -12,7 +12,7 @@ use citygen::venue::{
     MissionInputs, MissionLayer, MissionSize, VenueFrame, VenueLayout, VenuePack, VenueType,
     building_seed, lay_out,
 };
-use citygen::{BuildingId, FloorPlan, Place, StratumKind, Terrain};
+use citygen::{BuildingId, BuildingKind, FloorPlan, Place, RoomKind, StratumKind, Terrain};
 use std::cmp::Reverse;
 
 /// The seeds a mission tries on each objective before it gives up.
@@ -46,7 +46,7 @@ pub fn dev_site(
     type_id: &str,
     inputs: MissionInputs,
 ) -> Result<String, String> {
-    let (t, inputs) = lay_site(st, b, type_id, inputs)?;
+    let (t, inputs) = lay_site(st, b, type_id, inputs, Objectives::Any)?;
     let line = begin(st, b, inputs)?;
     let objective = &t.objectives[inputs.objective].name;
     Ok(format!(
@@ -73,13 +73,71 @@ pub fn dev_start(
         security: 128,
         seed: st.tick,
     };
+    dev_start_with(st, type_id, inputs, mission)
+}
+
+/// `dev_start` with the mission's inputs given whole: its size, objective, security and
+/// seed. A mission that won't lay at those tries the next seeds, then the type's other
+/// objectives.
+pub fn dev_start_with(
+    st: &mut AppState,
+    type_id: &str,
+    inputs: MissionInputs,
+    mission: bool,
+) -> Result<BuildingId, String> {
+    start_with(st, type_id, inputs, mission, Objectives::Any)
+}
+
+/// Dev, the DEVELOPER menu's SITE NET start (Ruling 24 of the plan
+/// `docs/superpowers/plans/2026-11-11-site-net.md`): in a state NEW GAME (DEBUG) has
+/// just made, the type that builds offices laid on the largest building away from home
+/// that holds a MEDIUM job on its first objective in a server room, at `security` and the
+/// tick as seed, the mission copy begun, and you on the street at its main door. It keeps
+/// to that objective: a building where it won't lay at any of the seeds gives way to the
+/// next largest.
+pub fn dev_site_net(st: &mut AppState, security: u8) -> Result<BuildingId, String> {
+    let t = (VenuePack::builtin().for_kind(BuildingKind::Office))
+        .ok_or("no site type builds offices")?;
+    let objective = (t.objectives.iter())
+        .position(|o| t.room(&o.room).is_some_and(|r| r.kind == RoomKind::Server))
+        .ok_or_else(|| format!("no {} job in a server room", t.name))?;
+    let inputs = MissionInputs {
+        size: MissionSize::Medium,
+        objective,
+        security,
+        seed: st.tick,
+    };
+    start_with(st, &t.id, inputs, true, Objectives::Asked)
+}
+
+/// Which objectives a mission that won't lay at the asked seed may fall back on.
+#[derive(Clone, Copy)]
+enum Objectives {
+    /// The type's others, after the asked one's seeds.
+    Any,
+    /// The asked one's alone.
+    Asked,
+}
+
+/// The dev starts: `type_id` laid on the largest building away from home that takes it,
+/// its mission begun when `mission`, you on the street at its main door.
+fn start_with(
+    st: &mut AppState,
+    type_id: &str,
+    inputs: MissionInputs,
+    mission: bool,
+    objectives: Objectives,
+) -> Result<BuildingId, String> {
+    let size = inputs.size;
     let mut why = format!("no building away from home takes a {} job", size.label());
     for b in away_from_home(st, size).into_iter().take(BUILDINGS) {
-        let laid = if mission {
-            dev_site(st, b, type_id, inputs).map(drop)
-        } else {
-            lay_site(st, b, type_id, inputs).map(drop)
-        };
+        let laid = lay_site(st, b, type_id, inputs, objectives).and_then(|(_, inputs)| {
+            if mission {
+                begin(st, b, inputs).map(drop)
+            } else {
+                Ok(())
+            }
+        });
         match laid {
             Ok(()) => {
                 stand_outside(st, b)?;
@@ -115,13 +173,15 @@ fn away_from_home(st: &AppState, size: MissionSize) -> Vec<BuildingId> {
 
 /// Lays type `type_id` on `b` and makes it the building's plan: its frame as the city
 /// made it when that holds `inputs.size`, else raised to the type's own top. The inputs a
-/// mission lays with come back: `inputs` when they lay, else the next few seeds, then the
-/// type's other objectives. The building is left as it was when none lays.
+/// mission lays with come back: `inputs` when they lay, else the next few seeds, then
+/// (`Objectives::Any`) the type's other objectives. The building is left as it was when
+/// none lays.
 fn lay_site(
     st: &mut AppState,
     b: BuildingId,
     type_id: &str,
     inputs: MissionInputs,
+    objectives: Objectives,
 ) -> Result<(&'static VenueType, MissionInputs), String> {
     let pack = VenuePack::builtin();
     let t = (pack.by_id(type_id)).ok_or_else(|| format!("no site type {type_id}"))?;
@@ -148,7 +208,11 @@ fn lay_site(
         None => lay_out(t, frame.raised(t.frame.top), seed)
             .map_err(|e| format!("a {} won't lay out there: {e}", t.name))?,
     };
-    let inputs = laid_inputs(&layout, t, inputs).ok_or_else(|| {
+    let laid = match objectives {
+        Objectives::Any => laid_inputs(&layout, t, inputs),
+        Objectives::Asked => laid_seeds(&layout, t, inputs),
+    };
+    let inputs = laid.ok_or_else(|| {
         format!(
             "that building can't hold a {} {} job",
             inputs.size.label(),
@@ -166,15 +230,27 @@ fn laid_inputs(
     t: &VenueType,
     inputs: MissionInputs,
 ) -> Option<MissionInputs> {
-    let rule = VenuePack::builtin().size(inputs.size);
     let others = (0..t.objectives.len()).filter(|&o| o != inputs.objective);
-    (std::iter::once(inputs.objective).chain(others))
-        .flat_map(|objective| {
-            (0..SEEDS).map(move |k| MissionInputs {
+    (std::iter::once(inputs.objective).chain(others)).find_map(|objective| {
+        laid_seeds(
+            layout,
+            t,
+            MissionInputs {
                 objective,
-                seed: inputs.seed.wrapping_add(k),
                 ..inputs
-            })
+            },
+        )
+    })
+}
+
+/// The first inputs a mission lays with on `layout` on its own objective: `inputs`, then
+/// the next seeds.
+fn laid_seeds(layout: &VenueLayout, t: &VenueType, inputs: MissionInputs) -> Option<MissionInputs> {
+    let rule = VenuePack::builtin().size(inputs.size);
+    (0..SEEDS)
+        .map(|k| MissionInputs {
+            seed: inputs.seed.wrapping_add(k),
+            ..inputs
         })
         .find(|i| MissionLayer::lay(layout, t, rule, *i).is_ok())
 }

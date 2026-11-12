@@ -182,6 +182,22 @@ impl AppIo<'_> {
             [] => Err(format!("ssh: {what}: no such host")),
             [i] => {
                 let b = list[*i];
+                // A site's host sits behind its firewall: from outside its Net, refused
+                // while a lock is whole, before a key is tried (Ruling 15 of the plan
+                // `docs/superpowers/plans/2026-11-11-site-net.md`), unless you hold root
+                // on it, a Net backdoor or its server cracked: root gets you back in. A
+                // shell on one of its own terminals is on the host already.
+                if crate::sitenet::is_site(self.st, b)
+                    && !crate::sitenet::firewall_open(self.st, b)
+                    && access::tier_on(self.st, b) < access::Tier::Admin
+                {
+                    let n = crate::sitenet::broken(self.st, b).len();
+                    return Err(format!(
+                        "ssh: {}: FIREWALL · {n} LOCK{}",
+                        hostname(self.st, HostId::Building(b)),
+                        if n == 1 { "" } else { "S" }
+                    ));
+                }
                 let via = self.st.backdoors.held(b).is_some();
                 let mut audit = false;
                 let mut key_user = None;
@@ -601,7 +617,9 @@ mod tests {
     use crate::access::building_label;
     use crate::helix::hosts::{ensure_host, slug, user_for};
     use crate::helix::shell::{complete, prompt, run};
+    use crate::sitenet::testutil::{crack_server, shell_on, street_shell_listing};
     use citygen::{BuildingKind, GenParams, Generator, NodeKind, SizePreset};
+    use std::collections::BTreeSet;
 
     /// A city, a residential building with people home and a server, and its district.
     fn state() -> (AppState, BuildingId, citygen::DistrictId) {
@@ -1424,6 +1442,169 @@ mod tests {
             st.backdoors.list[0].health(0),
             crate::backdoors::Health::Burned
         );
+    }
+
+    #[test]
+    fn ssh_to_a_site_from_the_street_is_refused_while_its_firewall_stands() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let (mut sh, n) = street_shell_listing(&mut st, b); // n: the site's row in `net`
+        let out = text(&go(&mut st, &mut sh, &format!("ssh {n}")));
+        let host = hostname(&st, HostId::Building(b));
+        assert_eq!(out, format!("ssh: {host}: FIREWALL · 3 LOCKS"));
+        assert_ne!(sh.host, HostId::Building(b));
+        let now = st.net.now(&st);
+        for i in 0..3 {
+            st.net.break_lock(b, i, now);
+        }
+        go(&mut st, &mut sh, &format!("ssh {n}"));
+        assert_eq!(sh.host, HostId::Building(b));
+    }
+
+    #[test]
+    fn a_sites_firewall_refuses_ssh_from_the_rig_before_a_users_key_is_spent() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let seed = st.city.as_ref().unwrap().seed;
+        let now = st.net.now(&st);
+        st.backdoors.plant_key(b, "kade", 190, seed, now);
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        let host = hostname(&st, HostId::Building(b));
+        let out = go(&mut st, &mut sh, &format!("ssh {host}"));
+        assert_eq!(text(&out), format!("ssh: {host}: FIREWALL · 3 LOCKS"));
+        assert_eq!(out.status, 1);
+        assert_eq!(sh.host, HostId::Rig);
+        assert_eq!(st.backdoors.held(b).unwrap().spent, 0, "the key unspent");
+        assert!(st.backdoors.logins.is_empty());
+    }
+
+    #[test]
+    fn root_on_a_site_gets_ssh_back_in_through_its_standing_firewall() {
+        // A Net backdoor on its server, from the rig.
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let seed = st.city.as_ref().unwrap().seed;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(b, 99, seed, now);
+        let mut sh = new_shell(&mut st, HostId::Rig);
+        let host = hostname(&st, HostId::Building(b));
+        let out = go(&mut st, &mut sh, &format!("ssh {host}"));
+        assert!(!crate::sitenet::firewall_open(&st, b));
+        assert_eq!(sh.host, HostId::Building(b), "{:?}", text(&out));
+        // Its server cracked, from a street terminal.
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        crack_server(&mut st, b);
+        let (mut sh, n) = street_shell_listing(&mut st, b);
+        let out = go(&mut st, &mut sh, &format!("ssh {n}"));
+        assert!(!crate::sitenet::firewall_open(&st, b));
+        assert_eq!(sh.host, HostId::Building(b), "{:?}", text(&out));
+    }
+
+    #[test]
+    fn a_building_wide_command_needs_root_on_a_site() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let mut sh = shell_on(&mut st, b); // logged in on b's host as a user (a held terminal)
+        let out = text(&go(&mut st, &mut sh, "door release"));
+        assert!(out.contains("ROOT ONLY"), "{out}");
+        assert_eq!(out, "door: ROOT ONLY · CRACK THE SERVER");
+        for line in ["lift answer", "cam loop", "echo release > /dev/door"] {
+            let out = text(&go(&mut st, &mut sh, line));
+            assert!(
+                out.ends_with(": ROOT ONLY · CRACK THE SERVER"),
+                "{line}: {out}"
+            );
+        }
+        assert!(!st.net.hacks.iter().any(|h| h.op == game::Op::Spoof));
+        crack_server(&mut st, b);
+        let out = text(&go(&mut st, &mut sh, "door release"));
+        let net = crate::sitenet::net_of(&st, b).unwrap();
+        let locks = |n: &&citygen::sitenet::SiteNodeInfo| {
+            matches!(n.kind, NodeKind::DoorLock | NodeKind::GateSwitch)
+        };
+        let k = (net.nodes.iter().filter(locks))
+            .filter(|n| net.on_riser(n.node.level))
+            .count();
+        assert_eq!(out, format!("{k} DOOR LOCKS RELEASED · 60 MIN"));
+        assert!(
+            net.nodes
+                .iter()
+                .filter(locks)
+                .any(|n| !net.on_riser(n.node.level))
+        );
+        for n in net.nodes.iter().filter(locks) {
+            assert_eq!(
+                crate::sitenet::hacked(&st, n.node, &[game::Op::Spoof]),
+                net.on_riser(n.node.level),
+                "{}",
+                n.name
+            );
+        }
+        assert_eq!(
+            text(&go(&mut st, &mut sh, "cat /dev/door")),
+            format!("locks: {k}/{k} released")
+        );
+    }
+
+    #[test]
+    fn man_says_what_a_sites_host_wants() {
+        let (mut st, _, d) = state();
+        let mut sh = new_shell(&mut st, HostId::District(d));
+        let page = |st: &mut AppState, sh: &mut Shell, cmd: &str| {
+            go(st, sh, &format!("man {cmd}")).lines.join(" ")
+        };
+        for cmd in ["door", "lift", "cam", "alarm"] {
+            let man = page(&mut st, &mut sh, cmd);
+            assert!(
+                man.contains("On a hotel's or an office's host it wants root"),
+                "{cmd}: {man}"
+            );
+        }
+        let ssh = page(&mut st, &mut sh, "ssh");
+        assert!(ssh.contains("while its firewall stands"), "{ssh}");
+    }
+
+    /// The `cam*` devices `ls /dev` lists on the shell's host.
+    fn cam_devices(st: &mut AppState, sh: &mut Shell) -> BTreeSet<String> {
+        let ls = go(st, sh, "ls /dev");
+        (ls.lines.into_iter())
+            .filter(|l| l.starts_with("cam"))
+            .collect()
+    }
+
+    #[test]
+    fn a_sites_camera_devices_follow_the_cameras_on_its_riser() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let copy = st.interiors.copy(b).unwrap().clone();
+        // The host first opened while the plain office stands: no cameras of its own.
+        crate::venues::end(&mut st, b).unwrap();
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(cam_devices(&mut st, &mut sh), BTreeSet::new());
+        // The job begins: one device per camera on the riser, in the Net's order.
+        crate::venues::begin(&mut st, b, copy.inputs).unwrap();
+        crack_server(&mut st, b);
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(sh.user, "root");
+        let net = crate::sitenet::net_of(&st, b).unwrap();
+        let riser: Vec<citygen::SiteNode> = (net.nodes.iter())
+            .filter(|n| n.kind == NodeKind::Camera && net.on_riser(n.node.level))
+            .map(|n| n.node)
+            .collect();
+        let n = riser.len();
+        assert!(n > 1, "cameras up the riser");
+        let want: BTreeSet<String> = (0..n).map(|i| format!("cam{i}")).collect();
+        assert_eq!(cam_devices(&mut st, &mut sh), want);
+        // Each loops its own camera.
+        let k = n - 1;
+        let out = text(&go(&mut st, &mut sh, &format!("echo loop > /dev/cam{k}")));
+        assert_eq!(out, "1 CAMERA LOOPED · 60 MIN");
+        let now = st.net.now(&st);
+        for (i, c) in riser.iter().enumerate() {
+            let blind = st.net.blinded(citygen::NetNode::Site(*c), now);
+            assert_eq!(blind, i == k, "cam{i}");
+        }
+        let cat = text(&go(&mut st, &mut sh, &format!("cat /dev/cam{k}")));
+        assert!(cat.starts_with(&format!("cam{k}: looped (until ")), "{cat}");
+        // The job ends: its cameras go from the host's list.
+        crate::venues::end(&mut st, b).unwrap();
+        let mut sh = new_shell(&mut st, HostId::Building(b));
+        assert_eq!(cam_devices(&mut st, &mut sh), BTreeSet::new());
     }
 
     #[test]

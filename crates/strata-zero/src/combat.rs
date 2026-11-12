@@ -718,10 +718,7 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     else {
         return Err(format!("{} is not a strike", ability.name));
     };
-    if matches!(
-        st.player.as_ref().map(|p| p.place),
-        Some(Place::Construct(_))
-    ) {
+    if st.player.as_ref().is_some_and(|p| p.place.in_construct()) {
         return Err("not in here".to_string());
     }
     let chance = strike_chance(st, id, foe)?;

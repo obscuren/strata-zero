@@ -461,7 +461,9 @@ pub(crate) fn inventory(st: &AppState) -> Vec<ItemId> {
 pub(crate) fn trace(st: &AppState) -> Option<u8> {
     let p = st.player.as_ref().filter(|p| p.jacked_in())?;
     match p.place {
-        Place::Construct(b) => Some(st.net.traces.get(&b).map_or(0, |t| t.heat)),
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+            Some(st.net.traces.get(&b).map_or(0, |t| t.heat))
+        }
         _ => st
             .net
             .nearest_trace(st.city.as_ref()?, p.pos)

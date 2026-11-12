@@ -4,7 +4,7 @@
 
 use crate::geom::{Grid, Pos, Rect, Size};
 use crate::ids::{BuildingId, NodeId};
-use crate::net::{NodeKind, SubnetOwner};
+use crate::net::{NodeKind, SiteNode, SubnetOwner};
 use crate::pathing::flood_fill;
 use crate::rng::{hash64, tile_hash};
 use crate::tile::{Feature, IceGrade, Terrain, Tile};
@@ -12,11 +12,13 @@ use crate::world::{City, StratumKind};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-/// Security from which a construct has ICE at its gate.
+/// Security from which a construct has ICE at its gate. A site's ICE table
+/// (`sitenet::table_ice`) uses it too: from it whites patrol every other kept level.
 pub const ICE_THRESHOLD: u8 = 160;
-/// Security from which the ICE is grey and the vault has its own guard.
+/// Security from which the ICE is grey and the vault has its own guard. On a site, from
+/// it a grey patrols every kept level instead.
 pub const GREY_THRESHOLD: u8 = 200;
-/// Security from which the vault's guard is black.
+/// Security from which the vault's guard is black, on a site as in any construct.
 pub const BLACK_THRESHOLD: u8 = 230;
 const MIN_W: i32 = 14;
 const MAX_W: i32 = 40;
@@ -102,7 +104,37 @@ pub fn lot_construct() -> Construct {
         rooms: Vec::new(),
         nodes: Vec::new(),
         guards,
+        levels: Vec::new(),
+        devices: Vec::new(),
     }
+}
+
+/// A level of a site's construct: where its floor stands in the grid, and what it holds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NetLevel {
+    pub level: i32,
+    /// Its role: "lobby".
+    pub name: String,
+    /// Where its floor stands in the construct's grid, at the floor's size.
+    pub area: Rect,
+    /// Its hub, in the grid.
+    pub hub: Pos,
+    pub gapped: bool,
+    /// The thin traces from its devices to its hub, in the grid: drawn, never walked.
+    pub traces: Vec<Pos>,
+    /// The levels the copy drops between this one and the next kept one below: the
+    /// lift passes them in the slab under this level ("8F–11F passed").
+    pub passed: Option<(i32, i32)>,
+}
+
+/// A node of a site's construct: its device, where it stands in the grid.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NetDevice {
+    pub node: SiteNode,
+    pub kind: NodeKind,
+    /// Its tile in the grid.
+    pub at: Pos,
+    pub name: String,
 }
 
 /// The inside of a construct.
@@ -118,8 +150,15 @@ pub struct Construct {
     /// In order along the spine; the last holds the vault when there is one.
     pub rooms: Vec<Rect>,
     pub nodes: Vec<(NodeId, Pos)>,
-    /// The gate guard first, the vault guard second.
+    /// The gate guard first, the vault guard second; in a site's, the white at G's hub
+    /// first, then the patrols by level lowest first, then the black at the vault.
     pub guards: Vec<Guard>,
+    /// A site's levels as they stand in the grid, the highest first; none in any other.
+    #[serde(default)]
+    pub levels: Vec<NetLevel>,
+    /// A site's nodes, each on its tile in the grid; none in any other.
+    #[serde(default)]
+    pub devices: Vec<NetDevice>,
 }
 
 impl Construct {
@@ -132,13 +171,53 @@ impl Construct {
         self.guards.iter().position(|g| g.pos == p && g.standing)
     }
 
-    /// The tile's feature follows whoever stands on it.
+    /// A site's construct: one with levels.
+    pub fn is_site(&self) -> bool {
+        !self.levels.is_empty()
+    }
+
+    pub fn net_level(&self, level: i32) -> Option<&NetLevel> {
+        self.levels.iter().find(|l| l.level == level)
+    }
+
+    /// The level whose band holds `p`.
+    pub fn level_at(&self, p: Pos) -> Option<&NetLevel> {
+        self.levels.iter().find(|l| l.area.contains(p))
+    }
+
+    pub fn device_at(&self, p: Pos) -> Option<&NetDevice> {
+        self.devices.iter().find(|d| d.at == p)
+    }
+
+    pub fn device(&self, node: SiteNode) -> Option<&NetDevice> {
+        self.devices.iter().find(|d| d.node == node)
+    }
+
+    /// A grid tile as its level and its tile on that level's floor.
+    pub fn to_floor(&self, p: Pos) -> Option<(i32, Pos)> {
+        let l = self.level_at(p)?;
+        Some((l.level, Pos::new(p.x - l.area.x, p.y - l.area.y)))
+    }
+
+    /// A tile of `level`'s floor as it stands in the grid.
+    pub fn on_level(&self, level: i32, p: Pos) -> Option<Pos> {
+        let area = self.net_level(level)?.area;
+        let q = p.offset(area.x, area.y);
+        area.contains(q).then_some(q)
+    }
+
+    /// The tile's feature follows whoever stands on it; with nobody, a site's node
+    /// stands there again. An old construct's pieces walk its spine, where no node is.
     fn refresh_ice(&mut self, p: Pos) {
         if !self.tiles.in_bounds(p) {
             return;
         }
         let standing = self.guards.iter().find(|g| g.pos == p && g.standing);
-        self.tiles[p].feature = standing.map(|g| Feature::Ice(g.grade));
+        let feature = match standing {
+            Some(g) => Some(Feature::Ice(g.grade)),
+            None => self.device_at(p).map(|d| Feature::Node(d.kind)),
+        };
+        self.tiles[p].feature = feature;
     }
 
     pub fn vault_room(&self) -> Option<Rect> {
@@ -278,6 +357,11 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
         NodeKind::Server => 6,
         NodeKind::DataVault => 7,
         NodeKind::Ice => 8,
+        NodeKind::GateSwitch
+        | NodeKind::Turret
+        | NodeKind::Container
+        | NodeKind::Hub
+        | NodeKind::Firewall => 5,
     };
     by_kind.sort_by_key(|(id, k)| (rank(*k), id.index()));
     let has_vault = by_kind.iter().any(|(_, k)| *k == NodeKind::DataVault);
@@ -388,6 +472,8 @@ pub fn generate_construct(city: &City, b: BuildingId) -> Option<Construct> {
         rooms,
         nodes,
         guards,
+        levels: Vec::new(),
+        devices: Vec::new(),
     })
 }
 

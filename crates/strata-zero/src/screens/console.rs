@@ -236,7 +236,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 return Ok("already engaged".to_string());
             }
             match place {
-                citygen::Place::Construct(_) => {}
+                _ if place.in_construct() => {}
                 _ if jacked => return Err("not in a construct".to_string()),
                 _ if crate::foes::in_memory(st).is_empty() => {
                     return Err("nothing to engage".to_string());

@@ -327,6 +327,11 @@ mod tests {
                             || matches!(t.terrain, Terrain::Floor | Terrain::Mass)
                     )
                 }
+                NodeKind::GateSwitch
+                | NodeKind::Turret
+                | NodeKind::Container
+                | NodeKind::Hub
+                | NodeKind::Firewall => panic!("a city node of a site's kind: {:?}", n.kind),
             }
             assert!(c.net.subnets.iter().any(|s| s.id == n.subnet));
         }

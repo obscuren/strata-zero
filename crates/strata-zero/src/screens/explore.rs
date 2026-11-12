@@ -201,7 +201,14 @@ pub struct MapScreen {
     /// Where the occupants of the floor the player walks stand, keyed by the place
     /// and the world's minute it was worked out for.
     placement: Option<(Place, u64, crate::interiors::Placement)>,
+    /// The terminals and gate switches of the site's floor on screen, kept while it stays
+    /// on screen: they come of the site's Net, worked out whole, and a mission's copy
+    /// waits to begin or end while you're in its building.
+    devices: RefCell<Option<(Place, DeviceTiles)>>,
 }
+
+/// A site's floor's terminals and gate switches, by their wall tiles.
+type DeviceTiles = Vec<(Pos, citygen::NodeKind)>;
 
 pub(crate) fn dir_for(code: KeyCode) -> Option<Dir> {
     Some(match code {
@@ -219,6 +226,24 @@ pub(crate) fn dir_for(code: KeyCode) -> Option<Dir> {
 
 /// NEAR's places in HERE off the city's cells.
 const NEAR_ROWS: usize = 4;
+
+/// Whether grid tile `p` of site construct `k` stands on level `level`.
+fn on_level(k: &citygen::Construct, level: i32, p: Pos) -> bool {
+    k.level_at(p).is_some_and(|l| l.level == level)
+}
+
+/// The tiles the look, the aim and the fire cursor keep to at `place`: on a site's Net the
+/// open level's, since the tower draws the rows round it as other levels' folds and slabs;
+/// none elsewhere.
+fn cursor_band(st: &AppState, place: Place) -> Option<TileRect> {
+    let Place::SiteNet { building, level } = place else {
+        return None;
+    };
+    st.constructs
+        .site(building)?
+        .net_level(level)
+        .map(|l| l.area)
+}
 
 /// Whether `place`'s map carries on past the city's edge: the street and the Net, with a
 /// world out there.
@@ -873,7 +898,26 @@ impl MapScreen {
             up_from: None,
             traffic: RefCell::new(Default::default()),
             placement: None,
+            devices: RefCell::new(None),
         }
+    }
+
+    /// The terminals and gate switches of the floor on screen (`sitenet::floor_devices`),
+    /// none off a floor; worked out once while the floor stays on screen.
+    fn floor_devices(&self, st: &AppState) -> DeviceTiles {
+        let mut kept = self.devices.borrow_mut();
+        let Place::Floor { building, level } = self.place else {
+            *kept = None;
+            return Vec::new();
+        };
+        if let Some((place, devices)) = kept.as_ref()
+            && *place == self.place
+        {
+            return devices.clone();
+        }
+        let devices = crate::sitenet::floor_devices(st, building, level);
+        *kept = Some((self.place, devices.clone()));
+        devices
     }
 
     /// Your act half on turns, on any map: the keys aim and fire.
@@ -890,7 +934,7 @@ impl MapScreen {
             return Vec::new();
         };
         match p.place {
-            Place::Construct(b) => {
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                 let Some(k) = st.constructs.get(b) else {
                     return Vec::new();
                 };
@@ -901,7 +945,9 @@ impl MapScreen {
                     .iter()
                     .enumerate()
                     .filter(|(i, g)| {
-                        k.guard_at(g.pos) == Some(*i) && crate::net::line_clear_in(k, p.pos, g.pos)
+                        k.guard_at(g.pos) == Some(*i)
+                            && crate::net::line_clear_in(k, p.pos, g.pos)
+                            && cursor_band(st, p.place).is_none_or(|r| r.contains(g.pos))
                     })
                     .map(|(i, g)| (Enemy::Ice(i), g.pos))
                     .collect();
@@ -919,7 +965,7 @@ impl MapScreen {
     fn enemy_at(st: &AppState, at: Pos) -> Option<Enemy> {
         let p = st.player.as_ref()?;
         match p.place {
-            Place::Construct(b) => st
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => st
                 .constructs
                 .get(b)
                 .and_then(|k| k.guard_at(at))
@@ -935,10 +981,7 @@ impl MapScreen {
             Enemy::Ice(i) => st
                 .player
                 .as_ref()
-                .and_then(|p| match p.place {
-                    Place::Construct(b) => st.net.ice.get(&b),
-                    _ => None,
-                })
+                .and_then(|p| st.net.ice.get(&p.place.construct()?))
                 .and_then(|states| states.get(i))
                 .is_some_and(|ice| matches!(ice.mode, crate::net::IceMode::Awake { .. })),
         }
@@ -984,7 +1027,7 @@ impl MapScreen {
                 (format!("{head}{odds} "), lit)
             }
             Enemy::Ice(i) => {
-                let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+                let Some(b) = st.player.as_ref().and_then(|p| p.place.construct()) else {
                     return (String::new(), None);
                 };
                 let Some((name, left, at)) = crate::net::ice_card(st, b, i) else {
@@ -1007,10 +1050,7 @@ impl MapScreen {
     }
 
     fn net_place(place: Place) -> bool {
-        matches!(
-            place,
-            Place::Construct(_) | Place::Stratum(StratumKind::Net)
-        )
+        place.in_construct() || place == Place::Stratum(StratumKind::Net)
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
@@ -1182,7 +1222,9 @@ impl MapScreen {
         if let Some(dir) = dir_for(k.code) {
             let from = self.target.unwrap_or(me);
             let to = from.step(dir);
-            if st.city.as_ref().is_some_and(|c| c.size.contains(to)) {
+            if st.city.as_ref().is_some_and(|c| c.size.contains(to))
+                && cursor_band(st, place).is_none_or(|r| r.contains(to))
+            {
                 self.target = Some(to);
             }
             return Some(ScreenCmd::Stay);
@@ -1254,7 +1296,7 @@ impl MapScreen {
                     }
                     Some(Enemy::Ice(i)) => {
                         self.last_enemy = Some(Enemy::Ice(i));
-                        let Place::Construct(b) = place else {
+                        let Some(b) = place.construct() else {
                             return Some(ScreenCmd::Stay);
                         };
                         match crate::combat::attack_ice(st, b, i) {
@@ -1306,7 +1348,11 @@ impl MapScreen {
                 self.last_enemy = enemy;
                 crate::combat::strike(st, id, foe)
             }
-            (Active(A::Strike { .. }), Some(Enemy::Ice(i)), Place::Construct(b)) => {
+            (
+                Active(A::Strike { .. }),
+                Some(Enemy::Ice(i)),
+                Place::Construct(b) | Place::SiteNet { building: b, .. },
+            ) => {
                 self.last_enemy = enemy;
                 crate::casts::strike_ice(st, id, b, i)
             }
@@ -1395,7 +1441,7 @@ impl MapScreen {
         tethered: bool,
     ) -> hud::Footer<'a> {
         let place = match (jacked, st.player.as_ref().map(|p| p.place)) {
-            (true, Some(Place::Construct(b))) => {
+            (true, Some(Place::Construct(b) | Place::SiteNet { building: b, .. })) => {
                 let district = city
                     .building_opt(b)
                     .map(|bl| city.district(bl.district).name.clone())
@@ -1420,7 +1466,7 @@ impl MapScreen {
         let now = st.net.now(st);
         let trace = match (jacked, st.player.as_ref()) {
             (true, Some(p)) => Some(match p.place {
-                Place::Construct(b) => {
+                Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                     let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
                     let mut t = format!("TRACE {} {heat}", crate::net::trace_bar(heat));
                     if let Some(until) = st
@@ -1456,7 +1502,9 @@ impl MapScreen {
             st.net.run.as_ref(),
             st.player.as_ref().map(|p| p.place),
         ) {
-            (true, Some(run), Some(Place::Construct(b))) if !tethered => {
+            (true, Some(run), Some(Place::Construct(b) | Place::SiteNet { building: b, .. }))
+                if !tethered =>
+            {
                 crate::net::run_readout(st, b, run)
             }
             (true, Some(run), Some(Place::Stratum(StratumKind::Net))) if !tethered => {
@@ -1466,9 +1514,9 @@ impl MapScreen {
         };
         let ice = match (jacked, st.player.as_ref()) {
             (true, Some(p)) => match p.place {
-                Place::Construct(b) => {
+                place if place.in_construct() => {
                     let vis = p.vis();
-                    crate::net::ice_lines(st, b, |q| {
+                    crate::net::ice_lines(st, place, |q| {
                         vis.get(q)
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
@@ -1754,7 +1802,7 @@ impl MapScreen {
             (Place::Stratum(_), Some(c)) if c.is_lot() => c.name.clone(),
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
-            (Place::Construct(_), _) => "construct".to_string(),
+            (Place::Construct(_) | Place::SiteNet { .. }, _) => "construct".to_string(),
         }
     }
 
@@ -1945,7 +1993,7 @@ impl MapScreen {
         if let Some(scene) = crate::net::scene_of(place)
             && st.character.deck(&st.content).is_some()
         {
-            let inside = matches!(place, Place::Construct(_));
+            let inside = place.in_construct();
             let here = match (inside, subjects.as_slice()) {
                 (false, [s]) => Some(s),
                 _ => None,
@@ -2050,9 +2098,7 @@ impl MapScreen {
             if !game::applies(spec.op, kind) {
                 continue;
             }
-            if spec.op == game::Op::Copy
-                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now))
-            {
+            if spec.op == game::Op::Copy && st.net.copied(target, now) {
                 copied = true;
                 continue;
             }
@@ -2156,6 +2202,16 @@ impl MapScreen {
         TileRect::new(origin.x, origin.y, map.width as i32, map.height as i32)
     }
 
+    /// The tiles on screen the look cursor may rest on: on a site's Net only the open
+    /// level's (`cursor_band`).
+    fn look_rect(&self, st: &AppState) -> TileRect {
+        let view = self.view_rect();
+        match cursor_band(st, self.place) {
+            Some(band) => view.intersection(band).unwrap_or(band),
+            None => view,
+        }
+    }
+
     /// Keys in look mode: the walk keys move the cursor (shift by eight), tab and
     /// shift-tab step through what is worth a look, space opens what is in reach,
     /// esc or `x` puts the cursor away.
@@ -2200,7 +2256,7 @@ impl MapScreen {
                     st,
                     &map,
                     self.place,
-                    self.view_rect(),
+                    self.look_rect(st),
                     from,
                     &|pl, p| self.inside_person_at(pl, p),
                 );
@@ -2220,9 +2276,10 @@ impl MapScreen {
                 Some(d) => {
                     let step = if fast { 8 } else { 1 };
                     let (dx, dy) = d.delta();
-                    let view = self.view_rect();
-                    // the view bounds the cursor, and the map too where it ends; the
-                    // street and the Net carry on past the city's edge
+                    let view = self.look_rect(st);
+                    // the view bounds the cursor (on a site's Net the open level's part
+                    // of it), and the map too where it ends; the street and the Net carry
+                    // on past the city's edge
                     let size = st
                         .city
                         .as_ref()
@@ -2256,7 +2313,7 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
-        let popup = if let Place::Construct(b) = place {
+        let popup = if let Some(b) = place.construct() {
             let mut letters = FREE_LETTERS.chars();
             let rows: Vec<Choice> = interact::run_rows(st, b, pos, None, &mut letters)
                 .into_iter()
@@ -2508,6 +2565,20 @@ impl MapScreen {
             }
             // The gate in and out of a construct comes with the construct cache.
             Place::Construct(_) => None,
+            // On a site's Net a door's node or a turnstile, as its lock on the floor.
+            Place::SiteNet { .. } => match crate::sitenet::step_on_net(st, here, target) {
+                crate::venues::Meets::Held(why) => {
+                    st.warn(why);
+                    Some(ScreenCmd::Stay)
+                }
+                crate::venues::Meets::Through(line) => {
+                    if let Some(line) = line {
+                        st.say(line);
+                    }
+                    None
+                }
+                crate::venues::Meets::Nothing => None,
+            },
         }
     }
 
@@ -2674,18 +2745,34 @@ impl MapScreen {
                     _ => return None,
                 };
                 let result = crate::constructs::enter_construct(st, b);
+                let crossed = result.is_ok();
                 report(st, result);
-                self.follow_player(st);
+                // Refused (a whole firewall, an alert), you stay where you were and so
+                // does the camera.
+                if crossed {
+                    self.follow_player(st);
+                }
                 Some(ScreenCmd::Stay)
             }
-            Place::Construct(b) => {
+            // Out through the entry: a step off it outward; on a site's Net the step onto
+            // it as well (its firewall's gate, which lets you out once every lock is
+            // broken, else holds you on it).
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                 let k = st.constructs.get(b)?;
-                if here != k.entry || k.tiles.in_bounds(target) {
+                let onto = k.is_site() && k.entry == target;
+                if !onto && !crate::constructs::leads_out(k, here, target) {
                     return None;
                 }
+                if onto && !step(st, dir) {
+                    say_why_not(st, dir);
+                    return Some(ScreenCmd::Stay);
+                }
                 let result = crate::constructs::leave_construct(st);
+                let crossed = result.is_ok();
                 report(st, result);
-                self.follow_player(st);
+                if crossed {
+                    self.follow_player(st);
+                }
                 Some(ScreenCmd::Stay)
             }
             _ => None,
@@ -2748,21 +2835,34 @@ impl MapScreen {
     }
 
     /// Puts the camera on a tile of the current place at once: snapped, clamped to
-    /// that place's map (a small map sits centred; the street and the Net carry on
-    /// past the city's edge, unclamped), and settled, so a new map never slides into
-    /// view.
-    fn jump_to(&mut self, st: &AppState, pos: Pos) {
+    /// that place's map (a small map sits centred; a site's Net is kept to its tower; the
+    /// street and the Net carry on past the city's edge, unclamped), and settled, so a new
+    /// map never slides into view.
+    pub(crate) fn jump_to(&mut self, st: &AppState, pos: Pos) {
         self.cam.snap(pos);
         if let Some(city) = st.city.as_ref() {
             let view = self.last_map.get();
             if view.width > 0 && view.height > 0 {
                 if !carries_on(st, self.place) {
-                    let size = TileMap::size(&self.map(st, city));
-                    self.cam.clamp(size, view.width, view.height);
+                    self.cam
+                        .clamp_to(self.cam_bounds(st, city), view.width, view.height);
                 }
                 self.cam.settle();
             }
         }
+    }
+
+    /// What the camera keeps the view inside on this place: on a site's Net the open
+    /// tower round the level you're on, its labels and the words beside it; elsewhere the
+    /// map's own tiles.
+    fn cam_bounds(&self, st: &AppState, city: &citygen::City) -> TileRect {
+        if let Place::SiteNet { building, level } = self.place
+            && let Some(k) = st.constructs.site(building)
+        {
+            return crate::render::netlook::tower::bounds(k, level);
+        }
+        let size = TileMap::size(&self.map(st, city));
+        TileRect::new(0, 0, size.w as i32, size.h as i32)
     }
 
     /// The stream built under the view and round you wherever the city doesn't own the
@@ -2797,9 +2897,15 @@ impl MapScreen {
         }
     }
 
-    /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else.
+    /// `>` and `<` inside: the lift panel on a lift, a floor on the stairs, nothing else;
+    /// on a site's Net, the riser from a hub.
     fn vertical(&mut self, st: &mut AppState, up: bool) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
+        if let Place::SiteNet { .. } = player.place {
+            let result = crate::sitenet::riser(st, up);
+            report(st, result);
+            return Some(ScreenCmd::Stay);
+        }
         let Place::Floor { building, level } = player.place else {
             return None;
         };
@@ -2857,7 +2963,7 @@ impl MapScreen {
     pub fn aim_path(&self, st: &AppState) -> Option<(Vec<Pos>, usize)> {
         let aim = self.aim?;
         let player = st.player.as_ref()?;
-        let Place::Construct(b) = player.place else {
+        let Some(b) = player.place.construct() else {
             let path = self.street_path(st, player.pos, aim)?;
             let lit = match st.net.engaged.as_ref() {
                 Some(e) => e.moves as usize,
@@ -2972,16 +3078,18 @@ impl MapScreen {
             self.street_walk_step(st, next);
             return;
         }
-        let Some((Place::Construct(b), _)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
+        let Some((place, b)) =
+            (st.player.as_ref()).and_then(|p| Some((p.place, p.place.construct()?)))
+        else {
             self.walking = None;
             return;
         };
         let here = st.player.as_ref().map(|p| p.pos);
-        // The last tile off the map from the entry is the gate: out onto the grid.
-        let leaving = st
-            .constructs
-            .get(b)
-            .is_some_and(|k| !k.tiles.in_bounds(next) && here == Some(k.entry));
+        // The last tile off the map from the entry (off a site's gate's level) is the
+        // gate: out onto the grid.
+        let leaving = (st.constructs.get(b))
+            .zip(here)
+            .is_some_and(|(k, here)| crate::constructs::leads_out(k, here, next));
         if leaving {
             self.walking = None;
             if let Err(why) = crate::net::spend_move(st) {
@@ -2989,8 +3097,11 @@ impl MapScreen {
                 return;
             }
             let result = crate::constructs::leave_construct(st);
+            let out = result.is_ok();
             report(st, result);
-            self.follow_player(st);
+            if out {
+                self.follow_player(st);
+            }
             return;
         }
         let open = here.is_some_and(|me| me.chebyshev(next) <= 1)
@@ -3000,6 +3111,14 @@ impl MapScreen {
         if !open {
             self.walking = None;
             st.warn("the way is blocked");
+            return;
+        }
+        // On a site's Net a door's node or a turnstile that holds ends the walk there.
+        if let (Place::SiteNet { .. }, Some(me)) = (place, here)
+            && let crate::venues::Meets::Held(why) = crate::sitenet::step_on_net(st, me, next)
+        {
+            self.walking = None;
+            st.warn(why);
             return;
         }
         if let Err(why) = crate::net::spend_move(st) {
@@ -3013,7 +3132,7 @@ impl MapScreen {
                 city,
                 &st.interiors,
                 &st.constructs,
-                Place::Construct(b),
+                place,
                 st.minute_of_day(),
             )
             && let Some(player) = st.player.as_mut()
@@ -3031,6 +3150,23 @@ impl MapScreen {
                 self.walking = None;
             } else {
                 w.next_at = now + crate::net::WALK_TICKS;
+            }
+        }
+        // Onto a site's gate inside: out through it once every lock is broken, else the
+        // walk ends on it.
+        if let Place::SiteNet { building, .. } = place
+            && st
+                .constructs
+                .site(building)
+                .is_some_and(|k| k.entry == next)
+        {
+            self.walking = None;
+            let result = crate::constructs::leave_construct(st);
+            let out = result.is_ok();
+            report(st, result);
+            if out {
+                self.follow_player(st);
+                return;
             }
         }
         // The last move spent: the act half opens by itself.
@@ -3053,10 +3189,7 @@ impl MapScreen {
             st.say("feed closed");
         }
         if k.code == KeyCode::Char('.') {
-            let inside = st
-                .player
-                .as_ref()
-                .is_some_and(|p| matches!(p.place, Place::Construct(_)));
+            let inside = st.player.as_ref().is_some_and(|p| p.place.in_construct());
             if st.net.engaged.is_some() {
                 // Only your own turn ends on the key; the others' run on the pace.
                 if crate::net::your_turn(st) {
@@ -3116,10 +3249,7 @@ impl MapScreen {
             // An aim on another tile: space confirms the walk, as enter does.
             if let Some(aim) = self.aim
                 && st.player.as_ref().is_some_and(|p| p.pos != aim)
-                && matches!(
-                    st.player.as_ref().map(|p| p.place),
-                    Some(Place::Construct(_))
-                )
+                && st.player.as_ref().is_some_and(|p| p.place.in_construct())
             {
                 return Some(self.start_walk(st, aim));
             }
@@ -3165,7 +3295,7 @@ impl MapScreen {
                 }
                 (Some(_), Some(_)) if crate::net::hunting(st) => st.warn("still hunted"),
                 (Some(_), Some(_)) => crate::net::disengage(st),
-                (Some(place @ Place::Construct(_)), None) => crate::net::engage(st, place, true),
+                (Some(place), None) if place.in_construct() => crate::net::engage(st, place, true),
                 (Some(place), None) if !crate::foes::in_memory(st).is_empty() => {
                     crate::net::engage(st, place, true)
                 }
@@ -3242,10 +3372,7 @@ impl MapScreen {
         }
         // The aim: `g` starts it anywhere in a construct, the arrows move it while it
         // is up or while the board is on turns, enter walks it, esc drops it.
-        let inside = match st.player.as_ref().map(|p| (p.place, p.pos)) {
-            Some((Place::Construct(b), pos)) => Some((b, pos)),
-            _ => None,
-        };
+        let inside = (st.player.as_ref()).and_then(|p| Some((p.place.construct()?, p.pos)));
         // On foot on turns: `g` aims a path over the street, the arrows move the aim
         // while it is up, enter walks it; a plain arrow steps and spends a move.
         if inside.is_none()
@@ -3300,13 +3427,18 @@ impl MapScreen {
                     return Some(ScreenCmd::Stay);
                 }
                 // The aim reaches as far as the moves do; a piece within that reach
-                // may be aimed at (no path: a red cross).
+                // may be aimed at (no path: a red cross). On a site's Net it keeps to
+                // the open level.
                 let from = self.aim.unwrap_or(pos);
                 let to = from.step(dir);
                 let cap = crate::net::aim_cap(st);
+                let band = (st.player.as_ref())
+                    .and_then(|p| cursor_band(st, p.place))
+                    .is_none_or(|r| r.contains(to));
                 let open = st.constructs.get(b).is_some_and(|k| {
-                    crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
-                        || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)
+                    (band
+                        && (crate::net::path_to(k, pos, to).is_some_and(|p| p.len() <= cap)
+                            || (k.guard_at(to).is_some() && pos.chebyshev(to) as usize <= cap)))
                         // Off the map from the entry: the gate, one tile past it.
                         || (from == k.entry
                             && !k.tiles.in_bounds(to)
@@ -3690,9 +3822,9 @@ impl Screen for MapScreen {
             let bounds = st
                 .city
                 .as_ref()
-                .map(|c| TileMap::size(&self.map(st, c)))
-                .unwrap_or(size);
-            self.cam.clamp(bounds, map.width, map.height);
+                .map(|c| self.cam_bounds(st, c))
+                .unwrap_or(TileRect::new(0, 0, size.w as i32, size.h as i32));
+            self.cam.clamp_to(bounds, map.width, map.height);
         }
         self.cam.update();
         // The city lives: a minute step when the clock turns, a few paths per frame,
@@ -3704,10 +3836,7 @@ impl Screen for MapScreen {
         if let (Some(_), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
             world.set_blocker(standing);
         }
-        let inside = match st.player.as_ref().map(|p| p.place) {
-            Some(Place::Construct(b)) => Some(b),
-            _ => None,
-        };
+        let inside = st.player.as_ref().and_then(|p| p.place.construct());
         let before = st.player.as_ref().map(|p| (p.place, p.pos));
         let resting = st.rest.is_some();
         if resting {
@@ -3956,18 +4085,20 @@ impl Screen for MapScreen {
         if let Some(o) = atrium.as_ref() {
             overlays.push(o);
         }
+        // The map's tiles on screen.
+        let shown = TileRect::new(
+            origin.x,
+            origin.y,
+            map_area.width as i32,
+            map_area.height as i32,
+        );
+        let on_the_grid = self.place == Place::Stratum(StratumKind::Net);
         // The city's Net's traffic moves on with the clock round the view.
-        let (packets, soaks) = if self.place == Place::Stratum(StratumKind::Net) {
-            let view = citygen::Rect::new(
-                origin.x,
-                origin.y,
-                map_area.width as i32,
-                map_area.height as i32,
-            );
+        let (packets, soaks) = if on_the_grid {
             self.traffic
                 .borrow_mut()
                 .city(city.seed)
-                .run_city(city, view, st.tick)
+                .run_city(city, shown, st.tick)
         } else {
             Default::default()
         };
@@ -3987,29 +4118,35 @@ impl Screen for MapScreen {
                     .get(b)
                     .map(crate::net::watched)
                     .unwrap_or_default(),
+                // On a site's Net the tower folds the other levels: the open one's watch.
+                Place::SiteNet { building, level } => (st.constructs.site(building))
+                    .map(|k| crate::net::watched_on(k, Some(level)))
+                    .unwrap_or_default(),
                 _ => Default::default(),
+            },
+            site: match self.place {
+                Place::SiteNet { building, level } => {
+                    Some(crate::sitenet::site_view(st, building, level))
+                }
+                _ => None,
+            },
+            // On the city's Net each site's firewall locks on its edge.
+            firewalls: match on_the_grid {
+                true => crate::sitenet::grid_locks(st, shown),
+                false => Vec::new(),
             },
         };
         let net_look = crate::render::netlook::NetLook {
             view: &net_view,
             keep,
         };
-        if matches!(
-            self.place,
-            Place::Stratum(StratumKind::Net) | Place::Construct(_)
-        ) {
+        if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
             overlays.push(&net_look);
         }
         // The cord: the way back to where you jacked in (Settings can hide it), walked
         // as far as the view shows it.
-        let shown = TileRect::new(
-            origin.x,
-            origin.y,
-            map_area.width as i32,
-            map_area.height as i32,
-        );
         let cord = crate::net::cord_view(st)
-            .filter(|_| self.place == Place::Stratum(StratumKind::Net))
+            .filter(|_| on_the_grid)
             .zip(st.player.as_ref().map(|p| p.pos))
             .map(|(mut view, you)| {
                 view.walk = self.cord_walk.borrow_mut().walk(st, view.entry, you, shown);
@@ -4046,15 +4183,27 @@ impl Screen for MapScreen {
         if !marks.is_empty() {
             overlays.push(&door_marks);
         }
+        // A site's floor: its terminals and gate switches on their wall tiles, where you
+        // jack in.
+        let devices = self.floor_devices(st);
+        let floor_devices = crate::render::doors::FloorDevices {
+            devices: &devices,
+            vis,
+        };
+        if !devices.is_empty() {
+            overlays.push(&floor_devices);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
         let scorch = ScorchOverlay { fx: &st.fx, vis };
         overlays.push(&scorch);
-        // On the street: the cones of cameras that see you, or that you hold.
-        let cones = if self.place == Place::Stratum(StratumKind::Street) {
-            crate::cameras::cones(st)
-        } else {
-            Vec::new()
+        // On the street or a site's floor: the cones of cameras that see you, or that you
+        // hold.
+        let cones = match self.place {
+            Place::Stratum(StratumKind::Street) | Place::Floor { .. } => {
+                crate::cameras::cones(st, self.place)
+            }
+            _ => Vec::new(),
         };
         let cone_overlay = crate::cameras::ConeOverlay { cones: &cones, vis };
         if !cones.is_empty() {
@@ -4119,6 +4268,15 @@ impl Screen for MapScreen {
             Place::Construct(b) => Some(crate::render::ghost::GhostOverlay {
                 steps: crate::net::ghost_steps(st, b),
             }),
+            // The open level's alone: the tower folds the others (Ruling 22 of the plan
+            // `docs/superpowers/plans/2026-11-11-site-net.md`).
+            Place::SiteNet { building, level } => {
+                let mut steps = crate::net::ghost_steps(st, building);
+                if let Some(k) = st.constructs.site(building) {
+                    steps.retain(|(p, _)| on_level(k, level, *p));
+                }
+                Some(crate::render::ghost::GhostOverlay { steps })
+            }
             _ => None,
         };
         if let Some(o) = ghost.as_ref() {
@@ -4277,7 +4435,9 @@ impl Screen for MapScreen {
         }
         // A decoy floods the ad board's room.
         let flood = match self.place {
-            Place::Construct(b) => crate::holds::decoy_room(st, b),
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                crate::holds::decoy_room(st, b)
+            }
             _ => Vec::new(),
         };
         let flood_blocks = crate::render::path::BlockOverlay {
@@ -4609,7 +4769,9 @@ impl Screen for MapScreen {
         }
         .unwrap_or_else(|| crate::look::location(st, self.place, cursor));
         let alert_building = match self.place {
-            Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
+            Place::Construct(b)
+            | Place::SiteNet { building: b, .. }
+            | Place::Floor { building: b, .. } => Some(b),
             Place::Stratum(_) => None,
         };
         if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
@@ -4619,16 +4781,14 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure = if matches!(
-            self.place,
-            Place::Stratum(StratumKind::Net) | Place::Construct(_)
-        ) {
-            crate::exposure::net_text(self.place, crate::net::hunted(st))
-        } else if matches!(self.place, Place::Stratum(_)) {
-            crate::exposure::text(&crate::exposure::of(st))
-        } else {
-            String::new()
-        };
+        let exposure =
+            if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
+                crate::exposure::net_text(self.place, crate::net::hunted(st))
+            } else if matches!(self.place, Place::Stratum(_)) {
+                crate::exposure::text(&crate::exposure::of(st))
+            } else {
+                String::new()
+            };
         f.render_widget(
             Paragraph::new(hud::exposure_row(&exposure, rw)),
             r.band_r[2],
@@ -4689,6 +4849,9 @@ impl Screen for MapScreen {
             jobs: crate::missions::ui::jobs_pane(st),
             story_lines: crate::missions::ui::story_line_count(st),
             card: match (self.place, st.player.as_ref()) {
+                (Place::SiteNet { building, .. }, Some(p)) if p.place == self.place => {
+                    crate::sitenet::panel_lines(st, building)
+                }
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     crate::net::card_lines(st, b, None)
                 }
@@ -4724,9 +4887,9 @@ impl Screen for MapScreen {
             },
             beyond: beyond.as_ref(),
             ice_lines: match (self.place, st.player.as_ref()) {
-                (Place::Construct(b), Some(p)) if p.place == self.place => {
+                (place, Some(p)) if place.in_construct() && p.place == place => {
                     let vis = p.vis();
-                    crate::net::ice_lines(st, b, |q| {
+                    crate::net::ice_lines(st, place, |q| {
                         vis.get(q)
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
@@ -10849,7 +11012,7 @@ mod tests {
             .find(|f| matches!(f.fx, game::Fx::Bolt { .. }))
             .unwrap();
         assert_eq!(bolt.targets.len(), 2);
-        let lines = crate::net::ice_lines(&st, b, |_| true);
+        let lines = crate::net::ice_lines(&st, Place::Construct(b), |_| true);
         assert!(lines.iter().any(|l| l.contains("· stunned 2")), "{lines:?}");
         // Two turns beside it and it does nothing; the third it hits.
         let hp = st.character.hp;
@@ -10968,7 +11131,7 @@ mod tests {
             ice.stunned = 0;
         }
         // Everything in view: the lines list both pieces however the walls lie.
-        let lines = crate::net::ice_lines(&st, b, |_| true);
+        let lines = crate::net::ice_lines(&st, Place::Construct(b), |_| true);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines.iter().all(|l| l.contains("hunting")));
         // Without the ability, no steps.
@@ -11127,7 +11290,7 @@ mod tests {
         let (id, at) = (term.id, term.cyber);
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), at);
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, id, owner, now);
+        crate::holds::take(&mut st, citygen::NetNode::City(id), owner, now);
         (st, s)
     }
 
@@ -11204,7 +11367,7 @@ mod tests {
         }
         let now = st.net.now(&st);
         assert!(
-            crate::holds::held(&st, cam, now).is_some(),
+            crate::holds::held(&st, citygen::NetNode::City(cam), now).is_some(),
             "{:?}",
             last(&st)
         );
@@ -11214,13 +11377,21 @@ mod tests {
             panic!("the window with the camera's verbs");
         };
         w.update(&mut st, &[key(KeyCode::Char('o'))]);
-        assert!(crate::holds::looped(&st, cam, now), "{:?}", last(&st));
+        assert!(
+            crate::holds::looped(&st, citygen::NetNode::City(cam), now),
+            "{:?}",
+            last(&st)
+        );
         let ScreenCmd::Push { to: mut w, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("the window again");
         };
         w.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam), "the feed opens from the window too");
+        assert_eq!(
+            st.net.feed,
+            Some(citygen::NetNode::City(cam)),
+            "the feed opens from the window too"
+        );
     }
 
     #[test]
@@ -11232,10 +11403,15 @@ mod tests {
         let here = Pos::new(at.x, at.y + 1);
         stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+        crate::holds::take(
+            &mut st,
+            citygen::NetNode::City(cam),
+            crate::owners::Owner::Building(b),
+            now,
+        );
         // Esc closes it, and doesn't open the menu.
         s.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam));
+        assert_eq!(st.net.feed, Some(citygen::NetNode::City(cam)));
         let cmd = s.update(&mut st, &[key(KeyCode::Esc)]);
         assert!(matches!(cmd, ScreenCmd::Stay), "no menu while a feed is up");
         assert_eq!(st.net.feed, None);
@@ -11245,7 +11421,7 @@ mod tests {
         assert!(matches!(cmd, ScreenCmd::Push { .. }));
         // A step closes it.
         s.update(&mut st, &[key(KeyCode::Char('f'))]);
-        assert_eq!(st.net.feed, Some(cam));
+        assert_eq!(st.net.feed, Some(citygen::NetNode::City(cam)));
         let city = st.city.clone().unwrap();
         let step = [Dir::E, Dir::W, Dir::S, Dir::N]
             .into_iter()
@@ -11373,7 +11549,12 @@ mod tests {
             Pos::new(at.x, at.y - 1),
         );
         let now = st.net.now(&st);
-        crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+        crate::holds::take(
+            &mut st,
+            citygen::NetNode::City(ad),
+            crate::owners::Owner::Building(b),
+            now,
+        );
         let ScreenCmd::Push { to: mut picker, .. } = s.update(&mut st, &[key(KeyCode::Char('i'))])
         else {
             panic!("the hijack's picker");
@@ -12554,6 +12735,297 @@ mod tests {
     }
 
     #[test]
+    fn on_a_sites_net_a_door_node_holds_a_step_and_a_walk_and_a_hub_rides_the_riser() {
+        use crate::sitenet::testutil::{across_a_door_node, hack, office_copy};
+        let (mut st, b) = office_copy(190);
+        let (locked, _, door) = across_a_door_node(&mut st, b);
+        let place = player(&st).0;
+        let mut s = MapScreen::walking(&mut st);
+        let d = Dir::CARDINAL
+            .into_iter()
+            .find(|d| locked.step(*d) == door.at)
+            .unwrap();
+        crate::constructs::land(&mut st, place, locked);
+        assert!(matches!(s.doorway(&mut st, d), Some(ScreenCmd::Stay)));
+        assert!(last(&st).is_some_and(|l| l.contains(&door.name)));
+        // A walk over the door stops before it.
+        s.walking = Some(Walk {
+            path: vec![door.at],
+            next_at: st.clock_tick(),
+        });
+        s.walk_step(&mut st);
+        assert_eq!(player(&st).1, locked);
+        assert!(s.walking.is_none());
+        hack(
+            &mut st,
+            door.node,
+            citygen::NodeKind::DoorLock,
+            game::Op::Crack,
+        );
+        assert!(s.doorway(&mut st, d).is_none(), "the step goes on");
+        // On the hub `>` rides the riser up.
+        let hub = st.constructs.site(b).unwrap().net_level(0).unwrap().hub;
+        let g = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        crate::constructs::land(&mut st, g, hub);
+        assert!(matches!(s.vertical(&mut st, true), Some(ScreenCmd::Stay)));
+        assert!(matches!(player(&st).0, Place::SiteNet { level, .. } if level > 0));
+        assert!(last(&st).is_some_and(|l| l.starts_with("Entering")));
+    }
+
+    #[test]
+    fn a_sites_gate_lets_you_through_and_out_once_its_firewall_is_broken() {
+        use crate::sitenet::testutil::{at_the_gate, office_copy};
+        let (mut st, b) = office_copy(190);
+        at_the_gate(&mut st, b);
+        let mut s = MapScreen::walking(&mut st);
+        let gate = crate::constructs::city_gate(st.city.as_ref().unwrap(), b).unwrap();
+        let toward = |from: Pos, to: Pos| Dir::ALL.into_iter().find(|d| from.step(*d) == to);
+        let onto_gate = toward(player(&st).1, gate).unwrap();
+        // A lock whole: the gate refuses you on the grid, and the camera stays put.
+        s.cam.snap(Pos::new(gate.x + 9, gate.y + 5));
+        let cam = format!("{:?}", s.cam);
+        assert!(matches!(
+            s.gateway(&mut st, onto_gate),
+            Some(ScreenCmd::Stay)
+        ));
+        assert_eq!(last(&st), Some("FIREWALL · 3 locks · 0/3 broken"));
+        assert_eq!(player(&st).0, Place::Stratum(StratumKind::Net));
+        assert_eq!(format!("{:?}", s.cam), cam, "no jump on a refusal");
+        let now = st.net.now(&st);
+        for i in 0..3 {
+            st.net.break_lock(b, i, now);
+        }
+        s.gateway(&mut st, onto_gate);
+        let g = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        assert_eq!(player(&st).0, g);
+        // Inside, beside the gate: a lock closed again holds you on it.
+        let entry = st.constructs.site(b).unwrap().entry;
+        let beside = {
+            let k = st.constructs.site(b).unwrap();
+            (entry.neighbors4())
+                .find(|p| {
+                    k.tiles.get(*p).is_some_and(|t| t.is_walkable())
+                        && k.level_at(*p).is_some_and(|l| l.level == 0)
+                })
+                .unwrap()
+        };
+        let out = toward(beside, entry).unwrap();
+        st.net.firewalls.clear();
+        st.net.break_lock(b, 0, now);
+        crate::constructs::land(&mut st, g, beside);
+        assert!(matches!(s.gateway(&mut st, out), Some(ScreenCmd::Stay)));
+        assert_eq!(player(&st), (g, entry), "on the gate, held");
+        assert_eq!(last(&st), Some("FIREWALL · 3 locks · 1/3 broken"));
+        // Every lock broken: the step onto it goes out onto the city's gate tile.
+        for i in 1..3 {
+            st.net.break_lock(b, i, now);
+        }
+        crate::constructs::land(&mut st, g, beside);
+        s.gateway(&mut st, out);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert_eq!(last(&st), Some("Entering the GRID"));
+        // A walk onto the gate inside goes out too.
+        s.gateway(&mut st, onto_gate);
+        crate::constructs::land(&mut st, g, beside);
+        s.walking = Some(Walk {
+            path: vec![entry],
+            next_at: st.clock_tick(),
+        });
+        s.walk_step(&mut st);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert!(s.walking.is_none());
+    }
+
+    #[test]
+    fn on_a_sites_gate_inside_a_step_outward_goes_out_once_its_firewall_is_broken() {
+        use crate::sitenet::testutil::{office_copy, on_hub, walk_to_the_gate_inside};
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        walk_to_the_gate_inside(&mut st, b);
+        let mut s = MapScreen::walking(&mut st);
+        let g = Place::SiteNet {
+            building: b,
+            level: 0,
+        };
+        let (entry, outward) = {
+            let k = st.constructs.site(b).unwrap();
+            let out = (Dir::CARDINAL.into_iter())
+                .find(|d| k.level_at(k.entry.step(*d)).is_none())
+                .unwrap();
+            (k.entry, out)
+        };
+        let gate = crate::constructs::city_gate(st.city.as_ref().unwrap(), b).unwrap();
+        // A lock whole: the gate refuses the step outward, and says why.
+        assert!(matches!(s.gateway(&mut st, outward), Some(ScreenCmd::Stay)));
+        assert_eq!(last(&st), Some("FIREWALL · 3 locks · 0/3 broken"));
+        assert_eq!(player(&st), (g, entry));
+        // Every lock broken: the step outward goes out onto the city's gate tile.
+        let now = st.net.now(&st);
+        for i in 0..3 {
+            st.net.break_lock(b, i, now);
+        }
+        s.gateway(&mut st, outward);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert_eq!(last(&st), Some("Entering the GRID"));
+        // A walk from the gate inside, outward, goes out too.
+        crate::constructs::enter_construct(&mut st, b).unwrap();
+        walk_to_the_gate_inside(&mut st, b);
+        s.walking = Some(Walk {
+            path: vec![entry.step(outward)],
+            next_at: st.clock_tick(),
+        });
+        s.walk_step(&mut st);
+        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), gate));
+        assert!(s.walking.is_none());
+    }
+
+    #[test]
+    fn beside_a_sites_kiosk_space_and_j_jack_you_in_on_its_node() {
+        use crate::sitenet::testutil::{office_copy, stand_beside_the_kiosk};
+        let (mut st, b) = office_copy(190);
+        let kiosk = stand_beside_the_kiosk(&mut st, b);
+        let body = player(&st);
+        let mut s = MapScreen::walking(&mut st);
+        let cmd = jack_in(&mut st, &mut s);
+        assert!(
+            matches!(cmd, ScreenCmd::Pop { .. }),
+            "the window closes: {:?}",
+            last(&st)
+        );
+        let p = st.player.as_ref().unwrap();
+        let k = st.constructs.site(b).unwrap();
+        assert_eq!(
+            p.place,
+            Place::SiteNet {
+                building: b,
+                level: 0
+            }
+        );
+        assert_eq!(k.device_at(p.pos).map(|d| d.node), Some(kiosk));
+        assert_eq!(p.body, Some(body));
+        assert_eq!(s.place, p.place, "the map follows you in");
+    }
+
+    #[test]
+    fn a_sites_floor_draws_its_kiosk() {
+        use crate::render::netlook::TERMINAL;
+        use crate::sitenet::testutil::{office_copy, stand_beside_the_kiosk};
+        let (mut st, b) = office_copy(190);
+        let kiosk = stand_beside_the_kiosk(&mut st, b);
+        let s = MapScreen::walking(&mut st);
+        let buf = draw_buffer(&s, &st, 120, 40);
+        let area = s.last_map.get();
+        let origin = s.cam.origin(area.width, area.height);
+        let (x, y) = crate::render::viewport::tile_to_screen(area, origin, kiosk.at)
+            .expect("the kiosk in view");
+        let cell = &buf[(x, y)];
+        assert_eq!(
+            (cell.symbol(), cell.fg),
+            ("◇", TERMINAL.to_color()),
+            "the kiosk's wall tile"
+        );
+    }
+
+    #[test]
+    fn on_the_citys_net_a_sites_locks_stand_on_its_edge() {
+        use crate::render::netlook::{BLACK_RED, WHITE};
+        use crate::render::overlay::SIGNAL;
+        use crate::render::viewport::tile_to_screen;
+        use crate::sitenet::testutil::{at_the_gate, office_copy};
+        let (mut st, b) = office_copy(190);
+        at_the_gate(&mut st, b);
+        let s = MapScreen::walking(&mut st);
+        draw_buffer(&s, &st, 120, 40);
+        let drawn = |st: &AppState, p: Pos| {
+            let buf = draw_buffer(&s, st, 120, 40);
+            let area = s.last_map.get();
+            let origin = s.cam.origin(area.width, area.height);
+            let (x, y) = tile_to_screen(area, origin, p)?;
+            Some((buf[(x, y)].symbol().to_string(), buf[(x, y)].fg))
+        };
+        let look = |c: &str, fg: crate::render::Rgb| Some((c.to_string(), fg.to_color()));
+        // A lock in view nobody stands on (ICE on one is drawn over it).
+        let net = Place::Stratum(StratumKind::Net);
+        let (i, at) = (crate::sitenet::lock_spots(&st, b).into_iter().enumerate())
+            .find(|(_, p)| crate::foes::foe_at(&st, net, *p).is_none() && drawn(&st, *p).is_some())
+            .expect("a lock in view, nobody on it");
+        assert_eq!(drawn(&st, at), look("▮", BLACK_RED), "lock {i} whole");
+        let now = st.net.now(&st);
+        st.net.break_lock(b, i as u8, now);
+        assert_eq!(drawn(&st, at), look("▯", SIGNAL), "lock {i} broken");
+        // A building in view that is no site keeps its gate as before (a bare one: no
+        // node on it, nobody on it).
+        let (area, city) = (s.last_map.get(), st.city.as_ref().unwrap());
+        let origin = s.cam.origin(area.width, area.height);
+        let bare = |g: Pos| {
+            (city.tile(StratumKind::Net, g)).is_some_and(|t| t.feature.is_none())
+                && crate::foes::foe_at(&st, net, g).is_none()
+        };
+        let plain = (city.buildings.iter())
+            .filter_map(|x| Some((x.id, crate::constructs::city_gate(city, x.id)?)))
+            .filter(|(_, g)| tile_to_screen(area, origin, *g).is_some() && bare(*g))
+            .find(|(x, _)| !crate::sitenet::is_site(&st, *x))
+            .expect("a building that is no site, its bare gate in view")
+            .1;
+        assert_eq!(drawn(&st, plain), look("▯", WHITE));
+    }
+
+    #[test]
+    fn on_a_sites_net_the_cursors_keep_to_the_open_level() {
+        use crate::sitenet::testutil::{office_copy, on_hub};
+        let (mut st, b) = office_copy(190);
+        on_hub(&mut st, b, 0);
+        let mut s = MapScreen::walking(&mut st);
+        draw_buffer(&s, &st, 120, 64);
+        s.jump_to(&st, player(&st).1);
+        let area = (st.constructs.site(b).unwrap().net_level(0)).unwrap().area;
+        let on_it = |p: Pos| area.contains(p);
+        // The look: pushed past each edge, it rests on the level's first and last rows and
+        // columns, never on the folds and slabs the tower draws round it.
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        let cursor = |s: &MapScreen| s.looking.as_ref().unwrap().cursor;
+        for (k, edge) in [
+            ('K', area.y),
+            ('J', area.bottom() - 1),
+            ('H', area.x),
+            ('L', area.right() - 1),
+        ] {
+            for _ in 0..12 {
+                s.update(&mut st, &[key(KeyCode::Char(k))]);
+                assert!(on_it(cursor(&s)), "{k}: {:?} off {area:?}", cursor(&s));
+            }
+            let at = cursor(&s);
+            let got = if matches!(k, 'K' | 'J') { at.y } else { at.x };
+            assert_eq!(got, edge, "{k}");
+        }
+        // Tab through what's worth a look: only what's on it.
+        for _ in 0..12 {
+            s.update(&mut st, &[key(KeyCode::Tab)]);
+            assert!(on_it(cursor(&s)), "tab: {:?}", cursor(&s));
+        }
+        s.update(&mut st, &[key(KeyCode::Esc)]);
+        // The fire cursor on your act half the same.
+        let here = player(&st).0;
+        crate::net::engage(&mut st, here, true);
+        assert!(crate::net::stay(&mut st));
+        s.update(&mut st, &[]);
+        for _ in 0..60 {
+            s.update(&mut st, &[key(KeyCode::Char('k'))]);
+        }
+        assert_eq!(s.target.map(|t| t.y), Some(area.y), "the fire cursor");
+        for _ in 0..60 {
+            s.update(&mut st, &[key(KeyCode::Char('j'))]);
+        }
+        assert_eq!(s.target.map(|t| t.y), Some(area.bottom() - 1));
+    }
+
+    #[test]
     fn in_a_fight_the_arrows_aim_and_the_path_lights_to_your_moves() {
         let mut st = state8();
         let mut s = MapScreen::explore(0);
@@ -13439,10 +13911,13 @@ mod tests {
     /// A building with a gate and a server, not one of `not`.
     fn other_construct(st: &mut AppState, not: &[citygen::BuildingId]) -> citygen::BuildingId {
         let city = st.city.clone().unwrap();
-        city.buildings
-            .iter()
+        // A construct of today's kind: a site's gate is its firewall's.
+        let candidates: Vec<citygen::BuildingId> = (city.buildings.iter())
             .map(|b| b.id)
-            .filter(|b| !not.contains(b))
+            .filter(|b| !not.contains(b) && !crate::sitenet::is_site(st, *b))
+            .collect();
+        candidates
+            .into_iter()
             .find(|b| {
                 crate::constructs::city_gate(&city, *b).is_some()
                     && st.constructs.ensure(&city, *b).is_some_and(|k| {
@@ -17499,7 +17974,7 @@ mod tests {
             };
             let now = st.net.now(&st);
             let owner = crate::owners::owner_of(st.city.as_ref().unwrap(), held).unwrap();
-            crate::holds::take(&mut st, held, owner, now);
+            crate::holds::take(&mut st, citygen::NetNode::City(held), owner, now);
             stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), a);
             assert!(
                 !crate::net::out_of_reach(&st, a).is_empty(),
@@ -18688,7 +19163,12 @@ mod tests {
                 st.net.lights_out.insert(d.id, now + LIGHTS_OUT_MINUTES);
             }
             for (node, b, _) in ad_boards(&city) {
-                holds::take(&mut st, node, crate::owners::Owner::Building(b), now);
+                holds::take(
+                    &mut st,
+                    citygen::NetNode::City(node),
+                    crate::owners::Owner::Building(b),
+                    now,
+                );
                 holds::hijack(&mut st, node, Line::Tag);
             }
             holds::tick(&mut st);

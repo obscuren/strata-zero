@@ -490,10 +490,16 @@ impl Minimap<'_> {
     }
 
     /// A construct: its plan, walls and floor, in its building's colours; the target
-    /// and you.
+    /// and you. On a site's Net the open level's band alone, its watch with it, as the
+    /// tower opens it: the rest is other levels.
     fn construct_plan(&self, m: &ConstructMap, area: Rect, buf: &mut Buffer) {
         let k = m.construct;
-        let size = k.tiles.size();
+        let band = (m.level.and_then(|l| k.net_level(l)))
+            .map_or_else(|| k.tiles.size().rect(), |l| l.area);
+        let size = Size {
+            w: band.w as u32,
+            h: band.h as u32,
+        };
         // A tile a pixel when the whole construct fits, as it does at the column's size.
         let fits = size.w as i32 <= area.width as i32 && size.h as i32 <= 2 * area.height as i32;
         let s = if fits {
@@ -506,15 +512,21 @@ impl Minimap<'_> {
             area,
             s,
             origin: Pos::new(
-                plan_axis(size.w as i32, area.width as i32 * s, at.x, s),
-                plan_axis(size.h as i32, area.height as i32 * 2 * s, at.y, 2 * s),
+                band.x + plan_axis(size.w as i32, area.width as i32 * s, at.x - band.x, s),
+                band.y
+                    + plan_axis(
+                        size.h as i32,
+                        area.height as i32 * 2 * s,
+                        at.y - band.y,
+                        2 * s,
+                    ),
             ),
         };
-        let watch = crate::net::watched(k);
+        let watch = crate::net::watched_on(k, m.level);
         let ground = self.ground();
         let px = Pixels::new(area.width as i32, 2 * area.height as i32, |x, y| {
             let (x0, y0) = (v.origin.x + x * s, v.origin.y + y * s);
-            crate::render::netlook::mini::plan_px(k, &watch, x0, y0, s).unwrap_or(ground)
+            crate::render::netlook::mini::plan_px(k, &watch, band, x0, y0, s).unwrap_or(ground)
         });
         paint(buf, area, &px);
         self.marks(buf, &px, &v);
@@ -1218,6 +1230,26 @@ mod tests {
             .map(|at| buf[at].bg)
             .collect();
         assert!(colours.len() >= 3, "{colours:?}");
+    }
+
+    #[test]
+    fn on_a_sites_net_the_map_keeps_to_the_open_level() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(210);
+        crate::sitenet::testutil::on_hub(&mut st, b, 0);
+        let before = inside(&st, 40, 13);
+        assert!(find(&before, "@").is_some());
+        // Every tile off the open level's band turned to ICE: none of it shows.
+        let k = st.constructs.get_mut(b).unwrap();
+        let band = k.net_level(0).unwrap().area;
+        let size = k.tiles.size();
+        let off: Vec<Pos> = (0..size.h as i32)
+            .flat_map(|y| (0..size.w as i32).map(move |x| Pos::new(x, y)))
+            .filter(|p| !band.contains(*p))
+            .collect();
+        for p in off {
+            k.tiles[p].feature = Some(citygen::Feature::Ice(citygen::IceGrade::Black));
+        }
+        assert!(inside(&st, 40, 13) == before, "another level shows");
     }
 
     #[test]

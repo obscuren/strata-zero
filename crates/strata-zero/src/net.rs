@@ -1,5 +1,6 @@
 //! The Net's state this session: every construct's trace, the hacks that landed,
-//! the deck's cooling after a dump, and the program in flight.
+//! the deck's cooling after a dump, and the program in flight. The rulings cited are the
+//! site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::{AppState, FxInstance};
 use crate::constructs::Constructs;
@@ -7,7 +8,7 @@ use crate::render::map::MapRef;
 use citygen::pathing::{astar, bresenham};
 use citygen::rng::hash64;
 use citygen::{
-    BuildingId, City, Construct, IceGrade, NodeId, NodeKind, Place, Pos, StratumKind, Terrain,
+    BuildingId, City, Construct, FloorPlan, IceGrade, NodeKind, Place, Pos, StratumKind, Terrain,
 };
 use game::{
     ALERT_MINUTES, COOLING_MINUTES, Fx, HACK_MINUTES, HackTarget, ItemId, Op, Run, Target, Trace,
@@ -115,12 +116,9 @@ impl Engagement {
         self.order.get(self.turn).copied().unwrap_or(Actor::You)
     }
 
-    /// The construct on turns, when it is one.
+    /// The construct on turns, when it is one (a site's Net too).
     pub fn construct(&self) -> Option<BuildingId> {
-        match self.place {
-            Place::Construct(b) => Some(b),
-            _ => None,
-        }
+        self.place.construct()
     }
 }
 
@@ -219,10 +217,11 @@ pub enum Scene {
     Outside,
 }
 
-/// The scene of a place: a construct's inside, the open Net; none off the Net.
+/// The scene of a place: a construct's inside (a site's Net is its building's), the open
+/// Net; none off the Net.
 pub fn scene_of(place: Place) -> Option<Scene> {
     match place {
-        Place::Construct(b) => Some(Scene::Inside(b)),
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(Scene::Inside(b)),
         Place::Stratum(StratumKind::Net) => Some(Scene::Outside),
         _ => None,
     }
@@ -239,17 +238,19 @@ pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, Str
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
 /// a construct's outer wall (a facade's camera, holo ad, lock) or out on the grid (a
-/// district's lamp grid, a street terminal); not hubs, not ICE; and only on the cells
-/// the live city owns (on another's, that one's map is what's there). Yourself first.
+/// district's lamp grid, a street terminal), and a site's firewall locks; not hubs, not
+/// ICE, not what a site's firewall keeps inside; and only on the cells the live city owns
+/// (on another's, that one's map is what's there). Yourself first.
 pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let Some(city) = st.city.as_ref() else {
         return out;
     };
     let near: Vec<Pos> = std::iter::once(pos).chain(pos.neighbors8()).collect();
+    let site = |b: BuildingId| crate::sitenet::is_site(st, b);
     for n in &city.net.nodes {
         if !near.contains(&n.cyber)
-            || !grid_reaches(city, n)
+            || !grid_reaches(city, n, &site)
             || !crate::outside::stream::live_owns(st, n.cyber)
         {
             continue;
@@ -259,6 +260,17 @@ pub fn targets_outside(st: &AppState, pos: Pos) -> Vec<(HackTarget, String)> {
             None => n.kind.label().to_string(),
         };
         out.push((HackTarget::Node(n.id), what));
+    }
+    // A site's firewall locks, round its footprint.
+    let round = (city.buildings.iter()).filter(|x| x.footprint.grow(2).contains(pos));
+    for x in round.filter(|x| site(x.id)) {
+        for (i, at) in crate::sitenet::lock_spots(st, x.id).into_iter().enumerate() {
+            if near.contains(&at) && crate::outside::stream::live_owns(st, at) {
+                let lock = citygen::SiteNode::firewall(x.id, i as u8);
+                let what = format!("firewall lock {} · {}", i + 1, building_name(st, x.id));
+                out.push((HackTarget::Site(lock), what));
+            }
+        }
     }
     // ICE out on the grid, beside you or in sight at range.
     for (i, name) in crate::grid::in_reach(st, pos) {
@@ -291,11 +303,19 @@ pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<N
         let Some(Owner::City(city, q)) = b.elsewhere(p) else {
             continue;
         };
+        // Another city's plans aren't at hand: a building is a site by its kind.
+        let site = |id: BuildingId| {
+            (city.building_opt(id)).is_some_and(|x| {
+                citygen::venue::VenuePack::builtin()
+                    .for_kind(x.kind)
+                    .is_some()
+            })
+        };
         out.extend(
             city.net
                 .nodes
                 .iter()
-                .filter(|n| n.cyber == q && grid_reaches(city, n))
+                .filter(|n| n.cyber == q && grid_reaches(city, n, &site))
                 .map(|n| n.kind),
         );
     }
@@ -304,15 +324,26 @@ pub fn out_of_reach_on(st: &AppState, cells: impl Iterator<Item = Pos>) -> Vec<N
 
 /// Whether the open Net reaches node `n` of `city` from its tile or beside it: out on
 /// the grid, or on a construct's outer wall (a facade's camera, holo ad, lock); not hubs,
-/// not ICE.
-fn grid_reaches(city: &City, n: &citygen::Node) -> bool {
+/// not ICE, and not a site's server, data vault or lift control, which stand inside its
+/// firewall (`site` says which buildings are sites).
+pub(crate) fn grid_reaches(
+    city: &City,
+    n: &citygen::Node,
+    site: &dyn Fn(BuildingId) -> bool,
+) -> bool {
     if matches!(n.kind, NodeKind::Backbone | NodeKind::Ice) {
         return false;
     }
-    n.building.is_none()
-        || city
-            .tile(StratumKind::Net, n.cyber)
-            .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
+    let Some(b) = n.building else {
+        return true;
+    };
+    let walled = matches!(
+        n.kind,
+        NodeKind::Server | NodeKind::DataVault | NodeKind::LiftCtrl
+    );
+    (city.tile(StratumKind::Net, n.cyber))
+        .is_some_and(|t| matches!(t.terrain, Terrain::NetWall | Terrain::NetGate))
+        && !(walled && site(b))
 }
 
 /// A target's kind where you stand.
@@ -325,13 +356,16 @@ pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target
             HackTarget::Foe(i) => Some(Target::Guard(
                 st.foes.get(i).filter(|f| !f.down)?.ice.as_ref()?.grade,
             )),
-            HackTarget::Guard { .. } => None,
+            HackTarget::Site(n) if n.firewall_lock().is_some() => {
+                Some(Target::Node(NodeKind::Firewall))
+            }
+            HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
     }
 }
 
 /// A target's tile where you stand: its tile in the construct, or its tile on the
-/// open Net.
+/// open Net (a firewall lock's, its lock tile).
 pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
     match scene {
         Scene::Inside(b) => target_pos(st, b, target),
@@ -339,18 +373,28 @@ pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
             HackTarget::Node(id) => Some(st.city.as_ref()?.net.node(id).cyber),
             HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
             HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
+            HackTarget::Site(n) => {
+                let lock = usize::from(n.firewall_lock()?);
+                crate::sitenet::lock_spots(st, n.building)
+                    .get(lock)
+                    .copied()
+            }
             HackTarget::Guard { .. } => None,
         },
     }
 }
 
 /// Whose trace a run on `target` heats: the construct's inside; on the open Net the
-/// node's owner; none for a program on yourself out there.
+/// node's owner (a firewall lock's, its building); none for a program on yourself out
+/// there.
 pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate::owners::Owner> {
     match (scene, target) {
         (Scene::Inside(b), _) => Some(crate::owners::Owner::Building(b)),
         (Scene::Outside, HackTarget::Node(id)) => crate::owners::owner_of(st.city.as_ref()?, id),
         (Scene::Outside, HackTarget::Foe(i)) => st.foes.get(i)?.ice.as_ref().map(|g| g.owner),
+        (Scene::Outside, HackTarget::Site(n)) if n.firewall_lock().is_some() => {
+            Some(crate::owners::Owner::Building(n.building))
+        }
         (Scene::Outside, _) => None,
     }
 }
@@ -415,7 +459,7 @@ pub struct NetState {
     pub holds: Vec<crate::holds::Hold>,
     /// The camera whose feed is open.
     #[serde(default)]
-    pub feed: Option<NodeId>,
+    pub feed: Option<citygen::NetNode>,
     /// Buildings whose holo ads say your line.
     #[serde(default)]
     pub hijacks: Vec<crate::holds::Hijack>,
@@ -435,6 +479,11 @@ pub struct NetState {
     /// The open Net's trail, sentinels, tracers' pace and sweeps.
     #[serde(default)]
     pub grid: crate::grid::GridState,
+    /// A site's broken firewall locks: the lock, and the game minute it closes again. The
+    /// one record of a broken lock (no `Hack` is pushed for one); an alarm clears the
+    /// building's.
+    #[serde(default)]
+    pub firewalls: BTreeMap<BuildingId, Vec<(u8, u64)>>,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -475,6 +524,7 @@ impl Default for NetState {
             eyes_minute: None,
             line_next: 0,
             grid: Default::default(),
+            firewalls: BTreeMap::new(),
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -586,23 +636,32 @@ impl NetState {
         (event, false)
     }
 
-    fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
+    /// The hacks still holding at minute `now`.
+    pub(crate) fn live(&self, now: u64) -> impl Iterator<Item = &Hack> {
         self.hacks
             .iter()
             .filter(move |h| h.until.is_none_or(|u| now < u))
+    }
+
+    /// When a hack landing on building `b` at minute `now` ends: its hour, or the end of
+    /// the building's alert, whichever is sooner.
+    fn hack_end(&self, b: BuildingId, now: u64) -> u64 {
+        let hour = now + HACK_MINUTES;
+        (self.traces.get(&b))
+            .and_then(|t| t.alert_until)
+            .filter(|u| now < *u)
+            .map_or(hour, |u| u.min(hour))
     }
 
     /// Records a landed hack; a backdoor's hack is logged without an end.
     pub fn land(&mut self, b: BuildingId, target: HackTarget, kind: Target, op: Op, now: u64) {
         // A hack lasts an hour, or until the building's alert ends, whichever is
         // sooner; a broken piece stays down the whole hour whatever the alert does.
-        let alert_end = self
-            .traces
-            .get(&b)
-            .and_then(|t| t.alert_until)
-            .filter(|u| now < *u && op != Op::Attack);
-        let until = (op != Op::Backdoor)
-            .then(|| alert_end.map_or(now + HACK_MINUTES, |u| u.min(now + HACK_MINUTES)));
+        let until = match op {
+            Op::Backdoor => None,
+            Op::Attack => Some(now + HACK_MINUTES),
+            _ => Some(self.hack_end(b, now)),
+        };
         self.hacks.push(Hack {
             building: b,
             target,
@@ -621,26 +680,35 @@ impl NetState {
         })
     }
 
-    /// Whether the building's private rooms stand open: a lock cracked or spoofed,
-    /// and no alert.
+    /// Whether the building's private rooms stand open: a lock on the city's Net cracked
+    /// or spoofed, and no alert. A site's own nodes never open a whole building: each
+    /// opens its own device (`sitenet::lock_open`).
     pub fn unlocked(&self, b: BuildingId, now: u64) -> bool {
         !self.alert(b, now)
             && self.live(now).any(|h| {
                 h.building == b
+                    && matches!(h.target, HackTarget::Node(_))
                     && matches!(h.op, Op::Crack | Op::Spoof)
                     && h.kind == Target::Node(NodeKind::DoorLock)
             })
     }
 
+    /// The minute building `b`'s alarm went off, while it is on alert.
+    pub fn alarm_since(&self, b: BuildingId, now: u64) -> Option<u64> {
+        let t = self.traces.get(&b).filter(|t| t.alert(now))?;
+        Some(t.alert_until.unwrap_or(0).saturating_sub(ALERT_MINUTES))
+    }
+
     /// Whether the lifts answer: always off alert; on alert only with a spoof on the
-    /// lift control that landed after the alarm.
+    /// lift control on the city's Net that landed after the alarm. A site's lifts each
+    /// answer to their own node (`sitenet::lift_answers`).
     pub fn lifts_answer(&self, b: BuildingId, now: u64) -> bool {
-        let Some(t) = self.traces.get(&b).filter(|t| t.alert(now)) else {
+        let Some(since) = self.alarm_since(b, now) else {
             return true;
         };
-        let since = t.alert_until.unwrap_or(0).saturating_sub(ALERT_MINUTES);
         self.live(now).any(|h| {
             h.building == b
+                && matches!(h.target, HackTarget::Node(_))
                 && h.op == Op::Spoof
                 && h.kind == Target::Node(NodeKind::LiftCtrl)
                 && h.at >= since
@@ -648,17 +716,17 @@ impl NetState {
     }
 
     /// A camera blinded, or looped by a hold that still lasts.
-    pub fn blinded(&self, node: NodeId, now: u64) -> bool {
+    pub fn blinded(&self, node: citygen::NetNode, now: u64) -> bool {
         self.live(now)
-            .any(|h| h.target == HackTarget::Node(node) && h.op == Op::Blind)
+            .any(|h| h.target == HackTarget::from(node) && h.op == Op::Blind)
             || self.holds.iter().any(|h| {
                 h.node == node && now < h.until && h.used.contains(&crate::holds::Verb::Loop)
             })
     }
 
-    pub fn copied(&self, node: NodeId, now: u64) -> bool {
+    pub fn copied(&self, target: HackTarget, now: u64) -> bool {
         self.live(now)
-            .any(|h| h.target == HackTarget::Node(node) && h.op == Op::Copy)
+            .any(|h| h.target == target && h.op == Op::Copy)
     }
 
     /// Minutes until the dumped deck jacks in again.
@@ -667,12 +735,34 @@ impl NetState {
     }
 
     /// The alarm: every hack on the building but a backdoor expires now.
-    /// The alarm resets the building's locks, cameras and lifts; a backdoor holds,
-    /// and a broken piece of ICE stays broken for its hour.
+    /// The alarm resets the building's locks, cameras and lifts and closes a site's
+    /// firewall; a backdoor holds, and a broken piece of ICE stays broken for its hour.
     pub fn alarm(&mut self, b: BuildingId, now: u64) {
         let _ = now;
         self.hacks
             .retain(|h| h.building != b || matches!(h.op, Op::Backdoor | Op::Attack));
+        self.firewalls.remove(&b);
+    }
+
+    /// Site `b`'s firewall locks broken at minute `now`, in lock order.
+    pub fn broken_locks(&self, b: BuildingId, now: u64) -> Vec<u8> {
+        let mut locks: Vec<u8> = (self.firewalls.get(&b).into_iter().flatten())
+            .filter(|(_, until)| now < *until)
+            .map(|(lock, _)| *lock)
+            .collect();
+        locks.sort_unstable();
+        locks
+    }
+
+    /// Site `b`'s firewall lock `lock` broken at minute `now`, as a hack lands: for
+    /// `HACK_MINUTES`, or until the building's alert ends, whichever is sooner. Broken
+    /// again, its time starts over.
+    pub fn break_lock(&mut self, b: BuildingId, lock: u8, now: u64) {
+        let until = self.hack_end(b, now);
+        let locks = self.firewalls.entry(b).or_default();
+        locks.retain(|(l, _)| *l != lock);
+        locks.push((lock, until));
+        locks.sort_unstable();
     }
 
     /// Sets every guard of a generated construct standing or lifted by the hacks.
@@ -701,8 +791,8 @@ impl NetState {
         }
     }
 
-    /// The game minutes up to `now` pass: hacks expire, every trace the player is
-    /// not inside cools, alerts end and their guards stand again.
+    /// The game minutes up to `now` pass: hacks expire, broken firewall locks close, every
+    /// trace the player is not inside cools, alerts end and their guards stand again.
     pub fn minute(
         &mut self,
         now: u64,
@@ -733,6 +823,10 @@ impl NetState {
             }
         }
         self.hacks.retain(|h| h.until.is_none_or(|u| now < u));
+        for locks in self.firewalls.values_mut() {
+            locks.retain(|(_, until)| now < *until);
+        }
+        self.firewalls.retain(|_, locks| !locks.is_empty());
         for b in buildings {
             self.sync_guards(constructs, b, now, roots);
         }
@@ -796,10 +890,12 @@ fn name_in(city: Option<&City>, b: BuildingId) -> String {
         })
 }
 
-/// The building whose construct or floor the player is in.
+/// The building whose construct (a site's Net too) or floor the player is in.
 pub fn building_here(st: &AppState) -> Option<BuildingId> {
     match st.player.as_ref()?.place {
-        Place::Construct(b) | Place::Floor { building: b, .. } => Some(b),
+        Place::Construct(b)
+        | Place::SiteNet { building: b, .. }
+        | Place::Floor { building: b, .. } => Some(b),
         Place::Stratum(_) => None,
     }
 }
@@ -816,7 +912,10 @@ pub fn target_kind(st: &AppState, b: BuildingId, target: HackTarget) -> Option<T
             let k = st.constructs.get(building)?;
             Some(Target::Guard(k.guards.get(index)?.grade))
         }
-        HackTarget::Foe(_) => None,
+        HackTarget::Site(n) if n.building == b => {
+            Some(Target::Node(st.constructs.get(b)?.device(n)?.kind))
+        }
+        HackTarget::Foe(_) | HackTarget::Site(_) => None,
     }
 }
 
@@ -828,10 +927,10 @@ pub fn plant_net_refusal(st: &AppState, b: BuildingId) -> Option<String> {
 
 /// Starts a program against a target in the construct the player stands in.
 pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Result<String, String> {
-    let Some((scene, pos)) = st
+    let Some((scene, place, pos)) = st
         .player
         .as_ref()
-        .and_then(|p| Some((scene_of(p.place)?, p.pos)))
+        .and_then(|p| Some((scene_of(p.place)?, p.place, p.pos)))
     else {
         return Err("not on the Net".to_string());
     };
@@ -854,11 +953,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
         return Err(format!("{} does nothing there", item.name));
     }
     let now = st.net.now(st);
-    if spec.op == Op::Copy
-        && st
-            .net
-            .copied(node_of(target).unwrap_or(NodeId(u32::MAX)), now)
-    {
+    if spec.op == Op::Copy && st.net.copied(target, now) {
         return Err("copied already".to_string());
     }
     if spec.op == Op::Backdoor
@@ -897,7 +992,7 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     });
     // Pointing a program at a piece is picking the fight.
     match (target, scene) {
-        (HackTarget::Guard { .. }, Scene::Inside(b)) => engage(st, Place::Construct(b), false),
+        (HackTarget::Guard { .. }, Scene::Inside(_)) => engage(st, place, false),
         (HackTarget::Foe(i), Scene::Outside) => {
             if let Some(f) = st.foes.get_mut(i) {
                 f.mode = crate::foes::FoeMode::Hunting { seen: pos, lost: 0 };
@@ -911,13 +1006,6 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
         Some(_) => format!("run aborted · {starts}"),
         None => starts,
     })
-}
-
-fn node_of(target: HackTarget) -> Option<NodeId> {
-    match target {
-        HackTarget::Node(id) => Some(id),
-        HackTarget::Guard { .. } | HackTarget::Deck | HackTarget::Foe(_) => None,
-    }
 }
 
 /// One turn of the program in flight: the roll, the heat, the alarm or the dump,
@@ -943,6 +1031,13 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
         HackTarget::Guard { index, .. } => 1000 + index as u64,
         HackTarget::Deck => 2000,
         HackTarget::Foe(i) => 3000 + i as u64,
+        HackTarget::Site(n) => hash64(
+            4000,
+            hash64(
+                n.level as i64 as u64,
+                ((n.at.x as u64) << 32) | n.at.y as u32 as u64,
+            ),
+        ),
     };
     let roll = st.net.roll(st, seed);
     // A program on yourself never fails.
@@ -989,10 +1084,12 @@ pub fn step_run(st: &mut AppState) -> Option<String> {
     } else {
         spec.noise + 2
     };
-    // Out on the open Net a turn is louder than behind a gate.
+    // Out on the open Net a turn is louder than behind a gate; a firewall's lock is the
+    // gate, worked from either side.
+    let lock = matches!(run.target, HackTarget::Site(n) if n.firewall_lock().is_some());
     let noise = match scene {
-        Scene::Inside(_) => noise,
-        Scene::Outside => crate::owners::outside_noise(noise),
+        Scene::Outside if !lock => crate::owners::outside_noise(noise),
+        _ => noise,
     };
     if let Some(o) = owner {
         match crate::owners::heat_on(st, o, noise) {
@@ -1153,9 +1250,20 @@ fn land(
     rating: u8,
     now: u64,
 ) -> String {
-    st.net.land(b, target, kind, op, now);
+    // A firewall's lock is no hack: `NetState.firewalls` keeps it (`sitenet::landed`).
+    if !matches!(target, HackTarget::Site(n) if n.firewall_lock().is_some()) {
+        st.net.land(b, target, kind, op, now);
+    }
     let name = building_name(st, b);
+    // A site's node says what it opens, before the arms every construct shares; so does a
+    // city node of a site that opens one device, not the building.
+    let site = match target {
+        HackTarget::Site(n) => crate::sitenet::landed(st, b, n, kind, op, now),
+        HackTarget::Node(id) => crate::sitenet::city_landed(st, b, id, kind, op),
+        _ => None,
+    };
     let line = match (op, kind) {
+        _ if site.is_some() => site.unwrap_or_default(),
         (Op::Crack, Target::Guard(_)) => "ICE cracked · the way is open".to_string(),
         (Op::Crack | Op::Spoof, Target::Node(NodeKind::DoorLock)) => {
             let verb = if op == Op::Crack {
@@ -1219,10 +1327,14 @@ fn land(
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
+        // A site's camera or terminal is held by `sitenet::landed`, above.
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
-            HackTarget::Node(id) => {
-                crate::holds::take(st, id, crate::owners::Owner::Building(b), now)
-            }
+            HackTarget::Node(id) => crate::holds::take(
+                st,
+                citygen::NetNode::City(id),
+                crate::owners::Owner::Building(b),
+                now,
+            ),
             _ => format!("{} {}", k.label(), op.done_label()),
         },
         (Op::Crack, Target::Node(k)) => format!("{} cracked", k.label()),
@@ -1263,7 +1375,9 @@ fn land_outside(
         },
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => {
             match (target, owner) {
-                (HackTarget::Node(id), Some(o)) => crate::holds::take(st, id, o, now),
+                (HackTarget::Node(id), Some(o)) => {
+                    crate::holds::take(st, citygen::NetNode::City(id), o, now)
+                }
                 _ => format!("{} {}", k.label(), op.done_label()),
             }
         }
@@ -1285,6 +1399,7 @@ pub fn target_pos(st: &AppState, b: BuildingId, target: HackTarget) -> Option<Po
         HackTarget::Guard { index, .. } => st.constructs.get(b)?.guards.get(index).map(|g| g.pos),
         HackTarget::Deck => st.player.as_ref().map(|p| p.pos),
         HackTarget::Foe(i) => st.foes.get(i).map(|f| f.pos),
+        HackTarget::Site(n) => st.constructs.get(b)?.device(n).map(|d| d.at),
     }
 }
 
@@ -1401,12 +1516,11 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     st.net.alarm(b, now);
     let roots = st.backdoors.roots();
     st.net.sync_guards(&mut st.constructs, b, now, &roots);
-    if let Some(p) = st
-        .player
-        .as_ref()
-        .filter(|p| p.place == Place::Construct(b))
-    {
-        let pos = p.pos;
+    // Inside: where you stand in its construct (on a site's Net, your level).
+    let inside = (st.player.as_ref())
+        .filter(|p| p.place.construct() == Some(b))
+        .map(|p| (p.place, p.pos));
+    if let Some((_, pos)) = inside {
         if let Some(k) = st.constructs.get(b) {
             st.net.ice_of(k);
         }
@@ -1414,14 +1528,11 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     }
     // Inside with ICE standing, the board goes to turns; with every piece broken
     // there is nobody to fight and the beat runs on.
-    if st
-        .player
-        .as_ref()
-        .is_some_and(|p| p.place == Place::Construct(b))
-        && any_awake(st, b)
+    if let Some((place, _)) = inside
+        && any_awake(st, place)
     {
-        engage(st, Place::Construct(b), false);
-        seat_standing(st, b);
+        engage(st, place, false);
+        seat_standing(st, place);
     }
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
@@ -1647,7 +1758,43 @@ fn spring(st: &mut AppState, b: BuildingId) {
     st.warn("honeypot · they were waiting · trace running");
 }
 
-/// Jack in from the rig and land at a backdoor's gate.
+/// Where a backdoor on `b` lands you: a site's G hub, past its firewall, else the
+/// building's gate on the grid. What can stop it is settled here, before the key is used:
+/// a site's construct is made and the hub's tile found.
+enum Landing {
+    Hub,
+    Gate(Pos),
+}
+
+impl Landing {
+    fn of(st: &mut AppState, b: BuildingId) -> Result<Landing, String> {
+        if crate::sitenet::is_site(st, b) {
+            crate::sitenet::gs_hub(st, b)?;
+            return Ok(Landing::Hub);
+        }
+        let city = st.city.as_ref().ok_or("no city")?;
+        let gate = crate::constructs::city_gate(city, b).ok_or("that gate is gone")?;
+        Ok(Landing::Gate(gate))
+    }
+
+    /// You there, already on the Net; what the log calls it: `` `Kiroflux`'s gate ``.
+    fn land(self, st: &mut AppState, b: BuildingId) -> Result<String, String> {
+        let name = building_name(st, b);
+        match self {
+            Landing::Hub => {
+                let level = crate::sitenet::land_on_gs_hub(st, b)?;
+                Ok(format!("`{name}`'s {} hub", FloorPlan::label(level)))
+            }
+            Landing::Gate(gate) => {
+                crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
+                Ok(format!("`{name}`'s gate"))
+            }
+        }
+    }
+}
+
+/// Jack in from the rig and land at a backdoor's gate; a site's backdoor lands you on
+/// its G hub.
 pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
@@ -1668,7 +1815,7 @@ pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if !city.walkable(StratumKind::Net, port) {
         return Err("the port is dead".to_string());
     }
-    let gate = crate::constructs::city_gate(city, b).ok_or("that gate is gone")?;
+    let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
     let bonus = st.sight_bonus();
     let city = st.city.as_ref().ok_or("no city")?;
@@ -1677,48 +1824,42 @@ pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     player
         .jack_in(city, home.as_ref(), bonus)
         .map_err(|e| e.to_string())?;
-    player.pos = gate;
-    player.update_fov(&MapRef::stratum_of(city, StratumKind::Net), bonus);
+    let there = landing.land(st, b)?;
     after_jack_in(st, from, Some(b));
     st.repaint = true;
     if trap {
         spring(st, b);
     }
-    Ok(format!(
-        "jacked in · `{}`'s gate · via your backdoor",
-        building_name(st, b)
-    ))
+    Ok(format!("jacked in · {there} · via your backdoor"))
 }
 
-/// From the server of a construct you hold, onto another backdoor's gate.
+/// From the server of a construct you hold, onto another backdoor's gate; a site's
+/// backdoor lands you on its G hub.
 pub fn hop(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     if st.backdoors.route.is_none() {
         return Err("no route home".to_string());
     }
-    let gate = st
-        .city
-        .as_ref()
-        .and_then(|c| crate::constructs::city_gate(c, b))
-        .ok_or("that gate is gone")?;
+    let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
     if st.net.run.take().is_some() {
         st.say("run aborted");
     }
-    crate::constructs::land(st, Place::Stratum(StratumKind::Net), gate);
+    let there = landing.land(st, b)?;
     st.backdoors.hop(b);
     if trap {
         spring(st, b);
     }
-    Ok(format!("hop · `{}`'s gate", building_name(st, b)))
+    Ok(format!("hop · {there}"))
 }
 
-/// Whether a piece at `from` sees a player: on the spine, in its row or column,
-/// within its sight (halved under a mask), with no wall between.
+/// Whether a piece at `from` sees a player: on the spine (any open tile of a site's
+/// Net), in its row or column, within its sight (halved under a mask), with no wall
+/// between.
 pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool) -> bool {
     let Some(t) = k.tiles.get(player) else {
         return false;
     };
-    if !matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+    if !in_view(k, t.terrain) {
         return false;
     }
     if from.x != player.x && from.y != player.y {
@@ -1735,9 +1876,20 @@ pub fn sees(k: &Construct, from: Pos, grade: IceGrade, player: Pos, masked: bool
     line_clear_in(k, from, player)
 }
 
-/// The spine each standing piece would see you on: lane and gate tiles in its row or
-/// column within its sight, with no wall between, its own tile left out. Where two
-/// watch one tile the darker grade has it (black over grey over white).
+/// Where ICE sees you in a construct: on its spine, the lane and gate tiles; on a site's
+/// Net, any open tile, its floor standing in for the spine (Ruling 10).
+fn in_view(k: &Construct, terrain: Terrain) -> bool {
+    if k.is_site() {
+        terrain != Terrain::NetWall
+    } else {
+        matches!(terrain, Terrain::NetLane | Terrain::NetGate)
+    }
+}
+
+/// The spine each standing piece would see you on: lane and gate tiles (a site's open
+/// tiles) in its row or column within its sight, with no wall between, its own tile
+/// left out. Where two watch one tile the darker grade has it (black over grey over
+/// white).
 pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
     let rank = |g: IceGrade| match g {
         IceGrade::White => 0,
@@ -1757,7 +1909,7 @@ pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
                 if t.terrain == Terrain::NetWall {
                     break;
                 }
-                if matches!(t.terrain, Terrain::NetLane | Terrain::NetGate) {
+                if in_view(k, t.terrain) {
                     let e = out.entry(p).or_insert(g.grade);
                     if rank(g.grade) > rank(*e) {
                         *e = g.grade;
@@ -1767,6 +1919,16 @@ pub fn watched(k: &Construct) -> HashMap<Pos, IceGrade> {
         }
     }
     out
+}
+
+/// What the map draws of `k`'s watch: on a site's Net (`level`) the open level's alone,
+/// since the tower folds the others; all of it in any other construct.
+pub fn watched_on(k: &Construct, level: Option<i32>) -> HashMap<Pos, IceGrade> {
+    let mut watch = watched(k);
+    if let Some(level) = level {
+        watch.retain(|p, _| k.level_at(*p).is_some_and(|l| l.level == level));
+    }
+    watch
 }
 
 /// No wall of the construct on the line between two tiles, the ends excluded:
@@ -1814,33 +1976,42 @@ pub fn path_to(k: &Construct, from: Pos, to: Pos) -> Option<Vec<Pos>> {
 }
 
 /// The ICE's turn in the construct the player stands in: every standing piece
-/// looks, then acts: walks its beat asleep, hunts awake, hits beside the player.
+/// looks, then acts: walks its beat asleep, hunts awake, hits beside the player. On a
+/// site's Net only your level's pieces take it.
 pub fn ice_turn(st: &mut AppState) {
     let Some(player) = st.player.as_ref() else {
         return;
     };
-    let Place::Construct(b) = player.place else {
+    let place = player.place;
+    let Some(b) = place.construct() else {
         return;
     };
     mask_wears(st, b);
     let Some(k) = st.constructs.get(b) else {
         return;
     };
-    let n = k.guards.len();
+    let ours: Vec<usize> = (0..k.guards.len())
+        .filter(|&i| on_level(k, place, k.guards[i].pos))
+        .collect();
     st.net.ice_of(k);
-    for i in 0..n {
+    for i in ours {
         if !ice_look(st, b, i) {
             continue;
         }
         ice_step(st, b, i, true, true);
-        if st.net.death.is_some()
-            || st
-                .player
-                .as_ref()
-                .is_none_or(|p| p.place != Place::Construct(b))
-        {
+        if st.net.death.is_some() || st.player.as_ref().is_none_or(|p| p.place != place) {
             return;
         }
+    }
+}
+
+/// Whether a piece standing at `p` is in play at `place`: on a site's Net only your
+/// level's ICE takes turns with you and counts as awake (Ruling 10); in any other
+/// construct, all of it.
+pub fn on_level(k: &Construct, place: Place, p: Pos) -> bool {
+    match place {
+        Place::SiteNet { level, .. } => k.level_at(p).is_some_and(|l| l.level == level),
+        _ => true,
     }
 }
 
@@ -2001,15 +2172,19 @@ pub fn ice_step(st: &mut AppState, b: BuildingId, i: usize, can_move: bool, can_
     }
 }
 
-/// Any standing piece of the construct awake.
-pub fn any_awake(st: &AppState, b: BuildingId) -> bool {
+/// Any standing piece of the construct at `place` awake: on a site's Net, of your level.
+pub fn any_awake(st: &AppState, place: Place) -> bool {
+    let Some(b) = place.construct() else {
+        return false;
+    };
     let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
         return false;
     };
-    k.guards
-        .iter()
-        .zip(states)
-        .any(|(g, i)| k.guard_at(g.pos).is_some() && matches!(i.mode, IceMode::Awake { .. }))
+    k.guards.iter().zip(states).any(|(g, i)| {
+        k.guard_at(g.pos).is_some()
+            && on_level(k, place, g.pos)
+            && matches!(i.mode, IceMode::Awake { .. })
+    })
 }
 
 /// A piece's turn: the tiles it may walk and the hits it may land, by grade.
@@ -2022,12 +2197,13 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
 }
 
 /// The order of an engagement. In a construct: you by your Net, each standing
-/// piece by its grade. On foot: you by your Reflex, each standing foe in your sight
-/// memory by its own. Higher first, ties to you, then by index.
+/// piece by its grade (on a site's Net, each of your level's). On foot: you by your
+/// Reflex, each standing foe in your sight memory by its own. Higher first, ties to
+/// you, then by index.
 pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     let mut scored: Vec<(i32, u16, Actor)> = Vec::new();
     match place {
-        Place::Construct(b) => {
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => {
             scored.push((
                 st.character.attribute(&st.content, game::Attribute::Net) as i32,
                 0,
@@ -2035,7 +2211,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             ));
             if let Some(k) = st.constructs.get(b) {
                 for (i, g) in k.guards.iter().enumerate() {
-                    if k.guard_at(g.pos).is_none() {
+                    if k.guard_at(g.pos).is_none() || !on_level(k, place, g.pos) {
                         continue;
                     }
                     let score = match g.grade {
@@ -2076,7 +2252,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
 /// least one; in a construct your avatar isn't your meat, and walks `BASE_MOVE`.
 pub fn you_move(st: &AppState, place: Place) -> u8 {
     match place {
-        Place::Construct(_) => BASE_MOVE,
+        Place::Construct(_) | Place::SiteNet { .. } => BASE_MOVE,
         _ => {
             let moves = BASE_MOVE as i32 + st.character.move_bonus(&st.content);
             moves.clamp(1, u8::MAX as i32) as u8
@@ -2087,10 +2263,10 @@ pub fn you_move(st: &AppState, place: Place) -> u8 {
 fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
     match (actor, place) {
         (Actor::You, _) => (you_move(st, place), BASE_AP),
-        (Actor::Ice(i), Place::Construct(b)) => st
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => st
             .constructs
             .get(b)
-            .and_then(|k| k.guards.get(i))
+            .and_then(|k| k.guards.get(i).filter(|g| on_level(k, place, g.pos)))
             .map(|g| budgets(g.grade))
             .unwrap_or((0, 0)),
         (Actor::Ice(_), _) => (0, 0),
@@ -2108,7 +2284,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     if st.net.engaged.is_some() {
         return;
     }
-    if let Place::Construct(b) = place
+    if let Some(b) = place.construct()
         && let Some(k) = st.constructs.get(b)
     {
         st.net.ice_of(k);
@@ -2130,7 +2306,7 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     });
     let line = if manual {
         "engaged".to_string()
-    } else if let Place::Construct(_) = place {
+    } else if place.in_construct() {
         "ENGAGED · the ICE is on you".to_string()
     } else {
         let name = crate::foes::in_memory(st)
@@ -2173,7 +2349,7 @@ pub fn seat_foes(st: &mut AppState) {
 /// hunting foe on foot.
 pub fn hunting(st: &AppState) -> bool {
     match st.net.engaged.as_ref().map(|e| e.place) {
-        Some(Place::Construct(b)) => any_awake(st, b),
+        Some(place) if place.in_construct() => any_awake(st, place),
         Some(place) => crate::foes::any_hunting(st, place),
         None => false,
     }
@@ -2184,24 +2360,28 @@ pub fn engaged_on_foot(st: &AppState) -> bool {
     st.net
         .engaged
         .as_ref()
-        .is_some_and(|e| !matches!(e.place, Place::Construct(_)))
+        .is_some_and(|e| !e.place.in_construct())
 }
 
-/// Every standing piece of the construct that the order does not hold yet takes
-/// its place at the end: a piece that stood again mid-fight.
-pub fn seat_standing(st: &mut AppState, b: BuildingId) {
+/// Every standing piece of the construct at `place` (on a site's Net, of your level)
+/// that the order does not hold yet takes its place at the end: a piece that stood
+/// again mid-fight.
+pub fn seat_standing(st: &mut AppState, place: Place) {
+    let Some(b) = place.construct() else {
+        return;
+    };
     let standing: Vec<usize> = match st.constructs.get(b) {
         Some(k) => k
             .guards
             .iter()
             .enumerate()
-            .filter(|(_, g)| k.guard_at(g.pos).is_some())
+            .filter(|(_, g)| k.guard_at(g.pos).is_some() && on_level(k, place, g.pos))
             .map(|(i, _)| i)
             .collect(),
         None => return,
     };
     if let Some(e) = st.net.engaged.as_mut()
-        && e.place == Place::Construct(b)
+        && e.place == place
     {
         for i in standing {
             if !e.order.contains(&Actor::Ice(i)) {
@@ -2332,10 +2512,10 @@ pub fn end_turn(st: &mut AppState) {
         turn = 0;
         round += 1;
         match place {
-            Place::Construct(b) => {
+            Place::Construct(b) | Place::SiteNet { building: b, .. } => {
                 // A round passed: a held mask wears (and may dump you through the
                 // trace), and any piece that stood again since takes its seat.
-                seat_standing(st, b);
+                seat_standing(st, place);
                 mask_wears(st, b);
             }
             Place::Stratum(StratumKind::Net) => {
@@ -2393,7 +2573,9 @@ fn start_turn(st: &mut AppState) {
         return;
     };
     let acts = match (e.actor(), e.place) {
-        (Actor::Ice(i), Place::Construct(b)) => ice_look(st, b, i),
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
+            ice_look(st, b, i)
+        }
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
         (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
         (Actor::Ice(_), _) => false,
@@ -2419,7 +2601,9 @@ pub fn pace(st: &mut AppState) {
     let place = e.place;
     let (moves, ap) = (e.moves, e.ap);
     let step = match (actor, place) {
-        (Actor::Ice(i), Place::Construct(b)) => ice_step(st, b, i, moves > 0, ap > 0),
+        (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
+            ice_step(st, b, i, moves > 0, ap > 0)
+        }
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
         (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
         _ => Step::Nothing,
@@ -2435,7 +2619,7 @@ pub fn pace(st: &mut AppState) {
             e.moves = e.moves.saturating_sub(1);
             // A step may bring it into sight of you; it looks again.
             match (actor, place) {
-                (Actor::Ice(i), Place::Construct(b)) => {
+                (Actor::Ice(i), Place::Construct(b) | Place::SiteNet { building: b, .. }) => {
                     ice_look(st, b, i);
                 }
                 (Actor::Foe(i), _) => {
@@ -2755,8 +2939,12 @@ pub(crate) fn hit_by(
     }
 }
 
-/// The HERE lines for the ICE of a construct the player can see.
-pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+/// The HERE lines for the ICE of the construct at `place` the player can see: on a site's
+/// Net, of your level.
+pub fn ice_lines(st: &AppState, place: Place, seen: impl Fn(Pos) -> bool) -> Vec<String> {
+    let Some(b) = place.construct() else {
+        return Vec::new();
+    };
     let Some(k) = st.constructs.get(b) else {
         return Vec::new();
     };
@@ -2766,7 +2954,7 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
     k.guards
         .iter()
         .zip(states)
-        .filter(|(g, _)| k.guard_at(g.pos).is_some() && seen(g.pos))
+        .filter(|(g, _)| k.guard_at(g.pos).is_some() && on_level(k, place, g.pos) && seen(g.pos))
         .map(|(g, i)| {
             let mode = match i.mode {
                 IceMode::Asleep => "asleep",
@@ -2787,24 +2975,38 @@ pub fn ice_lines(st: &AppState, b: BuildingId, seen: impl Fn(Pos) -> bool) -> Ve
         .collect()
 }
 
-/// Every node tile of a construct, for a ping's glow.
-pub fn construct_nodes(st: &AppState, b: BuildingId) -> Vec<Pos> {
-    st.constructs
-        .get(b)
-        .map(|k| k.nodes.iter().map(|(_, p)| *p).collect())
-        .unwrap_or_default()
+/// Every node tile of the construct at `place` (a site's devices on your level), for a
+/// ping's glow.
+pub fn construct_nodes(st: &AppState, place: Place) -> Vec<Pos> {
+    let Some(k) = place.construct().and_then(|b| st.constructs.get(b)) else {
+        return Vec::new();
+    };
+    let nodes = k.nodes.iter().map(|(_, p)| *p);
+    let devices = k.devices.iter().map(|d| d.at);
+    nodes
+        .chain(devices)
+        .filter(|p| on_level(k, place, *p))
+        .collect()
 }
 
-/// An arc trace inside a construct: every standing piece within `radius` of the
-/// origin is stunned for `STUN_TURNS`. Returns their tiles, for the bolts.
-pub fn stun_pieces(st: &mut AppState, b: BuildingId, origin: Pos, radius: i32) -> Vec<Pos> {
-    let Some(k) = st.constructs.get(b).cloned() else {
+/// An arc trace inside the construct at `place`: every standing piece within `radius`
+/// of the origin (on a site's Net, of your level) is stunned for `STUN_TURNS`. Returns
+/// their tiles, for the bolts.
+pub fn stun_pieces(st: &mut AppState, place: Place, origin: Pos, radius: i32) -> Vec<Pos> {
+    let Some(k) = place
+        .construct()
+        .and_then(|b| st.constructs.get(b))
+        .cloned()
+    else {
         return Vec::new();
     };
     let states = st.net.ice_of(&k);
     let mut hit = Vec::new();
     for (i, g) in k.guards.iter().enumerate() {
-        if k.guard_at(g.pos).is_none() || g.pos.chebyshev(origin) > radius {
+        if k.guard_at(g.pos).is_none()
+            || !on_level(&k, place, g.pos)
+            || g.pos.chebyshev(origin) > radius
+        {
             continue;
         }
         if let Some(ice) = states.get_mut(i) {
@@ -2886,17 +3088,17 @@ pub fn beat(st: &mut AppState) {
         return;
     }
     // On foot and calm, fuses burn down on the beat.
-    if st.net.engaged.is_none()
-        && st
-            .player
-            .as_ref()
-            .is_some_and(|p| !matches!(p.place, Place::Construct(_)))
-    {
+    if st.net.engaged.is_none() && st.player.as_ref().is_some_and(|p| !p.place.in_construct()) {
         crate::blast::tick_live(st);
     }
     // The roll may have tripped the alarm or dumped you: the fight (or the street)
     // takes over from here, nothing acts outside the pace.
-    let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+    let Some(place) = st
+        .player
+        .as_ref()
+        .map(|p| p.place)
+        .filter(|p| p.in_construct())
+    else {
         return;
     };
     if st.net.engaged.is_some() {
@@ -2904,14 +3106,11 @@ pub fn beat(st: &mut AppState) {
     }
     ice_turn(st);
     crate::holds::decoy_beat(st);
-    if st
-        .player
-        .as_ref()
-        .is_some_and(|p| p.place == Place::Construct(b))
+    if st.player.as_ref().is_some_and(|p| p.place == place)
         && st.net.death.is_none()
-        && any_awake(st, b)
+        && any_awake(st, place)
     {
-        engage(st, Place::Construct(b), false);
+        engage(st, place, false);
     }
 }
 
@@ -2938,6 +3137,12 @@ pub fn target_label(st: &AppState, target: HackTarget) -> Option<String> {
             .foes
             .get(i)
             .map_or_else(|| "ICE".to_string(), |f| f.name.clone()),
+        // A firewall's lock is one from the grid too, before its construct is made.
+        HackTarget::Site(n) if n.firewall_lock().is_some() => NodeKind::Firewall.label().into(),
+        HackTarget::Site(n) => (st.constructs.get(n.building))
+            .and_then(|k| k.device(n))
+            .map_or("node", |d| d.kind.label())
+            .to_string(),
     })
 }
 
@@ -3062,7 +3267,7 @@ pub fn hunted(st: &AppState) -> bool {
     if p.place == Place::Stratum(StratumKind::Net) {
         return crate::grid::hunted(st);
     }
-    let Place::Construct(b) = p.place else {
+    let Some(b) = p.place.construct() else {
         return false;
     };
     let (Some(k), Some(states)) = (st.constructs.get(b), st.net.ice.get(&b)) else {
@@ -3071,6 +3276,7 @@ pub fn hunted(st: &AppState) -> bool {
     let vis = p.vis();
     k.guards.iter().zip(states).any(|(g, i)| {
         g.standing
+            && on_level(k, p.place, g.pos)
             && matches!(i.mode, IceMode::Awake { .. })
             && vis
                 .get(g.pos)
@@ -3078,8 +3284,17 @@ pub fn hunted(st: &AppState) -> bool {
     })
 }
 
+/// Whether you stand on a floor of a site, where its terminals and gate switches are the
+/// ports (`sitenet::device_in_reach`).
+fn on_a_sites_floor(st: &AppState) -> bool {
+    matches!(
+        st.player.as_ref().map(|p| p.place),
+        Some(Place::Floor { building, .. }) if crate::sitenet::is_site(st, building)
+    )
+}
+
 /// Why the port refuses to jack in right now: a fight on foot, the deck cooling, or
-/// a lockdown.
+/// a lockdown (on a site's floor, the building's alarm locks its terminals and switches).
 pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     if engaged_on_foot(st) {
         return Some("not with a gun on you".to_string());
@@ -3092,6 +3307,10 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     let player = st.player.as_ref()?;
     if st.home.is_some_and(|h| h.place() == player.place) && st.backdoors.seized(now) {
         return Some("the rig is gone · evidence".to_string());
+    }
+    if on_a_sites_floor(st) {
+        let (b, ..) = crate::sitenet::device_in_reach(st)?;
+        return st.net.alert(b, now).then(|| "port locked down".to_string());
     }
     let port = player.terminal_in_reach(city, st.home.as_ref())?;
     // The rig at home is your own line: no building's lockdown reaches it.
@@ -3111,9 +3330,14 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
     (locked || district).then(|| "port locked down".to_string())
 }
 
-/// Jacks in at the terminal in reach: the refusal when the port refuses, else the
-/// line the log reads.
+/// Jacks in at the terminal in reach (on a site's floor its terminal or gate switch,
+/// `sitenet::jack_in_on_floor`): the refusal when the port refuses, else the line the log
+/// reads.
 pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
+    // It asks the port itself.
+    if on_a_sites_floor(st) {
+        return crate::sitenet::jack_in_on_floor(st);
+    }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
     }
@@ -3132,7 +3356,8 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     Ok(line)
 }
 
-/// The node on or beside a tile in a construct, and the standing guard beside it.
+/// The node on or beside a tile in a construct (on a site's Net its devices', `door lock ·
+/// staff door`), and the standing guard beside it.
 pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(HackTarget, String)> {
     let mut out = vec![(HackTarget::Deck, "yourself".to_string())];
     let (Some(city), Some(k)) = (st.city.as_ref(), st.constructs.get(b)) else {
@@ -3143,6 +3368,12 @@ pub fn targets_near(st: &AppState, b: BuildingId, pos: citygen::Pos) -> Vec<(Hac
             out.push((
                 HackTarget::Node(id),
                 city.net.node(id).kind.label().to_string(),
+            ));
+        }
+        if let Some(d) = k.device_at(p) {
+            out.push((
+                HackTarget::Site(d.node),
+                format!("{} · {}", d.kind.label(), d.name),
             ));
         }
     }
@@ -3544,8 +3775,9 @@ fn arrow(from: Pos, to: Pos) -> Option<char> {
 }
 
 /// HERE's card for a construct: its name and kind (and on the open Net, the way to its
-/// gate); its security and the ICE it keeps; on the open Net, its nodes and what
-/// stands out about it. `from` is your tile on the open Net, `None` inside.
+/// gate); its security and the ICE it keeps; a site's firewall; on the open Net, its nodes
+/// and what stands out about it. `from` is your tile on the open Net, `None` inside. A
+/// site's security is the one that governs it (`sitenet::security`), as its locks are.
 pub fn card_lines(
     st: &AppState,
     b: BuildingId,
@@ -3561,7 +3793,11 @@ pub fn card_lines(
     let Some(building) = city.building_opt(b) else {
         return Vec::new();
     };
-    let security = security_of(city, b).unwrap_or(0);
+    let site = crate::sitenet::is_site(st, b);
+    let security = match site {
+        true => crate::sitenet::security(st, b),
+        false => security_of(city, b).unwrap_or(0),
+    };
     let tier = Tier::of(security);
     let tracked = from.is_some()
         && matches!(crate::track::target_now(st), Some(crate::track::Target::Building(t)) if t == b);
@@ -3590,19 +3826,23 @@ pub fn card_lines(
     {
         first.push(text(format!(" {a}")));
     }
-    let has_vault = city
-        .net
-        .nodes
-        .iter()
-        .any(|n| n.building == Some(b) && n.kind == NodeKind::DataVault);
-    let vault = (has_vault && security >= citygen::construct::GREY_THRESHOLD).then_some(
-        if security >= citygen::construct::BLACK_THRESHOLD {
-            IceGrade::Black
-        } else {
-            IceGrade::Grey
-        },
-    );
-    let ice = match (gate_ice(security), vault) {
+    // A site's by its own ICE rule; any other construct's by its gate and its vault.
+    let (gate, vault) = if site {
+        let ice = crate::sitenet::ice(st, b);
+        (ice.g, ice.vault)
+    } else {
+        let has_vault =
+            (city.net.nodes.iter()).any(|n| n.building == Some(b) && n.kind == NodeKind::DataVault);
+        let vault = (has_vault && security >= citygen::construct::GREY_THRESHOLD).then_some(
+            if security >= citygen::construct::BLACK_THRESHOLD {
+                IceGrade::Black
+            } else {
+                IceGrade::Grey
+            },
+        );
+        (gate_ice(security), vault)
+    };
+    let ice = match (gate, vault) {
         (None, _) => tier_word(tier).to_string(),
         (Some(g), None) => format!("gate {}", g.label()),
         (Some(g), Some(v)) => format!("gate {} · vault {}", g.label(), v.label()),
@@ -3618,6 +3858,9 @@ pub fn card_lines(
         text(format!(" · {ice}")),
     ];
     let mut out = vec![Line::from(first), Line::from(second)];
+    if site {
+        out.push(firewall_line(st, b));
+    }
     if from.is_none() {
         return out;
     }
@@ -3659,6 +3902,37 @@ pub fn card_lines(
     }
     out.push(Line::from(third));
     out
+}
+
+/// A site's firewall on its card, inside as on the grid (Ruling 21): `FIREWALL` in the
+/// firewall's red, a glyph a lock in lock order in its own colour (`▯` broken, green; `▮`
+/// whole, red), then how many are broken, quieter: `FIREWALL ▯▮▮ · 1/3 broken`. Built
+/// from the locks themselves (`sitenet::broken`), never from text.
+fn firewall_line(st: &AppState, b: BuildingId) -> ratatui::text::Line<'static> {
+    use crate::render::netlook::BLACK_RED;
+    use crate::render::overlay::SIGNAL;
+    use crate::ui::chrome::DIM;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let marks = crate::sitenet::broken(st, b);
+    let down = marks.iter().filter(|m| **m).count();
+    let red = Style::default().fg(BLACK_RED.to_color());
+    let mut spans = vec![Span::styled(" FIREWALL ", red)];
+    for broken in &marks {
+        let (glyph, fg) = match broken {
+            true => ("▯", SIGNAL),
+            false => ("▮", BLACK_RED),
+        };
+        let style = Style::default()
+            .fg(fg.to_color())
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(glyph, style));
+    }
+    spans.push(Span::styled(
+        format!(" · {down}/{} broken", marks.len()),
+        Style::default().fg(DIM),
+    ));
+    spans.into()
 }
 
 /// A tier's word on the card, where no ICE stands.
@@ -4183,9 +4457,10 @@ pub(crate) mod tests {
         assert_eq!((st.character.hp, st.character.focus), (hp, focus));
         assert!(!logged(&st, "ICE hits"));
         assert!(
-            ice_lines(&st, b, |_| true).contains(&"◈ dummy ICE · asleep · 6/6".to_string()),
+            ice_lines(&st, Place::Construct(b), |_| true)
+                .contains(&"◈ dummy ICE · asleep · 6/6".to_string()),
             "{:?}",
-            ice_lines(&st, b, |_| true)
+            ice_lines(&st, Place::Construct(b), |_| true)
         );
     }
 
@@ -4498,7 +4773,10 @@ pub(crate) mod tests {
             Op::Blind,
             10,
         );
-        assert!(net.blinded(NodeId(8), 20) && !net.blinded(NodeId(7), 20));
+        assert!(
+            net.blinded(citygen::NetNode::City(NodeId(8)), 20)
+                && !net.blinded(citygen::NetNode::City(NodeId(7)), 20)
+        );
         net.land(
             b(1),
             HackTarget::Node(NodeId(9)),
@@ -4506,7 +4784,7 @@ pub(crate) mod tests {
             Op::Copy,
             10,
         );
-        assert!(net.copied(NodeId(9), 20));
+        assert!(net.copied(HackTarget::Node(NodeId(9)), 20));
         // The alarm: the lock relocks, the lifts stop, a spoof after the alarm frees them.
         assert_eq!(
             net.trace(b(1)).add(game::ALARM_HEAT, 20),
@@ -4562,6 +4840,45 @@ pub(crate) mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_sites_own_nodes_never_open_a_whole_building() {
+        let mut net = NetState::default();
+        let node = |x: i32| {
+            HackTarget::Site(citygen::SiteNode {
+                building: b(1),
+                level: 0,
+                at: Pos::new(x, 4),
+            })
+        };
+        net.land(
+            b(1),
+            node(3),
+            Target::Node(NodeKind::DoorLock),
+            Op::Crack,
+            10,
+        );
+        net.land(
+            b(1),
+            node(5),
+            Target::Node(NodeKind::DoorLock),
+            Op::Spoof,
+            10,
+        );
+        assert!(!net.unlocked(b(1), 10), "a site's door opens alone");
+        net.trace(b(1)).add(game::ALARM_HEAT, 20);
+        net.alarm(b(1), 20);
+        net.land(
+            b(1),
+            node(7),
+            Target::Node(NodeKind::LiftCtrl),
+            Op::Spoof,
+            25,
+        );
+        assert!(!net.lifts_answer(b(1), 25), "a site's lift answers alone");
+        assert_eq!(net.alarm_since(b(1), 25), Some(20));
+        assert_eq!(net.alarm_since(b(2), 25), None);
     }
 
     #[test]

@@ -100,9 +100,10 @@ pub fn text(e: &Exposure) -> String {
 /// The HUD's words on the Net, where nothing is lit or dark: the place, then whether
 /// ICE hunts you: `grid · unseen`, `construct · hunted`.
 pub fn net_text(place: Place, hunted: bool) -> String {
-    let at = match place {
-        Place::Construct(_) => "construct",
-        _ => "grid",
+    let at = if place.in_construct() {
+        "construct"
+    } else {
+        "grid"
     };
     let eyes = if hunted { "hunted" } else { "unseen" };
     format!("{at} · {eyes}")

@@ -157,7 +157,7 @@ pub fn gather(
         return Vec::new();
     };
     let (place, pos) = (player.place, player.pos);
-    if matches!(place, Place::Construct(_)) {
+    if place.in_construct() {
         return Vec::new();
     }
     let Some(map) = MapRef::for_place(
@@ -418,6 +418,23 @@ pub fn gather(
         );
     }
 
+    // A site's terminal or turnstile switch beside you: jack in there, your body left
+    // standing beside it. Its only choice (Ruling 19 of the plan
+    // `docs/superpowers/plans/2026-11-11-site-net.md`).
+    if let Some((_, port)) = crate::sitenet::port_in_reach(st) {
+        let (glyph, colour) = crate::render::doors::device_mark(port.kind);
+        let head = header(capitalised(&port.name), Some((glyph, colour.to_color())));
+        let row = Choice::new('j', "Jack in", Pick::World(WorldAct::JackIn));
+        add(
+            &mut subs,
+            &mut here,
+            port.node.at,
+            Some(head),
+            None,
+            vec![row],
+        );
+    }
+
     // Your own bed beside you, in your flat: sleep in it.
     if let Some(rig) = st.home.as_ref()
         && place == rig.place()
@@ -674,8 +691,8 @@ pub fn ride_rows(st: &AppState, letters: &mut std::str::Chars) -> Option<Vec<Cho
                     (floor, TEXT)
                 };
                 let card = crate::venues::ride_card(plan, link, l);
-                let carded =
-                    l != level && crate::credentials::opens_stop(st, building, card).is_none();
+                let carded = l != level
+                    && crate::credentials::opens_stop(st, building, link, card).is_none();
                 let marks = if carded {
                     let zone = crate::venues::zone_name(plan, card);
                     format!("{marks} · {zone} card")
@@ -721,7 +738,7 @@ pub fn run_rows_at(
             continue;
         };
         let colour = match target {
-            game::HackTarget::Node(_) => CYAN,
+            game::HackTarget::Node(_) | game::HackTarget::Site(_) => CYAN,
             game::HackTarget::Guard { .. } | game::HackTarget::Foe(_) => MAGENTA,
             _ => TEXT,
         };
@@ -737,8 +754,7 @@ pub fn run_rows_at(
             }
             let Some(key) = letters.next() else { break };
             let verb = capitalised(spec.op.label());
-            let copied = spec.op == game::Op::Copy
-                && matches!(target, game::HackTarget::Node(id) if st.net.copied(id, now));
+            let copied = spec.op == game::Op::Copy && st.net.copied(target, now);
             if copied {
                 let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
                     .tail(" · copied already");
@@ -798,10 +814,16 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
     };
-    let n = city.net.node(node);
-    let what = match n.building {
-        Some(b) => format!("{} · {}", n.kind.label(), crate::net::building_name(st, b)),
-        None => n.kind.label().to_string(),
+    let Some(kind) = crate::holds::kind_of(st, node) else {
+        return Vec::new();
+    };
+    let building = match node {
+        citygen::NetNode::City(id) => city.net.nodes.get(id.index()).and_then(|n| n.building),
+        citygen::NetNode::Site(s) => Some(s.building),
+    };
+    let what = match building {
+        Some(b) => format!("{} · {}", kind.label(), crate::net::building_name(st, b)),
+        None => kind.label().to_string(),
     };
     let now = st.net.now(st);
     let left = crate::holds::held(st, node, now).map_or(0, |h| h.until - now);
@@ -826,21 +848,25 @@ pub fn verb_rows(st: &AppState) -> Vec<Choice> {
 /// A held node's rows, green as its dock.
 const HELD: Color = crate::holds::HELD_FG;
 
-/// On the server of a construct you hold a backdoor on: `Hop: <building>` to every
-/// other backdoor's gate. A street run has no way home, so its rows are greyed.
+/// On the server of a construct you hold a backdoor on (a city node in today's, a device
+/// of a site's): `Hop: <building>` to every other backdoor's gate. A street run has no way
+/// home, so its rows are greyed.
 fn hop_rows(
     st: &AppState,
     b: citygen::BuildingId,
     pos: Pos,
     letters: &mut std::str::Chars,
 ) -> Vec<Choice> {
+    let server = citygen::NodeKind::Server;
     let on_server = st.constructs.get(b).is_some_and(|k| {
-        k.nodes.iter().any(|(id, p)| {
+        let city = k.nodes.iter().any(|(id, p)| {
             st.city
                 .as_ref()
-                .is_some_and(|c| c.net.node(*id).kind == citygen::NodeKind::Server)
+                .is_some_and(|c| c.net.node(*id).kind == server)
                 && p.chebyshev(pos) <= 1
-        })
+        });
+        let site = (k.devices.iter()).any(|d| d.kind == server && d.at.chebyshev(pos) <= 1);
+        city || site
     });
     if !on_server || st.backdoors.held(b).is_none() {
         return Vec::new();

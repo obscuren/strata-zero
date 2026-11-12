@@ -54,7 +54,7 @@ pub fn node_glyph(kind: NodeKind, style: &StylePack) -> char {
     let i = match kind {
         NodeKind::Terminal => 0,
         NodeKind::Server => 1,
-        NodeKind::Backbone => 2,
+        NodeKind::Backbone | NodeKind::Hub => 2,
         NodeKind::DataVault => 3,
         NodeKind::Ice => 5,
         _ => 4,

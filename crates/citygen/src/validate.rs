@@ -229,6 +229,12 @@ impl City {
                         )
                     }
                     NodeKind::Backbone => true,
+                    // A site's own kinds are never nodes of the city's Net.
+                    NodeKind::GateSwitch
+                    | NodeKind::Turret
+                    | NodeKind::Container
+                    | NodeKind::Hub
+                    | NodeKind::Firewall => false,
                 },
             };
             if !ok || n.subnet.index() >= self.net.subnets.len() {

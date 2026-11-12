@@ -5,7 +5,7 @@ use crate::render::map::{MapRef, TileMap};
 use crate::render::style::StylePack;
 use crate::render::tileset::{MASK_E, MASK_N, MASK_S, MASK_W, cell, connects, reader_cell};
 use crate::render::{Cell, RenderCtx, Visibility};
-use citygen::{Grid, Pos, Size, StratumKind};
+use citygen::{Grid, Pos, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
@@ -75,22 +75,22 @@ impl Camera {
         }
     }
 
-    /// Keeps the target inside the map, with the view never scrolling past the edge.
-    pub fn clamp(&mut self, size: Size, view_w: u16, view_h: u16) {
+    /// Keeps the target inside `bounds` (a map's tiles, a site's tower), with the view never
+    /// scrolling past their edge; a view wider or taller than them sits centred on them.
+    pub fn clamp_to(&mut self, bounds: citygen::Rect, view_w: u16, view_h: u16) {
         let half_w = view_w as i32 / 2;
         let half_h = view_h as i32 / 2;
-        let w = size.w as i32;
-        let h = size.h as i32;
+        let (x, y, w, h) = (bounds.x, bounds.y, bounds.w, bounds.h);
         // The view spans origin..origin+view, so the far bound is the view's other half.
         self.tx = if w > view_w as i32 {
-            self.tx.clamp(half_w, w - (view_w as i32 - half_w))
+            self.tx.clamp(x + half_w, x + w - (view_w as i32 - half_w))
         } else {
-            w / 2
+            x + w / 2
         };
         self.ty = if h > view_h as i32 {
-            self.ty.clamp(half_h, h - (view_h as i32 - half_h))
+            self.ty.clamp(y + half_h, y + h - (view_h as i32 - half_h))
         } else {
-            h / 2
+            y + h / 2
         };
     }
 
@@ -389,8 +389,12 @@ mod tests {
         let before = cam.x;
         cam.update();
         assert!(cam.x > before && cam.x < cam.tx as f32);
-        cam.clamp(citygen::Size { w: 100, h: 40 }, 60, 30);
+        cam.clamp_to(citygen::Rect::new(0, 0, 100, 40), 60, 30);
         assert!(cam.tx <= 70 && cam.ty <= 25);
+        // Bounds off the grid's corner: kept inside them, centred where the view is wider.
+        cam.target(Pos::new(-50, 90));
+        cam.clamp_to(citygen::Rect::new(-20, 10, 100, 20), 60, 30);
+        assert_eq!((cam.tx, cam.ty), (10, 20));
         let o = cam.origin(60, 30);
         assert_eq!(o.x, cam.x.round() as i32 - 30);
     }

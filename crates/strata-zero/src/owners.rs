@@ -26,9 +26,10 @@ pub fn owner_of(city: &City, node: NodeId) -> Option<Owner> {
     }
 }
 
-/// The owner's subnet security.
+/// The owner's subnet security; a site's governing security (`sitenet::security`).
 pub fn security(st: &AppState, o: Owner) -> u8 {
     match o {
+        Owner::Building(b) if crate::sitenet::is_site(st, b) => crate::sitenet::security(st, b),
         // A construct already made carries its own (the lot's practice construct
         // among them); else the building's subnet.
         Owner::Building(b) => st

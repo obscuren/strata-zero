@@ -1,11 +1,12 @@
 //! The world behind the Access Terminal: your standing on a building, the constructs a
 //! district terminal sees, and the actions and states the HELIX/OS devices and
-//! programs call. Plain functions over the app state that answer in text.
+//! programs call. Plain functions over the app state that answer in text. The rulings
+//! cited are the site-net plan's, `docs/superpowers/plans/2026-11-11-site-net.md`.
 
 use crate::app::AppState;
 use crate::credentials;
 use citygen::construct::{BLACK_THRESHOLD, GREY_THRESHOLD, ICE_THRESHOLD};
-use citygen::{BuildingId, City, DistrictId, NodeKind, Place, Pos, StratumKind, SubnetOwner};
+use citygen::{BuildingId, City, DistrictId, NetNode, NodeKind, Place, Pos, SiteNode, StratumKind};
 use game::{HackTarget, Op, Target};
 use sim::OccupantRole;
 
@@ -53,7 +54,8 @@ pub fn tier_on(st: &AppState, b: BuildingId) -> Tier {
     }
 }
 
-/// The ICE a construct runs, by its security.
+/// The strongest ICE a construct that is no site runs, by its security (a site's:
+/// `sitenet::ice`).
 pub fn ice_grade(security: u8) -> &'static str {
     if security >= BLACK_THRESHOLD {
         "black"
@@ -99,17 +101,13 @@ fn building_name(st: &AppState, b: BuildingId) -> String {
     building_label(st, b)
 }
 
-fn security(city: &City, b: BuildingId) -> u8 {
-    city.net
-        .subnets
-        .iter()
-        .find(|s| s.owner == SubnetOwner::Building(b))
-        .map(|s| s.security)
-        .unwrap_or(0)
-}
-
+/// A building's security: its subnet's, but a site's governing security
+/// (`sitenet::security`, a live copy's own), so the scan and a backdoor's odds read the
+/// copy's.
 pub fn security_of(st: &AppState, b: BuildingId) -> u8 {
-    st.city.as_ref().map_or(0, |c| security(c, b))
+    // Only a site holds a copy, so a building that is none reads its subnet's here, and
+    // asking costs no venue's layout.
+    crate::sitenet::security(st, b)
 }
 
 // ---- the world actions: what the HELIX/OS devices and programs call ----
@@ -137,13 +135,18 @@ pub fn scan_row(st: &AppState, i: usize, b: BuildingId) -> String {
     let Some(city) = st.city.as_ref() else {
         return String::new();
     };
-    let sec = security(city, b);
+    let sec = security_of(st, b);
+    // A site's strongest piece by its own ICE rule; any other construct's by its security.
+    let ice = match crate::sitenet::is_site(st, b) {
+        true => (crate::sitenet::ice(st, b).top).map_or("none", citygen::IceGrade::label),
+        false => ice_grade(sec),
+    };
     format!(
         "{:>2}  {:<22} {:<10} SEC {sec:>3}  ICE {:<5} {}",
         i + 1,
         building_name(st, b),
         citygen::kind_label(city, b).to_uppercase(),
-        ice_grade(sec).to_uppercase(),
+        ice.to_uppercase(),
         tier_on(st, b).label()
     )
 }
@@ -325,81 +328,141 @@ fn nodes_of(st: &AppState, b: BuildingId, kind: NodeKind) -> Vec<citygen::NodeId
         .unwrap_or_default()
 }
 
-pub fn release_doors(st: &mut AppState, b: BuildingId) -> Result<String, String> {
-    let Some(lock) = nodes_of(st, b, NodeKind::DoorLock).first().copied() else {
-        return Err("NO DOOR CONTROLLER".to_string());
+/// What a building-wide command answers on a site below root (Ruling 15).
+const ROOT_ONLY: &str = "ROOT ONLY · CRACK THE SERVER";
+
+/// Site `b`'s nodes of `kinds` on the riser's levels, in the Net's order: what HELIX's
+/// building-wide commands reach on a site, never across an air gap (Ruling 15).
+fn riser_nodes(st: &AppState, b: BuildingId, kinds: &[NodeKind]) -> Vec<(SiteNode, NodeKind)> {
+    let Some(net) = crate::sitenet::net_of(st, b) else {
+        return Vec::new();
     };
+    (net.nodes.iter())
+        .filter(|n| kinds.contains(&n.kind) && net.on_riser(n.node.level))
+        .map(|n| (n.node, n.kind))
+        .collect()
+}
+
+/// Whether building `b` is a site, where a building-wide command is root's alone: refused
+/// below it (Ruling 15).
+fn site_root(st: &AppState, b: BuildingId) -> Result<bool, String> {
+    let site = crate::sitenet::is_site(st, b);
+    if site && tier_on(st, b) < Tier::Admin {
+        return Err(ROOT_ONLY.to_string());
+    }
+    Ok(site)
+}
+
+/// What a building-wide command works on building `b`, and whether `b` is a site: on a
+/// site, root's alone, every node of `kinds` on the riser's levels; on any other
+/// building, its nodes of `kinds` on the city's Net.
+fn reach(
+    st: &AppState,
+    b: BuildingId,
+    kinds: &[NodeKind],
+) -> Result<(Vec<(HackTarget, NodeKind)>, bool), String> {
+    if site_root(st, b)? {
+        let site = (riser_nodes(st, b, kinds).into_iter())
+            .map(|(n, k)| (HackTarget::Site(n), k))
+            .collect();
+        return Ok((site, true));
+    }
+    let city = (kinds.iter())
+        .flat_map(|k| {
+            nodes_of(st, b, *k)
+                .into_iter()
+                .map(|id| (HackTarget::Node(id), *k))
+        })
+        .collect();
+    Ok((city, false))
+}
+
+/// Lands `op` on every one of `targets` of building `b` now.
+fn land_all(st: &mut AppState, b: BuildingId, targets: &[(HackTarget, NodeKind)], op: Op) {
     let now = st.net.now(st);
-    if st.net.alert(b, now) {
+    for (t, kind) in targets {
+        st.net.land(b, *t, Target::Node(*kind), op, now);
+    }
+}
+
+/// A command's line for `n` devices: `16 DOOR LOCKS RELEASED · 60 MIN`, one `DOOR LOCK`.
+fn counted(n: usize, device: &str, done: &str) -> String {
+    let s = if n == 1 { "" } else { "S" };
+    format!("{n} {device}{s} {done} · 60 MIN")
+}
+
+/// `door release`: a door lock spoofed open for the hour; on a site every door lock and
+/// gate switch on the riser, root's alone.
+pub fn release_doors(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let (mut locks, site) = reach(st, b, &[NodeKind::DoorLock, NodeKind::GateSwitch])?;
+    if !site {
+        // The building's first, which opens them all.
+        locks.truncate(1);
+    }
+    if locks.is_empty() {
+        return Err("NO DOOR CONTROLLER".to_string());
+    }
+    if st.net.alert(b, st.net.now(st)) {
         return Err("LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS".to_string());
     }
-    st.net.land(
-        b,
-        HackTarget::Node(lock),
-        Target::Node(NodeKind::DoorLock),
-        Op::Spoof,
-        now,
-    );
+    land_all(st, b, &locks, Op::Spoof);
     let name = crate::net::building_name(st, b);
     st.say(format!("`{name}`'s locked doors open for an hour"));
-    Ok("DOOR LOCKS RELEASED · 60 MIN".to_string())
+    Ok(if site {
+        counted(locks.len(), "DOOR LOCK", "RELEASED")
+    } else {
+        "DOOR LOCKS RELEASED · 60 MIN".to_string()
+    })
 }
 
+/// `lift answer`: the lift control spoofed for the hour; on a site every lift on the
+/// riser, root's alone.
 pub fn answer_lifts(st: &mut AppState, b: BuildingId) -> Result<String, String> {
-    let Some(ctl) = nodes_of(st, b, NodeKind::LiftCtrl).first().copied() else {
+    let (mut lifts, site) = reach(st, b, &[NodeKind::LiftCtrl])?;
+    if !site {
+        lifts.truncate(1);
+    }
+    if lifts.is_empty() {
         return Err("NO LIFT CONTROLLER".to_string());
-    };
-    let now = st.net.now(st);
-    st.net.land(
-        b,
-        HackTarget::Node(ctl),
-        Target::Node(NodeKind::LiftCtrl),
-        Op::Spoof,
-        now,
-    );
+    }
+    land_all(st, b, &lifts, Op::Spoof);
     let name = crate::net::building_name(st, b);
     st.say(format!("`{name}`'s lifts answer you"));
-    Ok("LIFTS ANSWERING · 60 MIN".to_string())
+    Ok(if site {
+        counted(lifts.len(), "LIFT", "ANSWERING")
+    } else {
+        "LIFTS ANSWERING · 60 MIN".to_string()
+    })
 }
 
-/// Loops every camera of the building.
+/// Loops every camera of the building; on a site every camera on the riser, root's
+/// alone.
 pub fn loop_cams(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     loop_some(st, b, None)
 }
 
-/// Loops camera `i` alone.
+/// Loops camera `i` alone: on a site the `i`th on the riser, in the Net's order.
 pub fn loop_cam(st: &mut AppState, b: BuildingId, i: usize) -> Result<String, String> {
     loop_some(st, b, Some(i))
 }
 
 fn loop_some(st: &mut AppState, b: BuildingId, only: Option<usize>) -> Result<String, String> {
-    let mut cams = nodes_of(st, b, NodeKind::Camera);
+    let (mut cams, _) = reach(st, b, &[NodeKind::Camera])?;
     if let Some(i) = only {
         cams = cams.get(i).copied().into_iter().collect();
     }
     if cams.is_empty() {
         return Err("NO CAMERAS".to_string());
     }
-    let now = st.net.now(st);
-    for c in &cams {
-        st.net.land(
-            b,
-            HackTarget::Node(*c),
-            Target::Node(NodeKind::Camera),
-            Op::Blind,
-            now,
-        );
-    }
+    land_all(st, b, &cams, Op::Blind);
     let name = crate::net::building_name(st, b);
     st.say(format!("`{name}`'s cameras loop for an hour"));
-    let n = cams.len();
-    Ok(format!(
-        "{n} CAMERA{} LOOPED · 60 MIN",
-        if n == 1 { "" } else { "S" }
-    ))
+    Ok(counted(cams.len(), "CAMERA", "LOOPED"))
 }
 
+/// `alarm off`: root's (`/dev/alarm`), and on a site checked here too.
 pub fn alarm_off(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    site_root(st, b)?;
     let now = st.net.now(st);
     if !st.net.alert(b, now) {
         return Err("NO ALARM".to_string());
@@ -421,10 +484,18 @@ fn live_until(st: &AppState, b: BuildingId, kind: NodeKind, ops: &[Op], now: u64
         .max()
 }
 
+/// `/dev/door`: on a site, how many of the riser's door locks and gate switches stand
+/// open to a hack on their own node (`locks: 3/16 released`); elsewhere the building's.
 pub fn door_state(st: &AppState, b: BuildingId) -> String {
     let now = st.net.now(st);
     if st.net.alert(b, now) {
         "lockdown".to_string()
+    } else if crate::sitenet::is_site(st, b) {
+        let locks = riser_nodes(st, b, &[NodeKind::DoorLock, NodeKind::GateSwitch]);
+        let open = (locks.iter())
+            .filter(|(n, _)| crate::sitenet::hacked(st, *n, &[Op::Crack, Op::Spoof]))
+            .count();
+        format!("locks: {open}/{} released", locks.len())
     } else if st.net.unlocked(b, now) {
         match live_until(st, b, NodeKind::DoorLock, &[Op::Crack, Op::Spoof], now) {
             Some(u) => format!("locks: released (until {})", stamp(u)),
@@ -435,8 +506,19 @@ pub fn door_state(st: &AppState, b: BuildingId) -> String {
     }
 }
 
+/// `/dev/lift`: on a site, how many of the riser's lifts answer you, their stops freed by
+/// a spoof on their own node (`lifts: 1/3 answering`); elsewhere the building's.
 pub fn lift_state(st: &AppState, b: BuildingId) -> String {
     let now = st.net.now(st);
+    if crate::sitenet::is_site(st, b) {
+        let lifts = riser_nodes(st, b, &[NodeKind::LiftCtrl]);
+        let plan = crate::interiors::plan_now(st, b);
+        let answering = (lifts.iter())
+            .filter_map(|(n, _)| crate::sitenet::node_lift(plan.as_deref()?, *n))
+            .filter(|link| crate::sitenet::lift_answers_you(st, b, *link))
+            .count();
+        return format!("lifts: {answering}/{} answering", lifts.len());
+    }
     if !st.net.lifts_answer(b, now) {
         "lifts: stopped".to_string()
     } else if live_until(st, b, NodeKind::LiftCtrl, &[Op::Spoof], now).is_some() {
@@ -446,9 +528,30 @@ pub fn lift_state(st: &AppState, b: BuildingId) -> String {
     }
 }
 
+/// Building `b`'s cameras as its host numbers them, `/dev/cam0` first: on a site the
+/// riser's in the Net's order (as `loop_cam` takes them), elsewhere its nodes on the
+/// city's Net.
+fn cameras(st: &AppState, b: BuildingId) -> Vec<NetNode> {
+    if crate::sitenet::is_site(st, b) {
+        (riser_nodes(st, b, &[NodeKind::Camera]).into_iter())
+            .map(|(n, _)| NetNode::Site(n))
+            .collect()
+    } else {
+        (nodes_of(st, b, NodeKind::Camera).into_iter())
+            .map(NetNode::City)
+            .collect()
+    }
+}
+
+/// How many `/dev/cam*` building `b`'s host holds: one per camera it numbers.
+pub fn cam_count(st: &AppState, b: BuildingId) -> usize {
+    cameras(st, b).len()
+}
+
+/// `/dev/cam{i}`: camera `i`, on a site the `i`th on the riser in the Net's order.
 pub fn cam_state(st: &AppState, b: BuildingId, i: usize) -> String {
     let now = st.net.now(st);
-    let Some(node) = nodes_of(st, b, NodeKind::Camera).get(i).copied() else {
+    let Some(node) = cameras(st, b).get(i).copied() else {
         return format!("cam{i}: absent");
     };
     if !st.net.blinded(node, now) {
@@ -458,7 +561,7 @@ pub fn cam_state(st: &AppState, b: BuildingId, i: usize) -> String {
         .net
         .hacks
         .iter()
-        .filter(|h| h.target == HackTarget::Node(node) && h.op == Op::Blind)
+        .filter(|h| h.target == HackTarget::from(node) && h.op == Op::Blind)
         .filter(|h| h.until.is_none_or(|u| now < u))
         .filter_map(|h| h.until)
         .max();
@@ -571,7 +674,8 @@ pub fn place_label(st: &AppState, host: crate::helix::shell::HostId) -> String {
 mod tests {
     use super::*;
     use crate::app::AppState;
-    use citygen::{BuildingKind, GenParams, Generator, NodeKind, SizePreset};
+    use crate::sitenet::testutil::{crack_server, hack, office_copy};
+    use citygen::{BuildingKind, GenParams, Generator, NetNode, NodeKind, SiteNode, SizePreset};
     use game::{HackTarget, Op, Target};
 
     /// A city, a residential building with people home, and its district.
@@ -764,7 +868,10 @@ mod tests {
         match loop_cams(&mut st, b) {
             Ok(r) => {
                 assert!(r.ends_with("LOOPED · 60 MIN"), "{r}");
-                assert!(cams.iter().all(|c| st.net.blinded(*c, now)));
+                assert!(
+                    cams.iter()
+                        .all(|c| st.net.blinded(citygen::NetNode::City(*c), now))
+                );
                 assert!(cam_state(&st, b, 0).starts_with("cam0: looped (until "));
             }
             Err(e) => assert_eq!((e.as_str(), cams.len()), ("NO CAMERAS", 0)),
@@ -793,6 +900,116 @@ mod tests {
             load_plan(&mut st, b).as_deref(),
             Ok("GROUND FLOOR PLAN LOADED")
         );
+    }
+
+    /// Site `b`'s nodes of `kinds` on the riser's levels, in the Net's order, by kind.
+    fn on_riser(st: &AppState, b: BuildingId, kinds: &[NodeKind]) -> Vec<(SiteNode, NodeKind)> {
+        let net = crate::sitenet::net_of(st, b).unwrap();
+        (net.nodes.iter())
+            .filter(|n| kinds.contains(&n.kind) && net.on_riser(n.node.level))
+            .map(|n| (n.node, n.kind))
+            .collect()
+    }
+
+    #[test]
+    fn root_on_a_site_loops_the_risers_cameras_and_none_across_the_gap() {
+        let (mut st, b) = office_copy(190);
+        let net = crate::sitenet::net_of(&st, b).unwrap();
+        let cams: Vec<SiteNode> = (net.nodes.iter())
+            .filter(|n| n.kind == NodeKind::Camera)
+            .map(|n| n.node)
+            .collect();
+        assert!(
+            cams.iter().any(|c| !net.on_riser(c.level)),
+            "a camera across the gap"
+        );
+        let riser = on_riser(&st, b, &[NodeKind::Camera]).len();
+        assert!(riser > 1, "cameras up the riser");
+        assert_eq!(
+            loop_cams(&mut st, b).unwrap_err(),
+            "ROOT ONLY · CRACK THE SERVER"
+        );
+        crack_server(&mut st, b);
+        assert_eq!(
+            loop_cams(&mut st, b),
+            Ok(format!("{riser} CAMERAS LOOPED · 60 MIN"))
+        );
+        let now = st.net.now(&st);
+        for c in &cams {
+            assert_eq!(
+                st.net.blinded(NetNode::Site(*c), now),
+                net.on_riser(c.level),
+                "{c:?}"
+            );
+        }
+        assert!(cam_state(&st, b, 0).starts_with("cam0: looped (until "));
+        assert_eq!(cam_state(&st, b, riser), format!("cam{riser}: absent"));
+    }
+
+    #[test]
+    fn on_a_site_the_devices_count_what_stands_open_on_the_riser() {
+        let (mut st, b) = office_copy(190);
+        let locks = on_riser(&st, b, &[NodeKind::DoorLock, NodeKind::GateSwitch]);
+        let lifts = on_riser(&st, b, &[NodeKind::LiftCtrl]);
+        let cams = on_riser(&st, b, &[NodeKind::Camera]);
+        let (n, l) = (locks.len(), lifts.len());
+        assert!(n > 1 && l > 1 && cams.len() > 1);
+        assert_eq!(door_state(&st, b), format!("locks: 0/{n} released"));
+        assert_eq!(lift_state(&st, b), format!("lifts: 0/{l} answering"));
+        assert_eq!(cam_state(&st, b, 1), "cam1: live");
+        // A node cracked or spoofed on its own counts.
+        hack(&mut st, locks[0].0, locks[0].1, Op::Crack);
+        hack(&mut st, lifts[0].0, NodeKind::LiftCtrl, Op::Spoof);
+        assert_eq!(door_state(&st, b), format!("locks: 1/{n} released"));
+        assert_eq!(lift_state(&st, b), format!("lifts: 1/{l} answering"));
+        // A user's commands are refused; root's work every device on the riser.
+        for done in [
+            release_doors(&mut st, b),
+            answer_lifts(&mut st, b),
+            loop_cam(&mut st, b, 1),
+            alarm_off(&mut st, b),
+        ] {
+            assert_eq!(done.unwrap_err(), "ROOT ONLY · CRACK THE SERVER");
+        }
+        crack_server(&mut st, b);
+        assert_eq!(
+            release_doors(&mut st, b),
+            Ok(format!("{n} DOOR LOCKS RELEASED · 60 MIN"))
+        );
+        assert_eq!(door_state(&st, b), format!("locks: {n}/{n} released"));
+        assert_eq!(
+            answer_lifts(&mut st, b),
+            Ok(format!("{l} LIFTS ANSWERING · 60 MIN"))
+        );
+        assert_eq!(lift_state(&st, b), format!("lifts: {l}/{l} answering"));
+        assert_eq!(
+            loop_cam(&mut st, b, 1).as_deref(),
+            Ok("1 CAMERA LOOPED · 60 MIN")
+        );
+        assert!(cam_state(&st, b, 1).starts_with("cam1: looped (until "));
+        assert_eq!(cam_state(&st, b, 0), "cam0: live");
+        let now = st.net.now(&st);
+        assert!(st.net.blinded(NetNode::Site(cams[1].0), now));
+        assert!(!st.net.blinded(NetNode::Site(cams[0].0), now));
+        // An alarm: the hacks and the cracked server go; root by a backdoor holds, the
+        // locks hold, and a lift answers to a spoof landed since.
+        assert_eq!(alarm_off(&mut st, b).unwrap_err(), "NO ALARM");
+        crate::net::lock_down(&mut st, b);
+        assert_eq!(door_state(&st, b), "lockdown");
+        assert_eq!(lift_state(&st, b), format!("lifts: 0/{l} answering"));
+        assert_eq!(
+            release_doors(&mut st, b).unwrap_err(),
+            "ROOT ONLY · CRACK THE SERVER"
+        );
+        let seed = st.city.as_ref().unwrap().seed;
+        st.backdoors.plant_net(b, 99, seed, now);
+        assert_eq!(
+            release_doors(&mut st, b).unwrap_err(),
+            "LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS"
+        );
+        assert!(answer_lifts(&mut st, b).is_ok());
+        assert_eq!(lift_state(&st, b), format!("lifts: {l}/{l} answering"));
+        assert_eq!(alarm_off(&mut st, b).as_deref(), Ok("ALARM CLEARED"));
     }
 
     #[test]

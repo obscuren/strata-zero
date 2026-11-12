@@ -38,6 +38,8 @@
 // stratum and out in a zone. `objectives` name a room, on a level of the role in `level` when
 // one is given. `security` is a mission's layer per size: guard weights per zone, and ranges
 // of cameras, turrets (in `turret_zones`) and containers.
+// `terminals` name the rooms with a desk terminal on the site's Net; the ground floor's public
+// kiosk and a gapped level's terminal are by rule, not listed.
 // `sizes` is what a mission of each size keeps: floors, locks between a way in and its
 // objective, ways in at least, and guards. `crawl_tech` is the Tech a crawl's grille wants.
 // Sizes and security are first guesses, to tune by playing.
@@ -118,6 +120,7 @@ Sites(
                 Room(name: "spare bedroom", kind: HotelRoom, size: ((3, 3), (10, 6)), furniture: [Bed]),
                 Room(name: "plant room", kind: Plant, size: ((4, 4), (9, 6)), furniture: [Machine], stations: [Machine]),
             ],
+            terminals: ["security office", "manager's office"],
             pieces: [Piece(name: "ramp", kind: Ramp)],
             links: [
                 // A guest card takes it to the penthouse's foyer, which the staff band keeps
@@ -203,6 +206,7 @@ Sites(
                 Room(name: "boardroom", kind: Office, size: ((5, 4), (12, 8)), furniture: [Table]),
                 Room(name: "partner office", kind: Office, size: ((4, 4), (10, 6)), private: true, furniture: [Desk, Couch], stations: [Desk]),
             ],
+            terminals: ["outer office", "print room", "plant room"],
             pieces: [Piece(name: "gate line", kind: GateLine)],
             links: [
                 Link(name: "main lifts", kind: Lift, zone: "staff", serves: Roles(["lobby", "open-plan floor", "executive floor"]),
@@ -294,6 +298,7 @@ Sites(
                 Room(name: "sump", kind: Plant, size: ((4, 4), (16, 8)), furniture: [Machine]),
                 Room(name: "cable vault", kind: Server, size: ((4, 4), (10, 6)), private: true, furniture: [Machine]),
             ],
+            terminals: ["ticket office", "signal box"],
             pieces: [Piece(name: "gate line", kind: GateLine), Piece(name: "track", kind: Track)],
             links: [
                 Link(name: "street stairs", kind: Stair, zone: "public", serves: Roles(["hall", "concourse"])),

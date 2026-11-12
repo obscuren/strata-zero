@@ -1288,7 +1288,9 @@ impl Deck {
                         .tile(k, pos)
                         .and_then(|t| t.district)
                         .or_else(|| c.tile(StratumKind::Street, pos).and_then(|t| t.district)),
-                    Place::Floor { building, .. } | Place::Construct(building) => {
+                    Place::Floor { building, .. }
+                    | Place::Construct(building)
+                    | Place::SiteNet { building, .. } => {
                         c.building_opt(building).map(|b| b.district)
                     }
                 };
@@ -1298,7 +1300,7 @@ impl Deck {
         let label = match place {
             Place::Stratum(k) => k.label().to_string(),
             Place::Floor { level, .. } => FloorPlan::label(level),
-            Place::Construct(_) => "construct".to_string(),
+            Place::Construct(_) | Place::SiteNet { .. } => "construct".to_string(),
         };
         format!("▍ LINK · {district} · {label}")
     }

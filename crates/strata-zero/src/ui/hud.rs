@@ -722,7 +722,7 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
             let _ = interiors;
             return format!("{name} · {}", FloorPlan::label(level));
         }
-        Place::Construct(building) => {
+        Place::Construct(building) | Place::SiteNet { building, .. } => {
             let name = city
                 .building_opt(building)
                 .map(|b| {

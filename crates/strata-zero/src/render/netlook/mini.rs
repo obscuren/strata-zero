@@ -6,7 +6,7 @@ use crate::render::Rgb;
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use citygen::{
-    BuildingId, City, Construct, Feature, IceGrade, NodeKind, Pos, StratumKind, Terrain,
+    BuildingId, City, Construct, Feature, IceGrade, NodeKind, Pos, Rect, StratumKind, Terrain,
 };
 use std::collections::HashMap;
 
@@ -116,16 +116,19 @@ fn plan_tile(k: &Construct, watch: &HashMap<Pos, IceGrade>, p: Pos) -> Option<(u
 
 /// The `s` × `s` pixel of a construct's plan at tile (`x0`, `y0`): the tile that
 /// matters most in it, so a piece, a node or the spine never drops out when the plan
-/// is drawn small; none where the block is off the construct.
+/// is drawn small; none where the block is off the construct, or off `within` (the tiles
+/// drawn: a site's open level).
 pub fn plan_px(
     k: &Construct,
     watch: &HashMap<Pos, IceGrade>,
+    within: Rect,
     x0: i32,
     y0: i32,
     s: i32,
 ) -> Option<Rgb> {
     (y0..y0 + s)
         .flat_map(|y| (x0..x0 + s).map(move |x| Pos::new(x, y)))
+        .filter(|p| within.contains(*p))
         .filter_map(|p| plan_tile(k, watch, p))
         .max_by_key(|(rank, _)| *rank)
         .map(|(_, c)| c)
@@ -198,14 +201,15 @@ mod tests {
             .find(|k| k.vault_room().is_some() && k.guards.len() == 2)
             .expect("a construct with a vault guard");
         let watch = crate::net::watched(&k);
+        let all = k.size.rect();
         let g = &k.guards[1];
         assert_eq!(
-            plan_px(&k, &watch, g.pos.x, g.pos.y, 1),
+            plan_px(&k, &watch, all, g.pos.x, g.pos.y, 1),
             Some(inside::watch_tint(g.grade).0)
         );
         // Drawn small, the piece still shows in its block.
         assert_eq!(
-            plan_px(&k, &watch, g.pos.x - 1, g.pos.y - 1, 3),
+            plan_px(&k, &watch, all, g.pos.x - 1, g.pos.y - 1, 3),
             Some(inside::watch_tint(g.grade).0)
         );
         let vault = k
@@ -214,7 +218,7 @@ mod tests {
             .find(|(_, p)| k.tiles[*p].feature == Some(Feature::Node(NodeKind::DataVault)))
             .map(|(_, p)| *p)
             .unwrap();
-        assert_eq!(plan_px(&k, &watch, vault.x, vault.y, 1), Some(AMBER));
-        assert_eq!(plan_px(&k, &watch, -3, 0, 2), None);
+        assert_eq!(plan_px(&k, &watch, all, vault.x, vault.y, 1), Some(AMBER));
+        assert_eq!(plan_px(&k, &watch, all, -3, 0, 2), None);
     }
 }

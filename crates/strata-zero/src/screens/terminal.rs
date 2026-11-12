@@ -153,12 +153,7 @@ impl Terminal {
                 .holds
                 .iter()
                 .filter(|h| h.owner == o && now < h.until)
-                .filter(|h| {
-                    st.city.as_ref().is_some_and(|c| {
-                        c.net.nodes.get(h.node.index()).map(|n| n.kind)
-                            == Some(citygen::NodeKind::Terminal)
-                    })
-                })
+                .filter(|h| crate::holds::kind_of(st, h.node) == Some(citygen::NodeKind::Terminal))
                 .map(|h| h.until - now)
                 .max()
         });

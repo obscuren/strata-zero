@@ -8,7 +8,7 @@ use crate::app::AppState;
 use crate::credentials::{self, Code, Source};
 use crate::ui::device::{Device, Look};
 use citygen::rng::{door_code, hash64};
-use citygen::{BuildingId, DistrictId, NodeKind};
+use citygen::{BuildingId, DistrictId};
 use sim::{HouseholdId, PersonId};
 use std::collections::BTreeSet;
 
@@ -197,6 +197,9 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
     if id == HostId::Rig {
         sync_rig_net(st);
     }
+    if let HostId::Building(b) = id {
+        sync_site_cams(st, b);
+    }
     let host = st.helix.hosts.entry(id).or_default();
     // only mails that arrived since the last look: one you deleted stays deleted
     for (path, index, owner) in adds.into_iter().skip(host.mails_placed) {
@@ -242,6 +245,41 @@ fn sync_rig_net(st: &mut AppState) {
         } else if !want.contains(b) && host.nets_placed.remove(b) {
             let _ = host.fs.remove(ROOT, "/", "/", &path, false);
         }
+    }
+}
+
+/// `/dev/cam{i}`, a resident's to write.
+fn put_cam(fs: &mut Vfs, i: usize) {
+    fs.put_dev(&format!("/dev/cam{i}"), Dev::Cam(i), USERS, Mode::RW_R);
+}
+
+/// Keeps a site's `/dev/cam*` in step with the cameras on its riser, which come and go
+/// with a mission's copy: `cam0` up to one per camera (`access::cam_count`), as
+/// `cam_state` and `loop_cam` number them. Any other host keeps the devices it was made
+/// with.
+fn sync_site_cams(st: &mut AppState, b: BuildingId) {
+    if !crate::sitenet::is_site(st, b) {
+        return;
+    }
+    let want = crate::access::cam_count(st, b);
+    let Some(host) = st.helix.hosts.get_mut(&HostId::Building(b)) else {
+        return;
+    };
+    let fs = &mut host.fs;
+    let have: Vec<(usize, String)> = (fs.list(ROOT, "/", "/", "/dev").unwrap_or_default())
+        .into_iter()
+        .filter_map(|id| match fs.node(id).kind {
+            Kind::Dev(Dev::Cam(i)) => Some((i, fs.path_of(id))),
+            _ => None,
+        })
+        .collect();
+    for (i, path) in &have {
+        if *i >= want {
+            let _ = fs.remove(ROOT, "/", "/", path, false);
+        }
+    }
+    for i in (0..want).filter(|i| !have.iter().any(|(h, _)| h == i)) {
+        put_cam(fs, i);
     }
 }
 
@@ -415,15 +453,8 @@ fn building_disk(st: &AppState, b: BuildingId, look: &Look, host: &mut Host) -> 
     fs.mkdir_as("/dev", ROOT, Mode::RW_R);
     fs.put_dev("/dev/door", Dev::Door, USERS, Mode::RW_R);
     fs.put_dev("/dev/lift", Dev::Lift, USERS, Mode::RW_R);
-    let cams = st.city.as_ref().map_or(0, |c| {
-        c.net
-            .nodes
-            .iter()
-            .filter(|n| n.kind == NodeKind::Camera && n.building == Some(b))
-            .count()
-    });
-    for i in 0..cams {
-        fs.put_dev(&format!("/dev/cam{i}"), Dev::Cam(i), USERS, Mode::RW_R);
+    for i in 0..crate::access::cam_count(st, b) {
+        put_cam(fs, i);
     }
     fs.put_dev("/dev/alarm", Dev::Alarm, ROOT, Mode::RW_R);
 

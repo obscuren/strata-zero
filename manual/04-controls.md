@@ -9,7 +9,7 @@ These are the keys on the map. The `?` key list shows the same ones while you pl
 | Key | What it does |
 |---|---|
 | `hjkl yubn ↑↓←→` | move; `yubn` go diagonally |
-| `< >` | go down or up: stairs, a lift, a ladder, a manhole |
+| `< >` | go down or up: stairs, a lift, a ladder, a manhole, a hub |
 | `W` | up to the overworld from the open street; jacked in, the Net over the world |
 | `space` | the thing in reach: look, talk, take, jack in. On turns, stay where you are |
 | `x` | look around with a cursor |

@@ -34,6 +34,8 @@ Doors to flats and offices are often locked. A keycard, or a code you've learned
 
 Hotels and offices are built floor by floor, and no two floors are quite the same. A hotel has a car park at `B1` and a service floor at `B2`, its lobby at `L`, guest floors above and a penthouse near the top. An office has open-plan floors over its lobby, an executive floor near the top and a server room under the street. Rooms are numbered by floor: `1204` on `12F`, and `B1-04` under the street.
 
+Each has a Net of its own, with a level for each floor, behind a firewall. A terminal set in a wall (`◇`) or the switch box of a line of turnstiles (`▪`) is a way onto it from the floor (The Net).
+
 There is more than one way between floors. A hotel has a guest lift and a service lift, a grand stair up from the lobby, a service stair and a fire stair. An office has two banks of lifts, a goods lift down to its basement, a stair and a fire stair.
 
 - A lift lists only the floors it stops at. If yours doesn't go where you want, another lift or a stair might.
@@ -43,12 +45,12 @@ There is more than one way between floors. A hotel has a guest lift and a servic
 
 A hotel or office is split into zones, from the public lobby to the staff's rooms and the secure ones deeper in. The doors between zones are locked.
 
-- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: a cracked lock opens a building's doors for an hour (The Net). An alarm ends that: until it's over, those doors say locked down, and only a card opens them.
+- A door with a **card reader** is drawn in orange. A **zone keycard** opens the card doors and lifts of its zone and of every zone before it, so a secure card opens the staff doors too. Staff keep theirs on a lanyard, and you won't get one off them. The Net opens card doors too: crack a door's lock on the building's own Net and that door opens for an hour, not every door in the building (The Net). An alarm ends that: those doors say locked down, and only a card, or a fresh crack on the door's lock made since the alarm went off, opens them until it's over.
 - Deeper doors have a keypad instead, worked as a flat's is: a code, the Keyjack or the Net opens it.
 - Getting out is free. Every zone door opens with no key from the deeper side, and a locked room opens from inside, so you can always leave a zone without a key, even once a crack runs out.
-- A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants. It asks only where you get off: riding away from a carded floor takes nothing.
+- A lift can ask for a card at a stop. On its panel a floor you can't reach is greyed with the card it wants. It asks only where you get off: riding away from a carded floor takes nothing. Spoof the lift's node on the building's Net and it asks for no card at any floor it serves.
 
-An office keeps its lifts and stairs behind the turnstiles in its lobby, for staff only. Its turnstiles have keypads: a code or the Keyjack gets you through, as do a card and the Net, or find another way in. Out through them is free.
+An office keeps its lifts and stairs behind the turnstiles in its lobby, for staff only. Its turnstiles have keypads: a code or the Keyjack gets you through, as do a card and the Net (the line's gate switch), or find another way in. Out through them is free.
 
 A hotel's or office's main street door is always open. Its other doors, from the Street, the Skyways, the roof or the Undercity, may open past the public rooms. Such a door is locked, with a keypad outside: a code, the Keyjack, a keycard for its zone or the Net opens it. From inside it always opens.
 
@@ -85,6 +87,8 @@ What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone 
 | `▯` | a door; in orange, one with a card reader |
 | `☰` | a vent; indoors, a crawl's grille |
 | `▣` | a terminal |
+| `◇` | in a hotel or office, a terminal set in a wall |
+| `▪` | in a hotel or office, the switch box of a line of turnstiles |
 | `●` | a street lamp |
 | `◉` | a camera |
 | `▤` | a bed |

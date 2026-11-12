@@ -56,11 +56,16 @@ pub fn header(st: &AppState, death: Option<Death>) -> RunHeader {
 /// Where you stand, as the run's card says it: `{building} {floor} · at home` in the
 /// flat, `{building} {floor}` on another floor, the district on the street, past the
 /// city's cells the city or town owning them as HERE names it, else `open ground`, `on
-/// the Net` jacked in. Empty before you stand anywhere.
+/// the Net` jacked in, `{building}'s Net · {floor}` on a site's. Empty before you stand
+/// anywhere.
 pub fn place_line(st: &AppState) -> String {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return String::new();
     };
+    if let Place::SiteNet { building, level } = p.place {
+        let name = crate::net::building_name(st, building);
+        return format!("{name}'s Net · {}", FloorPlan::label(level));
+    }
     if p.body.is_some() {
         return "on the Net".to_string();
     }
@@ -86,7 +91,9 @@ pub fn place_line(st: &AppState) -> String {
                 .is_some_and(|r| r.place() == p.place && r.home.rect.contains(p.pos));
             if home { format!("{at} · at home") } else { at }
         }
-        Place::Construct(_) | Place::Stratum(StratumKind::Net) => "on the Net".to_string(),
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Stratum(StratumKind::Net) => {
+            "on the Net".to_string()
+        }
         Place::Stratum(k) => city
             .tile(k, p.pos)
             .and_then(|t| t.district)
@@ -349,5 +356,11 @@ mod tests {
         p.body = Some((place, home.bed_side));
         st.player = Some(p);
         assert_eq!(place_line(&st), "on the Net");
+
+        st.player.as_mut().unwrap().place = Place::SiteNet {
+            building: home.building,
+            level: home.level,
+        };
+        assert_eq!(place_line(&st), format!("{name}'s Net · {floor}"));
     }
 }

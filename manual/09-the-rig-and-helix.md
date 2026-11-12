@@ -25,6 +25,12 @@ Type a command and press `enter`. `pgup` and `pgdn` scroll back, and `esc` close
 
 What a command lets you do depends on who you're logged in as: a guest, a user, or an admin. The usual tools are there too: `ls`, `cat`, `grep`, `man` and the rest.
 
+### Hotels and offices
+
+A hotel's or office's host stands behind the building's firewall (The Net). From a street terminal or your rig, `ssh` to it is refused while any of the firewall's locks is whole: `FIREWALL · 3 LOCKS`. Break every lock and it takes you as any other host does. Root on it gets you back in through the firewall: a Net backdoor on its server, or the server cracked. A shell on one of the building's own terminals, held from its Net, is on the host already.
+
+There, `door release`, `lift answer`, `cam loop` and `alarm off` want root, the admin's login, and answer `ROOT ONLY · CRACK THE SERVER` until you have it: crack the building's server on its own Net, or plant a backdoor on it there. With root, `door release` opens every door lock and turnstile switch on the floors the riser reaches, `lift answer` frees every lift there and `cam loop` loops every camera there, but none of them reach across an air gap.
+
 ### Only on your rig
 
 | Command | What it does |

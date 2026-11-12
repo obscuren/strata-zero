@@ -6,7 +6,7 @@
 
 use crate::app::AppState;
 use crate::owners::Owner;
-use citygen::{BuildingId, DistrictId, NodeId, NodeKind, Place, Pos, StratumKind};
+use citygen::{BuildingId, DistrictId, NetNode, NodeId, NodeKind, Place, Pos, StratumKind};
 
 /// How far from a held node its verbs reach.
 pub const VERB_REACH: i32 = 12;
@@ -88,7 +88,7 @@ pub fn holdable(kind: NodeKind) -> bool {
 /// A node you hold, until a game minute, and the verbs spent on it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hold {
-    pub node: NodeId,
+    pub node: NetNode,
     pub owner: Owner,
     pub until: u64,
     pub used: Vec<Verb>,
@@ -145,10 +145,12 @@ pub struct Decoy {
 
 /// A landed crack or spoof: the node is yours for an hour (a fresh hold on a node you
 /// already held starts the hour again and keeps what was spent). The log line.
-pub fn take(st: &mut AppState, node: NodeId, owner: Owner, now: u64) -> String {
+pub fn take(st: &mut AppState, node: NetNode, owner: Owner, now: u64) -> String {
     let until = now + game::HACK_MINUTES;
-    for j in st.net.hijacks.iter_mut().filter(|j| j.node == node) {
-        j.until = until;
+    if let Some(id) = node.city() {
+        for j in st.net.hijacks.iter_mut().filter(|j| j.node == id) {
+            j.until = until;
+        }
     }
     match st.net.holds.iter_mut().find(|h| h.node == node) {
         Some(h) => h.until = until,
@@ -171,15 +173,21 @@ pub fn take(st: &mut AppState, node: NodeId, owner: Owner, now: u64) -> String {
     }
 }
 
-fn kind_of(st: &AppState, node: NodeId) -> Option<NodeKind> {
-    st.city
-        .as_ref()
-        .and_then(|c| c.net.nodes.get(node.index()))
-        .map(|n| n.kind)
+/// What kind a node is: a city node's from the city's Net; a site node's from its
+/// building's construct (its devices come with the site's Net).
+pub fn kind_of(st: &AppState, node: NetNode) -> Option<NodeKind> {
+    match node {
+        NetNode::City(id) => st
+            .city
+            .as_ref()
+            .and_then(|c| c.net.nodes.get(id.index()))
+            .map(|n| n.kind),
+        NetNode::Site(n) => st.constructs.get(n.building)?.device(n).map(|d| d.kind),
+    }
 }
 
 /// The hold on a node, while it lasts.
-pub fn held(st: &AppState, node: NodeId, now: u64) -> Option<&Hold> {
+pub fn held(st: &AppState, node: NetNode, now: u64) -> Option<&Hold> {
     st.net
         .holds
         .iter()
@@ -196,15 +204,16 @@ pub fn terminal_held(st: &AppState, owner: Owner) -> bool {
 }
 
 /// A camera you hold has been looped.
-pub fn looped(st: &AppState, node: NodeId, now: u64) -> bool {
+pub fn looped(st: &AppState, node: NetNode, now: u64) -> bool {
     held(st, node, now).is_some_and(|h| h.used.contains(&Verb::Loop))
 }
 
 /// The clock moves: holds run out, and with them a feed and a hijack; a district's
-/// lights come back on; a feed closes once you are off the Net; a decoy ends when you
-/// leave its construct. The cities and towns held as you left them keep the same clock:
-/// their holds, hijacks and lights out run out as the live city's do, so they look from
-/// outside as they will when you walk in again.
+/// lights come back on; a feed closes once you are off the Net, and a site camera's open
+/// feed keeps its floor drawn; a decoy ends when you leave its construct. The cities and
+/// towns held as you left them keep the same clock: their holds, hijacks and lights out
+/// run out as the live city's do, so they look from outside as they will when you walk
+/// in again.
 pub fn tick(st: &mut AppState) {
     let now = st.net.now(st);
     expire(&mut st.net, now);
@@ -214,12 +223,16 @@ pub fn tick(st: &mut AppState) {
     {
         st.net.feed = None;
     }
+    // The feed paints its floor each frame: drawn once and kept, not drawn afresh.
+    if let (Some(NetNode::Site(n)), Some(city)) = (st.net.feed, st.city.as_ref()) {
+        st.interiors.ensure(city, n.building, n.level);
+    }
     let here = st.player.as_ref().map(|p| p.place);
     if st
         .net
         .decoy
         .as_ref()
-        .is_some_and(|d| here != Some(Place::Construct(d.building)))
+        .is_some_and(|d| here.and_then(Place::construct) != Some(d.building))
     {
         st.net.decoy = None;
     }
@@ -237,7 +250,7 @@ fn expire(net: &mut crate::net::NetState, now: u64) {
     net.holds.retain(|h| now < h.until);
     let holds = &net.holds;
     net.hijacks
-        .retain(|j| now < j.until && holds.iter().any(|h| h.node == j.node));
+        .retain(|j| now < j.until && holds.iter().any(|h| h.node == NetNode::City(j.node)));
     net.lights_out.retain(|_, until| now < *until);
 }
 
@@ -261,28 +274,42 @@ fn relight_city(city: &mut citygen::City, net: &crate::net::NetState) {
 }
 
 /// Where a node is drawn on a place: on the open Net its tile there; inside a
-/// construct its tile in it.
-pub fn node_pos(st: &AppState, place: Place, node: NodeId) -> Option<Pos> {
+/// construct its tile in it; a site's node on its own level of the site's Net, at its
+/// device's tile.
+pub fn node_pos(st: &AppState, place: Place, node: NetNode) -> Option<Pos> {
+    let id = match node {
+        NetNode::City(id) => id,
+        NetNode::Site(n) => {
+            return match place {
+                Place::SiteNet { building, level }
+                    if (building, level) == (n.building, n.level) =>
+                {
+                    st.constructs.site(building)?.device(n).map(|d| d.at)
+                }
+                _ => None,
+            };
+        }
+    };
     match place {
         Place::Stratum(StratumKind::Net) => {
-            Some(st.city.as_ref()?.net.nodes.get(node.index())?.cyber)
+            Some(st.city.as_ref()?.net.nodes.get(id.index())?.cyber)
         }
-        Place::Construct(b) => st
+        Place::Construct(b) | Place::SiteNet { building: b, .. } => st
             .constructs
             .get(b)?
             .nodes
             .iter()
-            .find(|(n, _)| *n == node)
+            .find(|(n, _)| *n == id)
             .map(|(_, p)| *p),
         _ => None,
     }
 }
 
 /// Every node you hold drawn on a place, nearest you first, with its tile.
-pub fn held_on(st: &AppState, place: Place) -> Vec<(NodeId, Pos)> {
+pub fn held_on(st: &AppState, place: Place) -> Vec<(NetNode, Pos)> {
     let now = st.net.now(st);
     let me = st.player.as_ref().map_or(Pos::new(0, 0), |p| p.pos);
-    let mut out: Vec<(NodeId, Pos)> = st
+    let mut out: Vec<(NetNode, Pos)> = st
         .net
         .holds
         .iter()
@@ -294,7 +321,7 @@ pub fn held_on(st: &AppState, place: Place) -> Vec<(NodeId, Pos)> {
 }
 
 /// The held node nearest you on your map, within `VERB_REACH`, and its tile.
-pub fn nearest(st: &AppState) -> Option<(NodeId, Pos)> {
+pub fn nearest(st: &AppState) -> Option<(NetNode, Pos)> {
     let p = st.player.as_ref()?;
     held_on(st, p.place)
         .into_iter()
@@ -304,19 +331,27 @@ pub fn nearest(st: &AppState) -> Option<(NodeId, Pos)> {
 
 /// The verbs a held node offers where you stand now: spent ones gone (but the feed and
 /// the shell), and a decoy only inside its own construct with ICE standing.
-pub fn verbs_of(st: &AppState, node: NodeId) -> Vec<Verb> {
-    let Some(n) = st.city.as_ref().and_then(|c| c.net.nodes.get(node.index())) else {
+pub fn verbs_of(st: &AppState, node: NetNode) -> Vec<Verb> {
+    let Some(kind) = kind_of(st, node) else {
         return Vec::new();
+    };
+    let building = match node {
+        NetNode::City(id) => st
+            .city
+            .as_ref()
+            .and_then(|c| c.net.nodes.get(id.index()))
+            .and_then(|n| n.building),
+        NetNode::Site(n) => Some(n.building),
     };
     let now = st.net.now(st);
     let used = held(st, node, now)
         .map(|h| h.used.clone())
         .unwrap_or_default();
-    verbs(n.kind)
+    verbs(kind)
         .iter()
         .copied()
         .filter(|v| v.again() || !used.contains(v))
-        .filter(|v| *v != Verb::Decoy || decoy_ok(st, n.building))
+        .filter(|v| *v != Verb::Decoy || decoy_ok(st, building))
         .collect()
 }
 
@@ -325,7 +360,7 @@ fn decoy_ok(st: &AppState, building: Option<BuildingId>) -> bool {
     let (Some(b), Some(p)) = (building, st.player.as_ref()) else {
         return false;
     };
-    p.place == Place::Construct(b)
+    p.place.construct() == Some(b)
         && st
             .constructs
             .get(b)
@@ -373,9 +408,13 @@ pub fn use_verb(st: &mut AppState, key: char) -> Result<VerbDone, String> {
             let left = held(st, node, now).map_or(0, |h| h.until - now);
             VerbDone::Said(format!("loop · the camera sees nothing for {left} min"))
         }
-        Verb::Hijack => VerbDone::Pick(node),
-        Verb::Decoy => VerbDone::Said(decoy(st, node, at)?),
-        Verb::LightsOut => VerbDone::Said(lights_out(st, node, now)?),
+        Verb::Hijack => VerbDone::Pick(node.city().ok_or("the board answers nothing")?),
+        Verb::Decoy => VerbDone::Said(decoy(st, node.city().ok_or("no decoy there")?, at)?),
+        Verb::LightsOut => VerbDone::Said(lights_out(
+            st,
+            node.city().ok_or("the grid answers nothing")?,
+            now,
+        )?),
         Verb::Shell => {
             let host = host_of(st, node).ok_or("no shell answers there")?;
             let place = st
@@ -389,7 +428,7 @@ pub fn use_verb(st: &mut AppState, key: char) -> Result<VerbDone, String> {
 }
 
 /// Marks a verb spent on a hold.
-pub fn spend(st: &mut AppState, node: NodeId, verb: Verb) {
+pub fn spend(st: &mut AppState, node: NetNode, verb: Verb) {
     if let Some(h) = st.net.holds.iter_mut().find(|h| h.node == node)
         && !h.used.contains(&verb)
     {
@@ -398,26 +437,34 @@ pub fn spend(st: &mut AppState, node: NodeId, verb: Verb) {
 }
 
 /// What a node's building is called, or `the street` for a district's.
-fn place_name(st: &AppState, node: NodeId) -> String {
-    st.city
-        .as_ref()
-        .and_then(|c| c.net.nodes.get(node.index()))
-        .and_then(|n| n.building)
-        .map(|b| crate::net::building_name(st, b))
-        .unwrap_or_else(|| "the street".to_string())
+fn place_name(st: &AppState, node: NetNode) -> String {
+    match node {
+        NetNode::City(id) => st
+            .city
+            .as_ref()
+            .and_then(|c| c.net.nodes.get(id.index()))
+            .and_then(|n| n.building),
+        NetNode::Site(n) => Some(n.building),
+    }
+    .map(|b| crate::net::building_name(st, b))
+    .unwrap_or_else(|| "the street".to_string())
 }
 
 /// `CAM · KIROFLUX MART`: what a camera's feed is headed.
-pub fn feed_title(st: &AppState, node: NodeId) -> String {
+pub fn feed_title(st: &AppState, node: NetNode) -> String {
     format!("CAM · {}", place_name(st, node).to_uppercase())
 }
 
 /// The host a terminal node answers for: its building's, or its district's for a
 /// street terminal.
-fn host_of(st: &AppState, node: NodeId) -> Option<crate::helix::shell::HostId> {
+fn host_of(st: &AppState, node: NetNode) -> Option<crate::helix::shell::HostId> {
     use crate::helix::shell::HostId;
+    let id = match node {
+        NetNode::Site(n) => return Some(HostId::Building(n.building)),
+        NetNode::City(id) => id,
+    };
     let city = st.city.as_ref()?;
-    Some(match crate::owners::owner_of(city, node)? {
+    Some(match crate::owners::owner_of(city, id)? {
         Owner::Building(b) => HostId::Building(b),
         Owner::District(d) => HostId::District(d),
     })
@@ -436,7 +483,7 @@ fn lights_out(st: &mut AppState, node: NodeId, now: u64) -> Result<String, Strin
     let name = city
         .district_opt(d)
         .map_or_else(|| city.name.clone(), |x| x.name.clone());
-    spend(st, node, Verb::LightsOut);
+    spend(st, NetNode::City(node), Verb::LightsOut);
     st.net.lights_out.insert(d, now + LIGHTS_OUT_MINUTES);
     tick(st);
     Ok(format!(
@@ -446,10 +493,10 @@ fn lights_out(st: &mut AppState, node: NodeId, now: u64) -> Result<String, Strin
 
 /// The ad board floods its room: every standing piece asleep goes to look.
 fn decoy(st: &mut AppState, node: NodeId, at: Pos) -> Result<String, String> {
-    let Some(Place::Construct(b)) = st.player.as_ref().map(|p| p.place) else {
+    let Some(b) = st.player.as_ref().and_then(|p| p.place.construct()) else {
         return Err("a decoy works inside its construct".to_string());
     };
-    spend(st, node, Verb::Decoy);
+    spend(st, NetNode::City(node), Verb::Decoy);
     st.net.decoy = Some(Decoy {
         building: b,
         node,
@@ -614,7 +661,7 @@ fn in_front(st: &AppState, at: Pos) -> Option<Pos> {
 /// ends; the lure sends the walkers near to the nearest ad. The log line.
 pub fn hijack(st: &mut AppState, node: NodeId, line: Line) -> String {
     let now = st.net.now(st);
-    let Some(hold) = held(st, node, now).cloned() else {
+    let Some(hold) = held(st, NetNode::City(node), now).cloned() else {
         return "the hold is gone".to_string();
     };
     let Some(b) = st
@@ -630,7 +677,7 @@ pub fn hijack(st: &mut AppState, node: NodeId, line: Line) -> String {
         .find(|(l, _)| *l == line)
         .map(|(_, t)| t)
         .unwrap_or_default();
-    spend(st, node, Verb::Hijack);
+    spend(st, NetNode::City(node), Verb::Hijack);
     st.net.hijacks.retain(|j| j.building != b);
     st.net.hijacks.push(Hijack {
         node,
@@ -777,10 +824,50 @@ mod tests {
     }
 
     #[test]
+    fn an_old_hold_reads_as_a_city_node() {
+        #[derive(serde::Serialize)]
+        struct OldHold {
+            node: NodeId,
+            owner: Owner,
+            until: u64,
+            used: Vec<Verb>,
+        }
+        let old = OldHold {
+            node: NodeId(9),
+            owner: Owner::Building(BuildingId(2)),
+            until: 70,
+            used: vec![Verb::Loop],
+        };
+        let back: Hold = rmp_serde::from_slice(&rmp_serde::to_vec_named(&old).unwrap()).unwrap();
+        assert_eq!(back.node, citygen::NetNode::City(NodeId(9)));
+        assert_eq!(back.used, vec![Verb::Loop]);
+    }
+
+    #[test]
+    fn a_site_hold_and_its_feed_come_back() {
+        let n = citygen::NetNode::Site(citygen::SiteNode {
+            building: BuildingId(4),
+            level: 2,
+            at: Pos::new(6, 3),
+        });
+        let mut net = crate::net::NetState::default();
+        net.holds.push(Hold {
+            node: n,
+            owner: Owner::Building(BuildingId(4)),
+            until: 80,
+            used: vec![Verb::Tap],
+        });
+        net.feed = Some(n);
+        let back: crate::net::NetState =
+            rmp_serde::from_slice(&rmp_serde::to_vec_named(&net).unwrap()).unwrap();
+        assert_eq!((back.holds[0].node, back.feed), (n, Some(n)));
+    }
+
+    #[test]
     fn a_crack_holds_a_camera_for_an_hour() {
         let (st, cam) = camera_held();
         let now = st.net.now(&st);
-        let h = held(&st, cam, now).expect("held");
+        let h = held(&st, citygen::NetNode::City(cam), now).expect("held");
         assert_eq!(h.until, now + game::HACK_MINUTES);
         assert!(
             st.log
@@ -803,7 +890,7 @@ mod tests {
             crate::net::step_run(&mut st);
         }
         let now = st.net.now(&st);
-        assert!(held(&st, ad, now).is_some());
+        assert!(held(&st, citygen::NetNode::City(ad), now).is_some());
         let spoof = st.net.traces.get(&b).map_or(0, |t| t.heat);
         let (mut st2, _) = under_kiroflux();
         st2.player.as_mut().unwrap().pos = Pos::new(at.x, at.y - 1);
@@ -816,19 +903,22 @@ mod tests {
     fn a_verb_key_acts_on_the_nearest_hold() {
         let (mut st, cam) = camera_held();
         let now = st.net.now(&st);
-        assert!(!st.net.blinded(cam, now));
+        assert!(!st.net.blinded(citygen::NetNode::City(cam), now));
         let done = use_verb(&mut st, 'o').unwrap();
         assert!(
             matches!(done, VerbDone::Said(ref l) if l.starts_with("loop")),
             "{done:?}"
         );
-        assert!(st.net.blinded(cam, now), "the loop blinds it");
+        assert!(
+            st.net.blinded(citygen::NetNode::City(cam), now),
+            "the loop blinds it"
+        );
         // Spent: the loop is gone from its verbs, the tap still there.
-        assert_eq!(verbs_of(&st, cam), vec![Verb::Tap]);
+        assert_eq!(verbs_of(&st, citygen::NetNode::City(cam)), vec![Verb::Tap]);
         assert!(use_verb(&mut st, 'o').is_err());
         // Tap toggles the feed.
         use_verb(&mut st, 'f').unwrap();
-        assert_eq!(st.net.feed, Some(cam));
+        assert_eq!(st.net.feed, Some(citygen::NetNode::City(cam)));
         use_verb(&mut st, 'f').unwrap();
         assert_eq!(st.net.feed, None);
         // A key the camera has no verb on.
@@ -853,7 +943,7 @@ mod tests {
     #[test]
     fn a_hold_runs_out() {
         let (mut st, cam) = camera_held();
-        st.net.feed = Some(cam);
+        st.net.feed = Some(citygen::NetNode::City(cam));
         st.net.holds.iter_mut().for_each(|h| h.until = 0);
         tick(&mut st);
         assert!(st.net.holds.is_empty());
@@ -894,7 +984,7 @@ mod tests {
         let now = st.net.now(&st);
         st.net.alarm(b, now);
         assert!(
-            st.net.blinded(cam, now),
+            st.net.blinded(citygen::NetNode::City(cam), now),
             "the loop is the hold's, not a hack"
         );
     }
@@ -926,14 +1016,24 @@ mod tests {
             crate::helix::hosts::user_for(&st, HostId::District(d)),
             "guest"
         );
-        take(&mut st, street, Owner::District(d), now);
+        take(
+            &mut st,
+            citygen::NetNode::City(street),
+            Owner::District(d),
+            now,
+        );
         assert_eq!(
             crate::helix::hosts::user_for(&st, HostId::District(d)),
             "user"
         );
         let term = term.expect("Kiroflux Mart has a terminal");
         assert_eq!(crate::access::tier_on(&st, b), crate::access::Tier::Guest);
-        take(&mut st, term, Owner::Building(b), now);
+        take(
+            &mut st,
+            citygen::NetNode::City(term),
+            Owner::Building(b),
+            now,
+        );
         assert_eq!(crate::access::tier_on(&st, b), crate::access::Tier::User);
         assert_eq!(
             crate::helix::hosts::user_for(&st, HostId::Building(b)),
@@ -982,7 +1082,12 @@ mod tests {
         assert!(staring(&st, ad_at.step(citygen::Dir::S)));
         // Held again, the hijack lasts with the hold.
         let later = st.net.now(&st) + 5;
-        take(&mut st, ad, Owner::Building(b), later);
+        take(
+            &mut st,
+            citygen::NetNode::City(ad),
+            Owner::Building(b),
+            later,
+        );
         assert_eq!(st.net.hijacks[0].until, later + game::HACK_MINUTES);
         // The hold ends: the ads go back.
         st.net.holds.iter_mut().for_each(|h| h.until = 0);
@@ -1033,9 +1138,11 @@ mod tests {
     fn a_decoy_draws_the_ice() {
         let (mut st, _) = under_kiroflux();
         let city = st.city.as_ref().unwrap();
+        // A construct of today's kind: a site's gate is its firewall's.
         let (b, gi, ad, at) = city
             .buildings
             .iter()
+            .filter(|b| !crate::sitenet::is_site(&st, b.id))
             .find_map(|b| {
                 let k = citygen::construct::generate_construct(city, b.id)?;
                 let gi = k
@@ -1052,8 +1159,11 @@ mod tests {
         crate::constructs::enter_construct(&mut st, b).unwrap();
         st.player.as_mut().unwrap().pos = at;
         let now = st.net.now(&st);
-        take(&mut st, ad, Owner::Building(b), now);
-        assert_eq!(verbs_of(&st, ad), vec![Verb::Hijack, Verb::Decoy]);
+        take(&mut st, citygen::NetNode::City(ad), Owner::Building(b), now);
+        assert_eq!(
+            verbs_of(&st, citygen::NetNode::City(ad)),
+            vec![Verb::Hijack, Verb::Decoy]
+        );
         let done = use_verb(&mut st, 'z').unwrap();
         assert!(
             matches!(done, VerbDone::Said(ref l) if l.starts_with("decoy")),
@@ -1169,7 +1279,11 @@ mod tests {
             use_verb(&mut st, 'o'),
             Err("the lamps are off by day".to_string())
         );
-        assert_eq!(verbs_of(&st, grid), vec![Verb::LightsOut], "not spent");
+        assert_eq!(
+            verbs_of(&st, citygen::NetNode::City(grid)),
+            vec![Verb::LightsOut],
+            "not spent"
+        );
     }
 
     #[test]

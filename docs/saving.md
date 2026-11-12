@@ -154,8 +154,8 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   `Room.zone`; `Floor.locks` (the `DoorLock`s on a venue's zone borders and ways in, and
   the readers a copy fits); `LinkStop.card`, `on` and `off` (`on` and `off` default to
   true); `LevelLink.name`; `FrameDoor.enclosed`; `Foe.post`. The new `Terrain`,
-  `Feature` and `RoomKind` variants join their enums at the end, so saved indices keep
-  their meaning.
+  `Feature` and `RoomKind` variants, and `Place::SiteNet` (you on a site's own Net, below),
+  join their enums at the end, so saved indices keep their meaning.
 - **The venue's own enums grow only at their end too.** A saved layout and a copy hold
   `LinkKind`, `LockKind`, `Spine`, `PieceKind`, `WayInKind`, `MissionSize` and
   `DeviceKind`: a new variant joins its enum at the end. A `Ways` is a set of bits, one
@@ -194,6 +194,73 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   `lost in the update · the job in {building}`.
 - **Another city.** The copies are a field of `Interiors`, which `outside::Stay` and
   `kept::StayParts` carry whole, so a copy in a city you've left travels with it.
+
+## A site's own Net
+
+Every site (a building whose plan is a venue's) has a Net of its own behind a firewall:
+a node for each device, a riser joining its levels' hubs, an air gap from high security.
+The design is `docs/superpowers/specs/2026-11-11-site-net-design.md`; the rules at play
+are in `sitenet.rs`.
+
+- **The Net isn't saved.** Its nodes, riser, hubs, air gap and firewall spots are worked
+  out (`citygen::sitenet::SiteNet::of`) from what is saved: the plan with its layout, a
+  live copy's layer, and the security that governs the site (the live copy's, else its
+  subnet's). So a reopened run works out the same Net. Two caches in `Interiors` are
+  `#[serde(skip)]` and made again when first asked (rule 16), so nothing about a site is
+  rebuilt in `after_restore`:
+  - `site_nets`: each site's Net as `sitenet::net_of` worked it out, dropped with the plan
+    or the copy it was made from;
+  - `venues`: whether a building with no plan yet lays out as a venue
+    (`Interiors::is_venue`).
+- **The site's construct is saved whole**, in `Constructs` beside every other construct.
+  It is one `Construct` whose grid holds every kept level; its levels and devices are in
+  `Construct.levels` and `Construct.devices`. Both are `#[serde(default)]`: empty in every
+  other construct, and in one saved before. Its ICE is saved with it: where each piece
+  stands and whether it's lifted in its `guards`, each piece's state in `NetState.ice`, a
+  hack on a piece as a `HackTarget::Guard` indexed across all its levels. Making it keeps
+  the site's plan in `Interiors.plans`, as walking in does, so a run saved on a site's Net
+  holds the plan its construct was made from.
+- **The firewall's broken locks** are `NetState.firewalls` (`#[serde(default)]`): per
+  building, each lock broken and the game minute it closes again. It is the one record of
+  a broken lock: no `Hack` is pushed for one.
+- **A site's node** is a `SiteNode`: its building, its level and its device's tile on that
+  floor (a firewall lock: level `SiteNode::FIREWALL`, at `(lock, 0)`).
+  - A hack on one is `HackTarget::Site`.
+  - A hold (`Hold.node`) and the open feed (`NetState.feed`) are `NetNode`s, `City` or
+    `Site`. Both read the bare `NodeId` that saves held before as `City`
+    (`citygen::net::NetNodeRead`).
+  - `HackTarget::Site`, `Place::SiteNet` and the new `NodeKind`s (`GateSwitch`, `Turret`,
+    `Container`, `Hub`, `Firewall`) join their enums at the end.
+- **Old saves.**
+  - A hotel or office an old save planned on the classic builder is no site (Ruling 14 of
+    the plan, `2026-11-11-site-net.md`): no firewall, no Net of its own, its old construct
+    as before. One it never planned is laid out as a venue when first asked, and is a
+    site.
+  - A save standing in a site's old construct (`Place::Construct`, made before the site
+    had a Net of its own) opens and carries on there until you step out (Ruling 13).
+    Nothing replaces the old construct while you're in it. Out through its gate, the way
+    back in is the firewall's.
+  - The site's construct replaces an old one when it's first made
+    (`sitenet::ensure_construct`: through the firewall, by a backdoor, or jacking in on a
+    floor). The old one's ICE states and the hacks on its guards go with it.
+  - A hack or a hold from before names its city node and keeps working as it did; a
+    street door's city lock now opens that door only.
+  - No fixture stands in a site's construct or holds one, nor a hotel's or an office's
+    plan: in each, those are laid out as venues when first asked. The busy one is jacked
+    into a corp tower's construct, and no venue type builds corp towers, so it opens as
+    before. `a_save_inside_a_sites_old_construct_carries_on_until_you_step_out` plays the
+    old-construct case.
+- **A copy taken or ending drops the site's Net** (`sitenet::forget`): the hacks, a run in
+  flight, the holds and the feed on its nodes, its broken locks, its construct, its ICE
+  and the Net kept from its plan. Each is made again from the new plan when next needed.
+  It never runs while you're in the building: `venues::tick` waits for you to be out.
+- **A copy lost while you're inside.** A copy lost in the update (its type gone, or saved
+  with no layer) ends at once, even with you in the building, and then skips `forget` so
+  nothing is dropped under you. Its construct stays as it stood, though the plan and copy
+  that made it are gone. It is saved as any construct is. A save in that state opens and
+  plays there, and jacking out works. The construct stays the building's, through the
+  firewall too, until a copy on the building next goes live.
+  `a_save_on_a_lost_copys_net_opens_and_plays` plays it.
 
 ## Writing a save
 
@@ -249,6 +316,6 @@ Go through this whenever you add or change something that lives through play.
 
 ## Tests
 
-- `cargo test -p strata-zero --target-dir target/smoke runs::` covers the file, the snapshot, the ids and when it saves; `a_run_comes_back_whole` restores a save and compares every saved field, and `the_open_nets_state_comes_back_whole` does the same for the Net's nodes. `a_looped_camera_stays_blind_after_a_reopen` and `the_lights_stay_out_after_a_reopen` play what a reopen must keep: comparing what is written can't see a skipped field made again.
+- `cargo test -p strata-zero --target-dir target/smoke runs::` covers the file, the snapshot, the ids and when it saves; `a_run_comes_back_whole` restores a save and compares every saved field, and `the_open_nets_state_comes_back_whole` does the same for the Net's nodes. `a_looped_camera_stays_blind_after_a_reopen` and `the_lights_stay_out_after_a_reopen` play what a reopen must keep: comparing what is written can't see a skipped field made again. `a_site_construct_and_its_firewall_come_back` brings back a site's construct (a piece moved, one lifted, their states), its broken locks and the hacks, holds and feed on its nodes, and works its Net out again the same; the old-construct and lost-copy saves are played as "A site's own Net" says.
 - Saving off by default: `AppState::new()` saves nowhere, and tests that save use `runs::testutil::Dir`. No test writes into the crate's folder except the `#[ignore]` fixture writers.
 - Shots: `save_title_shots`, `save_load_shots`, `save_hall_shots`, `save_flatline_shots`, `save_pause_shots` (see CLAUDE.md, "Seeing the window without opening it").

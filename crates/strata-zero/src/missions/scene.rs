@@ -1337,7 +1337,9 @@ pub(crate) mod tests {
         let view = map.map_area();
         let mut want = Camera::default();
         want.target(far.1);
-        want.clamp(st.city.as_ref().unwrap().size, view.width, view.height);
+        let size = st.city.as_ref().unwrap().size;
+        let all = citygen::Rect::new(0, 0, size.w as i32, size.h as i32);
+        want.clamp_to(all, view.width, view.height);
         assert_eq!((map.cam.tx, map.cam.ty), (want.tx, want.ty));
         let zone = i32::from(view.width) / 6;
         assert!(map.cam.tx - below.x > zone, "the camera left you");

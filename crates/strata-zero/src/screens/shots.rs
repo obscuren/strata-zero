@@ -2894,9 +2894,11 @@ fn net_inside() {
     let mut st = state_home();
     let mut map = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();
+    // A construct of today's kind: a site's gate is its firewall's.
     let (k, b) = city
         .buildings
         .iter()
+        .filter(|b| !crate::sitenet::is_site(&st, b.id))
         .filter_map(|b| citygen::construct::generate_construct(&city, b.id).map(|k| (k, b.id)))
         .find(|(k, _)| k.vault_room().is_some() && k.security >= 230 && k.guards.len() == 2)
         .expect("a black construct with a vault");
@@ -3252,8 +3254,18 @@ fn held_camera(tap: bool) -> (AppState, MapScreen) {
     stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(cam),
+        crate::owners::Owner::Building(b),
+        now,
+    );
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     if tap {
         crate::holds::use_verb(&mut st, 'f').unwrap();
     }
@@ -3390,7 +3402,12 @@ fn street_hijack() {
     let b = kiroflux(&st);
     let (ad, _) = kiroflux_node(&st, citygen::NodeKind::AdBoard);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     crate::holds::hijack(&mut st, ad, crate::holds::Line::Smear);
     map.update(&mut st, &[]);
     pass(&mut st, 60);
@@ -3466,9 +3483,11 @@ fn net_decoy() {
     let mut st = state_home();
     let mut map = MapScreen::walking(&mut st);
     let city = st.city.clone().unwrap();
+    // A construct of today's kind: a site's gate is its firewall's.
     let (b, ad, at) = city
         .buildings
         .iter()
+        .filter(|b| !crate::sitenet::is_site(&st, b.id))
         .find_map(|b| {
             let k = citygen::construct::generate_construct(&city, b.id)?;
             let g = k.guards.iter().find(|g| g.beat.len() >= 2 && !g.inert)?;
@@ -3495,7 +3514,12 @@ fn net_decoy() {
     stand_in(&mut st, Place::Construct(b), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, ad, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(ad),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     crate::holds::use_verb(&mut st, 'z').unwrap();
     for _ in 0..2 {
         st.net.beat = st.clock_tick();
@@ -3650,7 +3674,12 @@ fn net_space_camera() {
     );
     let b = kiroflux(&st);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, cam, crate::owners::Owner::Building(b), now);
+    crate::holds::take(
+        &mut st,
+        citygen::NetNode::City(cam),
+        crate::owners::Owner::Building(b),
+        now,
+    );
     map.update(&mut st, &[]);
     let crate::app::ScreenCmd::Push { to: w, .. } = map.update(&mut st, &[key(KeyCode::Char(' '))])
     else {
@@ -3696,7 +3725,7 @@ fn net_shell() {
     stand_in(&mut st, Place::Stratum(StratumKind::Net), here);
     map.cam.snap(here);
     let now = st.net.now(&st);
-    crate::holds::take(&mut st, id, owner, now);
+    crate::holds::take(&mut st, citygen::NetNode::City(id), owner, now);
     map.update(&mut st, &[]);
     write_svg(
         &dir,
@@ -6003,5 +6032,65 @@ fn armor_on_its_blueprints() {
                 (w, h),
             );
         }
+    }
+}
+
+/// The open tower of a site's Net (#95), in the DEVELOPER SITE NET start's office copy at
+/// 190, at 120 x 40 and 100 x 30: jacked in at the lobby kiosk with L open; jacked in at
+/// B1's terminal across the air gap; through the broken firewall on L's hub; and on the
+/// city's Net beside the building with lock 0 broken.
+#[test]
+#[ignore]
+fn site_net_shots() {
+    use crate::sitenet::testutil::*;
+    use citygen::SiteNode;
+    use game::HackTarget;
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let security = crate::venues::SITE_NET_SECURITY;
+    // Jacked in at the lobby kiosk: L open.
+    let (mut st, b) = office_copy(security);
+    jacked_in_at_the_kiosk(&mut st, b);
+    site_net_shot(&dir, "L", &mut st);
+    // Jacked in at B1's terminal: B1 open across the gap.
+    let (mut st, b) = office_copy(security);
+    jacked_in_across_the_gap(&mut st, b);
+    site_net_shot(&dir, "vault", &mut st);
+    // Through the broken firewall, on L's hub.
+    let (mut st, b) = office_copy(security);
+    let now = st.net.now(&st);
+    for i in 0..3 {
+        st.net.break_lock(b, i, now);
+    }
+    at_the_gate(&mut st, b);
+    crate::constructs::enter_construct(&mut st, b).unwrap();
+    site_net_shot(&dir, "firewall", &mut st);
+    // On the grid beside the building, lock 0 broken from there.
+    let (mut st, b) = office_copy(security);
+    let gate = crate::sitenet::lock_spots(&st, b)[0];
+    stand_on_the_grid_beside(&mut st, gate);
+    let lock = HackTarget::Site(SiteNode::firewall(b, 0));
+    crate::net::tests::crack_to_landing(&mut st, lock);
+    assert_eq!(crate::sitenet::broken(&st, b), [true, false, false]);
+    // A few seconds on: the landing's kick and flourish over, its line in the log.
+    st.tick += 300;
+    site_net_shot(&dir, "grid", &mut st);
+}
+
+/// The map where you stand as `site_net_{name}_{w}x{h}`, at 120 x 40 and 100 x 30, the
+/// camera landed on you (`sitenet::testutil::drawn`). On a site's Net your level's label is
+/// on the map at both sizes.
+fn site_net_shot(dir: &str, name: &str, st: &mut AppState) {
+    use crate::sitenet::testutil::{drawn, label_shown};
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let buf = drawn(st, (w, h));
+        if let Some(Place::SiteNet { building, level }) = st.player.as_ref().map(|p| p.place) {
+            let k = st.constructs.site(building).expect("the site's construct");
+            let role = &k.net_level(level).expect("your level").name;
+            let key = citygen::FloorPlan::label(level);
+            assert!(label_shown(&buf, &key, role), "{name} at {w}x{h}");
+        }
+        write_svg(dir, &format!("site_net_{name}_{w}x{h}"), st, &buf, false);
     }
 }

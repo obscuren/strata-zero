@@ -36,6 +36,22 @@ impl Constructs {
         self.made.insert(k.building, k);
     }
 
+    /// A site's construct, once made: none while the building has none, or keeps one from
+    /// before its Net (an old save's).
+    pub fn site(&self, b: BuildingId) -> Option<&Construct> {
+        self.made.get(&b).filter(|k| k.is_site())
+    }
+
+    /// A site's construct, kept under its building over any construct it had before.
+    pub fn put_site(&mut self, k: Construct) {
+        self.made.insert(k.building, k);
+    }
+
+    /// Drops building `b`'s construct: made again when next needed.
+    pub fn drop(&mut self, b: BuildingId) {
+        self.made.remove(&b);
+    }
+
     #[cfg(test)]
     pub fn generated(&self) -> usize {
         self.made.len()
@@ -78,10 +94,14 @@ pub(crate) fn land(st: &mut AppState, place: Place, pos: Pos) {
     st.repaint = true;
 }
 
-/// Through a building's gate on the Net, onto the entry inside its construct.
+/// Through a building's gate on the Net, onto the entry inside its construct; a site's
+/// gate is its firewall's (`sitenet::through`).
 pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     // The first beat falls a full beat after the gate.
     st.net.beat = st.clock_tick();
+    if crate::sitenet::is_site(st, b) {
+        return crate::sitenet::through(st, b);
+    }
     let now = st.net.now(st);
     if st.net.alert(b, now) {
         let city = st.city.as_ref().ok_or("no city")?;
@@ -101,10 +121,24 @@ pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, Strin
     Ok(format!("Entering `{name}`"))
 }
 
-/// Out through the entry, onto the gate tile on the Net.
+/// Whether a step from `here` onto `to` in construct `k` leads out through its gate: from
+/// the entry, off the map; in a site's, off the gate's level.
+pub fn leads_out(k: &Construct, here: Pos, to: Pos) -> bool {
+    here == k.entry
+        && match k.level_at(k.entry) {
+            Some(gate) => !gate.area.contains(to),
+            None => !k.tiles.in_bounds(to),
+        }
+}
+
+/// Out through the entry, onto the gate tile on the Net; a site's gate is its firewall's
+/// (`sitenet::out`).
 pub fn leave_construct(st: &mut AppState) -> Result<String, String> {
-    let city = st.city.as_ref().ok_or("no city")?;
     let player = st.player.as_ref().ok_or("no body")?;
+    if let Place::SiteNet { .. } = player.place {
+        return crate::sitenet::out(st);
+    }
+    let city = st.city.as_ref().ok_or("no city")?;
     let Place::Construct(b) = player.place else {
         return Err("not in a construct".to_string());
     };

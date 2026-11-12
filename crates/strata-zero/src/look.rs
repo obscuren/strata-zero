@@ -359,7 +359,7 @@ fn fixture_at(
                 key,
             })
         }
-        Place::Construct(_) => None,
+        Place::Construct(_) | Place::SiteNet { .. } => None,
     }
 }
 
@@ -876,10 +876,16 @@ pub fn look_card(
                     );
                 }
             }
-            Feature::Node(k) => {
-                set_head(&mut card, capitalised(k.label()), glyph);
-                card.second = Some("node".to_string());
-            }
+            Feature::Node(k) => match site_device(st, place, pos) {
+                Some((name, second)) => {
+                    set_head(&mut card, capitalised(&name), glyph);
+                    card.second = Some(second);
+                }
+                None => {
+                    set_head(&mut card, capitalised(k.label()), glyph);
+                    card.second = Some("node".to_string());
+                }
+            },
             Feature::Ice(g) => {
                 set_head(&mut card, format!("{} ICE", capitalised(g.label())), glyph);
             }
@@ -916,7 +922,7 @@ pub fn look_card(
                 None => ground(&location, mark(), tile, own, &mut card),
             },
         }
-    } else if let Place::Construct(b) = place
+    } else if let Some(b) = place.construct()
         && let Some(i) = st.constructs.get(b).and_then(|k| k.guard_at(pos))
     {
         let g = &st.constructs.get(b).expect("checked").guards[i];
@@ -991,6 +997,64 @@ pub fn look_card(
         card.also.clear();
     }
     card
+}
+
+/// A site's device on tile `pos` of its Net: its name, and its kind with what the Net
+/// holds of it now: `camera · held`, `door lock · cracked`, `door lock · locked`.
+fn site_device(st: &AppState, place: Place, pos: Pos) -> Option<(String, String)> {
+    use citygen::NodeKind;
+    let Place::SiteNet { building, .. } = place else {
+        return None;
+    };
+    let d = st.constructs.site(building)?.device_at(pos)?;
+    let now = st.net.now(st);
+    let state = if crate::holds::held(st, citygen::NetNode::Site(d.node), now).is_some() {
+        Some("held")
+    } else if d.kind == NodeKind::DoorLock {
+        Some(door_state(st, building, d))
+    } else if d.kind == NodeKind::Container {
+        Some(match crate::sitenet::container_open(st, d.node) {
+            true => "cracked",
+            false => "locked",
+        })
+    } else if crate::sitenet::hacked(st, d.node, &[game::Op::Crack, game::Op::Spoof]) {
+        Some("cracked")
+    } else if d.kind == NodeKind::GateSwitch {
+        Some("locked")
+    } else {
+        None
+    };
+    let kind = d.kind.label();
+    let second = match state {
+        Some(s) => format!("{kind} · {s}"),
+        None => kind.to_string(),
+    };
+    Some((d.name.clone(), second))
+}
+
+/// A door's node as a step onto it meets it (`sitenet::step_on_net`): `locked down` in an
+/// alarm; `cracked` by a hack on its own node; `open` when the Net holds its lock open
+/// another way (`sitenet::lock_open`: a way in's, by its street door's city lock); else
+/// `locked`. The card is drawn every frame: the way in's lock is read off the layout, no
+/// floor drawn for it.
+fn door_state(st: &AppState, b: citygen::BuildingId, d: &citygen::NetDevice) -> &'static str {
+    if crate::sitenet::opened(st, d.node) {
+        return "cracked";
+    }
+    if st.net.alert(b, st.net.now(st)) {
+        return "locked down";
+    }
+    let (level, at) = (d.node.level, d.node.at);
+    let way_in = crate::interiors::plan_now(st, b).and_then(|plan| {
+        let v = plan.venue.as_deref()?;
+        (v.ways_in.iter())
+            .filter(|w| w.level == level)
+            .find_map(|w| w.lock.filter(|l| l.at == at))
+    });
+    match way_in {
+        Some(lock) if crate::sitenet::lock_open(st, b, level, &lock) => "open",
+        _ => "locked",
+    }
 }
 
 /// The bare ground `tile`, drawn as `glyph`: its name and `location`, where it is; or

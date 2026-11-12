@@ -7,6 +7,7 @@
 use crate::app::AppState;
 use crate::render::map::MapRef;
 use citygen::rng::hash64;
+use citygen::sitenet::SiteNet;
 use citygen::venue::VenueLayout;
 use citygen::{
     BuildingId, City, Exit, Floor, FloorPlan, LinkKind, Place, Pos, Role, RoomKind, StratumKind,
@@ -14,10 +15,12 @@ use citygen::{
 };
 use sim::{HouseholdId, Occupant, OccupantRole, PersonId, Whereabouts, World};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Interiors {
@@ -30,6 +33,15 @@ pub struct Interiors {
     /// saves, so it defaults: they hold none.
     #[serde(default)]
     copies: BTreeMap<BuildingId, crate::venues::MissionCopy>,
+    /// Whether each building asked about with no plan yet would be laid out as a venue:
+    /// a cache, made from the city when first asked (saving rule 16), never saved.
+    #[serde(skip)]
+    venues: RefCell<BTreeMap<BuildingId, bool>>,
+    /// Each site's Net as `sitenet::net_of` worked it out (None for a building that is no
+    /// site): a cache, made from the plan, its copy and the city when first asked (saving
+    /// rule 16), never saved; dropped with the plan or the copy it was made from.
+    #[serde(skip)]
+    site_nets: RefCell<BTreeMap<BuildingId, Option<Arc<SiteNet>>>>,
 }
 
 /// Which household lives in which flat of one building: stable, in or out.
@@ -156,10 +168,49 @@ impl Interiors {
         self.plans.get(&b)
     }
 
-    /// Replaces a building's plan and drops the floors made from the old one.
+    /// Whether building `b`'s plan is a venue's: the session's plan when it holds one (an
+    /// old save's hotel kept on the classic builder is none), else whether the seed lays
+    /// it out as one, a kind a venue type builds whose layout lays (worked out once).
+    pub fn is_venue(&self, city: &City, b: BuildingId) -> bool {
+        if let Some(plan) = self.plans.get(&b) {
+            return plan.venue.is_some();
+        }
+        let built = (city.building_opt(b)).is_some_and(|x| {
+            citygen::venue::VenuePack::builtin()
+                .for_kind(x.kind)
+                .is_some()
+        });
+        built
+            && *(self.venues.borrow_mut().entry(b))
+                .or_insert_with(|| FloorPlan::new(city, b).is_some_and(|plan| plan.venue.is_some()))
+    }
+
+    /// Replaces a building's plan and drops the floors and the site's Net made from the
+    /// old one.
     pub fn put_plan(&mut self, plan: FloorPlan) {
         self.drop_floors(plan.building);
+        self.drop_site_net(plan.building);
         self.plans.insert(plan.building, plan);
+    }
+
+    /// Site `b`'s Net as kept, else worked out by `work_out` and kept: `sitenet::net_of`.
+    pub(crate) fn site_net(
+        &self,
+        b: BuildingId,
+        work_out: impl FnOnce() -> Option<SiteNet>,
+    ) -> Option<Arc<SiteNet>> {
+        if let Some(net) = self.site_nets.borrow().get(&b) {
+            return net.clone();
+        }
+        // Worked out with no borrow held: it reads the plan and the copy beside it.
+        let net = work_out().map(Arc::new);
+        self.site_nets.borrow_mut().insert(b, net.clone());
+        net
+    }
+
+    /// Drops site `b`'s kept Net: worked out again when next asked.
+    pub(crate) fn drop_site_net(&mut self, b: BuildingId) {
+        self.site_nets.get_mut().remove(&b);
     }
 
     /// Drops every floor of building `b`: each is drawn again from its plan when next
@@ -173,12 +224,16 @@ impl Interiors {
         self.copies.get(&b)
     }
 
+    /// Venue `b`'s copy to change: the site's Net kept from it goes, since what changes
+    /// (going live, its layer, its security) may change the Net.
     pub(crate) fn copy_mut(&mut self, b: BuildingId) -> Option<&mut crate::venues::MissionCopy> {
+        self.drop_site_net(b);
         self.copies.get_mut(&b)
     }
 
-    /// Records venue `b`'s copy, or with None lets it go.
+    /// Records venue `b`'s copy, or with None lets it go; the site's Net kept goes too.
     pub(crate) fn set_copy(&mut self, b: BuildingId, copy: Option<crate::venues::MissionCopy>) {
+        self.drop_site_net(b);
         match copy {
             Some(c) => self.copies.insert(b, c),
             None => self.copies.remove(&b),
@@ -480,12 +535,11 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
         .filter(|_| plan.rides(link, here).contains(&level))
         .ok_or("the lift doesn't stop there")?
         .at;
-    let now = st.net.now(st);
-    if !st.net.lifts_answer(b, now) {
+    if !crate::sitenet::lift_answers(st, b, link) {
         return Err("lifts locked down".to_string());
     }
     let card = crate::venues::ride_card(&plan, link, level);
-    if crate::credentials::opens_stop(st, b, card).is_none() {
+    if crate::credentials::opens_stop(st, b, link, card).is_none() {
         return Err(format!(
             "the lift wants a {} card",
             crate::venues::zone_name(&plan, card)

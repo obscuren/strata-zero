@@ -1,13 +1,14 @@
 //! A tapped camera's feed: a small window hanging off the camera's node on a wire, the
-//! street around the camera's tile drawn live in green phosphor (each cell by its
-//! light, walkers white, cameras red), headed `CAM · <BUILDING>` and `● REC`. Spec
+//! street around the camera's tile (a site camera's floor around its spot) drawn live in
+//! green phosphor (each cell by its light, walkers white, cameras red), headed
+//! `CAM · <BUILDING>` and `● REC`. Spec
 //! `docs/superpowers/specs/2026-11-04-net-nodes-design.md`, "Camera: tap, loop, eyes".
 
 use crate::app::AppState;
-use crate::render::map::{MapRef, TileMap};
+use crate::render::map::{FloorMap, MapRef, TileMap};
 use crate::render::people::PeopleOverlay;
 use crate::render::viewport::{MapView, Overlay, tile_to_screen};
-use citygen::{NodeKind, Place, Pos, StratumKind};
+use citygen::{NetNode, NodeKind, Place, Pos, StratumKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -95,8 +96,21 @@ pub fn draw(
     else {
         return;
     };
-    let Some(n) = city.net.nodes.get(node.index()) else {
-        return;
+    // A city camera watches its stratum from its anchor; a site's, its floor from its spot.
+    let anchor = match node {
+        NetNode::City(id) => {
+            let Some(n) = city.net.nodes.get(id.index()) else {
+                return;
+            };
+            (Place::Stratum(n.anchor.0), n.anchor.1)
+        }
+        NetNode::Site(n) => (
+            Place::Floor {
+                building: n.building,
+                level: n.level,
+            },
+            n.at,
+        ),
     };
     let at =
         crate::holds::node_pos(st, p.place, node).and_then(|q| tile_to_screen(area, origin, q));
@@ -109,29 +123,56 @@ pub fn draw(
         cell.set_char('━').set_fg(EDGE);
     }
     let title = crate::holds::feed_title(st, node);
-    paint(buf, win, st, n.anchor, &title);
+    paint(buf, win, st, anchor, &title);
 }
 
-/// The window: border and header, and the street around `anchor` inside it.
-pub fn paint(buf: &mut Buffer, win: Rect, st: &AppState, anchor: (StratumKind, Pos), title: &str) {
+/// The window: border and header, and the place around `anchor` inside it: a city
+/// camera's stratum around its tile, a site camera's floor around its spot.
+pub fn paint(buf: &mut Buffer, win: Rect, st: &AppState, anchor: (Place, Pos), title: &str) {
     let Some(city) = st.city.as_ref() else {
         return;
     };
+    let (place, at) = anchor;
     let inner = Rect::new(win.x + 1, win.y + 1, win.width - 2, win.height - 2);
     let origin = Pos::new(
-        anchor.1.x - inner.width as i32 / 2,
-        anchor.1.y - inner.height as i32 / 2,
+        at.x - inner.width as i32 / 2,
+        at.y - inner.height as i32 / 2,
     );
-    // The street as the map draws it, into a scratch buffer, then recoloured.
+    // The street or the floor as the map draws it, into a scratch buffer, then recoloured:
+    // a floor as the session has it, else made fresh and not kept.
     let minute = st.minute_of_day();
-    let map = MapRef::stratum_at(city, anchor.0, minute);
+    let (plan, floor);
+    let map = match place {
+        Place::Stratum(k) => MapRef::stratum_at(city, k, minute),
+        Place::Floor { building, level } => {
+            let Some(p) = crate::interiors::plan_now(st, building) else {
+                return;
+            };
+            plan = p;
+            let Some(f) = crate::interiors::floor_now(st, &plan, level) else {
+                return;
+            };
+            floor = f;
+            MapRef::Floor(FloorMap {
+                city,
+                plan: &plan,
+                floor: &floor,
+            })
+        }
+        _ => return,
+    };
     let scratch_area = Rect::new(0, 0, inner.width, inner.height);
     let mut scratch = Buffer::empty(scratch_area);
     let hour = minute / 60;
     let people = st
         .world
         .as_ref()
-        .filter(|_| anchor.0 == StratumKind::Street)
+        .filter(|_| {
+            matches!(
+                place,
+                Place::Stratum(StratumKind::Street) | Place::Floor { .. }
+            )
+        })
         .map(|world| PeopleOverlay {
             world,
             night: hour >= 18 || hour <= 5,
@@ -153,29 +194,42 @@ pub fn paint(buf: &mut Buffer, win: Rect, st: &AppState, anchor: (StratumKind, P
         cursor: None,
     }
     .render(scratch_area, &mut scratch);
-    let movers: Vec<Pos> = st.world.as_ref().map_or_else(Vec::new, |w| {
-        w.visible(citygen::Rect::new(
-            origin.x,
-            origin.y,
-            inner.width as i32,
-            inner.height as i32,
-        ))
-        .into_iter()
-        .map(|m| m.pos)
-        .collect()
-    });
-    let cameras: Vec<Pos> = city
-        .net
-        .nodes
-        .iter()
-        .filter(|c| c.kind == NodeKind::Camera && c.anchor.0 == anchor.0)
-        .map(|c| c.anchor.1)
-        .collect();
+    // Who moves there: the city's walkers, or on a floor the guards standing on it.
+    let movers: Vec<Pos> = match place {
+        Place::Floor { .. } => (st.foes.iter())
+            .filter(|f| f.place == place && f.standing())
+            .map(|f| f.pos)
+            .collect(),
+        _ => st.world.as_ref().map_or_else(Vec::new, |w| {
+            w.visible(citygen::Rect::new(
+                origin.x,
+                origin.y,
+                inner.width as i32,
+                inner.height as i32,
+            ))
+            .into_iter()
+            .map(|m| m.pos)
+            .collect()
+        }),
+    };
+    let cameras: Vec<Pos> = match place {
+        Place::Floor { building, level } => crate::cameras::floor_cameras(st, building, level)
+            .into_iter()
+            .map(|c| c.at)
+            .collect(),
+        _ => city
+            .net
+            .nodes
+            .iter()
+            .filter(|c| c.kind == NodeKind::Camera && Place::Stratum(c.anchor.0) == place)
+            .map(|c| c.anchor.1)
+            .collect(),
+    };
     let body = st
         .player
         .as_ref()
         .and_then(|p| p.body)
-        .filter(|(place, _)| *place == Place::Stratum(anchor.0))
+        .filter(|(there, _)| *there == place)
         .map(|(_, at)| at);
     for y in 0..inner.height {
         for x in 0..inner.width {
@@ -287,5 +341,56 @@ mod tests {
             })
             .count();
         assert!(greens > 100, "{greens} green cells");
+    }
+
+    #[test]
+    fn a_site_cameras_feed_draws_its_floor() {
+        use crate::sitenet::testutil::{beside_device, office_copy};
+        let (mut st, b) = office_copy(190);
+        let cam = beside_device(&mut st, b, NodeKind::Camera);
+        crack_to_landing(&mut st, HackTarget::Site(cam.node));
+        crate::holds::use_verb(&mut st, 'f').unwrap();
+        // Its floor is drawn once and kept while the feed is open, not every frame.
+        let level = cam.node.level;
+        assert!(st.interiors.floor(b, level).is_none(), "not walked yet");
+        crate::holds::tick(&mut st);
+        assert!(st.interiors.floor(b, level).is_some(), "kept for the feed");
+        let area = Rect::new(0, 0, 100, 40);
+        let mut buf = Buffer::empty(area);
+        let me = st.player.as_ref().unwrap().pos;
+        let origin = Pos::new(me.x - 50, me.y - 20);
+        draw(&mut buf, area, origin, &st, None, true);
+        let text: String = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        // The header, as much of it as the window holds beside `● REC`.
+        let title = crate::holds::feed_title(&st, citygen::NetNode::Site(cam.node));
+        let head: String = title.chars().take(16).collect();
+        assert!(text.contains(&head), "the header {head}");
+        assert!(text.contains("● REC"));
+        // The camera on its floor, in red at the window's middle.
+        let (win, _) = place(area, tile_to_screen(area, origin, cam.at), None, true);
+        let inner = Rect::new(win.x + 1, win.y + 1, win.width - 2, win.height - 2);
+        let mid = (inner.x + inner.width / 2, inner.y + inner.height / 2);
+        assert_eq!(buf[mid].fg, CAMERA, "the camera at the middle");
+        // Its floor's walls drawn about it.
+        let (_, floor) = st.interiors.floor(b, level).unwrap();
+        let half = (inner.width as i32 / 2, inner.height as i32 / 2);
+        let walls = (0..inner.height)
+            .flat_map(|y| (0..inner.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let p = Pos::new(
+                    cam.node.at.x - half.0 + x as i32,
+                    cam.node.at.y - half.1 + y as i32,
+                );
+                floor
+                    .tiles
+                    .get(p)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::Wall)
+                    && buf[(inner.x + x, inner.y + y)].symbol() != " "
+            })
+            .count();
+        assert!(walls > 5, "{walls} wall cells");
     }
 }

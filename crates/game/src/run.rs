@@ -39,10 +39,24 @@ pub enum HackTarget {
     Deck,
     /// A piece of ICE on the open Net, by its index among the session's foes.
     Foe(usize),
+    /// A node of a site's own Net.
+    Site(citygen::SiteNode),
+}
+
+impl From<citygen::NetNode> for HackTarget {
+    fn from(n: citygen::NetNode) -> HackTarget {
+        match n {
+            citygen::NetNode::City(id) => HackTarget::Node(id),
+            citygen::NetNode::Site(s) => HackTarget::Site(s),
+        }
+    }
 }
 
 /// Whether an op does anything to a target.
 pub fn applies(op: Op, target: Target) -> bool {
+    if target == Target::Node(NodeKind::Hub) {
+        return false;
+    }
     matches!(
         (op, target),
         (Op::Crack, Target::Node(_) | Target::Guard(_))
@@ -57,6 +71,7 @@ pub fn applies(op: Op, target: Target) -> bool {
                         | NodeKind::AdBoard
                         | NodeKind::LampGrid
                         | NodeKind::Terminal
+                        | NodeKind::GateSwitch
                 )
             )
             | (Op::Blind, Target::Node(NodeKind::Camera))
@@ -244,6 +259,41 @@ mod tests {
     use crate::content::Content;
     use crate::model::{ItemId, SkillId, TalentId, TemplateId};
     use citygen::{IceGrade, NodeKind};
+
+    #[test]
+    fn a_hub_takes_no_program_and_the_new_nodes_take_a_crack() {
+        use citygen::NodeKind::*;
+        for op in [
+            Op::Crack,
+            Op::Spoof,
+            Op::Blind,
+            Op::Copy,
+            Op::Backdoor,
+            Op::Attack,
+        ] {
+            assert!(!applies(op, Target::Node(Hub)), "{op:?}");
+        }
+        for k in [Turret, Container, Firewall] {
+            assert!(applies(Op::Crack, Target::Node(k)), "{k:?}");
+            assert!(!applies(Op::Spoof, Target::Node(k)), "{k:?}");
+        }
+        assert!(applies(Op::Crack, Target::Node(GateSwitch)));
+        assert!(applies(Op::Spoof, Target::Node(GateSwitch)));
+    }
+
+    #[test]
+    fn a_site_target_round_trips() {
+        let n = citygen::SiteNode {
+            building: BuildingId(1),
+            level: 3,
+            at: citygen::Pos::new(9, 2),
+        };
+        let t = HackTarget::Site(n);
+        let back: HackTarget =
+            rmp_serde::from_slice(&rmp_serde::to_vec_named(&t).unwrap()).unwrap();
+        assert_eq!(back, t);
+        assert_eq!(HackTarget::from(citygen::NetNode::Site(n)), t);
+    }
 
     #[test]
     fn hit_chance_by_the_formula() {

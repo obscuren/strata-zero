@@ -107,6 +107,8 @@ pub enum MapRef<'a> {
 pub struct ConstructMap<'a> {
     pub city: &'a City,
     pub construct: &'a Construct,
+    /// The level of a site's Net you're on; none in any other construct.
+    pub level: Option<i32>,
 }
 
 impl TileMap for ConstructMap<'_> {
@@ -197,7 +199,19 @@ impl<'a> MapRef<'a> {
             }
             Place::Construct(b) => {
                 let construct = constructs.get(b)?;
-                Some(MapRef::Construct(ConstructMap { city, construct }))
+                Some(MapRef::Construct(ConstructMap {
+                    city,
+                    construct,
+                    level: None,
+                }))
+            }
+            Place::SiteNet { building, level } => {
+                let construct = constructs.site(building)?;
+                Some(MapRef::Construct(ConstructMap {
+                    city,
+                    construct,
+                    level: Some(level),
+                }))
             }
         }
     }
@@ -209,7 +223,13 @@ impl<'a> MapRef<'a> {
                 building: m.plan.building,
                 level: m.floor.level,
             },
-            MapRef::Construct(m) => Place::Construct(m.construct.building),
+            MapRef::Construct(m) => match m.level {
+                Some(level) => Place::SiteNet {
+                    building: m.construct.building,
+                    level,
+                },
+                None => Place::Construct(m.construct.building),
+            },
         }
     }
 
@@ -240,7 +260,17 @@ impl<'a> MapRef<'a> {
         match self {
             MapRef::Stratum(m) => m.stratum.label().to_string(),
             MapRef::Floor(m) => FloorPlan::label(m.floor.level),
-            MapRef::Construct(_) => "construct".to_string(),
+            MapRef::Construct(m) => match m.level {
+                Some(level) => {
+                    let role = m.construct.net_level(level).map(|l| l.name.as_str());
+                    let at = format!("construct · {}", FloorPlan::label(level));
+                    match role {
+                        Some(role) => format!("{at} {role}"),
+                        None => at,
+                    }
+                }
+                None => "construct".to_string(),
+            },
         }
     }
 }

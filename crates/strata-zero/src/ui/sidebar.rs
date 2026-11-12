@@ -27,6 +27,9 @@ const MAP_MIN: u16 = 7;
 const HERE_CAP: u16 = 7;
 /// HERE's cap on the Net, with the construct card on top.
 const NET_HERE_CAP: u16 = 10;
+/// HERE's cap on a site's Net, its panel (look D) on top: whole at 120x40, cut from the
+/// bottom on a smaller terminal.
+const SITE_HERE_CAP: u16 = 28;
 /// The rows the job in hand may take; the story's lines come on top of them.
 const JOBS_CAP: u16 = 5;
 const INSPECT_CAP: u16 = 14;
@@ -231,12 +234,13 @@ fn separator(width: u16) -> Line<'static> {
 }
 
 /// The focus tile: its feature, then what lies on it.
-/// Rows HERE may take: more on the Net, where the card leads it.
+/// Rows HERE may take: more on the Net, where the card leads it, and most on a site's,
+/// where its panel does.
 fn here_cap(v: &SidebarView) -> u16 {
-    if on_the_net(v) {
-        NET_HERE_CAP
-    } else {
-        HERE_CAP
+    match &v.map {
+        MapRef::Construct(m) if m.level.is_some() => SITE_HERE_CAP,
+        _ if on_the_net(v) => NET_HERE_CAP,
+        _ => HERE_CAP,
     }
 }
 
@@ -250,7 +254,7 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
     if out.is_empty() && v.map.stratum() == Some(StratumKind::Net) && v.outside.is_empty() {
         out.push(dim(" open grid"));
     }
-    if let citygen::Place::Construct(b) = v.map.place() {
+    if let Some(b) = v.map.place().construct() {
         for (i, line) in crate::net::trace_lines(v.net, b, v.now)
             .into_iter()
             .enumerate()
@@ -280,18 +284,22 @@ pub fn here_lines(v: &SidebarView) -> Vec<Line<'static>> {
         out.extend(v.outside.iter().cloned());
         return out;
     }
-    if let citygen::Place::Construct(_) = v.map.place() {
+    if v.map.place().in_construct() {
         if let Some(t) = v.map.tile(v.focus) {
             match t.feature {
                 Some(Feature::Node(k)) => {
-                    // The node under the focus, not any node of its kind.
-                    let id = match &v.map {
-                        MapRef::Construct(m) => m.construct.node_at(v.focus),
+                    // The node under the focus, not any node of its kind: on a site's Net
+                    // its device's, in any other construct its node on the city's Net.
+                    let node = match &v.map {
+                        MapRef::Construct(m) => match m.construct.device_at(v.focus) {
+                            Some(d) => Some(citygen::NetNode::Site(d.node)),
+                            None => m.construct.node_at(v.focus).map(citygen::NetNode::City),
+                        },
                         _ => None,
                     };
-                    let state = match id {
-                        Some(id) if v.net.blinded(id, v.now) => " · blind",
-                        Some(id) if v.net.copied(id, v.now) => " · copied",
+                    let state = match node {
+                        Some(n) if v.net.blinded(n, v.now) => " · blind",
+                        Some(n) if v.net.copied(game::HackTarget::from(n), v.now) => " · copied",
                         _ => "",
                     };
                     out.push(plain(format!(" ◆ {}{state}", k.label())));
@@ -684,6 +692,51 @@ mod tests {
             citygen::Place::Stratum(StratumKind::Street),
         );
         assert_eq!(here_cap(&street), HERE_CAP);
+    }
+
+    #[test]
+    fn a_sites_net_gives_here_its_panels_rows() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        crate::sitenet::testutil::on_hub(&mut st, b, 0);
+        let (place, pos) = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+        let mut v = view(&st, pos, place);
+        assert_eq!(here_cap(&v), SITE_HERE_CAP);
+        v.card = crate::sitenet::panel_lines(&st, b);
+        let text = draw_to(&v, &Sidebar::default(), 40, 34);
+        assert!(text.contains("BODY"), "whole at 120x40's 30 rows: {text}");
+        let text = draw_to(&v, &Sidebar::default(), 40, 12);
+        assert!(
+            text.contains("LEVELS") && !text.contains("BODY"),
+            "cut from the bottom"
+        );
+        // A site's construct seen as any construct keeps the Net's cap.
+        let other = view(&st, pos, citygen::Place::Construct(b));
+        assert_eq!(here_cap(&other), NET_HERE_CAP);
+    }
+
+    #[test]
+    fn here_says_a_site_nodes_blind_or_copied() {
+        use crate::sitenet::testutil::{device, hack, on_hub};
+        use citygen::NodeKind;
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        on_hub(&mut st, b, 0);
+        let place = st.player.as_ref().unwrap().place;
+        let focus = |st: &AppState, at: Pos| {
+            let mut v = view(st, at, place);
+            v.now = st.net.now(st);
+            (here_lines(&v).iter())
+                .map(|l| l.to_string())
+                .find(|l| l.starts_with(" ◆ "))
+        };
+        let (cam, server) = (
+            device(&st, b, NodeKind::Camera),
+            device(&st, b, NodeKind::Server),
+        );
+        assert_eq!(focus(&st, cam.at).as_deref(), Some(" ◆ camera"));
+        hack(&mut st, cam.node, NodeKind::Camera, game::Op::Blind);
+        assert_eq!(focus(&st, cam.at).as_deref(), Some(" ◆ camera · blind"));
+        hack(&mut st, server.node, NodeKind::Server, game::Op::Copy);
+        assert_eq!(focus(&st, server.at).as_deref(), Some(" ◆ server · copied"));
     }
 
     #[test]
