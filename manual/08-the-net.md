@@ -87,7 +87,7 @@ A hotel's or office's cameras and terminals are held the same way, from its own 
 
 Everything you do in the Net makes **noise**, and noise raises the **trace** of the building or district you're working in. The footer shows it.
 
-- At 60 the alarm goes off for an hour: the building locks down, its hacks end, its ICE wakes, its gate closes and its ports lock, on its floors and beside it. A firewall's broken locks close again.
+- At 60 the alarm goes off for an hour: the building locks down, its hacks end, its ICE wakes, its gate closes and its ports lock, on its floors and beside it. A firewall's broken locks close again; break them all again and its gate lets you through, until the alarm ends.
 - At 100 you're **dumped**: thrown back into your body.
 
 Trace falls by itself, a little each minute, once you've left. A camera that sees you, on the street or on a hotel's or office's floor, raises its building's trace too: enough to set off the alarm, never enough to dump you.
@@ -145,7 +145,7 @@ Crack each lock standing beside it on the grid, as you would any node. You can d
 
 A broken lock stays broken for an hour, or until an alarm goes off: the alarm closes them all. On the grid, HERE's card for the building shows how it stands, a mark a lock: `FIREWALL ▯▮▮ · 1/3 broken`.
 
-While a lock is whole, the gate turns you away: `FIREWALL · 3 locks · 1/3 broken`. With every lock broken, step onto the gate and you land on `L`'s hub, beside the server. From inside, while every lock is still broken, step onto the gate on `L` to go back out onto the grid. Jacking out always works, wherever you are: the firewall only stands between the building's Net and the city's.
+While a lock is whole, the gate turns you away: `FIREWALL · 3 locks · 1/3 broken`. With every lock broken, step onto the gate and you land on `L`'s hub, beside the server. From inside, while every lock is still broken, step onto the gate on `L` to go back out onto the grid. An alarm closes the locks behind you: crack them again from inside, and the gate lets you out. Jacking out always works, wherever you are: the firewall only stands between the building's Net and the city's.
 
 The building's server, data vault and lift controls are behind the firewall, out of reach from the grid. The cameras and terminals on its face are still the street's.
 

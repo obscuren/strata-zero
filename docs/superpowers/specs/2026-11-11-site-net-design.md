@@ -237,7 +237,9 @@ From the city's Net, a site is a building behind a firewall.
   - Each landed crack adds trace to the building, as a crack does today. A miss adds
     more.
   - A broken lock stays broken for the hack's hour, or until an alarm. An alarm closes
-    them all.
+    them all; locks broken again since it went off open the gate both ways until it
+    ends, so a runner caught inside can crack a way out (changed after play: at first
+    the gate stayed shut through the whole alarm).
 - **Through it.** While every lock is broken, the gate lets you through, both ways:
   - into the site's Net, landing on G's hub, beside the server;
   - and out again onto the grid.
@@ -343,6 +345,7 @@ firewall and open everything from the chair. So on a site:
 
 **An alarm** works as today, on the site's trace:
 - it drops every hack on the site's nodes and every broken firewall lock;
+- the gate shuts with its locks; every lock broken again since the alarm went off opens it, both ways, until the alarm ends;
 - a backdoor holds;
 - doors relock, and say "locked down"; a crack on a door's own node landed after the alarm went off opens it again until the alarm ends, so a runner can crack a way out (changed after play: at first no crack opened a door in an alarm).
 

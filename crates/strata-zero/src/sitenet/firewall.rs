@@ -57,18 +57,11 @@ pub fn refusal(st: &AppState, b: BuildingId) -> String {
     format!("FIREWALL · {n} {locks} · {down}/{n} broken")
 }
 
-/// Why site `b`'s gate won't let you across now, either way: a lock still whole (an
-/// alarm closes them all, so this is what one says too), else the alarm itself.
+/// Why site `b`'s gate won't let you across now, either way: a lock still whole. An alarm
+/// closes them all, so in an alarm the gate lets you through only once every lock is
+/// broken again since it went off: a runner can crack a way out.
 fn shut(st: &AppState, b: BuildingId) -> Option<String> {
-    if !firewall_open(st, b) {
-        return Some(refusal(st, b));
-    }
-    st.net.alert(b, st.net.now(st)).then(|| {
-        format!(
-            "gate closed · `{}` on alert",
-            crate::net::building_name(st, b)
-        )
-    })
+    (!firewall_open(st, b)).then(|| refusal(st, b))
 }
 
 /// Through the gate from the grid: onto the hub of the level the gate stands on (G's,
@@ -270,21 +263,26 @@ mod tests {
     }
 
     #[test]
-    fn on_alert_with_the_locks_broken_the_gate_says_so() {
+    fn in_an_alarm_locks_broken_since_let_you_through_both_ways() {
         let (mut st, b) = office_copy(190);
         at_the_gate(&mut st, b);
+        crate::net::lock_down(&mut st, b);
+        assert!(st.net.alert(b, st.net.now(&st)));
+        assert_eq!(
+            crate::constructs::enter_construct(&mut st, b).unwrap_err(),
+            "FIREWALL · 3 locks · 0/3 broken"
+        );
+        // Broken again since the alarm, from the grid: in, and out again.
         let now = st.net.now(&st);
-        st.net.trace(b).alert_until = Some(now + game::ALERT_MINUTES);
         for i in 0..3 {
             st.net.break_lock(b, i, now);
         }
-        assert_eq!(
-            crate::constructs::enter_construct(&mut st, b).unwrap_err(),
-            format!(
-                "gate closed · `{}` on alert",
-                crate::net::building_name(&st, b)
-            )
-        );
+        crate::constructs::enter_construct(&mut st, b).unwrap();
+        walk_to_the_gate_inside(&mut st, b);
+        assert_eq!(out(&mut st).unwrap(), "Entering the `GRID`");
+        // A lock broken in the alarm closes with it.
+        let until = st.net.traces[&b].alert_until.unwrap();
+        assert!(st.net.broken_locks(b, until).is_empty());
     }
 
     #[test]
