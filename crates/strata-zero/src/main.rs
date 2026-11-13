@@ -41,6 +41,7 @@ mod platform;
 mod render;
 mod rest;
 mod ride;
+mod rig;
 mod runs;
 mod save;
 mod screens;

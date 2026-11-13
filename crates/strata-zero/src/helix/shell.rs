@@ -1055,7 +1055,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     (
         "backdoor",
         "plant a key on this host",
-        "backdoor writes your rig's key into this user's ~/.ssh/authorized_keys, so you can ssh in as them from home or any terminal for a while, and your rig can put you on the Net at this building's gate. The rig keeps three lines at most. rm the file to burn it.",
+        "backdoor writes your rig's key into this user's ~/.ssh/authorized_keys, so you can ssh in as them from home or any terminal for a while, and your rig can put you on the Net at this building's gate. The rig keeps as many lines as its relay holds. rm the file to burn it.",
     ),
     (
         "burn",
@@ -1066,6 +1066,21 @@ const PAGES: &[(&str, &str, &str)] = &[
         "route",
         "your route and the trace",
         "route prints the chain of backdoors between the rig and you while you are jacked in from home, each with its health, and the trace walking it back when there is one. Rig only.",
+    ),
+    (
+        "run",
+        "start a job on the rig",
+        "run <job> [target] starts one of the rig's programs in a free seat; ls /opt/jobs lists the ones installed. run sniff <host> and run keepalive <host> work a backdoor by its /net name, prefix or number; run sift [shard] digs through a paydata shard in your pack; run rent sells the spare cycles. Jobs go on while you are away. Rig only.",
+    ),
+    (
+        "ps",
+        "list the rig's jobs",
+        "ps prints the jobs running on the rig, how long each has been up and what it has found, then how many seats of the core are busy. Rig only.",
+    ),
+    (
+        "kill",
+        "end a job",
+        "kill <n> ends job n of ps and frees its seat. A shard being sifted comes back to your pack. Rig only.",
     ),
     (
         "alarm",

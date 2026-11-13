@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 mod fuse;
+pub(crate) mod sled;
 mod weapon;
 
 /// A piece's large drawing: its width and height in cells.
@@ -23,7 +24,11 @@ pub fn large_size(look: HardwareLook) -> (u16, u16) {
         | HardwareLook::FuseStock
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
-        | HardwareLook::FuseWideband => (52, 18),
+        | HardwareLook::FuseWideband
+        | HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => (52, 18),
     }
 }
 
@@ -123,6 +128,10 @@ pub fn draw_large(look: HardwareLook, mods: &[Mod], p: &mut Pen) {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::large(p, look, mods),
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => sled::large(p, look, mods),
     }
 }
 
@@ -138,7 +147,14 @@ pub fn footprint(kind: SocketKind) -> Option<(i32, i32, u16, u16)> {
         SocketKind::Muzzle => Some((4, 0, 18, 5)),
         SocketKind::Rail => Some((0, 0, 24, 3)),
         SocketKind::Fuse => Some((2, 0, 13, 3)),
-        SocketKind::Deck | SocketKind::Hand | SocketKind::Forearm | SocketKind::Bay => None,
+        SocketKind::Deck
+        | SocketKind::Hand
+        | SocketKind::Forearm
+        | SocketKind::Bay
+        | SocketKind::Core
+        | SocketKind::Relay
+        | SocketKind::Line
+        | SocketKind::Firewall => None,
     }
 }
 
@@ -166,6 +182,11 @@ pub fn draw_fitted(look: HardwareLook, place: &SocketPlace, p: &mut Pen) {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::fitted(&mut at, look),
+        // A rig's bays are drawn by the desk, not over a host's drawing.
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => {}
         HardwareLook::ColdfinI | HardwareLook::ColdfinII | HardwareLook::Sidecar => {}
     }
 }
@@ -402,7 +423,11 @@ fn native(look: HardwareLook) -> Option<([[Cell; 5]; 5], Side)> {
         | HardwareLook::FuseStock
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
-        | HardwareLook::FuseWideband => None,
+        | HardwareLook::FuseWideband
+        | HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => None,
     }
 }
 
@@ -472,6 +497,10 @@ pub fn tile(look: HardwareLook) -> Tile {
         | HardwareLook::FuseCeramic
         | HardwareLook::FuseSlowBlow
         | HardwareLook::FuseWideband => fuse::tile(look),
+        HardwareLook::SledCore
+        | HardwareLook::SledRelay
+        | HardwareLook::SledLine
+        | HardwareLook::SledFirewall => sled::tile(look),
     }
 }
 
@@ -702,6 +731,75 @@ mod tests {
         assert!(native(HardwareLook::FuseStock).is_none(), "no deck side");
     }
 
+    const SLEDS: [HardwareLook; 4] = [
+        HardwareLook::SledCore,
+        HardwareLook::SledRelay,
+        HardwareLook::SledLine,
+        HardwareLook::SledFirewall,
+    ];
+
+    /// Cells that carry `c` as ink or ground.
+    fn cells_in(b: &Buffer, c: Color) -> usize {
+        b.content.iter().filter(|x| x.fg == c || x.bg == c).count()
+    }
+
+    #[test]
+    fn a_sled_is_drawn_in_its_kind() {
+        let b = large(HardwareLook::SledRelay, &[Mod::Lines(3)]);
+        assert!(
+            b.content.iter().any(|c| c.fg == rgb(0x50e678)),
+            "a relay is green"
+        );
+        assert!(buffer_text(&b).contains("RELAY"));
+        assert!(buffer_text(&b).contains(" LINES 3 "));
+        for (look, hex) in [
+            (HardwareLook::SledCore, 0x00e5ff),
+            (HardwareLook::SledRelay, 0x50e678),
+            (HardwareLook::SledLine, 0xffb000),
+            (HardwareLook::SledFirewall, 0xff3a5a),
+        ] {
+            assert_eq!(large_size(look), (52, 18));
+            let b = large(look, &[]);
+            assert!(cells_in(&b, rgb(hex)) > 0, "{look:?}");
+            assert!(cells_in(&b, rgb(0x9ad4dc)) == 0, "{look:?} is no fuse");
+        }
+        let tiles: Vec<Tile> = SLEDS.iter().map(|&s| tile(s)).collect();
+        for (i, a) in tiles.iter().enumerate() {
+            assert!(!tiles[i + 1..].contains(a), "{tiles:?}");
+        }
+        assert_eq!(tile(HardwareLook::SledLine).swatch.0, rgb(0xffb000));
+    }
+
+    #[test]
+    fn tiers_light_more_lamps() {
+        use sled::tier;
+        assert_eq!(tier(&[]), 1);
+        assert_eq!(tier(&[Mod::Seats(1)]), 1);
+        assert_eq!(tier(&[Mod::Seats(2)]), 2);
+        assert_eq!(tier(&[Mod::Seats(3), Mod::Speed(150)]), 3);
+        assert_eq!(
+            [3, 5, 8].map(|n| tier(&[Mod::Lines(n)])),
+            [1, 2, 3],
+            "relays"
+        );
+        assert_eq!([3, 5, 7].map(|n| tier(&[Mod::Hold(n)])), [1, 2, 3], "lines");
+        assert_eq!(
+            [1, 2, 3].map(|n| tier(&[Mod::Firewall(n)])),
+            [1, 2, 3],
+            "firewalls"
+        );
+        let green = rgb(0x50e678);
+        let one = cells_in(&large(HardwareLook::SledRelay, &[Mod::Lines(3)]), green);
+        let two = cells_in(&large(HardwareLook::SledRelay, &[Mod::Lines(5)]), green);
+        let three = cells_in(&large(HardwareLook::SledRelay, &[Mod::Lines(8)]), green);
+        assert!(one < two && two < three, "{one} {two} {three}");
+        assert_eq!(
+            sled::kind_colour(SocketKind::Firewall),
+            rgb(0xff3a5a),
+            "the four kind colours"
+        );
+    }
+
     fn buffer_text(b: &Buffer) -> String {
         crate::screens::testutil::buffer_text(b)
     }
@@ -732,6 +830,10 @@ mod tests {
             HardwareLook::FuseCeramic,
             HardwareLook::FuseSlowBlow,
             HardwareLook::FuseWideband,
+            HardwareLook::SledCore,
+            HardwareLook::SledRelay,
+            HardwareLook::SledLine,
+            HardwareLook::SledFirewall,
         ] {
             let mut bufs = vec![large(look, &[Mod::TraceCut(10)]), large(look, &[])];
             bufs.push(drawn(30, 10, |p| draw_side(look, Side::Left, p, -4, 7)));

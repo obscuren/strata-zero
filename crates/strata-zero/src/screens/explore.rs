@@ -3553,6 +3553,8 @@ impl MapScreen {
 
 impl Screen for MapScreen {
     fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+        // The map on top is no desk: however the desk left the stack, you're up from it.
+        st.at_desk = false;
         // A daze over: it ends.
         if st
             .missions
@@ -13951,10 +13953,10 @@ mod tests {
         let seed = st.city.as_ref().unwrap().seed;
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         // one you keep, to lose in the raid
         let kept = other_construct(&mut st, &[home, a]);
-        st.backdoors.plant_net(kept, 1, seed, 0);
+        st.backdoors.plant_net(kept, 1, seed, 0, 3);
         crate::net::land_at(&mut st, a).unwrap();
         crate::net::dump(&mut st, "the trace found you");
         advance_minutes(&mut st, crate::backdoors::HOLD_NET);
@@ -13986,11 +13988,11 @@ mod tests {
         let seed = st.city.as_ref().unwrap().seed;
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         // a trace already on its last leg, then jack in from the rig
         st.backdoors.start_route(None);
         let now = st.net.now(&st);
-        st.backdoors.start_trace(now);
+        st.backdoors.start_trace(now, 0);
         st.backdoors.end_route();
         crate::net::land_at(&mut st, a).unwrap();
         advance_minutes(&mut st, crate::backdoors::LAST_LEG);
@@ -14008,7 +14010,7 @@ mod tests {
         let seed = st.city.as_ref().unwrap().seed;
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         crate::net::land_at(&mut st, a).unwrap();
         let name = crate::helix::hosts::building_hostname(&st, a);
         let text = draw_screen(&screen, &st, 120, 40);
@@ -14078,7 +14080,7 @@ mod tests {
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
         let other = other_construct(&mut st, &[h.home.building]);
-        st.backdoors.plant_net(other, 1, seed, 0);
+        st.backdoors.plant_net(other, 1, seed, 0, 3);
         let ScreenCmd::Push { to: mut popup, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("space opens the popup")
@@ -14179,8 +14181,8 @@ mod tests {
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
         let b2 = other_construct(&mut st, &[home, a]);
-        st.backdoors.plant_net(a, 1, seed, 0);
-        st.backdoors.plant_net(b2, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
+        st.backdoors.plant_net(b2, 1, seed, 0, 3);
         crate::net::land_at(&mut st, a).unwrap();
         crate::constructs::enter_construct(&mut st, a).unwrap();
         let server = server_tile(&st, a);
@@ -14242,7 +14244,7 @@ mod tests {
         let seed = st.city.as_ref().unwrap().seed;
         let home = st.home.unwrap().home.building;
         let a = other_construct(&mut st, &[home]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         crate::net::land_at(&mut st, a).unwrap();
         crate::net::dump(&mut st, "the trace found you");
         assert!(st.backdoors.route.is_none());
@@ -14271,7 +14273,7 @@ mod tests {
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
         let a = other_construct(&mut st, &[h.home.building]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         // away from the rig
         let at = st.player.as_ref().unwrap().pos;
         st.player.as_mut().unwrap().pos = Pos::new(at.x + 20, at.y + 20);
@@ -14300,7 +14302,7 @@ mod tests {
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
         let a = other_construct(&mut st, &[h.home.building]);
-        st.backdoors.plant_net(a, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
         st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
         crate::net::land_at(&mut st, a).unwrap();
         let p = st.player.as_ref().unwrap();
@@ -14341,8 +14343,8 @@ mod tests {
         let seed = st.city.as_ref().unwrap().seed;
         let a = other_construct(&mut st, &[h.home.building]);
         let b2 = other_construct(&mut st, &[h.home.building, a]);
-        st.backdoors.plant_net(a, 1, seed, 0);
-        st.backdoors.plant_net(b2, 1, seed, 0);
+        st.backdoors.plant_net(a, 1, seed, 0, 3);
+        st.backdoors.plant_net(b2, 1, seed, 0, 3);
         crate::net::land_at(&mut st, a).unwrap();
         crate::constructs::enter_construct(&mut st, a).unwrap();
         st.net.run = Some(game::Run {
@@ -14390,7 +14392,7 @@ mod tests {
         crate::screens::console::run(&mut st, at, "program backdoor").unwrap();
         for i in 0..3 {
             st.backdoors
-                .plant_net(citygen::BuildingId(9000 + i), 1, 0, 0);
+                .plant_net(citygen::BuildingId(9000 + i), 1, 0, 0, 3);
         }
         let why = "the rig holds 3 lines · burn one first";
         let rows =
@@ -14409,6 +14411,42 @@ mod tests {
         let all = rows(&st);
         assert!(all.iter().find(|c| c.label == "Backdoor").unwrap().enabled);
         assert!(crate::net::start_run(&mut st, ItemId::new("backdoor"), target).is_ok());
+    }
+
+    #[test]
+    fn the_backdoor_program_is_greyed_with_no_line_sled() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let b = in_construct(&mut st, &mut s);
+        let (server, server_pos) = node_of(&st, b, NodeKind::Server);
+        let here = beside(&st, b, server_pos);
+        stand(&mut st, &mut s, Place::Construct(b), here);
+        st.character
+            .unload(&st.content, &ItemId::new("copy"))
+            .unwrap();
+        st.character
+            .unload(&st.content, &ItemId::new("crack"))
+            .unwrap();
+        let at = game::At {
+            place: Place::Construct(b),
+            pos: here,
+        };
+        crate::screens::console::run(&mut st, at, "program backdoor").unwrap();
+        // the LINE bay pulled: a backdoor planted now would be dead on arrival
+        let c = st.content.clone();
+        st.character.rig_copy_mut(&c).fitted[2] = None;
+        assert_eq!(crate::rig::of(&st).hold_days, 0);
+        let why = "no line in the rig · nothing holds";
+        let all = crate::interact::run_rows(&st, b, here, None, &mut FREE_LETTERS.chars());
+        let row = all.iter().find(|c| c.label == "Backdoor").expect("a row");
+        assert!(!row.enabled);
+        assert!(row.tail.ends_with(why), "{:?}", row.tail);
+        let target = game::HackTarget::Node(server);
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("backdoor"), target).unwrap_err(),
+            why
+        );
+        assert!(st.backdoors.live(b).is_none());
     }
 
     #[test]

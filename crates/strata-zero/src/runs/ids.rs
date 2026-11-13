@@ -1401,9 +1401,9 @@ mod tests {
             crate::track::Source::Listing(crate::track::ListingId::Building(tower)),
         );
         assert!(tracked.is_ok(), "{tracked:?}");
-        st.backdoors.plant_net(tower, 2, city.seed, now);
+        st.backdoors.plant_net(tower, 2, city.seed, now, 3);
         st.backdoors.start_route(Some(tower));
-        st.backdoors.start_trace(now);
+        st.backdoors.start_trace(now, 0);
         st.backdoors.logins.push((now, tower, "root".into()));
 
         // The story: Mezz mid-line, a call behind, a feed and a scene queued, the

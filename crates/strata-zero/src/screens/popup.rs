@@ -107,6 +107,8 @@ pub enum Pick {
     },
     /// Opens the Rest window for a sleep in place of the popup.
     Sleep,
+    /// Opens the rig up on its desk in place of the popup.
+    Desk,
     /// Switches your holo set on and opens the news broadcast in place of the popup.
     Watch,
     /// Opens the card of an item's reading at the rig or the bench in place of the popup.
@@ -676,6 +678,13 @@ impl Popup {
                 )),
                 fx: TransitionKind::None,
             },
+            Pick::Desk => {
+                st.at_desk = true;
+                ScreenCmd::Replace {
+                    to: Box::new(crate::screens::desk::Desk::open(st)),
+                    fx: TransitionKind::None,
+                }
+            }
             Pick::Watch => {
                 crate::missions::news::switch_on(st);
                 ScreenCmd::Replace {

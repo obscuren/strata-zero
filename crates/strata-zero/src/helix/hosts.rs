@@ -196,6 +196,7 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
     };
     if id == HostId::Rig {
         sync_rig_net(st);
+        sync_rig_jobs(st);
     }
     if let HostId::Building(b) = id {
         sync_site_cams(st, b);
@@ -210,6 +211,24 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
         host.mails_placed = index + 1;
     }
     host
+}
+
+/// Keeps the rig's `/opt/jobs` in step with its programs: a file for each one
+/// installed.
+fn sync_rig_jobs(st: &mut AppState) {
+    let me = rig_user(st);
+    let names: Vec<String> = st.backdoors.jobs.programs.iter().cloned().collect();
+    let Some(host) = st.helix.hosts.get_mut(&HostId::Rig) else {
+        return;
+    };
+    host.fs.mkdir_as("/opt/jobs", &me, Mode::RW_R);
+    for n in names {
+        let path = format!("/opt/jobs/{n}");
+        if host.fs.resolve("/", "/", &path).is_err() {
+            host.fs
+                .put(&path, &format!("run {n} · man {n}\n"), &me, Mode::RW_R);
+        }
+    }
 }
 
 /// Keeps the rig's `/net` in step with its lines: the home block and every backdoor
@@ -1170,7 +1189,7 @@ mod tests {
         assert!(host.users.iter().any(|u| u.name == user_for(&st, id)));
         let _ = r;
         // the backdoor
-        st.backdoors.plant_net(b, 1, 0, 0);
+        st.backdoors.plant_net(b, 1, 0, 0, 3);
         assert_eq!(user_for(&st, id), "root");
         // a street terminal
         let d = st.city.as_ref().unwrap().districts[0].id;

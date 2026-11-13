@@ -20,6 +20,7 @@ pub mod panel;
 pub mod picture;
 pub mod pixels;
 pub mod preview;
+pub mod rack;
 pub mod sidebar;
 pub mod skill_art;
 pub mod skill_card;

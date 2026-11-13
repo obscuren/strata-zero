@@ -168,6 +168,11 @@ impl Terminal {
     pub fn with_look(st: &mut AppState, origin: HostId, key: (Place, Pos), look: Look) -> Terminal {
         let shell = new_shell(st, origin);
         let seized = origin == HostId::Rig && st.backdoors.seized(st.net.now(st));
+        let news = if origin == HostId::Rig && !seized {
+            rig_news(st)
+        } else {
+            Vec::new()
+        };
         // A seized rig does not spend its first boot on the warrant.
         let fresh = !seized && st.journal.booted.insert(key);
         let typing = if seized {
@@ -190,6 +195,7 @@ impl Terminal {
                     banner.retain(|l| !l.contains("HELIX/OS") && !l.eq_ignore_ascii_case(&place));
                 }
                 lines.extend(banner);
+                lines.extend(news.clone());
                 Typing::new(lines, st.tick, look.style.cps)
             })
         };
@@ -198,7 +204,9 @@ impl Terminal {
         let scrollback = if fresh || seized {
             Vec::new()
         } else {
-            new_mail_line(st, shell.host).into_iter().collect()
+            let mut lines: Vec<String> = new_mail_line(st, shell.host).into_iter().collect();
+            lines.extend(news);
+            lines
         };
         Terminal {
             look,
@@ -395,6 +403,28 @@ fn motd(st: &mut AppState, sh: &Shell) -> Vec<String> {
 fn new_mail_line(st: &AppState, host: HostId) -> Option<String> {
     let new = st.journal.mails.iter().filter(|m| !m.read).count();
     (host == HostId::Rig && new > 0).then(|| format!("YOU HAVE {new} NEW MAIL · TYPE mail"))
+}
+
+/// What the rig has to say on power-up besides the mail: program shards in the pack
+/// installed (and used up), and how many jobs ran while you were out. Each is said once.
+fn rig_news(st: &mut AppState) -> Vec<String> {
+    let now = st.net.now(st);
+    crate::rig::jobs::advance(st, now);
+    let mut out = Vec::new();
+    let ran = st.backdoors.jobs.boot();
+    if ran > 0 {
+        let jobs = if ran == 1 { "JOB" } else { "JOBS" };
+        out.push(format!("{ran} {jobs} RAN WHILE YOU WERE OUT · TYPE ps"));
+    }
+    for prog in ["sniff", "keepalive"] {
+        let shard = game::ItemId::new(&format!("prog_{prog}"));
+        if st.character.count(&shard) > 0 && !st.backdoors.jobs.programs.contains(prog) {
+            game::remove_from_pack(&mut st.character, &shard, 1);
+            st.backdoors.jobs.programs.insert(prog.to_string());
+            out.push(format!("INSTALLED {prog} FROM SHARD"));
+        }
+    }
+    out
 }
 
 fn pop() -> ScreenCmd {
@@ -753,6 +783,55 @@ mod tests {
         st.journal.mails[0].read = true;
         let quiet = Terminal::open(&mut st, HostId::Rig, KEY_A);
         assert!(quiet.text(st.tick).is_empty());
+    }
+
+    #[test]
+    fn sniff_needs_its_shard() {
+        let mut st = crate::jobs::testutil::state_home();
+        let mut t = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        st.tick += 10_000;
+        t.update(&mut st, &[]);
+        say(&mut t, &mut st, "run sniff 2");
+        assert_eq!(
+            reply(&t, &st, "run sniff 2"),
+            "run: no such job · ls /opt/jobs"
+        );
+        // a shard in the pack installs on the next open, and is used up
+        st.character
+            .give_item(&st.content, game::ItemId::new("prog_sniff"), 1);
+        let t = Terminal::open(&mut st, HostId::Rig, KEY_B);
+        let text = t.text(st.tick + 100_000).join("\n");
+        assert!(text.contains("INSTALLED sniff FROM SHARD"), "{text}");
+        assert_eq!(st.character.count(&game::ItemId::new("prog_sniff")), 0);
+        assert!(st.backdoors.jobs.programs.contains("sniff"));
+        let again = Terminal::open(&mut st, HostId::Rig, KEY_B);
+        assert!(!again.text(st.tick).join("\n").contains("INSTALLED"));
+    }
+
+    #[test]
+    fn the_boot_says_jobs_ran() {
+        let mut st = crate::jobs::testutil::state_home();
+        for m in &mut st.journal.mails {
+            m.read = true;
+        }
+        let none = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(
+            !none
+                .text(st.tick + 100_000)
+                .join("\n")
+                .contains("RAN WHILE")
+        );
+        crate::rig::jobs::start(&mut st, crate::rig::jobs::JobKind::Rent).unwrap();
+        let now = st.net.now(&st);
+        crate::rig::jobs::advance(&mut st, now + 120);
+        let again = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        let text = again.text(st.tick);
+        assert_eq!(
+            text,
+            vec!["1 JOB RAN WHILE YOU WERE OUT · TYPE ps".to_string()]
+        );
+        let once = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        assert!(once.text(st.tick).is_empty());
     }
 
     #[test]

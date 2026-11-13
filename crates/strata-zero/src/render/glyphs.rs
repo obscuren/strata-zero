@@ -18,5 +18,7 @@ pub fn kind_icon(kind: ItemKind) -> char {
         ItemKind::Sticker => '◪',
         // A rotor seen from above, as a drone draws on the map.
         ItemKind::Bot => '┼',
+        // A rack's tower: a frame with its bays.
+        ItemKind::Frame => '╫',
     }
 }

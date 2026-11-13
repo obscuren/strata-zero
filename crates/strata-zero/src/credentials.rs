@@ -37,6 +37,10 @@ pub enum Source {
     Shell,
     /// Cracked at the pad with a Keyjack.
     Keyjack,
+    /// Read off a backdoor's line by the rig's `sniff`.
+    Sniffed,
+    /// Dug out of a paydata shard by the rig's `sift`.
+    Sifted,
 }
 
 /// A message in the rig's inbox.
@@ -455,6 +459,8 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         weapon: None,
         stickers: Vec::new(),
         bot: None,
+        frame: None,
+        stands_for: None,
     }
 }
 
@@ -798,9 +804,13 @@ fn door_of(st: &AppState, c: &Code) -> String {
     }
     let whose = match c.source {
         Source::Home => "your flat".to_string(),
-        Source::ServerCopy | Source::Keypad | Source::Keyjack | Source::Mail | Source::Shell => {
-            whose_flat(st, c.building, c.level, c.number)
-        }
+        Source::ServerCopy
+        | Source::Keypad
+        | Source::Keyjack
+        | Source::Mail
+        | Source::Shell
+        | Source::Sniffed
+        | Source::Sifted => whose_flat(st, c.building, c.level, c.number),
     };
     format!("{whose} `{}`, level {}", c.number, c.level)
 }
@@ -816,6 +826,8 @@ pub fn entries(st: &AppState) -> Vec<(BuildingId, String, Vec<Entry>)> {
             Source::ServerCopy => format!("copied off the server, {}", stamp(c.at)),
             Source::Keypad => format!("keyed in at the door, {}", stamp(c.at)),
             Source::Keyjack => format!("cracked with the Keyjack, {}", stamp(c.at)),
+            Source::Sniffed => format!("sniffed off the line, {}", stamp(c.at)),
+            Source::Sifted => format!("sifted out of a shard, {}", stamp(c.at)),
             Source::Mail => format!("from a mail on the rig, {}", stamp(c.at)),
             Source::Shell => match &c.noted_by {
                 Some(n) => format!("read in `{n}`'s notes, {}", stamp(c.at)),
@@ -1216,7 +1228,7 @@ mod tests {
             now,
         );
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(b, 1, seed, now);
+        st.backdoors.plant_net(b, 1, seed, now, 3);
         let groups = entries(&st);
         assert_eq!(groups.len(), 1);
         let (gb, header, es) = &groups[0];
@@ -1560,12 +1572,12 @@ mod tests {
     #[test]
     fn the_journal_lists_the_route_the_trace_and_the_seizure() {
         let (mut st, b) = state();
-        st.backdoors.plant_net(b, 1, 0, 0);
+        st.backdoors.plant_net(b, 1, 0, 0, 3);
         st.backdoors.start_route(Some(b));
         let lines = extra_lines(&st);
         let name = crate::helix::hosts::building_hostname(&st, b);
         assert_eq!(lines[0], format!("route · zenbo ▸ {name}"));
-        st.backdoors.start_trace(0);
+        st.backdoors.start_trace(0, 0);
         st.backdoors.end_route();
         assert!(extra_lines(&st)[0].starts_with(&format!("trace ▸ {name} · ")));
         st.backdoors.rig_seized_until = Some(120);

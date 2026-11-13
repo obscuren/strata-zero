@@ -9,6 +9,7 @@ pub mod console;
 pub mod create;
 pub mod cyberdeck;
 pub mod deck;
+pub mod desk;
 pub mod explore;
 pub mod files;
 pub mod flatlined;

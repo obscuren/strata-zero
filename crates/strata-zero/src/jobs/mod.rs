@@ -186,6 +186,15 @@ pub fn handin_item(kind: &Kind) -> Option<ItemId> {
     }
 }
 
+/// What a rig has sifted a hand-in's shard into: the shard it takes in its place.
+pub fn handin_sifted(kind: &Kind) -> Option<ItemId> {
+    match kind {
+        Kind::Fetch { .. } | Kind::Copy { vault: false, .. } => Some(ItemId::new("paydata_sifted")),
+        Kind::Copy { vault: true, .. } => Some(ItemId::new("vault_data_sifted")),
+        Kind::Plant { .. } | Kind::Deliver { .. } => None,
+    }
+}
+
 /// Minutes left as the pane says them.
 pub fn clock_text(left: u64) -> String {
     match left {
@@ -435,6 +444,7 @@ impl Jobs {
         }
         if let Some(item) = handin_item(&j.kind)
             && !carries(&item)
+            && !handin_sifted(&j.kind).is_some_and(|s| carries(&s))
         {
             return Err("the shard is not on you".to_string());
         }
@@ -1102,7 +1112,7 @@ mod tests {
         );
         assert!(st.jobs.get(cid).unwrap().objectives[0].done);
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(pb, 1, seed, 0);
+        st.backdoors.plant_net(pb, 1, seed, 0, 3);
         crate::jobs::send(&mut st, Event::Planted { building: pb });
         assert!(st.jobs.get(pid).unwrap().objectives[0].done);
         let stands = |b: BuildingId| st.backdoors.standing().any(|d| d.building == b);
@@ -1363,7 +1373,7 @@ mod tests {
         };
         let p = st.jobs.push(plant);
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(pb, 1, seed, 0);
+        st.backdoors.plant_net(pb, 1, seed, 0, 3);
         st.jobs.drop_job(f, 0);
         crate::jobs::take_job(&mut st, p).unwrap();
         assert!(

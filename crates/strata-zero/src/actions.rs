@@ -10,6 +10,8 @@ use game::{AbilityKind, Action, Active, At, Effect};
 pub const JACKED_IN: &str = "jacked in · gear and pack locked until you jack out";
 /// What dropping an item is refused with off the cells the city owns.
 pub const OUT_HERE: &str = "nowhere to leave it out here";
+/// What a sled in or out of the rig is refused with away from its desk.
+pub const RIG_AT_HOME: &str = "the rig opens up at its desk, at home";
 
 /// What dropping an item the story still needs is refused with.
 pub const KEPT: &str = "You're not leaving that lying around.";
@@ -69,6 +71,20 @@ fn put_in(st: &AppState, action: &Action) -> Option<game::ItemId> {
 pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
     if handles_items(&action) && jacked_in(st) {
         return Err(JACKED_IN.to_string());
+    }
+    // Sleds go in and out of the rig only at its desk.
+    if matches!(
+        action,
+        Action::Fit {
+            host: game::Host::Rig,
+            ..
+        } | Action::Unfit {
+            host: game::Host::Rig,
+            ..
+        }
+    ) && !st.at_desk
+    {
+        return Err(RIG_AT_HOME.to_string());
     }
     // Items lie only on a city's map: off the cells the city owns there's nothing to
     // leave one on.

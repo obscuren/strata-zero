@@ -14,6 +14,8 @@ pub enum Host {
     Worn(Slot),
     Site(Site),
     Pack(CopyId),
+    /// The rig's rack on the desk: the bays take sleds.
+    Rig,
 }
 
 /// Everything a menu can ask for.
@@ -171,6 +173,19 @@ pub fn take_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> Vec<Stack>
     }
     ch.inventory.retain(|s| s.qty > 0);
     out
+}
+
+/// Takes `qty` of an item for the workbench: the item itself first, then what stands
+/// for it (`Item::stands_for`).
+fn take_for(ch: &mut Character, c: &Content, item: &ItemId, qty: u32) {
+    let mut left = qty - remove_from_pack(ch, item, qty);
+    let ins: Vec<ItemId> = crate::character::stand_ins(c, item).cloned().collect();
+    for i in ins {
+        if left == 0 {
+            break;
+        }
+        left -= remove_from_pack(ch, &i, left);
+    }
 }
 
 /// Removes up to `qty` of an item from the pack; returns how many came out.
@@ -475,6 +490,10 @@ pub fn apply(
             socket,
             piece,
         } => {
+            // The stock rig is made the first time it is touched.
+            if host == Host::Rig {
+                ch.rig_copy_mut(c);
+            }
             // Every refusal comes before the first change.
             let host_item = ch
                 .host_item(host)
@@ -555,15 +574,15 @@ pub fn apply(
                     .map_or_else(|| r.skill.to_string(), |s| s.name.clone());
                 return Err(format!("needs {skill}"));
             }
-            if let Some((item, need)) = r.inputs.iter().find(|(i, n)| ch.count(i) < *n) {
+            if let Some((item, need)) = r.inputs.iter().find(|(i, n)| ch.count_for(c, i) < *n) {
                 return Err(format!(
                     "needs {} more {}",
-                    need - ch.count(item),
+                    need - ch.count_for(c, item),
                     name(c, item)
                 ));
             }
             for (item, n) in &r.inputs {
-                take_from_pack(ch, item, *n);
+                take_for(ch, c, item, *n);
             }
             let (out, n) = &r.output;
             ch.give_item(c, out.clone(), *n);
@@ -574,6 +593,9 @@ pub fn apply(
             }
         }
         Action::Unfit { host, socket } => {
+            if host == Host::Rig {
+                ch.rig_copy_mut(c);
+            }
             let host_id = ch
                 .host_item(host)
                 .cloned()
@@ -746,6 +768,38 @@ mod tests {
         assert_eq!(ch.count(&id("copper_coil")), 0);
         assert_eq!(ch.count(&id("scrap_servo")), 1);
         assert_eq!(ch.count(&id("shiv_blade")), 1);
+    }
+
+    #[test]
+    fn a_sifted_shard_builds_for_its_twin_the_twin_first() {
+        let (c, mut ch, _, _) = setup();
+        ch.skills.insert(SkillId::new("electronics"));
+        let (vault, sifted) = (id("vault_data"), id("vault_data_sifted"));
+        let coils = |ch: &mut Character| {
+            ch.inventory.retain(|s| s.item != id("copper_coil"));
+            ch.give(id("copper_coil"), 2);
+        };
+        coils(&mut ch);
+        assert_eq!(
+            build(&c, &mut ch, "hydra_build").unwrap_err(),
+            "needs 1 more Vault dump"
+        );
+        ch.give(sifted.clone(), 1);
+        assert_eq!(ch.count_for(&c, &vault), 1, "the sifted one stands in");
+        build(&c, &mut ch, "hydra_build").unwrap();
+        assert_eq!(ch.count(&sifted), 0);
+        assert_eq!(ch.count(&id("sled_hydra")), 1);
+        // With both carried, the unsifted one goes.
+        coils(&mut ch);
+        ch.give(vault.clone(), 1);
+        ch.give(sifted.clone(), 1);
+        build(&c, &mut ch, "hydra_build").unwrap();
+        assert_eq!((ch.count(&vault), ch.count(&sifted)), (0, 1));
+        // Two wanted, one of each: both go.
+        ch.give(vault.clone(), 1);
+        ch.give(id("scrap_servo"), 1);
+        build(&c, &mut ch, "killswitch_build").unwrap();
+        assert_eq!((ch.count(&vault), ch.count(&sifted)), (0, 0));
     }
 
     #[test]

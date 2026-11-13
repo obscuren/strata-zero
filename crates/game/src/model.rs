@@ -230,9 +230,13 @@ pub enum ItemKind {
     Sticker,
     /// A small vehicle that docks in a socket and comes out with you: a drone.
     Bot,
+    /// A rig's rack: its bays take sleds. Stands in your flat, never carried.
+    Frame,
 }
 
 impl ItemKind {
+    /// Every kind a pack can hold: the KIT's filter chips. A frame stands in the flat
+    /// and is never carried, so it is not among them.
     pub const ALL: [ItemKind; 11] = [
         ItemKind::Weapon,
         ItemKind::Armor,
@@ -260,6 +264,7 @@ impl ItemKind {
             ItemKind::Hardware => "hardware",
             ItemKind::Sticker => "sticker",
             ItemKind::Bot => "bot",
+            ItemKind::Frame => "rack",
         }
     }
 }
@@ -404,6 +409,14 @@ pub enum SocketKind {
     Bay,
     /// On a Keyjack's board: the fuse it runs on.
     Fuse,
+    /// In a rig's rack: a core sled (seats and speed).
+    Core,
+    /// In a rig's rack: a relay sled (backdoor lines).
+    Relay,
+    /// In a rig's rack: a line sled (how long a backdoor holds).
+    Line,
+    /// In a rig's rack: a firewall sled.
+    Firewall,
 }
 
 impl SocketKind {
@@ -417,6 +430,10 @@ impl SocketKind {
             SocketKind::Forearm => "forearm",
             SocketKind::Bay => "bay",
             SocketKind::Fuse => "fuse",
+            SocketKind::Core => "core",
+            SocketKind::Relay => "relay",
+            SocketKind::Line => "line",
+            SocketKind::Firewall => "firewall",
         }
     }
 
@@ -430,6 +447,10 @@ impl SocketKind {
             SocketKind::Forearm => "forearm chrome",
             SocketKind::Bay => "drones",
             SocketKind::Fuse => "fuses",
+            SocketKind::Core => "core sleds",
+            SocketKind::Relay => "relay sleds",
+            SocketKind::Line => "line sleds",
+            SocketKind::Firewall => "firewall sleds",
         }
     }
 
@@ -443,6 +464,10 @@ impl SocketKind {
             SocketKind::Forearm => "forearm socket",
             SocketKind::Bay => "bay",
             SocketKind::Fuse => "fuse socket",
+            SocketKind::Core => "core bay",
+            SocketKind::Relay => "relay bay",
+            SocketKind::Line => "line bay",
+            SocketKind::Firewall => "firewall bay",
         }
     }
 
@@ -450,6 +475,14 @@ impl SocketKind {
     /// sockets. A drone docks in its bay anywhere.
     pub fn needs_a_doc(self) -> bool {
         matches!(self, SocketKind::Hand | SocketKind::Forearm)
+    }
+
+    /// A bay in a rig's rack: only a frame has them.
+    pub fn is_rig(self) -> bool {
+        matches!(
+            self,
+            SocketKind::Core | SocketKind::Relay | SocketKind::Line | SocketKind::Firewall
+        )
     }
 }
 
@@ -504,6 +537,27 @@ pub enum Mod {
     Sweep(u8),
     /// Cells added to each lit zone of a Keyjack's run.
     Zone(i8),
+    /// Jobs a rig runs at once.
+    Seats(u8),
+    /// A rig's job speed, in percent.
+    Speed(u16),
+    /// Backdoor lines a rig holds.
+    Lines(u8),
+    /// Days a planted Net backdoor lives.
+    Hold(u8),
+    /// A rig's firewall tier, 1 to 3.
+    Firewall(u8),
+}
+
+/// A firewall tier's name.
+/// A tier outside 1 to 3 is not one; content validation refuses it.
+fn firewall(n: u8) -> String {
+    match n {
+        1 => "sandbag".to_string(),
+        2 => "tripwire".to_string(),
+        3 => "killswitch".to_string(),
+        _ => format!("tier {n}?"),
+    }
 }
 
 /// A number with its sign always shown; a negative takes a real minus, as the
@@ -526,6 +580,11 @@ impl Mod {
             Mod::Faults(n) => format!("faults {}", signed(*n)),
             Mod::Sweep(n) => format!("marker {}", sweep(*n)),
             Mod::Zone(n) => format!("zones {}", signed(*n)),
+            Mod::Seats(n) => format!("seats {n}"),
+            Mod::Speed(n) => format!("jobs \u{d7}{}", speed(*n)),
+            Mod::Lines(n) => format!("lines {n}"),
+            Mod::Hold(n) => format!("holds {n} days"),
+            Mod::Firewall(n) => firewall(*n),
         }
     }
 
@@ -538,7 +597,22 @@ impl Mod {
             Mod::Faults(n) => format!("FAULTS {}", signed(*n)),
             Mod::Sweep(n) => sweep(*n).to_uppercase(),
             Mod::Zone(n) => format!("ZONES {}", signed(*n)),
+            Mod::Seats(n) => format!("SEATS {n}"),
+            Mod::Speed(n) => format!("JOBS \u{d7}{}", speed(*n)),
+            Mod::Lines(n) => format!("LINES {n}"),
+            Mod::Hold(n) => format!("HOLDS {n}D"),
+            Mod::Firewall(n) => firewall(*n).to_uppercase(),
         }
+    }
+}
+
+/// A speed in percent as a multiplier: 150 reads 1.5, 200 reads 2.
+fn speed(pct: u16) -> String {
+    let (w, f) = (pct / 100, pct % 100);
+    match (f, f % 10) {
+        (0, _) => format!("{w}"),
+        (_, 0) => format!("{w}.{}", f / 10),
+        _ => format!("{w}.{f:02}"),
     }
 }
 
@@ -564,6 +638,11 @@ pub enum HardwareLook {
     FuseCeramic,
     FuseSlowBlow,
     FuseWideband,
+    /// A rig's sleds: one faceplate drawing, tinted per bay kind.
+    SledCore,
+    SledRelay,
+    SledLine,
+    SledFirewall,
 }
 
 impl HardwareLook {
@@ -579,8 +658,30 @@ impl HardwareLook {
             | HardwareLook::FuseCeramic
             | HardwareLook::FuseSlowBlow
             | HardwareLook::FuseWideband => SocketKind::Fuse,
+            HardwareLook::SledCore => SocketKind::Core,
+            HardwareLook::SledRelay => SocketKind::Relay,
+            HardwareLook::SledLine => SocketKind::Line,
+            HardwareLook::SledFirewall => SocketKind::Firewall,
         }
     }
+}
+
+/// What a rack's base looks like on the desk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrameBase {
+    Crate,
+    Plinth,
+    Foot,
+    Rails,
+}
+
+/// A rack's head unit: the device theme its terminal wears, the text on its
+/// display and the base it stands on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameSpec {
+    pub theme: String,
+    pub head: String,
+    pub base: FrameBase,
 }
 
 /// A piece of hardware: the socket it fits, what it does, how it looks.
@@ -904,6 +1005,13 @@ pub struct Item {
     /// What a throw looks like, in order (throwables only).
     #[serde(default)]
     pub fx: Vec<Fx>,
+    /// A rack's head unit (frames only).
+    #[serde(default)]
+    pub frame: Option<FrameSpec>,
+    /// The item it does for at the workbench when that one is short, as a rig's sifted
+    /// shard does for the shard it was.
+    #[serde(default)]
+    pub stands_for: Option<ItemId>,
 }
 
 impl Item {

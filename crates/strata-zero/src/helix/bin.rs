@@ -19,7 +19,7 @@ pub struct AppIo<'a> {
 /// The programs the world adds to the builtins.
 const PROGRAMS: &[&str] = &[
     "scan", "ssh", "connect", "mail", "journal", "door", "lift", "cam", "alarm", "plan",
-    "backdoor", "burn", "route",
+    "backdoor", "burn", "route", "run", "ps", "kill",
 ];
 
 /// A shell logged in on `host`: the user the host's tier gives you, in their home.
@@ -71,6 +71,20 @@ fn lines(lines: Vec<String>) -> Output {
         lines,
         ..Output::default()
     }
+}
+
+/// What a job has found, counted: `2 codes · 1 stash`.
+fn found_label(found: &[String]) -> String {
+    let count = |p: &str| found.iter().filter(|f| f.starts_with(p)).count();
+    let mut parts = Vec::new();
+    for (p, one, many) in [("code", "code", "codes"), ("stash", "stash", "stashes")] {
+        match count(p) {
+            0 => {}
+            1 => parts.push(format!("1 {one}")),
+            n => parts.push(format!("{n} {many}")),
+        }
+    }
+    parts.join(" · ")
 }
 
 fn one(line: impl Into<String>) -> Output {
@@ -227,7 +241,8 @@ impl AppIo<'_> {
                             );
                             if shell.origin == HostId::Rig {
                                 self.st.backdoors.start_route(None);
-                                self.st.backdoors.start_trace(now);
+                                let fw = crate::rig::of(self.st).firewall;
+                                self.st.backdoors.start_trace(now, fw);
                                 self.st.backdoors.end_route();
                                 self.st.warn("honeypot · they were waiting · trace running");
                             }
@@ -265,6 +280,161 @@ impl AppIo<'_> {
                     .join(", ")
             )),
         }
+    }
+
+    /// `run <job> [target]`: starts a program of the rig in a free seat.
+    fn run(&mut self, args: &[String]) -> Result<Output, String> {
+        use crate::rig::jobs::{self, JobKind};
+        let Some(job) = args.first() else {
+            return Err("usage: run <job> [target] · ls /opt/jobs".to_string());
+        };
+        if !self.st.backdoors.jobs.programs.contains(job.as_str()) {
+            return Err("run: no such job · ls /opt/jobs".to_string());
+        }
+        let target = args.get(1).map(|s| s.to_lowercase());
+        let kind = match (job.as_str(), target) {
+            ("rent", _) => JobKind::Rent,
+            ("sift", what) => JobKind::Sift {
+                shard: self.shard_for(what.as_deref())?,
+            },
+            (p @ ("sniff" | "keepalive"), what) => {
+                let Some(what) = what else {
+                    return Err(format!("usage: run {p} <host>"));
+                };
+                let b = self.rig_host(p, &what)?;
+                if p == "sniff" {
+                    JobKind::Sniff(b)
+                } else {
+                    JobKind::Keepalive(b)
+                }
+            }
+            _ => return Err("run: no such job · ls /opt/jobs".to_string()),
+        };
+        let on = jobs::target(self.st, &kind);
+        let n = jobs::start(self.st, kind.clone())?;
+        let (what, noise) = match kind {
+            JobKind::Sniff(_) => (
+                format!("sniff on {on} · listening for door codes"),
+                Some("noise: high · every hour leaves a line in their auth.log"),
+            ),
+            JobKind::Keepalive(_) => (
+                format!("keepalive on {on} · its hold stays full while it runs"),
+                Some("noise: low · their admins read the logs on Sundays"),
+            ),
+            JobKind::Sift { .. } => (format!("sift on {on} · digging"), None),
+            JobKind::Rent => (format!("rent on {on} · selling them by the hour"), None),
+        };
+        let mut out = vec![format!("{n} · {what}")];
+        out.extend(noise.map(str::to_string));
+        Ok(lines(out))
+    }
+
+    /// The shard `run sift` works on: the one named, or the first in the pack.
+    fn shard_for(&self, what: Option<&str>) -> Result<game::ItemId, String> {
+        let ids = ["paydata", "vault_data"].map(game::ItemId::new);
+        let in_pack = |i: &&game::ItemId| self.st.character.count(i) > 0;
+        let named = |i: &&game::ItemId| {
+            what.is_none_or(|w| {
+                i.0.starts_with(w)
+                    || self
+                        .st
+                        .content
+                        .item(i)
+                        .is_some_and(|x| x.name.to_lowercase().starts_with(w))
+            })
+        };
+        match ids.iter().find(|i| in_pack(i) && named(i)) {
+            Some(i) => Ok(i.clone()),
+            None => Err("sift: no paydata shard or vault dump in your pack".to_string()),
+        }
+    }
+
+    /// A host of the rig's `/net`, by number, name or prefix.
+    fn rig_host(&self, prog: &str, what: &str) -> Result<BuildingId, String> {
+        let all = self.net_of(HostId::Rig);
+        let named: Vec<(BuildingId, String)> = all
+            .iter()
+            .map(|b| (*b, hostname(self.st, HostId::Building(*b))))
+            .collect();
+        let pick: Vec<&(BuildingId, String)> = if let Ok(n) = what.parse::<usize>() {
+            n.checked_sub(1)
+                .and_then(|i| named.get(i))
+                .into_iter()
+                .collect()
+        } else if let Some(h) = named.iter().find(|(_, n)| n == what) {
+            vec![h]
+        } else {
+            named.iter().filter(|(_, n)| n.starts_with(what)).collect()
+        };
+        match pick.as_slice() {
+            [] => Err(format!("{prog}: {what}: no such host")),
+            [(b, _)] => Ok(*b),
+            many => Err(format!(
+                "{prog}: {what}: ambiguous: {}",
+                many.iter()
+                    .map(|(_, n)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// `ps`: the rig's jobs, how many seats of its core they fill, and what the jobs
+    /// did since you last looked.
+    fn ps(&mut self) -> Vec<String> {
+        use crate::rig::jobs::{self, JobKind};
+        let now = self.st.net.now(self.st);
+        jobs::advance(self.st, now);
+        let mut out = vec![" #  JOB        ON                      UP      FOUND".to_string()];
+        for j in &self.st.backdoors.jobs.running {
+            let on: String = jobs::target(self.st, &j.kind).chars().take(23).collect();
+            let up = jobs::up_label(now.saturating_sub(j.started));
+            let found = match j.kind {
+                JobKind::Rent => format!("¤{} paid", j.paid),
+                _ => found_label(&j.found),
+            };
+            out.push(format!(
+                "{:>2}  {:<10} {:<23} {:<7} {}",
+                j.n,
+                j.kind.name(),
+                on,
+                up,
+                found
+            ));
+        }
+        let cores: Vec<String> = (self.st.character.rig_fitted(&self.st.content))
+            .into_iter()
+            .filter(|(k, _)| *k == game::SocketKind::Core)
+            .filter_map(|(_, sled)| sled)
+            .filter_map(|id| self.st.content.item(&id).map(|i| i.name.clone()))
+            .collect();
+        out.push(format!(
+            "{} · {} of {} seats busy",
+            if cores.is_empty() {
+                "no core".to_string()
+            } else {
+                cores.join(" + ")
+            },
+            self.st.backdoors.jobs.running.len(),
+            crate::rig::of(self.st).seats
+        ));
+        let done = jobs::unseen(&mut self.st.backdoors.jobs);
+        if !done.is_empty() {
+            out.push(String::new());
+            out.extend(done);
+        }
+        out
+    }
+
+    /// `kill <n>`: ends job `n`.
+    fn kill(&mut self, args: &[String]) -> Result<Output, String> {
+        let [n] = args else {
+            return Err("usage: kill <n> · ps lists the jobs".to_string());
+        };
+        let n: u32 = n
+            .parse()
+            .map_err(|_| format!("kill: {n}: no such job · ps lists the jobs"))?;
+        crate::rig::jobs::kill(self.st, n).map(one)
     }
 
     /// `burn <line>`: cuts one of the rig's lines, by number, name or prefix.
@@ -343,7 +513,8 @@ impl AppIo<'_> {
             });
         }
         let now = self.st.net.now(self.st);
-        if let Err(r) = self.st.backdoors.can_plant(b, now) {
+        let lines = crate::rig::of(self.st).lines;
+        if let Err(r) = self.st.backdoors.can_plant(b, now, lines) {
             return Err(format!("backdoor: {}", r.words()));
         }
         let path = key_path(&shell.user);
@@ -387,7 +558,7 @@ impl AppIo<'_> {
             shell.user,
             hostname(self.st, shell.host),
             self.st.backdoors.slots_used(),
-            crate::backdoors::SLOTS
+            lines
         )))
     }
 
@@ -553,6 +724,10 @@ impl Io for AppIo<'_> {
             "burn" => self.burn(shell, args),
             "route" if shell.host == HostId::Rig => Ok(lines(access::rig_net_lines(self.st))),
             "route" => Err("route: rig only".to_string()),
+            "run" | "ps" | "kill" if shell.host != HostId::Rig => Err(format!("{name}: rig only")),
+            "run" => self.run(args),
+            "ps" => Ok(lines(self.ps())),
+            "kill" => self.kill(args),
             "mail" => self.mail(shell, args),
             "journal" if shell.host == HostId::Rig => Ok(lines(access::journal_lines(self.st))),
             "journal" => Err("journal: no journal on this host".to_string()),
@@ -1020,7 +1195,7 @@ mod tests {
             game::Op::Backdoor,
             now,
         );
-        st.backdoors.plant_net(b, 1, 0, now);
+        st.backdoors.plant_net(b, 1, 0, now, 3);
         let mut sh = new_shell(&mut st, HostId::Building(b));
         assert_eq!(sh.user, "root");
         let quiet = go(&mut st, &mut sh, "alarm off");
@@ -1238,9 +1413,9 @@ mod tests {
             "backdoor: already planted here"
         );
         // fill the rig, then the cap
-        st.backdoors.plant_net(BuildingId(9000), 1, 0, 0);
-        st.backdoors.plant_net(BuildingId(9001), 1, 0, 0);
-        st.backdoors.plant_net(BuildingId(9002), 1, 0, 0);
+        st.backdoors.plant_net(BuildingId(9000), 1, 0, 0, 3);
+        st.backdoors.plant_net(BuildingId(9001), 1, 0, 0, 3);
+        st.backdoors.plant_net(BuildingId(9002), 1, 0, 0, 3);
         st.backdoors.burn(b, crate::backdoors::Why::Decay, 0);
         let out = go(&mut st, &mut sh, "backdoor");
         assert_eq!(
@@ -1280,7 +1455,7 @@ mod tests {
             .find(|x| x.id != home && x.kind.is_closed())
             .map(|x| x.id)
             .unwrap();
-        st.backdoors.plant_net(other, 1, seed, 0);
+        st.backdoors.plant_net(other, 1, seed, 0, 3);
         let mut sh = new_shell(&mut st, HostId::Rig);
         let ls = text(&go(&mut st, &mut sh, "ls /net"));
         let other_name = hostname(&st, HostId::Building(other));
@@ -1308,10 +1483,10 @@ mod tests {
             ("burn: nope: no such backdoor", 1)
         );
         // a trace on the relay: burning cuts it and the building alarms
-        st.backdoors.plant_net(other, 1, seed, 5_000);
+        st.backdoors.plant_net(other, 1, seed, 5_000, 3);
         st.backdoors.patched.clear();
         st.backdoors.start_route(Some(other));
-        st.backdoors.start_trace(5_000);
+        st.backdoors.start_trace(5_000, 0);
         st.backdoors.end_route();
         let route = text(&go(&mut st, &mut sh, "route"));
         assert!(route.contains(&format!("TRACE ▸ {other_name}")), "{route}");
@@ -1482,7 +1657,8 @@ mod tests {
         let (mut st, b) = crate::sitenet::testutil::office_copy(190);
         let seed = st.city.as_ref().unwrap().seed;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(b, 99, seed, now);
+        st.backdoors
+            .plant_net(b, 99, seed, now, crate::rig::STOCK.hold_days);
         let mut sh = new_shell(&mut st, HostId::Rig);
         let host = hostname(&st, HostId::Building(b));
         let out = go(&mut st, &mut sh, &format!("ssh {host}"));
@@ -1611,7 +1787,7 @@ mod tests {
     fn a_honeypot_logs_you_in_and_rings_the_alarm() {
         let (mut st, b, d) = state();
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(b, 1, seed, 0);
+        st.backdoors.plant_net(b, 1, seed, 0, 3);
         st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
         let mut sh = new_shell(&mut st, HostId::District(d));
         // the clue is in the log before you use it
@@ -1633,11 +1809,165 @@ mod tests {
         let mut st = state_home();
         let home = st.home.unwrap().home.building;
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(home, 1, seed, 0);
+        st.backdoors.plant_net(home, 1, seed, 0, 3);
         st.backdoors.list[0].state = crate::backdoors::State::Honeypot;
         let mut sh = new_shell(&mut st, HostId::Rig);
         go(&mut st, &mut sh, "ssh 1");
         assert!(st.backdoors.trace.is_some());
         assert!(st.backdoors.trace.as_ref().unwrap().relays.is_empty());
+    }
+
+    fn rig() -> (AppState, Shell) {
+        let mut st = crate::jobs::testutil::state_home();
+        let sh = new_shell(&mut st, HostId::Rig);
+        (st, sh)
+    }
+
+    /// A backdoor on a closed building other than home; its hostname.
+    fn backdoored(st: &mut AppState) -> (BuildingId, String) {
+        let home = st.home.unwrap().home.building;
+        let seed = st.city.as_ref().unwrap().seed;
+        let other = st
+            .city
+            .as_ref()
+            .unwrap()
+            .buildings
+            .iter()
+            .find(|x| x.id != home && x.kind.is_closed())
+            .map(|x| x.id)
+            .unwrap();
+        let now = st.net.now(st);
+        st.backdoors.plant_net(other, 1, seed, now, 3);
+        let name = hostname(st, HostId::Building(other));
+        (other, name)
+    }
+
+    #[test]
+    fn run_ps_kill_on_the_rig() {
+        let (mut st, mut sh) = rig();
+        let ran = go(&mut st, &mut sh, "run rent");
+        assert_eq!(ran.status, 0, "{}", text(&ran));
+        assert!(text(&ran).starts_with("1 · rent"), "{}", text(&ran));
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        let rows: Vec<&str> = ps.lines().collect();
+        assert_eq!(
+            rows[0],
+            " #  JOB        ON                      UP      FOUND"
+        );
+        assert!(rows[1].starts_with(" 1  rent       spare cycles"), "{ps}");
+        assert_eq!(rows[2], "ZB-8 core · 1 of 1 seats busy", "{ps}");
+        let full = go(&mut st, &mut sh, "run rent");
+        assert_eq!(full.status, 1);
+        assert!(
+            text(&full).contains("every seat is busy"),
+            "{}",
+            text(&full)
+        );
+        let k = text(&go(&mut st, &mut sh, "kill 1"));
+        assert_eq!(k, "killed 1 · rent · spare cycles");
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(
+            ps.ends_with("ZB-8 core · 0 of 1 seats busy\n\nrent · spare cycles\n└ killed"),
+            "{ps}"
+        );
+        let bad = go(&mut st, &mut sh, "kill 1");
+        assert_eq!((text(&bad).as_str(), bad.status), ("kill: no job 1", 1));
+    }
+
+    #[test]
+    fn ps_shows_what_finished_since_you_last_looked_once() {
+        let (mut st, mut sh) = rig();
+        st.character.give(game::ItemId::new("paydata"), 1);
+        let t0 = st.net.now(&st);
+        let ran = go(&mut st, &mut sh, "run sift");
+        assert_eq!(ran.status, 0, "{}", text(&ran));
+        // 22:00 and six hours: done at 04:00, before the morning mail
+        crate::rig::jobs::advance(&mut st, t0 + 6 * 60);
+        assert!(st.journal.mails.iter().all(|m| m.from != "cron"));
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(ps.contains("ZB-8 core · 0 of 1 seats busy"), "{ps}");
+        assert!(ps.contains("\nsift · paydata shard\n"), "{ps}");
+        assert!(ps.contains("└ code "), "{ps}");
+        assert!(
+            ps.contains("└ done · the shard is back in your pack, sifted"),
+            "{ps}"
+        );
+        let again = text(&go(&mut st, &mut sh, "ps"));
+        assert!(!again.contains("sift"), "shown once: {again}");
+        assert!(again.ends_with("ZB-8 core · 0 of 1 seats busy"), "{again}");
+        // the morning mail still carries the night, and the mark goes with it
+        crate::rig::jobs::advance(&mut st, t0 + 9 * 60);
+        assert!(st.journal.mails.iter().any(|m| m.from == "cron"));
+        assert_eq!(st.backdoors.jobs.seen, 0);
+        go(&mut st, &mut sh, "run rent");
+        go(&mut st, &mut sh, "kill 2");
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(ps.contains("rent · spare cycles\n└ killed"), "{ps}");
+    }
+
+    #[test]
+    fn rig_only_elsewhere() {
+        let (mut st, _, d) = state();
+        let mut sh = new_shell(&mut st, HostId::District(d));
+        for (cmd, said) in [
+            ("ps", "ps: rig only"),
+            ("run rent", "run: rig only"),
+            ("kill 1", "kill: rig only"),
+        ] {
+            let o = go(&mut st, &mut sh, cmd);
+            assert_eq!((text(&o).as_str(), o.status), (said, 1));
+        }
+    }
+
+    #[test]
+    fn run_unknown_job() {
+        let (mut st, mut sh) = rig();
+        for cmd in ["run nope", "run sniff x", "run keepalive x"] {
+            let o = go(&mut st, &mut sh, cmd);
+            assert_eq!(
+                (text(&o).as_str(), o.status),
+                ("run: no such job · ls /opt/jobs", 1),
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn sniff_and_keepalive_take_a_host_by_name_or_number() {
+        let (mut st, mut sh) = rig();
+        let (other, name) = backdoored(&mut st);
+        st.backdoors.jobs.programs.insert("sniff".into());
+        st.backdoors.jobs.programs.insert("keepalive".into());
+        let usage = go(&mut st, &mut sh, "run sniff");
+        assert_eq!(usage.status, 1);
+        let bad = go(&mut st, &mut sh, "run sniff zzzz");
+        assert_eq!(text(&bad), "sniff: zzzz: no such host");
+        let o = text(&go(&mut st, &mut sh, &format!("run sniff {}", &name[..3])));
+        assert!(o.contains(&format!("sniff on {name}")), "{o}");
+        assert!(o.contains("noise:"), "{o}");
+        assert!(st.backdoors.jobs.running[0].kind.line() == Some(other));
+        // a bigger core for the second seat
+        st.character.rig_copy_mut(&st.content).fitted[0] = Some(game::Stack {
+            item: game::ItemId::new("sled_tinman"),
+            qty: 1,
+            copy: None,
+        });
+        let n = st.city.as_ref().map(|_| 2).unwrap();
+        let o = go(&mut st, &mut sh, &format!("run keepalive {n}"));
+        assert_eq!(o.status, 0, "{}", text(&o));
+        let ps = text(&go(&mut st, &mut sh, "ps"));
+        assert!(ps.contains("sniff") && ps.contains("keepalive"), "{ps}");
+        assert!(ps.contains(&name), "{ps}");
+        assert!(ps.ends_with("Tinman 2X core · 2 of 2 seats busy"), "{ps}");
+    }
+
+    #[test]
+    fn the_rig_lists_its_installed_jobs() {
+        let (mut st, mut sh) = rig();
+        let ls = text(&go(&mut st, &mut sh, "ls /opt/jobs"));
+        assert_eq!(ls.split_whitespace().collect::<Vec<_>>(), ["rent", "sift"]);
+        st.backdoors.jobs.programs.insert("sniff".into());
+        let ls = text(&go(&mut st, &mut sh, "ls /opt/jobs"));
+        assert!(ls.contains("sniff"), "{ls}");
     }
 }

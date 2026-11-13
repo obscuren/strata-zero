@@ -124,6 +124,12 @@ pub struct Stay {
     pub card_stacks: Vec<game::Stack>,
 }
 
+/// The city the run is in, taken out of it as leaving sets it aside.
+#[cfg(test)]
+pub(crate) fn set_aside(st: &mut AppState) -> Option<Stay> {
+    Stay::take(st)
+}
+
 impl Stay {
     /// The city the run is in, taken out of it.
     fn take(st: &mut AppState) -> Option<Stay> {

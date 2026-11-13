@@ -499,6 +499,68 @@ fn keyjack_copy(st: &AppState) -> game::CopyId {
         .expect("a Keyjack in the pack")
 }
 
+/// The four racks as the desk draws them, at the map pane's size on 120x40 and on
+/// 100x30, and the stock rig with its relay pulled.
+#[test]
+#[ignore]
+fn rig_racks() {
+    use crate::ui::rack::{self, RackArt};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    let draw = |st: &AppState, art: &RackArt, name: &str, (w, h): (u16, u16)| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, w + 2, h + 2));
+        for c in &mut buf.content {
+            c.set_bg(Color::Rgb(0x0a, 0x09, 0x0c));
+        }
+        rack::draw(art, st, Rect::new(1, 1, w, h), &mut buf);
+        write_svg(&dir, name, st, &buf, false);
+    };
+    let mut pulled = RackArt::rig(&st, None);
+    pulled.bays[1].1 = None;
+    draw(&st, &pulled, "rack_zenbo_pulled", (78, 28));
+    for frame in ["rack_zenbo", "rack_civitas", "rack_lotus", "rack_halcyon"] {
+        st.character.set_frame(&st.content, &ItemId::new(frame));
+        let art = RackArt::rig(&st, None);
+        for size in [(78, 28), (58, 22), (58, 14), (58, 10)] {
+            draw(&st, &art, &format!("{frame}_{}x{}", size.0, size.1), size);
+        }
+    }
+}
+
+/// The four rig sleds large, each at a tier: a stock core, a tier-two relay, a
+/// tier-three line and a firewall.
+#[test]
+#[ignore]
+fn rig_sleds() {
+    use crate::ui::art::Art;
+    use crate::ui::hardware::HardwareArt;
+    use game::{HardwareLook, Mod};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let st = AppState::new();
+    let area = Rect::new(0, 0, 108, 38);
+    let mut buf = Buffer::empty(area);
+    for c in &mut buf.content {
+        c.set_bg(Color::Rgb(4, 6, 10));
+    }
+    for (i, (look, mods)) in [
+        (HardwareLook::SledCore, vec![Mod::Seats(1)]),
+        (HardwareLook::SledRelay, vec![Mod::Lines(5)]),
+        (HardwareLook::SledLine, vec![Mod::Hold(7)]),
+        (HardwareLook::SledFirewall, vec![Mod::Firewall(2)]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = (1 + (i as u16 % 2) * 54, 1 + (i as u16 / 2) * 19);
+        HardwareArt { look, mods }.draw(at, area, &mut buf);
+    }
+    write_svg(&dir, "rig_sleds", &st, &buf, false);
+}
+
 /// The Keyjack through the real screens: the clip line, a run on the keypad (a beat, a
 /// miss, the fuse blown, the door cracked), and the item on its blueprint, modded, and
 /// its fuse inspected.
@@ -669,6 +731,210 @@ fn the_rig_at_home() {
     st.tick += 10_000;
     term.update(&mut st, &[]);
     shot("rig", &st, &map, &term);
+}
+
+/// A rig with a Tinman core, sniff and keepalive installed and a Net backdoor on a block
+/// of flats, the sniff and the rent started: the minute they started.
+fn rig_with_jobs() -> (AppState, u64, citygen::BuildingId) {
+    use crate::rig::jobs::{JobKind, start};
+    let mut st = state_home();
+    let c = st.content.clone();
+    st.character.rig_copy_mut(&c).fitted[0] = Some(game::Stack {
+        item: ItemId::new("sled_tinman"),
+        qty: 1,
+        copy: None,
+    });
+    for p in ["sniff", "keepalive"] {
+        st.backdoors.jobs.programs.insert(p.to_string());
+    }
+    let home = st.home.unwrap().home.building;
+    let ids: Vec<citygen::BuildingId> = st
+        .city
+        .as_ref()
+        .unwrap()
+        .buildings
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.kind,
+                citygen::BuildingKind::Apartment | citygen::BuildingKind::Megablock
+            )
+        })
+        .map(|b| b.id)
+        .filter(|b| *b != home)
+        .collect();
+    let mut block = None;
+    for b in ids {
+        crate::credentials::prepare(&mut st, b);
+        if st
+            .interiors
+            .homes_of(b)
+            .is_some_and(|h| h.all_flats().count() >= 8)
+        {
+            block = Some(b);
+            break;
+        }
+    }
+    let b = block.expect("a block of flats");
+    let now = st.net.now(&st);
+    let seed = st.city.as_ref().unwrap().seed;
+    st.backdoors.plant_net(b, 1, seed, now, 3);
+    start(&mut st, JobKind::Sniff(b)).unwrap();
+    start(&mut st, JobKind::Rent).unwrap();
+    (st, now, b)
+}
+
+/// The rig's glass after `ps`: a sniff seven hours in and the rent running, both seats
+/// of a Tinman busy.
+#[test]
+#[ignore]
+fn rig_ps() {
+    let (mut st, t0, _) = rig_with_jobs();
+    // seven hours and twelve minutes on, the clock and the jobs together
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.catch_up(city, world.tick() + (7 * 60 + 12) * sim::TICKS_PER_MINUTE);
+    crate::net::tick_backdoors(&mut st);
+    let _ = t0;
+    for m in &mut st.journal.mails {
+        m.read = true;
+    }
+    let map = MapScreen::walking(&mut st);
+    let home = st.home.unwrap().home;
+    let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    type_lines(&mut st, &mut term, &["ps"]);
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    for size in [(120, 40), (100, 30)] {
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(text.contains("JOB        ON"), "{text}");
+        assert!(text.contains("2 of 2 seats busy"), "{text}");
+        shot_at(
+            &format!("rig_ps_{}x{}", size.0, size.1),
+            &st,
+            &map,
+            &term,
+            size,
+        );
+    }
+}
+
+/// The overnight mail from cron, read in the rig's mail program.
+#[test]
+#[ignore]
+fn cron_mail() {
+    let (mut st, t0, _) = rig_with_jobs();
+    let day = 24 * 60;
+    let six = t0 + (6 * 60 + day - (22 * 60 + t0) % day) % day;
+    crate::rig::jobs::advance(&mut st, six);
+    for m in st.journal.mails.iter_mut().filter(|m| m.from != "cron") {
+        m.read = true;
+    }
+    st.missions.daze = None;
+    st.missions.asides.clear();
+    st.mail_seen = st.journal.mails.len();
+    st.mail_pill = None;
+    let map = MapScreen::walking(&mut st);
+    let home = st.home.unwrap().home;
+    let mut term = Terminal::open(&mut st, HostId::Rig, (map.place, home.rig));
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    type_lines(&mut st, &mut term, &["mail"]);
+    term.update(&mut st, &[key(KeyCode::Char(' '))]);
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    for size in [(120, 40), (100, 30)] {
+        let text = buffer_text(&draw_stack(&st, &[&map, &term], size));
+        assert!(text.contains("overnight"), "{text}");
+        shot_at(
+            &format!("cron_mail_{}x{}", size.0, size.1),
+            &st,
+            &map,
+            &term,
+            size,
+        );
+    }
+}
+
+/// The desk at home over the map, at 120x40 and 100x30: `keys` pressed at it first,
+/// then the card let type out.
+fn desk_shot(name: &str, st: &mut AppState, map: &MapScreen, keys: &[KeyCode]) {
+    use crate::screens::desk::Desk;
+    let mut desk = Desk::open(st);
+    for k in keys {
+        desk.update(st, &[key(*k)]);
+    }
+    st.tick += 40;
+    for (w, h) in [(120, 40), (100, 30)] {
+        shot_at(&format!("{name}_{w}x{h}"), st, map, &desk, (w, h));
+    }
+}
+
+/// The desk with the stock Zenbo, its core bay picked.
+#[test]
+#[ignore]
+fn desk_stock() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    desk_shot("desk_stock", &mut st, &map, &[]);
+}
+
+/// The Civitas cabinet fitted, a Sandbag and a Tripwire in the pack, the firewall bay
+/// picked with the list open.
+#[test]
+#[ignore]
+fn desk_civitas_firewall_list() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    st.character
+        .set_frame(&st.content, &ItemId::new("rack_civitas"));
+    for sled in ["sled_sandbag", "sled_tripwire"] {
+        st.character.give_item(&st.content, ItemId::new(sled), 1);
+    }
+    let keys = [
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Char(' '),
+    ];
+    desk_shot("desk_civitas_firewall_list", &mut st, &map, &keys);
+}
+
+/// The Halcyon server frame with every bay fitted, the last one at the desk.
+#[test]
+#[ignore]
+fn desk_halcyon_full() {
+    let mut st = state_home();
+    let map = MapScreen::walking(&mut st);
+    st.character
+        .set_frame(&st.content, &ItemId::new("rack_halcyon"));
+    let c = st.content.clone();
+    for (bay, sled) in [
+        (0, "sled_qstack"),
+        (1, "sled_tinman"),
+        (2, "sled_hydra"),
+        (3, "sled_darkfibre"),
+    ] {
+        let id = ItemId::new(sled);
+        let copy = st.character.new_copy(&c, &id);
+        st.character.rig_copy_mut(&c).fitted[bay] = Some(game::Stack {
+            item: id,
+            qty: 1,
+            copy: Some(copy),
+        });
+    }
+    st.character
+        .give_item(&c, ItemId::new("sled_killswitch"), 1);
+    let keys = [
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Char(' '),
+        KeyCode::Char(' '),
+    ];
+    desk_shot("desk_halcyon_full", &mut st, &map, &keys);
 }
 
 #[test]
@@ -2998,13 +3264,13 @@ fn net_cord() {
     let home = st.home.unwrap();
     st.player.as_mut().unwrap().body = Some((home.place(), home.home.rig));
     let now = st.net.now(&st);
-    st.backdoors.plant_net(relay, 50, city.seed, now);
+    st.backdoors.plant_net(relay, 50, city.seed, now, 3);
     st.backdoors.start_route(Some(relay));
     map.update(&mut st, &[]);
     for (name, size) in [("net_cord", (120, 40)), ("net_cord_small", (100, 30))] {
         write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
     }
-    st.backdoors.start_trace(now);
+    st.backdoors.start_trace(now, 0);
     map.update(&mut st, &[]);
     write_svg(
         &dir,

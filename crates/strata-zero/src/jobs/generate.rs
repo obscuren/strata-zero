@@ -243,6 +243,24 @@ fn fetch_in(st: &mut AppState, b: BuildingId, r: u64) -> Option<Kind> {
         return None;
     }
     let (level, number) = flats[(r % flats.len() as u64) as usize];
+    let tile = lay_in_flat(st, b, level, number, &ItemId::new("paydata"))?;
+    Some(Kind::Fetch {
+        building: b,
+        level,
+        number,
+        tile,
+    })
+}
+
+/// Lays one `item` on the floor of flat `number` on `level` of `b`, on its first open
+/// tile; the tile, or `None` when the flat has no room to lay it in.
+pub(crate) fn lay_in_flat(
+    st: &mut AppState,
+    b: BuildingId,
+    level: i32,
+    number: u16,
+    item: &ItemId,
+) -> Option<Pos> {
     let city = st.city.as_ref()?;
     let floor = st.interiors.ensure(city, b, level)?;
     let room = floor
@@ -253,18 +271,9 @@ fn fetch_in(st: &mut AppState, b: BuildingId, r: u64) -> Option<Kind> {
         .rect
         .iter()
         .find(|p| floor.tiles[*p].is_walkable() && floor.tiles[*p].feature.is_none())?;
-    st.ground.add(
-        Place::Floor { building: b, level },
-        tile,
-        ItemId::new("paydata"),
-        1,
-    );
-    Some(Kind::Fetch {
-        building: b,
-        level,
-        number,
-        tile,
-    })
+    st.ground
+        .add(Place::Floor { building: b, level }, tile, item.clone(), 1);
+    Some(tile)
 }
 
 fn finish_fetch(st: &AppState, mut job: Job, r_text: u64) -> Job {
@@ -420,10 +429,12 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
             Some(job)
         }
         KindTag::Plant => {
+            let lines = crate::rig::of(st).lines;
             let pool: Vec<BuildingId> = servers_in_band(st, standing)
                 .into_iter()
                 .filter(|b| {
-                    st.backdoors.held(*b).is_none() && st.backdoors.can_plant(*b, now).is_ok()
+                    st.backdoors.held(*b).is_none()
+                        && st.backdoors.can_plant(*b, now, lines).is_ok()
                 })
                 .collect();
             if pool.is_empty() {

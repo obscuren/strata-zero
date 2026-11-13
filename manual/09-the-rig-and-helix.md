@@ -39,6 +39,82 @@ There, `door release`, `lift answer`, `cam loop` and `alarm off` want root, the 
 | `journal` | what you know |
 | `route` | your backdoors, hop by hop |
 | `burn` | give up a backdoor |
+| `run` | start a job on the rig |
+| `ps` | the jobs running, the seats, and what finished since you last looked |
+| `kill` | stop a job |
+
+## Working on the rig
+
+Stand at your rig and press `space`, then `o Open up the rig`. The desk shows your rack from the front, bay by bay. It won't open while the rig is held as evidence.
+
+The rack is the frame, and its bays take **sleds**, small cards that slide in. Each bay takes one kind of sled, and each kind does one thing:
+
+| Bay | What its sled gives |
+|---|---|
+| `CORE` | seats: how many jobs run at once, and how fast |
+| `RELAY` | lines: how many backdoors you can keep |
+| `LINE` | hold: how many days a planted Net backdoor lasts |
+| `FIREWALL` | a stronger fight against a trace |
+
+The stock rig is a Zenbo half-rack with a ZB-8 core (1 seat), an R-3 relay (3 lines) and a CU-1 copper line (3 days). It has no firewall. A rig with no relay holds no lines, and you can't plant. With no line sled nothing holds, so a Net backdoor won't plant either; a key from the shell still goes in, on its own clock.
+
+| Key | What it does |
+|---|---|
+| `↑↓` | move between the frame and the bays |
+| `space` | what fits here; in the list, fit it |
+| `x` | pull the sled into your pack |
+| `esc` | back, then stand up |
+
+Fitting or pulling takes ten minutes. A swap puts the old sled in your pack. Pull a core, or swap to one with fewer seats, and the newest jobs over the new count are killed; the log says which. Lowering your lines burns nothing, but you can't plant until you're under.
+
+### Racks
+
+| Rack | Bays |
+|---|---|
+| Zenbo half-rack | core, relay, line |
+| Civitas cabinet | core, relay, line, firewall |
+| Lotus tower | core, core, relay, line |
+| Halcyon server frame | core, core, relay, line, firewall |
+
+`space` on FRAME shows the racks standing in your flat. Change racks and your sleds move to the new bays of their kind; any left over go to your pack. Your terminal wears its rack's look from then on, but the rig is still called `zenbo`.
+
+### Firewalls
+
+Each tier does what the one below does.
+
+- Sandbag: the trace's last leg takes twice as long.
+- Tripwire: your phone rings when a trace starts, wherever you are.
+- Killswitch: when the trace reaches your door, the rig wipes itself. Every backdoor burns, but nothing is seized, and the fixers don't go quiet.
+
+### Where parts come from
+
+- Fixers. The first time a fixer comes to know you, they pay a tier-two sled with the hand-in, once each: a Tinman 2X core, a Switchback relay, a Longwire, a Sandbag. The first fixer to trust you sends a Civitas cabinet, the second a Lotus tower, and the first to take you into the inner circle a Halcyon server frame. A rack waits in your flat, and a mail says so.
+- The workbench. Tier-two sleds and the rest are built from parts with the `electronics` skill. The top tier eats a data vault's dump, so a netrunner's haul becomes hardware.
+
+## Jobs
+
+Your rig can work while you're out or asleep. `run <job> [target]` starts a job in a free seat, `ps` lists them and `kill <n>` stops one. Each says `rig only` on any other host. Jobs run on game time, faster on a fast core, and catch up when you come back to the city.
+
+| Job | What it does |
+|---|---|
+| `sift` | digs through a paydata shard or a vault dump from your pack: 6 hours (10 for a vault). It finds the door codes of 2 flats (4 for a vault) and, one time in three, a stash left on a flat's floor, marked on your MAP. The shard comes back sifted, still worth the same, and can't be sifted again. A sifted shard still hands in wherever its shard does and still builds at the workbench in its place; an unsifted one is used first |
+| `rent` | sells the spare cycles: ¤6 an hour, paid as it goes |
+| `sniff <host>` | listens on a Net backdoor you hold and learns a flat's door code every 3 hours |
+| `keepalive <host>` | holds a Net backdoor's life still while it runs |
+
+`sniff` and `keepalive` take a host as `route` lists it, by name, prefix or number. A key backdoor won't hold that long. `sift` and `rent` start installed; the other two come on shards, which a job pays: the first Plant gives `sniff`, the first Copy gives `keepalive`. Carry one to your rig and the next time you sit down it says `INSTALLED sniff FROM SHARD`. `ls /opt/jobs` lists what is installed.
+
+A job takes one seat. With every seat busy, `kill` one or fit a bigger core. A seized rig kills every job.
+
+### Noise
+
+`sniff` and `keepalive` make noise on the building they work on. At 18 points the mail warns you once. At 36 the admins patch the hole: the backdoor burns and the jobs on it end. Noise fades while nothing runs there. `sift` and `rent` make none.
+
+A job doesn't use its backdoor, so it never springs a honeypot, but a line that dies of age under a job burns there and then.
+
+### The morning mail
+
+At 06:00 each day with something to say, a mail arrives from `cron`: what each job found, grouped by job, with the day's warnings and ends. The finds are already in your journal and on your map. When you sit down at the rig, the boot says how many jobs ran while you were out; type `ps`. Under its table `ps` lists what the jobs found and how they ended since you last looked, each line once; the morning mail still carries the night.
 
 ## Mail
 
