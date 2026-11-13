@@ -76,6 +76,7 @@ pub struct Post {
     /// A stop on another level its round takes in.
     #[serde(default)]
     pub stop: Option<(i32, Pos)>,
+    /// Where it is on its round: the leg, the tick it next acts, the lift or link it's on.
     #[serde(default)]
     pub round: Round,
     /// The link you took off its floor, and the level you went to.
@@ -84,6 +85,7 @@ pub struct Post {
     /// It has seen you since it last radioed.
     #[serde(default)]
     pub spotted: bool,
+    /// It has radioed what it saw (or lost the call to a stun), so it doesn't again.
     #[serde(default)]
     pub radioed: bool,
 }
@@ -214,7 +216,7 @@ pub fn sees(map: &MapRef, foe: &Foe, to: Pos) -> bool {
     if !foe.standing() || foe.pos.chebyshev(to) > foe.sight {
         return false;
     }
-    if !matches!(map, MapRef::Floor(_)) {
+    if map.floor().is_none() {
         return line_clear(map, foe.pos, to);
     }
     let lit = |p: Pos| {

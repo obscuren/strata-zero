@@ -241,6 +241,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn old_guards_wake_in_the_home_city_held_and_a_city_kept() {
+        use crate::foes::{Foe, Post};
+        use crate::outside::tests::{beside_another, home_run, reopen};
+        use citygen::{BuildingId, Place, Pos};
+        // Home held while you're away in a second city, and a first one kept.
+        let mut st = home_run();
+        let (first, _) = beside_another(&st);
+        let second = (st.outside.as_ref().unwrap().others().into_iter())
+            .map(|(s, _)| s)
+            .find(|&s| s != first)
+            .expect("a second city or town");
+        crate::outside::enter(&mut st, first).unwrap();
+        crate::outside::enter(&mut st, second).unwrap();
+        // A guard as a save from before holds one: inert, with no home.
+        let old = |level: i32| {
+            let place = Place::Floor {
+                building: BuildingId(1),
+                level,
+            };
+            Foe {
+                post: Some(Post::new(BuildingId(1), 1, vec![Pos::new(3, 4)])),
+                inert: true,
+                ..Foe::goon(place, Pos::new(3, 4))
+            }
+        };
+        st.away.as_mut().expect("home held").foes.push(old(2));
+        let kept = |st: &mut AppState| -> Vec<Vec<Foe>> {
+            let o = st.outside.as_mut().unwrap();
+            o.kept_foes_mut().map(|foes| foes.clone()).collect()
+        };
+        assert_eq!(kept(&mut st).len(), 1, "the first city kept");
+        let o = st.outside.as_mut().unwrap();
+        o.kept_foes_mut().next().unwrap().push(old(3));
+        let mut back = reopen(st, "old-guards-held");
+        let kept = kept(&mut back);
+        assert_eq!(kept.len(), 1, "kept still");
+        let held = &back.away.as_ref().expect("home held still").foes;
+        for (foes, level) in [(held, 2), (&kept[0], 3)] {
+            let f = (foes.iter())
+                .find(|f| f.post.is_some())
+                .expect("the guard comes back");
+            assert!(!f.inert, "{f:?}");
+            assert_eq!(f.post.as_ref().unwrap().home, Some(level), "{f:?}");
+        }
+    }
+
     /// A small city entered, with a run: enough for a file.
     fn small_run() -> AppState {
         let mut st = AppState::new();

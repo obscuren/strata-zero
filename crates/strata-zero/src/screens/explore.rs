@@ -5215,6 +5215,16 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(15, 3));
         assert_eq!(opened(&st), 1);
+        // The aimed walk with its moves: the step through says it once.
+        stand(&mut st, 0, Pos::new(14, 3));
+        st.net.engaged.as_mut().unwrap().moves = moves;
+        s.walking = Some(Walk {
+            path: vec![Pos::new(15, 3)],
+            next_at: 0,
+        });
+        s.street_walk_step(&mut st, Pos::new(15, 3));
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(15, 3));
+        assert_eq!(opened(&st), 2, "one line for the walked step");
     }
 
     #[test]
