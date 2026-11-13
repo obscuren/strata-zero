@@ -246,7 +246,6 @@ pub(crate) fn run(st: &mut AppState, n: u64) {
 }
 
 /// Ticks of the clock as `run`'s until `done`; panics when it isn't in `max`.
-#[expect(dead_code, reason = "the links' and the hunt's tests wait on it")]
 pub(crate) fn run_until(st: &mut AppState, max: u64, done: impl Fn(&AppState) -> bool) {
     for _ in 0..max {
         if done(st) {

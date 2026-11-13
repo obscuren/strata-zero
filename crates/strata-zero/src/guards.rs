@@ -1,12 +1,14 @@
 //! Guards in a mission's copy of a venue: what only they do beside every other foe.
 
 mod doors;
+mod links;
 mod round;
 
 use crate::app::AppState;
 use citygen::BuildingId;
 
 pub use doors::opens;
+pub(crate) use links::free_landing;
 
 /// A calm guard's step: an amble, three times your walk.
 pub const GUARD_STEP_TICKS: u64 = 3 * crate::net::WALK_TICKS;
@@ -16,7 +18,6 @@ pub const GUARD_RUN_TICKS: u64 = crate::net::WALK_TICKS;
 /// How long a guard stands at each spot of its round: three seconds at 30 fps.
 pub const GUARD_PAUSE_TICKS: u64 = 90;
 /// How long a guard waits for a lift.
-#[expect(dead_code, reason = "a guard taking a lift waits it")]
 pub const GUARD_LIFT_TICKS: u64 = 60;
 /// How far a shot wakes the calm guards of its floor, walls or not.
 #[expect(dead_code, reason = "hearing a shot reads it")]

@@ -1,9 +1,10 @@
 //! The calm round: a guard walks its patrol out and back, then its stop, on the clock.
 
+use super::links;
 use super::{GUARD_PAUSE_TICKS, GUARD_STEP_TICKS};
 use crate::app::AppState;
 use crate::foes::{self, Foe, Post};
-use citygen::{Place, Pos};
+use citygen::{BuildingId, Place, Pos};
 
 /// A guard's round as goals, each a level and a tile: its patrol out on `home`, back the
 /// way it came (the ends left out), then its stop on another level if it has one. Its
@@ -40,49 +41,82 @@ pub(crate) fn avoid(st: &AppState, i: usize) -> Vec<Pos> {
     you.chain(others).collect()
 }
 
-/// One calm action of guard `i` at clock tick `now`. Standing on its goal, it takes the
-/// next leg and pauses; else it steps a tile toward the goal round the tiles held, or
-/// along the way that ignores them when there's none round (waiting while that tile is
-/// held), and a step that lands on the goal takes the next leg and pauses at once. A
-/// goal with no way at all, or on another level (links come later), is skipped.
+/// One calm action of guard `i` at clock tick `now`. Waiting for a lift, it rides once
+/// the lift answers. Standing on its goal, it takes the next leg and pauses; else it steps
+/// a tile toward the goal round the tiles held, or along the way that ignores them when
+/// there's none round (waiting while that tile is held), and a step that lands on the goal
+/// takes the next leg and pauses at once. A goal on another level it walks to by the link
+/// `links::link_to` picks, and takes that link standing on its stop. A goal (or a link)
+/// with no way at all is skipped. Off a floor, or with no map, it waits a step.
 pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
     let foe = &st.foes[i];
     let (Some(post), Place::Floor { building, level }) = (foe.post.as_ref(), foe.place) else {
-        return;
+        return wait(st, i, now + GUARD_STEP_TICKS);
     };
+    if let Some((link, to)) = post.round.lift {
+        return links::wait_for_lift(st, i, link, to, now);
+    }
     let goals = goals(post, home(foe));
     let Some(&(goal_level, goal)) = goals.get(post.round.leg % goals.len().max(1)) else {
-        return;
+        return wait(st, i, now + GUARD_STEP_TICKS);
     };
+    let n = goals.len();
     let from = foe.pos;
     if goal_level != level {
-        return next_leg(st, i, goals.len(), now + GUARD_STEP_TICKS);
+        return match links::link_to(st, i, goal_level) {
+            None => next_leg(st, i, n, now + GUARD_STEP_TICKS),
+            Some((link, at)) if from == at => links::take(st, i, link, goal_level, now),
+            Some((_, at)) => match step(st, i, building, level, at) {
+                Step::NoWay => next_leg(st, i, n, now + GUARD_STEP_TICKS),
+                Step::NoMap | Step::Held | Step::To(_) => wait(st, i, now + GUARD_STEP_TICKS),
+            },
+        };
     }
     if from == goal {
-        return next_leg(st, i, goals.len(), now + GUARD_PAUSE_TICKS);
+        return next_leg(st, i, n, now + GUARD_PAUSE_TICKS);
     }
+    match step(st, i, building, level, goal) {
+        Step::NoWay => next_leg(st, i, n, now + GUARD_STEP_TICKS),
+        Step::To(to) if to == goal => next_leg(st, i, n, now + GUARD_PAUSE_TICKS),
+        Step::NoMap | Step::Held | Step::To(_) => wait(st, i, now + GUARD_STEP_TICKS),
+    }
+}
+
+/// What a guard's step toward a tile came to.
+enum Step {
+    /// Its floor has no map: it waits.
+    NoMap,
+    /// No way there at all.
+    NoWay,
+    /// The way's next tile is held: it waits, never sharing.
+    Held,
+    /// It stepped onto this tile.
+    To(Pos),
+}
+
+/// Guard `i`, on level `level` of `building`, steps a tile toward `target` round the
+/// tiles held, else along the way that ignores them when that tile is free. Its floor is
+/// drawn when needed.
+fn step(st: &mut AppState, i: usize, building: BuildingId, level: i32, target: Pos) -> Step {
     if let Some(city) = st.city.as_ref() {
         st.interiors.ensure(city, building, level);
     }
+    let from = st.foes[i].pos;
     let held = avoid(st, i);
     let next = {
         let Some(map) = foes::map_of(st, st.foes[i].place) else {
-            return;
+            return Step::NoMap;
         };
         let post = st.foes[i].post.as_ref();
-        foes::step_toward(&map, from, goal, &held, post)
-            .or_else(|| foes::step_toward(&map, from, goal, &[], post))
+        foes::step_toward(&map, from, target, &held, post)
+            .or_else(|| foes::step_toward(&map, from, target, &[], post))
     };
     match next {
-        None => next_leg(st, i, goals.len(), now + GUARD_STEP_TICKS),
-        Some(to) if held.contains(&to) => wait(st, i, now + GUARD_STEP_TICKS),
+        None => Step::NoWay,
+        Some(to) if held.contains(&to) => Step::Held,
         Some(to) => {
             st.foes[i].pos = to;
-            if to == goal {
-                next_leg(st, i, goals.len(), now + GUARD_PAUSE_TICKS);
-            } else {
-                wait(st, i, now + GUARD_STEP_TICKS);
-            }
+            Step::To(to)
         }
     }
 }
@@ -148,6 +182,18 @@ mod tests {
             Pos::new(9, 3),
             "paused, and on its way back"
         );
+    }
+
+    #[test]
+    fn the_clock_walks_a_calm_guard_off_its_post() {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(20, 3));
+        let i = guard(&mut st, 0, 0, &[Pos::new(2, 3), Pos::new(10, 3)]);
+        for _ in 0..(1 + GUARD_PAUSE_TICKS + GUARD_STEP_TICKS) {
+            st.tick += 1; // the app's frame; the living city's, when there is one, runs below
+            crate::clock::run(&mut st, Some(1), 0);
+        }
+        assert_ne!(st.foes[i].pos, Pos::new(2, 3), "off its post");
     }
 
     #[test]
