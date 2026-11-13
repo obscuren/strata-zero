@@ -2,7 +2,7 @@
 //! to where it last had you, and loses you at the street door.
 
 use super::round::{self, Step};
-use super::{GUARD_LIFT_TICKS, GUARD_RUN_TICKS, GUARD_STEP_TICKS, links};
+use super::{GUARD_LIFT_TICKS, GUARD_RUN_TICKS, GUARD_STEP_TICKS, HEAR_RADIUS, links};
 use crate::app::AppState;
 use crate::foes::FoeMode;
 use citygen::{BuildingId, LinkKind, Place};
@@ -16,6 +16,25 @@ pub(crate) fn you_left(st: &mut AppState, b: BuildingId, level: i32, link: usize
         if let Some(post) = st.foes[i].post.as_mut() {
             post.follow = Some((link, to));
             post.round.next = post.round.next.min(now);
+        }
+    }
+}
+
+/// A shot or a blast at `at` on `place`: on a floor, every standing calm guard there
+/// within `HEAR_RADIUS` of it (walls or not) hunts toward `toward`. It heard you; it
+/// hasn't seen you, so it has nothing to radio yet.
+pub fn hear(st: &mut AppState, place: Place, at: citygen::Pos, toward: citygen::Pos) {
+    if !matches!(place, Place::Floor { .. }) {
+        return;
+    }
+    for foe in st.foes.iter_mut() {
+        let calm = foe.mode == FoeMode::Idle;
+        let near = foe.place == place && foe.pos.chebyshev(at) <= HEAR_RADIUS;
+        if foe.post.is_some() && foe.standing() && calm && near {
+            foe.mode = FoeMode::Hunting {
+                seen: toward,
+                lost: 0,
+            };
         }
     }
 }
@@ -234,5 +253,109 @@ mod tests {
         run(&mut st, 1);
         assert!(!st.foes[i].hunting());
         assert_eq!(st.foes[i].pos, Pos::new(5, 3));
+    }
+
+    #[test]
+    fn a_shot_on_a_floor_wakes_the_calm_guards_within_twelve() {
+        let mut st = ward();
+        st.character.skills.insert(game::SkillId::new("handguns"));
+        let target = goon(&mut st, 0, Pos::new(10, 3));
+        let near = guard(&mut st, 0, 1, &[Pos::new(18, 3)]); // 12, behind the wall
+        let far = guard(&mut st, 0, 1, &[Pos::new(19, 3)]); // 13
+        let above = guard(&mut st, 1, 0, &[Pos::new(6, 3)]);
+        crate::net::engage(&mut st, on(0), true);
+        crate::net::stay(&mut st);
+        crate::combat::fire(&mut st, target).unwrap();
+        assert_eq!(
+            st.foes[near].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0
+            }
+        );
+        assert!(
+            !st.foes[near].post.as_ref().unwrap().spotted,
+            "heard, not seen"
+        );
+        assert!(!st.foes[far].hunting() && !st.foes[above].hunting());
+    }
+
+    #[test]
+    fn a_guards_shot_wakes_the_guards_near_it() {
+        let mut st = ward();
+        let shooter = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let near = guard(&mut st, 0, 1, &[Pos::new(22, 3)]); // 12 from the shooter
+        crate::combat::fire_at_you(&mut st, shooter);
+        assert_eq!(
+            st.foes[near].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(10, 3),
+                lost: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_blast_on_a_floor_is_heard_within_twelve() {
+        let mut st = ward();
+        let near = guard(&mut st, 0, 2, &[Pos::new(25, 3)]); // 12 from (13,3)
+        let far = guard(&mut st, 0, 2, &[Pos::new(26, 3)]);
+        let satchel = st
+            .content
+            .item(&game::ItemId::new("satchel"))
+            .unwrap()
+            .clone();
+        let (_, _, blast) = satchel.throw().unwrap();
+        st.live.push(crate::blast::Live {
+            place: on(0),
+            pos: Pos::new(13, 3),
+            blast,
+            fx: Vec::new(),
+            name: satchel.name.clone(),
+            turns: 2,
+            lands: 0,
+            wakes: Some(Pos::new(6, 3)),
+        });
+        crate::blast::land(&mut st);
+        assert_eq!(
+            st.foes[near].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0
+            }
+        );
+        assert!(!st.foes[far].hunting());
+    }
+
+    #[test]
+    fn a_blast_going_off_on_a_floor_turns_the_guards_in_earshot_toward_you() {
+        let mut st = ward();
+        let near = guard(&mut st, 0, 2, &[Pos::new(25, 3)]); // 12 from (13,3)
+        let far = guard(&mut st, 0, 2, &[Pos::new(26, 3)]);
+        let satchel = st
+            .content
+            .item(&game::ItemId::new("satchel"))
+            .unwrap()
+            .clone();
+        let (_, _, blast) = satchel.throw().unwrap();
+        let now = st.tick;
+        crate::blast::detonate(
+            &mut st,
+            on(0),
+            Pos::new(13, 3),
+            blast,
+            &[],
+            &satchel.name,
+            now,
+            None,
+        );
+        assert_eq!(
+            st.foes[near].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0
+            }
+        );
+        assert!(!st.foes[far].hunting());
     }
 }

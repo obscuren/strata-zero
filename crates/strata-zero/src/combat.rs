@@ -375,6 +375,8 @@ fn volley(
             lost: 0,
         };
     }
+    // A shot on a floor wakes the calm guards in earshot, toward you.
+    crate::guards::hear(st, place, from, from);
     let mut out = Vec::new();
     for k in 0..w.rounds as usize {
         let hit = game::round_hits(roll(st), chance);
@@ -459,6 +461,8 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
     let Some(me) = st.player.as_ref().map(|p| p.pos) else {
         return;
     };
+    // Its shot wakes the calm guards in earshot, toward it.
+    crate::guards::hear(st, place, from, from);
     let dist = from.chebyshev(me);
     let chance = game::hit_chance(reflex, true, dist, w.range);
     let turn = game::turn_chance(st.character.armor(&st.content));

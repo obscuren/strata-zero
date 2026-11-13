@@ -9,6 +9,7 @@ use crate::app::AppState;
 use citygen::BuildingId;
 
 pub use doors::opens;
+pub use hunt::hear;
 pub(crate) use hunt::you_left;
 pub(crate) use links::{forget_stale, free_landing};
 
@@ -21,7 +22,6 @@ pub const GUARD_PAUSE_TICKS: u64 = 90;
 /// How long a guard waits for a lift.
 pub const GUARD_LIFT_TICKS: u64 = 60;
 /// How far a shot wakes the calm guards of its floor, walls or not.
-#[expect(dead_code, reason = "hearing a shot reads it")]
 pub const HEAR_RADIUS: i32 = 12;
 
 /// The guards' step on the clock. Every building with a posted foe, in id order: while

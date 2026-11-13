@@ -265,6 +265,8 @@ pub fn detonate(
             wake(st, i, toward);
         }
     }
+    // The bang carries past its footprint: the calm guards in earshot turn too.
+    crate::guards::hear(st, place, centre, toward);
     let mut hurt_you = false;
     if let (Some(ring), Some(pos)) = (you_ring, you) {
         let (damage, stun) = effect_on_you(st, &blast, ring);
@@ -453,7 +455,8 @@ pub fn tick_live(st: &mut AppState) {
 }
 
 /// From the frame loop: a live blast that has come down is heard by the idle foes
-/// in its reach, who turn to hunt toward where it was thrown from. Once each.
+/// in its reach, and on a floor by the calm guards in earshot (`guards::hear`), who
+/// turn to hunt toward where it was thrown from. Once each.
 pub fn land(st: &mut AppState) {
     let now = st.tick;
     if st.city.is_none() {
@@ -469,6 +472,7 @@ pub fn land(st: &mut AppState) {
                 wake(st, i, from);
             }
         }
+        crate::guards::hear(st, place, centre, from);
     }
 }
 
