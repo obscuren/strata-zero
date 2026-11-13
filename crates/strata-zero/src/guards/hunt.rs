@@ -4,7 +4,7 @@
 use super::round::{self, Step};
 use super::{GUARD_LIFT_TICKS, GUARD_RUN_TICKS, GUARD_STEP_TICKS, HEAR_RADIUS, links};
 use crate::app::AppState;
-use crate::foes::FoeMode;
+use crate::foes::{FoeMode, Post};
 use citygen::{BuildingId, LinkKind, Place};
 
 /// You took link `link` off level `level` of building `b` to level `to`: every standing
@@ -154,16 +154,21 @@ pub(crate) fn body_check(st: &mut AppState) {
     };
     if let Some(post) = st.foes[i].post.as_mut() {
         post.radioed = true;
-        if post.follow.is_some() && post.round.lift == post.follow {
-            post.round.lift = None;
-        }
-        post.follow = None;
+        release_follow(post);
     }
     if !st.net.alert(b, st.net.now(st)) {
         crate::net::lock_down(st, b);
     }
     crate::net::dump(st, "a guard found you · jacked out");
     st.foes[i].mode = FoeMode::Hunting { seen: at, lost: 0 };
+}
+
+/// Lets a trail go: the follow, and the lift it waited on to follow it.
+fn release_follow(post: &mut Post) {
+    if post.follow.is_some() && post.round.lift == post.follow {
+        post.round.lift = None;
+    }
+    post.follow = None;
 }
 
 /// A downed guard of a zone above public leaves its zone's card where it fell, and the
@@ -187,10 +192,7 @@ pub(super) fn lose_you(st: &mut AppState, i: usize, now: u64) {
     let foe = &mut st.foes[i];
     foe.mode = FoeMode::Idle;
     if let Some(post) = foe.post.as_mut() {
-        if post.follow.is_some() && post.round.lift == post.follow {
-            post.round.lift = None;
-        }
-        post.follow = None;
+        release_follow(post);
         post.round.next = now + GUARD_STEP_TICKS;
     }
 }
@@ -552,8 +554,15 @@ mod tests {
         jacked_in_at_the_kiosk(&mut st, b);
         let (_, at) = st.player.as_ref().unwrap().body.unwrap();
         let i = guard_by_the_body(&mut st, b);
+        let second = nth_guard_by_the_body(&mut st, b, 1);
+        assert!(second > i);
         crate::guards::tick(&mut st);
         assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert!(
+            !st.foes[second].post.as_ref().unwrap().radioed,
+            "only the first finds it"
+        );
+        assert_eq!(st.foes[second].mode, crate::foes::FoeMode::Idle);
         assert!(
             st.log
                 .iter()
