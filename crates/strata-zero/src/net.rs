@@ -2363,12 +2363,15 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     } else if place.in_construct() {
         "ENGAGED · the ICE is on you".to_string()
     } else {
-        let name = crate::foes::in_memory(st)
+        // Only a foe you've seen is named; one you haven't (a woken guard behind a
+        // wall) is only heard.
+        match crate::foes::in_memory(st)
             .into_iter()
             .find(|i| st.foes[*i].hunting())
-            .map(|i| st.foes[i].name.clone())
-            .unwrap_or_else(|| "foe".to_string());
-        format!("ENGAGED · the {name} has you")
+        {
+            Some(i) => format!("ENGAGED · the {} has you", st.foes[i].name),
+            None => "ENGAGED · footsteps".to_string(),
+        }
     };
     st.warn(line);
     start_turn(st);
@@ -5165,6 +5168,25 @@ pub(crate) mod tests {
         assert!(order.contains(&Actor::Foe(seen)) && order.contains(&Actor::Foe(woken)));
         let readout = turn_readout(&st).unwrap();
         assert_eq!(readout.matches("guard").count(), 1, "{readout}");
+    }
+
+    #[test]
+    fn a_fight_with_only_an_unseen_guard_opens_on_footsteps() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        engage(&mut st, on(0), false);
+        assert!(crate::foes::unseen(&st, woken));
+        let last = st.log.latest().unwrap();
+        assert_eq!(
+            last.text, "ENGAGED · footsteps",
+            "nothing named you haven't seen"
+        );
+        assert_eq!(last.kind, crate::messages::Kind::Warn);
     }
 
     #[test]

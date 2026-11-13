@@ -368,9 +368,13 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
             seen: me.1,
             lost: 0,
         };
-        // A guard marks that it saw you, for its radio, and stops following a trail.
+        // A guard marks that it saw you, for its radio, and stops following a trail,
+        // letting go of the lift it waited on to follow it.
         let guard = foe.post.as_mut().map(|post| {
             post.spotted = true;
+            if post.follow.is_some() && post.round.lift == post.follow {
+                post.round.lift = None;
+            }
             post.follow = None;
         });
         if guard.is_some() && calm {
