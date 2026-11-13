@@ -75,7 +75,7 @@ fn sees(map: &MapRef, from: Pos, p: Pos) -> bool {
         map.city()
             .tile(k, p)
             .is_some_and(|t| !crate::foes::blocks_sight(t))
-    }) && crate::foes::line_clear(map.city(), map.place(), from, p)
+    }) && crate::foes::line_clear(map, from, p)
 }
 
 /// A thrown thing crossing the line two cells a tick, three cells of trail behind

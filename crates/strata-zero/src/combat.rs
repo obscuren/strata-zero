@@ -71,7 +71,7 @@ pub fn your_weapon(st: &AppState) -> Result<(ItemId, Weapon), String> {
 /// A shot's way to a foe from where you stand: refused out of range or without a
 /// clear line in sight; else the distance.
 pub(crate) fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String> {
-    let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
+    let Some(p) = st.player.as_ref().filter(|_| st.city.is_some()) else {
         return Err("no body in the city".to_string());
     };
     let Some(f) = st
@@ -89,7 +89,8 @@ pub(crate) fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String
         .vis()
         .get(f.pos)
         .is_some_and(|v| *v == crate::render::Visibility::Visible);
-    if !seen || !foes::line_clear(city, p.place, p.pos, f.pos) {
+    let line = foes::map_of(st, p.place).is_some_and(|m| foes::line_clear(&m, p.pos, f.pos));
+    if !seen || !line {
         return Err("no line".to_string());
     }
     Ok(dist)
@@ -647,16 +648,14 @@ fn chain_foes(st: &mut AppState, first: usize, arc: Chain) {
         let Some((place, at)) = st.foes.get(last).map(|f| (f.place, f.pos)) else {
             return;
         };
-        let Some(city) = st.city.as_ref() else {
+        let Some(map) = foes::map_of(st, place) else {
             return;
         };
         let candidates = st
             .foes
             .iter()
             .enumerate()
-            .filter(|(_, f)| {
-                f.standing() && f.place == place && foes::line_clear(city, place, at, f.pos)
-            })
+            .filter(|(_, f)| f.standing() && f.place == place && foes::line_clear(&map, at, f.pos))
             .map(|(i, f)| (i, f.pos));
         let next = nearest_other(candidates, at, &hit);
         let Some(next) = next else {
@@ -1012,6 +1011,16 @@ mod tests {
             fire(&mut st, 0).unwrap_err().as_str(),
             "no line" | "out of range"
         ));
+    }
+
+    #[test]
+    fn a_shot_across_a_floor_has_its_line() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let near = goon(&mut st, 0, Pos::new(12, 3));
+        let far = goon(&mut st, 0, Pos::new(18, 3));
+        assert_eq!(reach(&st, near, 12), Ok(6));
+        assert_eq!(reach(&st, far, 12), Err("no line".to_string()));
     }
 
     #[test]

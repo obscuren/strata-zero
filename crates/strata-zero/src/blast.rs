@@ -3,6 +3,7 @@
 
 use crate::app::{AppState, FxInstance};
 use crate::foes;
+use crate::render::map::MapRef;
 use citygen::{City, Place, Pos};
 use game::{Action, Blast, Fx, ItemId};
 
@@ -50,6 +51,7 @@ pub fn footprint(city: &City, place: Place, centre: Pos, radius: i32) -> Vec<(Po
     let Some(k) = place.stratum() else {
         return out;
     };
+    let map = MapRef::stratum_at(city, k, 0);
     for ring in 1..=radius {
         for y in -ring..=ring {
             for x in -ring..=ring {
@@ -58,7 +60,7 @@ pub fn footprint(city: &City, place: Place, centre: Pos, radius: i32) -> Vec<(Po
                 }
                 let p = centre.offset(x, y);
                 let open = city.tile(k, p).is_some_and(|t| !foes::blocks_sight(t));
-                if open && foes::line_clear(city, place, centre, p) {
+                if open && foes::line_clear(&map, centre, p) {
                     out.push((p, ring));
                 }
             }
@@ -337,7 +339,9 @@ pub fn landing(st: &AppState, range: i32, at: Pos) -> Result<(), String> {
         .vis()
         .get(at)
         .is_some_and(|v| *v == crate::render::Visibility::Visible);
-    if !seen || !foes::line_clear(city, p.place, p.pos, at) {
+    let line = (p.place.stratum())
+        .is_some_and(|k| foes::line_clear(&MapRef::stratum_at(city, k, 0), p.pos, at));
+    if !seen || !line {
         return Err("no line".to_string());
     }
     let lands = p.place.stratum().is_some_and(|k| {

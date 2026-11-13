@@ -193,6 +193,12 @@ impl Interiors {
         self.plans.insert(plan.building, plan);
     }
 
+    /// Puts a floor of building `b` drawn by hand, in place of any drawn from its plan.
+    #[cfg(test)]
+    pub(crate) fn put_floor(&mut self, b: BuildingId, floor: Floor) {
+        self.floors.insert((b, floor.level), floor);
+    }
+
     /// Site `b`'s Net as kept, else worked out by `work_out` and kept: `sitenet::net_of`.
     pub(crate) fn site_net(
         &self,
