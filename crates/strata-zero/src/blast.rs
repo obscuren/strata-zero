@@ -3,8 +3,8 @@
 
 use crate::app::{AppState, FxInstance};
 use crate::foes;
-use crate::render::map::MapRef;
-use citygen::{City, Place, Pos};
+use crate::render::map::{MapRef, TileMap};
+use citygen::{Place, Pos};
 use game::{Action, Blast, Fx, ItemId};
 
 /// Tiles a thrown thing crosses in a tick.
@@ -45,13 +45,10 @@ impl Live {
 }
 
 /// Every tile within `radius` of `centre` that the centre can see, with its ring,
-/// by ring then y then x. The centre always counts, whatever it is.
-pub fn footprint(city: &City, place: Place, centre: Pos, radius: i32) -> Vec<(Pos, i32)> {
+/// by ring then y then x. The centre always counts, whatever it is. Over any map: on a
+/// floor walls and doors stop it.
+pub fn footprint(map: &MapRef, centre: Pos, radius: i32) -> Vec<(Pos, i32)> {
     let mut out = vec![(centre, 0)];
-    let Some(k) = place.stratum() else {
-        return out;
-    };
-    let map = MapRef::stratum_at(city, k, 0);
     for ring in 1..=radius {
         for y in -ring..=ring {
             for x in -ring..=ring {
@@ -59,14 +56,28 @@ pub fn footprint(city: &City, place: Place, centre: Pos, radius: i32) -> Vec<(Po
                     continue;
                 }
                 let p = centre.offset(x, y);
-                let open = city.tile(k, p).is_some_and(|t| !foes::blocks_sight(t));
-                if open && foes::line_clear(&map, centre, p) {
+                let open = map.tile(p).is_some_and(|t| !foes::blocks_sight(t));
+                if open && foes::line_clear(map, centre, p) {
                     out.push((p, ring));
                 }
             }
         }
     }
     out
+}
+
+/// `footprint` over `place`'s map (`foes::map_of`); the centre alone where there is
+/// none.
+pub(crate) fn footprint_at(
+    st: &AppState,
+    place: Place,
+    centre: Pos,
+    radius: i32,
+) -> Vec<(Pos, i32)> {
+    match foes::map_of(st, place) {
+        Some(map) => footprint(&map, centre, radius),
+        None => vec![(centre, 0)],
+    }
 }
 
 /// A blast's source as the log and the epitaph name it: `Satchel charge` reads
@@ -183,16 +194,16 @@ pub fn detonate(
     at: u64,
     tint: Option<(u8, u8, u8)>,
 ) {
-    let Some(city) = st.city.as_ref() else {
+    if st.city.is_none() {
         return;
-    };
+    }
     // An EMP's victims play in the net's cyan, as a net attack's do.
     let tint = tint.or_else(|| {
         fx.iter()
             .any(|f| matches!(f, Fx::Shock))
             .then_some(crate::net::ATTACK_TINT)
     });
-    let tiles = footprint(city, place, centre, blast.radius);
+    let tiles = footprint_at(st, place, centre, blast.radius);
     let you = st
         .player
         .as_ref()
@@ -329,7 +340,7 @@ pub fn your_throw(st: &AppState, id: &ItemId) -> Option<(i32, game::Arc, Blast)>
 /// reach, in sight with the way clear, on a tile it can lie on. The refusal is the
 /// word the log and the aim readout use.
 pub fn landing(st: &AppState, range: i32, at: Pos) -> Result<(), String> {
-    let (Some(p), Some(city)) = (st.player.as_ref(), st.city.as_ref()) else {
+    let Some(p) = st.player.as_ref().filter(|_| st.city.is_some()) else {
         return Err("no body in the city".to_string());
     };
     if p.pos.chebyshev(at) > range {
@@ -339,13 +350,13 @@ pub fn landing(st: &AppState, range: i32, at: Pos) -> Result<(), String> {
         .vis()
         .get(at)
         .is_some_and(|v| *v == crate::render::Visibility::Visible);
-    let line = (p.place.stratum())
-        .is_some_and(|k| foes::line_clear(&MapRef::stratum_at(city, k, 0), p.pos, at));
+    let map = foes::map_of(st, p.place);
+    let line = (map.as_ref()).is_some_and(|m| foes::line_clear(m, p.pos, at));
     if !seen || !line {
         return Err("no line".to_string());
     }
-    let lands = p.place.stratum().is_some_and(|k| {
-        city.tile(k, at)
+    let lands = (map.as_ref()).is_some_and(|m| {
+        m.tile(at)
             .is_some_and(|t| t.is_walkable() && !foes::blocks_sight(t))
     });
     if !lands {
@@ -445,21 +456,18 @@ pub fn tick_live(st: &mut AppState) {
 /// in its reach, who turn to hunt toward where it was thrown from. Once each.
 pub fn land(st: &mut AppState) {
     let now = st.tick;
-    let Some(city) = st.city.as_ref() else {
+    if st.city.is_none() {
         return;
-    };
-    let mut woken = Vec::new();
-    for l in st.live.iter_mut().filter(|l| l.landed(now)) {
-        let Some(from) = l.wakes.take() else {
-            continue;
-        };
-        for (pos, _) in footprint(city, l.place, l.pos, l.blast.radius) {
-            woken.push((l.place, pos, from));
-        }
     }
-    for (place, pos, from) in woken {
-        if let Some(i) = foes::foe_at(st, place, pos) {
-            wake(st, i, from);
+    let heard: Vec<(Place, Pos, i32, Pos)> = (st.live.iter_mut())
+        .filter(|l| l.landed(now))
+        .filter_map(|l| Some((l.place, l.pos, l.blast.radius, l.wakes.take()?)))
+        .collect();
+    for (place, centre, radius, from) in heard {
+        for (pos, _) in footprint_at(st, place, centre, radius) {
+            if let Some(i) = foes::foe_at(st, place, pos) {
+                wake(st, i, from);
+            }
         }
     }
 }
@@ -467,13 +475,13 @@ pub fn land(st: &mut AppState) {
 /// Every tile a live blast lying on `place` would reach, with its ring: for foes
 /// to step out of and the overlay to shade. One still in the air reaches nothing.
 pub fn live_footprints(st: &AppState, place: Place) -> Vec<(Pos, i32)> {
-    let Some(city) = st.city.as_ref() else {
+    if st.city.is_none() {
         return Vec::new();
-    };
+    }
     st.live
         .iter()
         .filter(|l| l.place == place && l.landed(st.tick))
-        .flat_map(|l| footprint(city, place, l.pos, l.blast.radius))
+        .flat_map(|l| footprint_at(st, place, l.pos, l.blast.radius))
         .collect()
 }
 
@@ -525,8 +533,8 @@ mod tests {
     #[test]
     fn footprint_on_open_ground_is_the_square_by_ring() {
         let st = foes::testutil::lot(Pos::new(14, 8));
-        let city = st.city.as_ref().unwrap();
-        let tiles = footprint(city, STREET, Pos::new(20, 8), 2);
+        let map = foes::map_of(&st, STREET).unwrap();
+        let tiles = footprint(&map, Pos::new(20, 8), 2);
         assert_eq!(tiles.len(), 25);
         assert_eq!(tiles[0], (Pos::new(20, 8), 0));
         assert_eq!(rings(&tiles), vec![1, 8, 16]);
@@ -538,8 +546,8 @@ mod tests {
     fn footprint_stops_at_walls_and_behind_them() {
         let mut st = foes::testutil::lot(Pos::new(20, 8));
         set_terrain(&mut st, Pos::new(21, 8), citygen::Terrain::Wall);
-        let city = st.city.as_ref().unwrap();
-        let tiles: Vec<Pos> = footprint(city, STREET, Pos::new(20, 8), 2)
+        let map = foes::map_of(&st, STREET).unwrap();
+        let tiles: Vec<Pos> = footprint(&map, Pos::new(20, 8), 2)
             .into_iter()
             .map(|(p, _)| p)
             .collect();
@@ -548,7 +556,7 @@ mod tests {
         assert!(tiles.contains(&Pos::new(20, 8)), "the centre, foe or not");
         assert!(tiles.contains(&Pos::new(19, 8)));
         // Against the lot's wall ring.
-        let edge = footprint(city, STREET, Pos::new(1, 1), 2);
+        let edge = footprint(&map, Pos::new(1, 1), 2);
         assert!(edge.iter().all(|(p, _)| p.x >= 1 && p.y >= 1));
         assert!(edge.contains(&(Pos::new(3, 3), 2)));
     }
@@ -568,10 +576,34 @@ mod tests {
         ] {
             set_terrain(&mut st, Pos::new(20 + dx, 8 + dy), citygen::Terrain::Wall);
         }
-        let city = st.city.as_ref().unwrap();
+        let map = foes::map_of(&st, STREET).unwrap();
         assert_eq!(
-            footprint(city, STREET, Pos::new(20, 8), 3),
+            footprint(&map, Pos::new(20, 8), 3),
             vec![(Pos::new(20, 8), 0)]
+        );
+    }
+
+    #[test]
+    fn a_blast_on_a_floor_stops_at_walls_and_doors() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = foes::map_of(&st, on(0)).unwrap();
+        let tiles: Vec<Pos> = footprint(&map, Pos::new(13, 3), 3)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert!(tiles.contains(&Pos::new(14, 3)) && tiles.contains(&Pos::new(13, 1)));
+        assert!(!tiles.contains(&Pos::new(15, 3)) && !tiles.contains(&Pos::new(16, 3)));
+    }
+
+    #[test]
+    fn a_throw_lands_on_a_floor() {
+        let st = crate::guards::testutil::ward();
+        assert_eq!(landing(&st, 8, Pos::new(10, 3)), Ok(()));
+        // The door is in sight with a clear way to it: the refusal is the landing's.
+        assert_eq!(
+            landing(&st, 12, Pos::new(15, 3)),
+            Err("no landing".to_string())
         );
     }
 

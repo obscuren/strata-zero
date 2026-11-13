@@ -4,7 +4,7 @@
 
 use super::{BLOOM_TICKS, HAZE_RISE, HAZE_TICKS, WHITE, WHITEOUT_TICKS, paint};
 use crate::app::FxInstance;
-use crate::render::map::MapRef;
+use crate::render::map::{MapRef, TileMap};
 use crate::render::viewport::tile_to_screen;
 use crate::render::{Rgb, Visibility};
 use citygen::pathing::bresenham;
@@ -60,22 +60,30 @@ pub(super) fn blast_hash(p: Pos, k: u64) -> u64 {
     hash64(hash64(p.x as u64, p.y as u64), k)
 }
 
-/// Whether a thing can lie on `p`: open ground of a stratum.
+/// The map a fight reads (`foes::map_of`): a stratum ending at the city's edge, or a
+/// floor; none in a construct. The shapes read it, so they never land or see where a
+/// blast's footprint can't.
+fn fought<'a>(map: &MapRef<'a>) -> Option<MapRef<'a>> {
+    match map {
+        MapRef::Construct(_) => None,
+        m => Some(m.within_edge()),
+    }
+}
+
+/// Whether a thing can lie on `p`: open ground of a stratum or a floor.
 fn open_ground(map: &MapRef, p: Pos) -> bool {
-    map.stratum().is_some_and(|k| {
-        map.city()
-            .tile(k, p)
+    fought(map).is_some_and(|m| {
+        m.tile(p)
             .is_some_and(|t| t.is_walkable() && !crate::foes::blocks_sight(t))
     })
 }
 
 /// Whether `from` sees `p` across open ground.
 fn sees(map: &MapRef, from: Pos, p: Pos) -> bool {
-    map.stratum().is_some_and(|k| {
-        map.city()
-            .tile(k, p)
-            .is_some_and(|t| !crate::foes::blocks_sight(t))
-    }) && crate::foes::line_clear(map, from, p)
+    fought(map).is_some_and(|m| {
+        m.tile(p).is_some_and(|t| !crate::foes::blocks_sight(t))
+            && crate::foes::line_clear(&m, from, p)
+    })
 }
 
 /// A thrown thing crossing the line two cells a tick, three cells of trail behind
@@ -444,5 +452,20 @@ pub(super) fn pulse_rings(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_throw_shape_reads_a_floor() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = crate::foes::map_of(&st, on(0)).unwrap();
+        assert!(open_ground(&map, Pos::new(10, 3)));
+        assert!(sees(&map, Pos::new(6, 3), Pos::new(10, 3)));
+        assert!(!open_ground(&map, Pos::new(15, 3)), "a door is no ground");
     }
 }

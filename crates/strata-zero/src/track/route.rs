@@ -507,25 +507,34 @@ fn walk_past(
     if from == to {
         return Some(Vec::new());
     }
-    let (b, level) = (plan.building, floor.level);
-    let crawls = crate::venues::can_crawl(st);
-    let shut = |p: Pos, n: Pos| {
-        if let Some(lock) = floor.lock_at(n) {
-            return crate::credentials::opens_lock(st, b, level, lock, p).is_none();
-        }
-        let private = (floor.door_of(n))
-            .filter(|r| r.private && r.kind != RoomKind::Home && !r.rect.contains(p));
-        if let Some(r) = private {
-            return crate::credentials::opens(st, b, level, r.number).is_none();
-        }
-        !crawls && crate::venues::grille_at(plan, level, n)
-    };
     let ok = open(*map, false, exits, &[from, to]);
     let end = map.walkable(to);
     let path = astar(map.size(), from, to, |p, n| {
-        (((n == to && end) || ok(n)) && !shut(p, n)).then_some(1)
+        (((n == to && end) || ok(n)) && !shut_to_you(st, plan, floor, p, n)).then_some(1)
     })?;
     Some(path.into_iter().skip(1).collect())
+}
+
+/// Whether the door on `to` stays shut to you stepping onto it from `from`: a lock that
+/// doesn't open for you from that side, a private room's door from outside it that
+/// doesn't, or a grille you can't crawl through.
+pub(crate) fn shut_to_you(
+    st: &AppState,
+    plan: &FloorPlan,
+    floor: &Floor,
+    from: Pos,
+    to: Pos,
+) -> bool {
+    let (b, level) = (plan.building, floor.level);
+    if let Some(lock) = floor.lock_at(to) {
+        return crate::credentials::opens_lock(st, b, level, lock, from).is_none();
+    }
+    let private = (floor.door_of(to))
+        .filter(|r| r.private && r.kind != RoomKind::Home && !r.rect.contains(from));
+    if let Some(r) = private {
+        return crate::credentials::opens(st, b, level, r.number).is_none();
+    }
+    crate::venues::grille_at(plan, level, to) && !crate::venues::can_crawl(st)
 }
 
 /// Out of the building by a door whose landing leads on to the target, the target's

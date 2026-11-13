@@ -248,6 +248,11 @@ mod tests {
         let st = ward();
         let (plan, floor) = st.interiors.floor(WARD, 0).expect("its L");
         assert_eq!(plan.levels, vec![0, 1]);
+        assert_eq!(plan.links[1].kind, LinkKind::Lift);
+        assert_eq!(
+            plan.links[1].stops[1].card, 1,
+            "the lift's 2F stop asks card 1"
+        );
         let at = |x, y| floor.tiles.get(Pos::new(x, y)).unwrap().terrain;
         assert_eq!(at(0, 3), Terrain::Door);
         assert_eq!(at(15, 3), Terrain::Door);

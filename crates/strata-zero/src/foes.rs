@@ -917,6 +917,36 @@ mod tests {
     }
 
     #[test]
+    fn a_foe_out_of_a_blast_on_a_floor_never_takes_the_exit_or_a_shut_door() {
+        use crate::guards::testutil::*;
+        // Each blast's footprint stops at the door beside it, so the door is the one
+        // tile round the foe outside it: still never a step.
+        for (at, door) in [
+            (Pos::new(1, 3), Pos::new(0, 3)),
+            (Pos::new(14, 3), Pos::new(15, 3)),
+        ] {
+            let mut st = ward();
+            let i = goon(&mut st, 0, at);
+            st.foes[i].mode = FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0,
+            };
+            live_at(&mut st, at, 1);
+            st.live[0].place = on(0);
+            let live = crate::blast::live_footprints(&st, on(0));
+            assert!(
+                live.iter().all(|(p, _)| *p != door),
+                "the door is out of it"
+            );
+            let Step::Moved(to) = step(&mut st, i, true, true) else {
+                panic!("it should move");
+            };
+            assert_ne!(to, door);
+            assert!(live.iter().any(|(p, _)| *p == to), "it takes a ring");
+        }
+    }
+
+    #[test]
     fn it_picks_the_out_tile_nearest_its_seen() {
         let mut st = testutil::lot(Pos::new(14, 9));
         hunting(&mut st);

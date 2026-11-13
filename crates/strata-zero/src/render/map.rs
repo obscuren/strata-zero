@@ -182,6 +182,15 @@ impl<'a> MapRef<'a> {
         }
     }
 
+    /// The map ending at the city's edge, what lies past it dropped: the map the fight
+    /// reads (`foes::map_of`).
+    pub fn within_edge(self) -> MapRef<'a> {
+        match self {
+            MapRef::Stratum(m) => MapRef::Stratum(StratumMap { beyond: None, ..m }),
+            other => other,
+        }
+    }
+
     /// The map at a place at `minute` of the day, if its floor or construct has been
     /// generated.
     pub fn for_place(

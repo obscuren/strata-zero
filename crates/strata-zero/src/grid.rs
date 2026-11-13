@@ -633,7 +633,7 @@ fn step_tracers(st: &mut AppState) {
             continue;
         }
         let Some(map) = crate::foes::map_of(st, st.foes[i].place) else {
-            return;
+            continue;
         };
         let to = if pos.chebyshev(goal) <= 1 {
             Some(goal)

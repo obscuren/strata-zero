@@ -4,9 +4,10 @@
 use crate::app::{AppState, FxInstance};
 use crate::foes;
 use crate::render::fx::tracer_ticks;
+use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::bresenham;
 use citygen::rng::hash64;
-use citygen::{City, Place, Pos};
+use citygen::{Place, Pos};
 use game::{AbilityId, AbilityKind, Action, Active, Attribute, Fx, ItemId, Slot, Weapon};
 
 /// Ticks between the rounds of one burst.
@@ -26,11 +27,9 @@ pub fn roll(st: &mut AppState) -> u8 {
 
 /// Where a missed round stops: along the ray past the target, the first tile that
 /// blocks sight (the wall itself), else the last walkable tile within `range` of
-/// the shooter; the target's own tile when nothing lies past it.
-pub fn miss_impact(city: &City, place: Place, from: Pos, target: Pos, range: i32) -> Pos {
-    let Some(k) = place.stratum() else {
-        return target;
-    };
+/// the shooter; the target's own tile when nothing lies past it. Over any map: on a
+/// floor a shut door takes it as a wall does.
+pub fn miss_impact(map: &MapRef, from: Pos, target: Pos, range: i32) -> Pos {
     let (dx, dy) = (target.x - from.x, target.y - from.y);
     let span = dx.abs().max(dy.abs()).max(1);
     let reach = range / span + 2;
@@ -46,7 +45,7 @@ pub fn miss_impact(city: &City, place: Place, from: Pos, target: Pos, range: i32
         if from.chebyshev(p) > range && last != target {
             break;
         }
-        match city.tile(k, p) {
+        match map.tile(p) {
             Some(t) if foes::blocks_sight(t) => return p,
             Some(t) if t.is_walkable() => last = p,
             _ => break,
@@ -382,10 +381,7 @@ fn volley(
         let impact = if hit {
             target
         } else {
-            match st.city.as_ref() {
-                Some(city) => miss_impact(city, place, from, target, w.range),
-                None => target,
-            }
+            foes::map_of(st, place).map_or(target, |m| miss_impact(&m, from, target, w.range))
         };
         if hit {
             wound_foe(st, foe, w.damage);
@@ -431,6 +427,17 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// What your death reads when a foe called `name` on `place` kills you: on a floor
+/// the building it stands in, on any stratum the street.
+pub(crate) fn epitaph(st: &AppState, name: &str, place: Place) -> String {
+    match place {
+        Place::Floor { building, .. } => {
+            format!("a {name} in {}", crate::net::building_name(st, building))
+        }
+        _ => format!("a {name} on the street"),
+    }
+}
+
 /// A foe fires its weapon at you.
 pub fn fire_at_you(st: &mut AppState, foe: usize) {
     let Some((name, from, reflex, place)) = st
@@ -469,13 +476,11 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
         let impact = if hit {
             me
         } else {
-            match st.city.as_ref() {
-                Some(city) => miss_impact(city, place, from, me, w.range),
-                None => me,
-            }
+            foes::map_of(st, place).map_or(me, |m| miss_impact(&m, from, me, w.range))
         };
         if wounds {
-            wound_you(st, &format!("a {name} on the street"), damage);
+            let cause = epitaph(st, &name, place);
+            wound_you(st, &cause, damage);
         }
         play_round(
             st,
@@ -572,8 +577,9 @@ pub(crate) fn start_shapes_at(st: &mut AppState, from_len: usize, start: u64) {
 }
 
 /// On a hit the foe goes up to `steps` tiles straight away from `from`, stopping
-/// before a tile that is not walkable or holds you or another standing foe. A
-/// `Trail` plays on each tile it left, from `at`. Returns the tiles it moved.
+/// before a tile no foe may step onto (`foes::can_step` with no card: on a floor no
+/// exit and no shut door) or that holds you or another standing foe. A `Trail` plays
+/// on each tile it left, from `at`. Returns the tiles it moved.
 fn push_foe(st: &mut AppState, foe: usize, from: Pos, steps: u8, at: u64, trail: bool) -> u8 {
     let Some((place, mut pos)) = st.foes.get(foe).map(|f| (f.place, f.pos)) else {
         return 0;
@@ -582,11 +588,7 @@ fn push_foe(st: &mut AppState, foe: usize, from: Pos, steps: u8, at: u64, trail:
     let mut moved = 0;
     for _ in 0..steps {
         let next = pos.offset(dx, dy);
-        let open = place
-            .stratum()
-            .zip(st.city.as_ref())
-            .and_then(|(k, city)| city.tile(k, next))
-            .is_some_and(|t| t.is_walkable());
+        let open = foes::map_of(st, place).is_some_and(|m| foes::can_step(&m, None, pos, next));
         let held = next == from
             || st
                 .foes
@@ -911,13 +913,13 @@ mod tests {
             Pos::new(18, 8),
             "twelve tiles from the muzzle"
         );
-        let city = st.city.as_ref().unwrap();
+        let map = foes::map_of(&st, STREET).unwrap();
         assert_eq!(
-            miss_impact(city, STREET, Pos::new(6, 8), Pos::new(38, 8), 40),
+            miss_impact(&map, Pos::new(6, 8), Pos::new(38, 8), 40),
             Pos::new(40, 8)
         );
         assert_eq!(
-            miss_impact(city, STREET, Pos::new(6, 8), Pos::new(6, 2), 10),
+            miss_impact(&map, Pos::new(6, 8), Pos::new(6, 2), 10),
             Pos::new(6, 0),
             "straight up into the wall"
         );
@@ -984,10 +986,10 @@ mod tests {
             Pos::new(19, 8),
             "one tile past, over the range"
         );
-        let city = st.city.as_ref().unwrap();
+        let map = foes::map_of(&st, STREET).unwrap();
         // Against the wall the wall takes it, beyond the range too.
         assert_eq!(
-            miss_impact(city, STREET, Pos::new(29, 8), Pos::new(39, 8), 10),
+            miss_impact(&map, Pos::new(29, 8), Pos::new(39, 8), 10),
             Pos::new(40, 8)
         );
     }
@@ -1021,6 +1023,52 @@ mod tests {
         let far = goon(&mut st, 0, Pos::new(18, 3));
         assert_eq!(reach(&st, near, 12), Ok(6));
         assert_eq!(reach(&st, far, 12), Err("no line".to_string()));
+        let map = foes::map_of(&st, on(0)).unwrap();
+        assert!(
+            !foes::line_clear(&map, Pos::new(6, 3), Pos::new(18, 3)),
+            "the line is what refuses"
+        );
+    }
+
+    #[test]
+    fn a_miss_on_a_floor_stops_at_the_door() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = foes::map_of(&st, on(0)).unwrap();
+        assert_eq!(
+            miss_impact(&map, Pos::new(6, 3), Pos::new(12, 3), 12),
+            Pos::new(15, 3)
+        );
+    }
+
+    #[test]
+    fn a_push_on_a_floor_stops_before_a_shut_door() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = goon(&mut st, 0, Pos::new(13, 3));
+        assert_eq!(push_foe(&mut st, i, Pos::new(10, 3), 4, 0, false), 1);
+        assert_eq!(st.foes[i].pos, Pos::new(14, 3));
+    }
+
+    #[test]
+    fn a_push_on_a_floor_never_throws_a_body_out_an_exit() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = goon(&mut st, 0, Pos::new(1, 3));
+        assert_eq!(push_foe(&mut st, i, Pos::new(4, 3), 3, 0, false), 0);
+        assert_eq!(st.foes[i].pos, Pos::new(1, 3));
+    }
+
+    #[test]
+    fn a_guard_that_kills_you_indoors_names_the_building() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 1, &[Pos::new(10, 3)]);
+        st.character.hp = 1;
+        st.force_hit = Some(true);
+        fire_at_you(&mut st, i);
+        let want = format!("a guard in {}", crate::net::building_name(&st, WARD));
+        assert_eq!(st.net.death.as_deref(), Some(want.as_str()));
     }
 
     #[test]
