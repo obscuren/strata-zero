@@ -197,6 +197,12 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   `inert` with no `home`. `after_restore` wakes them (`runs::snapshot::wake_guards`):
   every foe with a post, in the city you're in, the home city held while you're away
   and every city kept, gets `inert` off and, without a `home`, the level it stands on.
+- **A guard's links by index.** `round.lift`, `round.via` and `follow` name a link by
+  its index into a plan made again from code, which a later build may order otherwise.
+  `after_restore` lets go of any whose link no longer stops on the level the guard stands
+  on (`guards::forget_stale`: `FloorPlan::hops` empty), for the guards of the city you're
+  in; every guard does the same again before each step, so those of a city held or kept
+  let theirs go when they next walk.
 - **Ending.** `venues::end` marks the copy, and `venues::tick` (every step of the clock)
   ends it once you're out: the foes posted to that building go, the cards still lying
   where `left` says go, the floors are dropped and the plan is made again from its

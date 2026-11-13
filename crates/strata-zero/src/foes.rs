@@ -659,7 +659,7 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::guards::testutil::{advance, logged, settle};
+    use crate::guards::testutil::{logged, pace_once, settle};
     use crate::net::Step;
     use citygen::StratumKind;
 
@@ -884,12 +884,6 @@ mod tests {
         assert!(any_hunting(&st, STREET));
     }
 
-    /// One pace of the clock, and whoever acts acts.
-    fn pace(st: &mut AppState) {
-        advance(st, crate::net::PACE_TICKS);
-        crate::net::pace(st);
-    }
-
     fn hunting_from(st: &mut AppState, seen: Pos) {
         st.foes[0].mode = FoeMode::Hunting { seen, lost: 0 };
     }
@@ -909,7 +903,7 @@ mod tests {
             crate::net::Actor::Foe(0)
         );
         // Three steps, one a pace; at nine tiles the pistol is out of range.
-        pace(&mut st);
+        pace_once(&mut st);
         assert_eq!(st.foes[0].pos, Pos::new(17, 8));
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, 2);
         settle(&mut st);
@@ -957,7 +951,7 @@ mod tests {
         }
         crate::net::engage(&mut st, STREET, true);
         crate::net::end_turn(&mut st);
-        pace(&mut st);
+        pace_once(&mut st);
         assert_eq!(st.foes[0].pos, Pos::new(1, 1));
         assert_ne!(
             st.net.engaged.as_ref().unwrap().actor(),

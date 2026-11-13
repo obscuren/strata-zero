@@ -242,6 +242,55 @@ mod tests {
     }
 
     #[test]
+    fn a_guards_round_comes_back_whole() {
+        use citygen::Place;
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        // A guard on a level links 0 and 1 stop on: a link that doesn't is let go.
+        let plan = crate::interiors::plan_now(&a, b).unwrap().into_owned();
+        let i = (a.foes.iter())
+            .position(|f| {
+                f.post.as_ref().is_some_and(|p| p.building == b)
+                    && matches!(f.place, Place::Floor { level, .. }
+                        if [0, 1].iter().all(|k| !plan.hops(*k, level).is_empty()))
+            })
+            .expect("a guard by both links");
+        let p = a.foes[i].post.as_mut().unwrap();
+        p.round = crate::foes::Round {
+            leg: 2,
+            next: 12345,
+            lift: Some((1, 3)),
+            via: Some(1),
+        };
+        p.follow = Some((0, 2));
+        p.radioed = true;
+        p.spotted = true;
+        a.foes[i].mode = crate::foes::FoeMode::Hunting {
+            seen: a.foes[i].pos,
+            lost: 1,
+        };
+        let dir = Dir::new("guard-round");
+        let a = running(a);
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        assert_eq!(st.foes[i], a.foes[i]);
+    }
+
+    #[test]
+    fn a_saved_link_that_no_longer_stops_on_the_level_is_dropped() {
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        let i = (a.foes.iter())
+            .position(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .unwrap();
+        let p = a.foes[i].post.as_mut().unwrap();
+        p.round.lift = Some((99, 1)); // a link the plan no longer has
+        p.round.via = Some(99);
+        p.follow = Some((99, 1));
+        let dir = Dir::new("guard-stale-links");
+        let st = reopened(&write(&dir.0, &running(a)).unwrap());
+        let r = &st.foes[i].post.as_ref().unwrap();
+        assert_eq!((r.round.lift, r.round.via, r.follow), (None, None, None));
+    }
+
+    #[test]
     fn old_guards_wake_in_the_home_city_held_and_a_city_kept() {
         use crate::foes::{Foe, Post};
         use crate::outside::tests::{beside_another, home_run, reopen};

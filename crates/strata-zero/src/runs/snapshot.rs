@@ -365,6 +365,12 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     // held put back with them
     lost.extend(crate::outside::kept::remake(st));
     wake_guards(st);
+    // a guard's saved lift, way back or trail names a link of a plan made again from
+    // code: one that no longer stops on its level is let go (the guards of other cities
+    // let theirs go when they next step)
+    for i in 0..st.foes.len() {
+        crate::guards::forget_stale(st, i);
+    }
     // the flat is the home city's: none in another city of the world
     let away = st.outside.as_ref().is_some_and(|o| o.here.is_some());
     st.home = if away {

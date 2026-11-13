@@ -289,9 +289,9 @@ pub(crate) fn run_until(st: &mut AppState, max: u64, done: impl Fn(&AppState) ->
     assert!(done(st), "not done in {max} ticks");
 }
 
-/// One pace of the clock, and whoever acts acts. Not exported: a test that globs this
-/// module in would have it shadow `net::pace`.
-fn pace(st: &mut AppState) {
+/// One pace of the clock, and whoever acts acts. Not named `pace`: a test that globs
+/// this module in would have it shadow `net::pace`.
+pub(crate) fn pace_once(st: &mut AppState) {
     advance(st, crate::net::PACE_TICKS);
     crate::net::pace(st);
 }
@@ -302,7 +302,7 @@ pub(crate) fn settle(st: &mut AppState) {
         if crate::net::your_turn(st) {
             return;
         }
-        pace(st);
+        pace_once(st);
     }
     panic!("the foe never hands the turn back");
 }

@@ -47,8 +47,10 @@ pub(crate) fn avoid(st: &AppState, i: usize) -> Vec<Pos> {
 /// there's none round (waiting while that tile is held), and a step that lands on the goal
 /// takes the next leg and pauses at once. A goal on another level it walks to by the link
 /// `links::link_to` picks, and takes that link standing on its stop. A goal (or a link)
-/// with no way at all is skipped. Off a floor, or with no map, it waits a step.
+/// with no way at all is skipped. Off a floor, or with no map, it waits a step. A saved
+/// link that no longer stops on its level is let go first (`links::forget_stale`).
 pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
+    links::forget_stale(st, i);
     let foe = &st.foes[i];
     let (Some(post), Place::Floor { building, level }) = (foe.post.as_ref(), foe.place) else {
         return wait(st, i, now + GUARD_STEP_TICKS);
@@ -87,7 +89,7 @@ pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
 }
 
 /// What a guard's step toward a tile came to.
-enum Step {
+pub(super) enum Step {
     /// Its floor has no map: it waits.
     NoMap,
     /// No way there at all.
@@ -101,7 +103,13 @@ enum Step {
 /// Guard `i`, on level `level` of `building`, steps a tile toward `target` round the
 /// tiles held, else along the way that ignores them when that tile is free. Its floor is
 /// drawn when needed.
-fn step(st: &mut AppState, i: usize, building: BuildingId, level: i32, target: Pos) -> Step {
+pub(super) fn step(
+    st: &mut AppState,
+    i: usize,
+    building: BuildingId,
+    level: i32,
+    target: Pos,
+) -> Step {
     if let Some(city) = st.city.as_ref() {
         st.interiors.ensure(city, building, level);
     }
@@ -134,7 +142,7 @@ fn next_leg(st: &mut AppState, i: usize, n: usize, next: u64) {
 }
 
 /// Guard `i` acts again at `next`.
-fn wait(st: &mut AppState, i: usize, next: u64) {
+pub(super) fn wait(st: &mut AppState, i: usize, next: u64) {
     if let Some(post) = st.foes[i].post.as_mut() {
         post.round.next = next;
     }

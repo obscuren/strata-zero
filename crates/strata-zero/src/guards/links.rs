@@ -88,13 +88,18 @@ pub(crate) fn take(st: &mut AppState, i: usize, link: usize, to: i32, now: u64) 
 
 /// Guard `i` waits on lift `link` for level `to`, due at clock tick `now`: it rides once
 /// the lift answers it and the landing has room, else waits another step. A lift that no
-/// longer goes there from the guard's level (a save from another build) is let go.
+/// longer goes there from the guard's level (a save from another build), or whose stop
+/// it no longer stands on (it went off hunting meanwhile), is let go.
 pub(crate) fn wait_for_lift(st: &mut AppState, i: usize, link: usize, to: i32, now: u64) {
+    let pos = st.foes[i].pos;
     let rides = match st.foes[i].place {
         Place::Floor { building, level } => crate::interiors::plan_now(st, building).map(|plan| {
             let post = st.foes[i].post.as_ref();
+            let on_stop = (plan.links.get(link))
+                .and_then(|l| l.stop(level))
+                .is_some_and(|s| s.at == pos);
             (
-                plan.hops(link, level).contains(&to),
+                on_stop && plan.hops(link, level).contains(&to),
                 post.is_some_and(|p| hops(st, p, &plan, link, level).contains(&to)),
             )
         }),
@@ -110,6 +115,41 @@ pub(crate) fn wait_for_lift(st: &mut AppState, i: usize, link: usize, to: i32, n
         }
         Some((true, false)) => {}
         _ => post.round.lift = None,
+    }
+}
+
+/// Guard `i` lets go of a lift it waits for, its way back (`round.via`) and a trail it
+/// follows (`follow`) whose link no longer stops on the level it stands on: each names a
+/// link by its place in a plan made again from code, which a later build may order
+/// otherwise. Called on reopening and before each step.
+pub(crate) fn forget_stale(st: &mut AppState, i: usize) {
+    let Some(foe) = st.foes.get(i) else {
+        return;
+    };
+    let (Some(post), Place::Floor { building, level }) = (foe.post.as_ref(), foe.place) else {
+        return;
+    };
+    let Some(plan) = crate::interiors::plan_now(st, building) else {
+        return;
+    };
+    let stale = |link: Option<usize>| link.is_some_and(|k| plan.hops(k, level).is_empty());
+    let (lift, via, follow) = (
+        stale(post.round.lift.map(|(k, _)| k)),
+        stale(post.round.via),
+        stale(post.follow.map(|(k, _)| k)),
+    );
+    drop(plan);
+    let Some(post) = st.foes[i].post.as_mut() else {
+        return;
+    };
+    if lift {
+        post.round.lift = None;
+    }
+    if via {
+        post.round.via = None;
+    }
+    if follow {
+        post.follow = None;
     }
 }
 
@@ -233,6 +273,22 @@ mod tests {
             Some((1, 1)),
             "still waiting for it"
         );
+    }
+
+    #[test]
+    fn a_lift_wait_is_let_go_once_the_guard_is_off_its_stop() {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(28, 3));
+        let i = guard(&mut st, 0, 1, &[Pos::new(10, 3)]);
+        // It waited at (12,1), then went off hunting and lost you here.
+        st.foes[i].post.as_mut().unwrap().round.lift = Some((1, 1));
+        run(&mut st, 2 * GUARD_LIFT_TICKS);
+        assert_eq!(
+            st.foes[i].place,
+            on(0),
+            "never carried from where it stands"
+        );
+        assert_eq!(st.foes[i].post.as_ref().unwrap().round.lift, None);
     }
 
     #[test]

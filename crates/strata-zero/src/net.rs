@@ -5293,6 +5293,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_guard_that_radioed_never_calls_again_once_the_alert_lapses() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let its_turn = |st: &mut AppState| {
+            while st
+                .net
+                .engaged
+                .as_ref()
+                .is_some_and(|e| e.actor() != Actor::Foe(i))
+            {
+                end_turn(st);
+            }
+        };
+        crate::foes::look_all(&mut st);
+        engage(&mut st, on(0), true);
+        its_turn(&mut st);
+        assert!(logged(&st, "guard radios it in · ALARM"));
+        disengage(&mut st);
+        st.foes[i].mode = crate::foes::FoeMode::Idle; // it lost you
+        advance(&mut st, game::ALERT_MINUTES * sim::TICKS_PER_MINUTE);
+        assert!(!st.net.alert(WARD, st.net.now(&st)), "the alert lapsed");
+        let lines = st.log.iter().count();
+        assert!(crate::foes::look_all(&mut st), "it sees you again");
+        assert!(st.foes[i].post.as_ref().unwrap().spotted);
+        engage(&mut st, on(0), true);
+        its_turn(&mut st);
+        assert!(!st.log.iter().skip(lines).any(|e| e.text.contains("radios")));
+        assert!(!st.net.alert(WARD, st.net.now(&st)), "no second alarm");
+    }
+
+    #[test]
     fn a_calm_guard_looks_each_round_and_joins() {
         use crate::guards::testutil::*;
         let mut st = ward();

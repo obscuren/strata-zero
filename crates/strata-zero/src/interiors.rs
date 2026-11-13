@@ -534,7 +534,8 @@ const BLOCKED: &str = "the landing is blocked";
 
 /// Rides the lift under the player to a floor it stops at: the player steps out at its
 /// bank there, or beside it when a guard holds it. A stop that asks for a zone card asks
-/// it of a ride there, never of a ride away from it: getting out is free.
+/// it of a ride there, never of a ride away from it: getting out is free. The guards
+/// hunting you on the floor you leave follow.
 pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
     let (here, link, plan) = link_under(st, b)
         .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
@@ -561,13 +562,14 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     let place = Place::Floor { building: b, level };
     let at = crate::guards::free_landing(st, place, at).ok_or(BLOCKED)?;
     crate::credentials::prepare(st, b);
+    crate::guards::you_left(st, b, here, link, level);
     land(st, place, at);
     Ok(format!("Entering `{}`", FloorPlan::label(level)))
 }
 
 /// Takes the stair, escalator, ladder or crawl under the player to its next stop up or
 /// down, landing on its landing there, or beside it when a guard holds it. A crawl wants
-/// a crawler.
+/// a crawler. The guards hunting you on the floor you leave follow.
 pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     let b = match st.player.as_ref().map(|p| p.place) {
         Some(Place::Floor { building, .. }) => building,
@@ -600,6 +602,7 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     };
     let at = crate::guards::free_landing(st, place, at).ok_or(BLOCKED)?;
     crate::credentials::prepare(st, b);
+    crate::guards::you_left(st, b, level, link, next);
     land(st, place, at);
     Ok(format!("Entering `{}`", FloorPlan::label(next)))
 }
