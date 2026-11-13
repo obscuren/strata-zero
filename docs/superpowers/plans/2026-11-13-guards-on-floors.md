@@ -36,9 +36,9 @@ Where the spec leaves a choice to the builder, or the code forces one, this plan
 3. **Ruling (forced steps):** a push and a step out of a live blast end only on tiles `can_step(map, None, from, to)` allows: on a floor a body is never thrown onto an exit or through a shut door.
 4. **Ruling (sight):** on a floor, `foes::sees` is `foe.standing() && foe.pos.chebyshev(to) <= foe.sight && sight::sees(foe.pos, to, GUARD_DARK_REACH, blocks, lit, |_| false)` where `blocks(p)` is `map.tile(p).is_none_or(foes::blocks_sight)` and `lit(p)` is `LIT_SIGHT` when `map.light(p) >= GUARD_LIT` else 0. `GUARD_LIT` is 100, where the exposure bands' `lit` begins (`EXPOSURE_BANDS`); a floor's `light` includes its ambient, so the street's emitted threshold (40) would light nearly every room. It holds for every foe on a floor; a stratum keeps `line_clear` and no light.
 5. **Ruling (saved state):** `foes::Post` gains `home: Option<i32>` (its round's level; None in an old save, filled by `after_restore` with the level it stands on), `stop: Option<(i32, Pos)>`, `round: Round`, `follow: Option<(usize, i32)>` (the link you took off its floor and the level you went to), `spotted: bool` (it has seen you since it last radioed) and `radioed: bool`, each `#[serde(default)]`. `Round { leg: usize, next: u64, lift: Option<(usize, i32)>, via: Option<usize> }` (derives `Default`) lives in `foes.rs` beside `Post`: the goal it walks to by index into `guards::goals`, the clock tick it next acts at, the lift it waits for (link, level), and the link it took to its stop (so it comes back the same way). `Post::new(building, zone, patrol)` builds one with the rest defaulted; every literal uses it.
-6. **Ruling (the round):** `guards::goals(post, home) -> Vec<(i32, Pos)>` is the patrol out (`patrol[0..n]` on `home`), back (`patrol[n-2..=1]`, reversed, ends excluded), then the stop if any; `round.leg` wraps to 0, the post. On its tick a calm guard: standing on its goal, takes the next leg and pauses `GUARD_PAUSE_TICKS` (90, three seconds at 30 fps); else steps one tile toward it (on another level, toward the link `guards::link_to` picks) and waits `GUARD_STEP_TICKS` (12), and a step that lands on its goal takes the next leg and pauses at once. The step is `foes::step_toward` round the tiles held (you, your body, other standing foes); with no way round them, the step of the way that ignores them, and when that tile is held it waits a step, never sharing. A goal (or a link) with no way at all is skipped (next leg, wait a step), so a round with nothing reachable stands where it is. Calm steps ignore `stunned` (a stun counts turns).
-7. **Ruling (when guards move):** `guards::tick` runs from `clock::run` after `venues::tick`. A building's guards move only while `venues::inside(st, b)` (made `pub(crate)`: you on one of its floors, on its Net, or your body on one of its floors); elsewhere its hunting guards turn calm (follow cleared) and every guard holds. A guard on the floor of an engagement holds (the turn engine moves it); every other guard of the building moves on, a fight on the site's Net included. A floor a guard walks on is drawn with `Interiors::ensure` when needed.
-8. **Ruling (links):** citygen gets `FloorPlan::hops(&self, link, from) -> Vec<i32>`: none by a crawl, a lift's `rides`, else the stair's, escalator's or ladder's `next_stop` up and down. `guards::hops(st, post, plan, link, from)` keeps a lift's hops only when `sitenet::lift_answers(st, b, link)` and `venues::ride_card(plan, link, to) <= post.zone`; stairs, escalators and ladders ask no card (no ladder asks Tech in this build; a crawl, which wants a crawler, is never a guard's). `guards::link_to(st, i, to_level) -> Option<(usize, Pos)>` is `round.via` when it still hops there (the way back from a stop is the way it came), else the link one hop from the guard's level to `to_level` nearest by its A* walk to the link's stop tile (ties: link order); taking a link to the stop sets `via`, coming back clears it. Taking it: standing on the stop tile, a stair, escalator or ladder moves the guard at once; a lift sets `round.lift`, waits `GUARD_LIFT_TICKS` (60), and moves when it answers (re-checked every step while it doesn't). It lands on the other level's stop tile, or the first free walkable tile of `at.neighbors8()`; with none free it waits. You land the same way (`interiors::ride`/`climb` never put you on a foe).
+6. **Ruling (the round):** `guards::goals(post, home) -> Vec<(i32, Pos)>` is the patrol out (`patrol[0..n]` on `home`), back (indices `n-2` down to `1`, ends excluded; empty when `n < 3`), then the stop if any; `round.leg` wraps to 0, the post. On its tick a calm guard: standing on its goal, takes the next leg and pauses `GUARD_PAUSE_TICKS` (90, three seconds at 30 fps); else steps one tile toward it (on another level, toward the link `guards::link_to` picks) and waits `GUARD_STEP_TICKS` (12), and a step that lands on its goal takes the next leg and pauses at once. The step is `foes::step_toward` round the tiles held (you, your body, other standing foes); with no way round them, the step of the way that ignores them, and when that tile is held it waits a step, never sharing. A goal (or a link) with no way at all is skipped (next leg, wait a step), so a round with nothing reachable stands where it is. Calm steps ignore `stunned` (a stun counts turns).
+7. **Ruling (when guards move):** `guards::tick` runs from `clock::run` after `venues::tick`. `guards::tick` visits every building that has a foe with a `post`, in `BuildingId` order, taken from `st.foes` (not from `interiors.copies()`: the ward has no copy). A building's guards move only while `venues::inside(st, b)` (made `pub(crate)`: you on one of its floors, on its Net, or your body on one of its floors); elsewhere its hunting guards turn calm (follow cleared) and every guard holds. A calm or hunting guard on the floor of an engagement holds (the turn engine moves it); only guards on the fight's floor hold, every other guard of the building moves on, a fight on the site's Net included. A floor a guard walks on is drawn with `Interiors::ensure` when needed.
+8. **Ruling (links):** citygen gets `FloorPlan::hops(&self, link, from) -> Vec<i32>`: none by a crawl, a lift's `rides`, else the stair's, escalator's or ladder's `next_stop` up and down. `guards::hops(st, post, plan, link, from)` keeps a lift's hops only when `sitenet::lift_answers(st, b, link)` and `venues::ride_card(plan, link, to) <= post.zone`; stairs, escalators and ladders ask no card (no ladder asks Tech in this build; a crawl, which wants a crawler, is never a guard's). `guards::link_to(st, i, to_level) -> Option<(usize, Pos)>` is `round.via` when it still hops there (the way back from a stop is the way it came), else the link one hop from the guard's level to `to_level` nearest by its A* walk to the link's stop tile (ties: link order); taking a link to the stop sets `via`, coming back clears it. A saved `round.lift`, `round.via` or `follow` names a link by index into a plan rebuilt from code: on restore (`after_restore`) and again on use, one whose link no longer stops on the guard's level (`hops` empty) is dropped (`lift`/`via`/`follow` to None), so a later build's link order can't misroute a guard. Taking it: standing on the stop tile, a stair, escalator or ladder moves the guard at once; a lift sets `round.lift`, waits `GUARD_LIFT_TICKS` (60), and moves when it answers (re-checked every step while it doesn't). It lands on the other level's stop tile, or the first free walkable tile of `at.neighbors8()`; with none free it waits. You land the same way (`interiors::ride`/`climb` never put you on a foe).
 9. **Ruling (the stop):** `GuardPost.stop: Option<Placed>` (`#[serde(default)]`). `MissionLayer::cross_floors` runs last in `lay`, after `stand_devices`, from `ChaCha8Rng::seed_from_u64(hash64(hash64(layout.seed, inputs.seed), STOP_SALT))` with `STOP_SALT = 0x5709_0033`, so nothing laid before it moves. On the kept plan (`FloorPlan::of_venue(layout).kept(&self.kept)`), a guard is eligible when some other kept level M has a link with M in `hops(link, level)` and `level` in `hops(link, M)`, both stops' `card` at most its zone when that link is a lift, and a spot of a room of its zone on M not in `used`. `n = max(1, guards.len() / 3)` of the eligible (in guard order, shuffled), each to a level among its eligible ones and a free spot there (both by the rng, from sorted lists); each stop goes into `used`.
 10. **Ruling (seats):** on a floor, `net::initiative` and `net::seat_foes` seat `foes::in_memory` and every standing guard of that floor that hunts (`foes::hunting_on(st, place)`); at each round's wrap on a floor every standing calm guard of the floor looks first. A foe out of your sight memory (`foes::unseen(st, i)`) is left out of `net::turn_readout`, its turn's banner reads `FOOTSTEPS` / `wait`, and its actions don't wait `PACE_TICKS`.
 11. **Ruling (radio):** `foes::look` sets `post.spotted` when a guard sees you, and warns `guard spots you` when that sight turns it from calm to hunting. `foes::turn_start`, after the stun check and before it looks, makes a guard with `spotted && !radioed` radio: `radioed = true`, `spotted = false`, and unless `st.net.alert(b, now)` already, `st.warn("guard radios it in · ALARM")` then `net::lock_down(st, b)` (the alarm with the alert on; `raise_alarm` alone sets no alert). A guard stunned when that turn comes loses its call: `radioed = true`, no alarm. A guard downed first never has the turn.
@@ -75,7 +75,7 @@ y6   ################################
 1. **You arrive by stair or lift on a landing a guard stands on** (waiting for the lift, or crossing): you land on the nearest free walkable tile beside it, never on its tile (Task 6, `you_land_beside_a_guard_on_the_landing`).
 2. **A guard arrives by a link onto a landing you or another foe hold:** it lands beside, else waits; it never shares a tile (Task 6, `a_guard_lands_beside_whoever_holds_the_landing`).
 3. **A save taken mid-round** (a guard pausing, waiting for a lift, following you, having radioed) reopens with the same state, and the guards carry on from it (Task 8, `a_guards_round_comes_back_whole`).
-4. **The card a downed guard dropped, picked up before the job ends:** the copy's end takes only what still lies there; the card stays in your pack (Task 11, `a_picked_up_guard_card_stays_in_your_pack`).
+4. **The card a downed guard dropped, picked up before the job ends:** the copy's end takes only what still lies there; the card stays in your pack (Task 11, `the_jobs_end_takes_a_dropped_card_and_a_picked_up_guard_card_stays_in_your_pack`).
 5. **A calm guard whose next step is your tile or your body's:** it waits, never shares, and walks on once you move (Task 5, `a_guard_waits_for_you_to_clear_its_way`).
 
 ## Files
@@ -92,8 +92,8 @@ strata-zero (`crates/strata-zero/src/`):
 Docs: `docs/saving.md`, `manual/06-the-city-and-the-world.md`, `manual/07-turns-and-fights.md`, `manual/08-the-net.md`.
 
 Test commands used throughout:
-- `cargo test -p citygen --target-dir target/smoke <filter>`
-- `cargo test -p strata-zero --target-dir target/smoke <filter>`
+- `cargo test -p citygen --target-dir target/smoke [-- <filters>]`
+- `cargo test -p strata-zero --target-dir target/smoke [-- <filters>]`
 - Green at a task's end: `cargo test --workspace --target-dir target/smoke && cargo check --workspace --all-targets --features strata-zero/window --target-dir target/smoke`
 
 ---
@@ -104,7 +104,7 @@ Test commands used throughout:
 - Modify: `crates/strata-zero/src/foes.rs` (`line_clear`, `sees`, `step_toward`, `step_out`, `look`, `step`; new `map_of`, `can_step`; tests)
 - Create: `crates/strata-zero/src/guards.rs`, `crates/strata-zero/src/guards/doors.rs`, `crates/strata-zero/src/guards/testutil.rs`; `main.rs`: `mod guards;`
 - Modify: `crates/strata-zero/src/interiors.rs` (`#[cfg(test)] put_floor`)
-- Modify (callers of the new signatures): `grid.rs` (`sees`, `step_toward` calls :640, :707, `line_clear` :858), `combat.rs` (`reach` :92, `chain_foes` :658), `blast.rs` (`footprint`'s line check), `render/fx/shapes.rs` (`sees`)
+- Modify (callers of the new signatures): `grid.rs` (`sees`, `step_toward` calls :640, :707, `line_clear` :858), `combat.rs` (`reach` :92, `chain_foes` :658), `blast.rs` (`footprint`'s line check and `landing`'s, blast.rs:340), `render/fx/shapes.rs` (`sees`)
 
 **Interfaces:**
 - Produces:
@@ -200,18 +200,18 @@ fn a_shot_across_a_floor_has_its_line() {
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke foes:: guards:: combat::tests::a_shot_across`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- foes:: guards:: combat::tests::a_shot_across`
 Expected: FAIL to compile (`map_of`, `guards`, `put_floor` not defined).
 
 - [ ] **Step 3: Implement**
 
 - `map_of` per Ruling 1; `line_clear` over `map.tile` with `blocks_sight`, a missing tile blocking; `sees` (no light yet: Task 3 adds the floor's) and `look`/`step`/`step_out` build their map with `map_of`. `can_step` and the door rule per Ruling 2; `step_toward` runs `astar(map.size(), …)` with `can_step(map, post, p, n) && (!avoid.contains(&n) || n == goal)`. `foes::step` passes `foe.post.as_ref()`. `step_out` filters with `can_step(map, None, foe.pos, p)` (Ruling 3).
-- `grid.rs`, `combat::reach`, `chain_foes` and `render/fx/shapes.rs::sees` take their map from `map_of` (or the map they hold). `blast::footprint` keeps its signature this task and checks lines over `MapRef::stratum_at(city, k, 0)`.
+- `grid.rs`, `combat::reach`, `chain_foes` and `render/fx/shapes.rs::sees` take their map from `map_of` (or the map they hold). `blast::footprint` keeps its signature this task and checks lines over `MapRef::stratum_at(city, k, 0)`; `blast::landing` (it calls `foes::line_clear(city, place, …)`, blast.rs:340) moves to the map the same way, over the stratum map, so Task 1 compiles. Task 2 then moves both onto `map_of`.
 - `guards.rs`: `mod doors; pub use doors::opens; #[cfg(test)] pub(crate) mod testutil;`.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke foes:: guards:: grid:: combat:: blast::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- foes:: guards:: grid:: combat:: blast::`
 Expected: PASS, every street test as before. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -357,7 +357,7 @@ Expected: FAIL (signatures, then assertions: "no line", `open_step` false on flo
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke combat:: blast:: shapes console explore`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- combat:: blast:: shapes console explore`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -442,7 +442,7 @@ fn old_guards_wake_after_a_reopen() {
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke a_foe_on_a_floor_sees guards_are_awake old_guards_wake`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- a_foe_on_a_floor_sees guards_are_awake old_guards_wake`
 Expected: FAIL (`Post::new`, `home` not defined).
 
 - [ ] **Step 3: Implement**
@@ -453,7 +453,7 @@ Expected: FAIL (`Post::new`, `home` not defined).
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke foes:: venues:: runs::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- foes:: venues:: runs::`
 Expected: PASS, the fixtures still open. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -470,6 +470,8 @@ git commit -m "foes: guards wake, take damage and see you by a floor's light (#3
 **Files:**
 - Modify: `crates/citygen/src/interior/plan.rs` (`FloorPlan::hops`; test)
 - Modify: `crates/citygen/src/interior/venue/mission.rs` (`GuardPost.stop`, `STOP_SALT`, `cross_floors`, `lay`); `mission/tests.rs`
+- Modify: `crates/citygen/src/interior/floor.rs` (the shared private-door helper `Room::shut_from`)
+- Modify: `crates/strata-zero/src/track/route.rs` (`Access::hops` calls `FloorPlan::hops`; `shut_to_you` uses `Room::shut_from`), `guards/doors.rs` (`opens` uses `Room::shut_from`)
 - Modify: `crates/strata-zero/src/venues.rs` (`guard_foes` carries the stop); `venues/tests/mod.rs`; `docs/saving.md`
 
 **Interfaces:**
@@ -479,6 +481,7 @@ git commit -m "foes: guards wake, take damage and see you by a floor's light (#3
   pub struct GuardPost { pub level, pub at, pub zone, pub patrol, #[serde(default)] pub stop: Option<Placed> }
   const STOP_SALT: u64 = 0x5709_0033;
   fn cross_floors(&mut self, layout: &VenueLayout, used: &mut BTreeSet<(i32, Pos)>, rng: &mut ChaCha8Rng);
+  impl Room { pub fn shut_from(&self, from: Pos) -> bool; } // private && kind != Home && !rect.contains(from): the one private-door check
   // strata-zero: Foe.post.stop == GuardPost.stop.map(|s| (s.level, s.at))
   ```
 
@@ -560,7 +563,7 @@ fn a_guard_post_saved_before_reads_with_no_stop() {
 }
 ```
 
-`occupied(layer)` (a test helper) is the objective, every card, code, post, device and container as `(level, at)`: exactly what `lay` has put into `used` when `cross_floors` starts (check `leave_keys`, `post_guards` and `stand_devices` and match them). `the_same_inputs_lay_the_same_layer` (existing) covers that the stop is drawn the same way every time. In `venues/tests/mod.rs`, `guards_are_awake_foes_at_their_posts` also asserts `f.post.as_ref().unwrap().stop == g.stop.map(|s| (s.level, s.at))`.
+`occupied(layer)` (a test helper) is the objective, every card, code, post, device and container as `(level, at)`: exactly what `lay` has put into `used` when `cross_floors` starts (check `leave_keys`, `post_guards` and `stand_devices` and match them). `the_same_inputs_lay_the_same_layer` (existing) covers that the stop is drawn the same way every time. In `venues/tests/mod.rs`, `guards_are_awake_foes_at_their_posts` has its Task 3 equality rewritten to carry the stop (`stop: g.stop.map(|s| (s.level, s.at))` in the expected `Post`; Step 3).
 
 - [ ] **Step 2: Run them to make sure they fail**
 
@@ -569,7 +572,7 @@ Expected: FAIL to compile (`hops`, `stop` not defined).
 
 - [ ] **Step 3: Implement**
 
-`FloorPlan::hops` per Ruling 8 (citygen's half); `cross_floors` per Ruling 9, called last in `lay` with its own rng; `guard_foes` copies the stop. `docs/saving.md`: `GuardPost.stop` joins the copy's layer notes (laid once, saved, `#[serde(default)]`: a layer saved before has no stops).
+`FloorPlan::hops` per Ruling 8 (citygen's half); `track::route::Access::hops` (route.rs:355) calls `FloorPlan::hops` and filters lifts by its own card/answer rule, so the branches live once. The private-door check is one helper, `Room::shut_from(from)` in citygen (`interior/floor.rs`, beside `Room`), and `guards::opens` (Ruling 2) and `track::route::shut_to_you` (Task 2; the rule `doorway` and `walk_past` use) both call it; none repeats the predicate. `cross_floors` per Ruling 9, called last in `lay` with its own rng; `guard_foes` copies the stop, and Task 3's `guard_foes` equality test (`guards_are_awake_foes_at_their_posts`) is updated here to `f.post == Some(Post { home: Some(g.level), stop: g.stop.map(|s| (s.level, s.at)), ..Post::new(b, g.zone, g.patrol.clone()) })`, since Task 3's version (stop None) fails for any guard given a stop. `docs/saving.md`: `GuardPost.stop` joins the copy's layer notes (laid once, saved, `#[serde(default)]`: a layer saved before has no stops).
 
 - [ ] **Step 4: Run the tests**
 
@@ -723,7 +726,7 @@ Expected: FAIL to compile (`tick`, `goals`, constants not defined).
 
 - [ ] **Step 3: Implement**
 
-- `guards::tick` per Ruling 7: buildings in `BuildingId` order; for each guard of a building you're in, not down, not held by a fight on its floor, with `now >= round.next` (`now = st.clock_tick()`): calm → `round::round_step`. Hunting guards and the body arrive in Tasks 8 and 10.
+- `guards::tick` per Ruling 7: the buildings of `st.foes`' posts in `BuildingId` order (not `interiors.copies()`: the ward has no copy); for each guard of a building you're in, not down, not held by a fight on its floor, with `now >= round.next` (`now = st.clock_tick()`): calm → `round::round_step`. Hunting guards and the body arrive in Tasks 8 and 10.
 - `round_step` per Ruling 6 for goals on its own level; a goal on another level is skipped this task (Task 6 takes links). It makes its map with `foes::map_of` after `st.interiors.ensure(city, b, level)`.
 - `clock::run` calls `crate::guards::tick(st)` after `crate::venues::tick(st)`.
 - Run the strata-zero suite; tests that stand in a copy and run the clock and are about something else call `no_guards`.
@@ -854,7 +857,7 @@ fn you_land_beside_a_guard_on_the_landing() {
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards::links interiors::tests::you_land_beside`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards::links interiors::tests::you_land_beside`
 Expected: FAIL to compile, then on the guard staying on L.
 
 - [ ] **Step 3: Implement**
@@ -863,7 +866,7 @@ Ruling 8. `round_step`'s goal on another level: on its link's stop tile, `take`;
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards:: interiors::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards:: interiors::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -878,8 +881,9 @@ git commit -m "guards: take the stairs and the lifts their card rides to a stop 
 ### Task 7: Hunting on floors and the radio
 
 **Files:**
-- Modify: `crates/strata-zero/src/foes.rs` (`look`, `turn_start`; new `hunting_on`, `unseen`)
-- Modify: `crates/strata-zero/src/net.rs` (`initiative`, `seat_foes`, `pace`, `turn_readout`; tests)
+- Modify: `crates/strata-zero/src/foes.rs` (`look`, `turn_start`; new `hunting_on`, `unseen`; `settle`/`pace` of its tests move out)
+- Modify: `crates/strata-zero/src/guards/testutil.rs` (`settle`; `pace` stays out of the export so it can't shadow `net::pace`)
+- Modify: `crates/strata-zero/src/net.rs` (`initiative`, `seat_foes`, `pace`, `turn_readout`, `turn_view`; tests)
 - Modify: `crates/strata-zero/src/screens/explore.rs` (`turn_prompt`'s `Actor::Foe` arm; test)
 
 **Interfaces:**
@@ -892,7 +896,7 @@ git commit -m "guards: take the stairs and the lifts their card rides to a stop 
 
 - [ ] **Step 1: Write the failing tests**
 
-In `net.rs` tests (the ward; `settle`/`pace` as `foes::tests` have them, moved to `guards::testutil`):
+In `net.rs` tests (the ward; `settle` as `foes::tests` has it, moved to `guards::testutil`; `pace` is not exported, the unseen-pace test calls `crate::net::pace`):
 
 ```rust
 #[test]
@@ -920,8 +924,22 @@ fn an_unseen_guard_acts_without_the_pace() {
     while st.net.engaged.as_ref().unwrap().actor() != Actor::Foe(woken) {
         end_turn(&mut st);
     }
-    pace(&mut st); // no tick passed
+    crate::net::pace(&mut st); // explicitly net's, not a testutil copy: no tick passed
     assert_eq!(st.foes[woken].pos, Pos::new(19, 3));
+}
+
+#[test]
+fn an_unseen_guard_is_not_in_the_turn_column_until_seen() {
+    use crate::guards::testutil::*;
+    let mut st = ward();
+    let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+    st.foes[woken].mode = crate::foes::FoeMode::Hunting { seen: Pos::new(16, 3), lost: 0 };
+    engage(&mut st, on(0), false);
+    assert!(crate::foes::unseen(&st, woken));
+    assert!(!turn_view(&st).iter().any(|c| c.actor == Actor::Foe(woken)), "not before you see it");
+    stand(&mut st, 0, Pos::new(16, 3)); // the doorway sees the east hall
+    assert!(!crate::foes::unseen(&st, woken));
+    assert!(turn_view(&st).iter().any(|c| c.actor == Actor::Foe(woken)), "once seen");
 }
 
 #[test]
@@ -1001,16 +1019,16 @@ In `screens/explore.rs` tests: `the_banner_hides_an_unseen_actor`: the ward, a w
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke net::tests:: explore::tests::the_banner`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- net::tests:: explore::tests::the_banner`
 Expected: FAIL (`hunting_on` not defined; then the unseen guard never seated, no radio).
 
 - [ ] **Step 3: Implement**
 
-Rulings 10 and 11. `foes::look`: a guard that sees you sets `spotted`, clears `follow`, and warns `guard spots you` when it was calm. `foes::turn_start`: after the stun (a guard stunned with `spotted && !radioed` sets `radioed`), the radio, then `look`. `initiative` and `seat_foes` on a `Place::Floor` add `hunting_on` (deduped, in index order); `seat_foes` on a floor first runs `foes::look` on every standing calm guard of the place. `pace` skips the `PACE_TICKS` wait for an unseen `Actor::Foe`. `turn_readout` skips an unseen foe as it skips a bot gone.
+Rulings 10 and 11. `foes::look`: a guard that sees you sets `spotted`, clears `follow`, and warns `guard spots you` when it was calm. `foes::turn_start`: after the stun (a guard stunned with `spotted && !radioed` sets `radioed`), the radio, then `look`. `initiative` and `seat_foes` on a `Place::Floor` add `hunting_on` (deduped, in index order); `seat_foes` on a floor first runs `foes::look` on every standing calm guard of the place. `pace` skips the `PACE_TICKS` wait for an unseen `Actor::Foe`. `turn_readout` and `net::turn_view` (the chips `render/turns.rs` draws, with HP) skip an unseen foe as they skip a bot gone. (Adjust the `turn_view` test's chip field names to the real type.)
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke net:: foes:: explore::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- net:: foes:: explore::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -1027,7 +1045,7 @@ git commit -m "guards: every hunting guard on your floor takes turns, and one th
 **Files:**
 - Create: `crates/strata-zero/src/guards/hunt.rs` (`you_left`, `hunt_step`)
 - Modify: `crates/strata-zero/src/guards.rs` (`tick`: hunting guards; out of the building they turn calm), `interiors.rs` (`ride`, `climb` call `you_left`)
-- Modify: `crates/strata-zero/src/runs/file.rs` (test)
+- Modify: `crates/strata-zero/src/runs/file.rs` (tests), `runs/snapshot.rs` (`after_restore` drops stale links)
 
 **Interfaces:**
 - Consumes: Tasks 5, 6, 7.
@@ -1113,20 +1131,34 @@ fn a_guards_round_comes_back_whole() {
     let st = reopened(&write(&dir.0, &a).unwrap());
     assert_eq!(st.foes[i], a.foes[i]);
 }
+
+#[test]
+fn a_saved_link_that_no_longer_stops_on_the_level_is_dropped() {
+    let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+    let i = a.foes.iter().position(|f| f.post.as_ref().is_some_and(|p| p.building == b)).unwrap();
+    let p = a.foes[i].post.as_mut().unwrap();
+    p.round.lift = Some((99, 1));      // a link the plan no longer has
+    p.round.via = Some(99);
+    p.follow = Some((99, 1));
+    let dir = Dir::new("guard-stale-links");
+    let st = reopened(&write(&dir.0, &running(a)).unwrap());
+    let r = &st.foes[i].post.as_ref().unwrap();
+    assert_eq!((r.round.lift, r.round.via, r.follow), (None, None, None));
+}
 ```
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards::hunt a_guards_round_comes_back`
-Expected: FAIL (`you_left` not defined; the guard never follows).
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards::hunt a_guards_round_comes_back`
+Expected: FAIL (`you_left` not defined; the guard never follows; the stale links stay).
 
 - [ ] **Step 3: Implement**
 
-Ruling 12. In `guards::tick`, a building you're out of turns its hunting guards calm and clears their follows before holding; a hunting guard you're not fighting on its floor takes `hunt_step` when due. `ride` and `climb` call `you_left` with the link under you before landing.
+Ruling 12; `after_restore` and `guards::link_to`/`take` drop a `lift`, `via` or `follow` whose link no longer stops on the guard's level (Ruling 8). In `guards::tick`, a building you're out of turns its hunting guards calm and clears their follows before holding; a hunting guard you're not fighting on its floor takes `hunt_step` when due. `ride` and `climb` call `you_left` with the link under you before landing.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards:: runs:: interiors::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards:: runs:: interiors::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -1201,7 +1233,7 @@ A street test in `combat.rs` stays as it is: `hear` does nothing off a floor.
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards::hunt::tests::a_shot guards::hunt::tests::a_guards_shot guards::hunt::tests::a_blast`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards::hunt::tests::a_shot guards::hunt::tests::a_guards_shot guards::hunt::tests::a_blast`
 Expected: FAIL (`hear` not defined; then guards stay calm).
 
 - [ ] **Step 3: Implement**
@@ -1210,7 +1242,7 @@ Ruling 13: `hear` and its four callers.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards:: combat:: blast::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards:: combat:: blast::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -1225,8 +1257,7 @@ git commit -m "guards: a gun or a blast on a floor wakes the guards within twelv
 ### Task 10: A guard finds your body
 
 **Files:**
-- Modify: `crates/strata-zero/src/guards/hunt.rs` (`body_check`; tests), `guards.rs` (`tick` calls it)
-- Modify: `crates/strata-zero/src/sitenet/panel.rs` (test only)
+- Modify: `crates/strata-zero/src/guards/hunt.rs` (`body_check`; tests, `a_guard_that_finds_your_body…` and `the_body_panel_follows_a_guard_as_it_walks`), `guards.rs` (`tick` calls it)
 
 **Interfaces:**
 - Produces:
@@ -1313,8 +1344,8 @@ fn the_body_panel_follows_a_guard_as_it_walks() {
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards::hunt::tests::a_guard_that_finds guards::hunt::tests::the_body_panel`
-Expected: FAIL (you stay jacked in).
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards::hunt::tests::a_guard_that_finds guards::hunt::tests::the_body_panel`
+Expected: `a_guard_that_finds…` FAILS (you stay jacked in); `the_body_panel_follows_a_guard_as_it_walks` already passes after Task 5 (the panel reads guards where they stand) and is here as a guard against regression.
 
 - [ ] **Step 3: Implement**
 
@@ -1322,7 +1353,7 @@ Ruling 14. Run the strata-zero suite; sitenet tests that leave a body on a floor
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards:: sitenet::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards:: sitenet::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**
@@ -1405,7 +1436,7 @@ fn the_jobs_end_takes_a_dropped_card_and_a_picked_up_guard_card_stays_in_your_pa
 
 - [ ] **Step 2: Run them to make sure they fail**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards::hunt::tests::a_downed guards::hunt::tests::a_public guards::hunt::tests::the_jobs_end`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards::hunt::tests::a_downed guards::hunt::tests::a_public guards::hunt::tests::the_jobs_end`
 Expected: FAIL (nothing on the ground).
 
 - [ ] **Step 3: Implement**
@@ -1414,7 +1445,7 @@ Ruling 15.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p strata-zero --target-dir target/smoke guards:: venues:: combat::`
+Run: `cargo test -p strata-zero --target-dir target/smoke -- guards:: venues:: combat::`
 Expected: PASS. Then the green line.
 
 - [ ] **Step 5: Commit**

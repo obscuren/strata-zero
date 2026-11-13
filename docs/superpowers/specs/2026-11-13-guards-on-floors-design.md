@@ -102,8 +102,8 @@ walk only gets tense once guards act (#33) and the alert lands (#36).
   floors, or on its own Net, or with your body on one of its floors. Elsewhere they hold
   where they are. **(call)**
 - A guard on a floor you haven't seen yet walks there too: its floor is drawn when needed.
-- During a fight, a calm guard holds still; it looks each round, and joins if it sees you
-  (`seat_foes`, as on the street).
+- During a fight, a calm guard on the fight's floor holds still; it looks each round, and joins if it sees you
+  (`seat_foes`, as on the street). Guards on other floors keep walking, a fight on the site's Net included. **(call)**
 - During a fight on a floor, every hunting guard on that floor has a seat, whether or not
   you've seen it, so a guard woken by a shot comes for the shot on turns. The turn bar shows
   a guard only once you've seen it. The fight ends, as today, once nothing on your floor
@@ -138,7 +138,9 @@ walk only gets tense once guards act (#33) and the alert lands (#36).
 
 - A guard that sees you hunts you, as a goon does: on your turns and its own, it closes in
   and fires when you're in range with a clear line, and loses you after `LOST_TURNS` turns
-  without sight, then walks back to its round.
+  without sight, then walks back to its round. Off a fight, a hunting guard that reaches
+  the spot it last saw you without sight turns calm at once, with no `LOST_TURNS` count.
+  **(call)**
 - **Radio (call).** A guard that has seen you radios it in at the start of its next turn,
   before it acts: the site's alarm goes off (`net::raise_alarm`), with the line "guard
   radios it in · ALARM". Only seeing you counts: a guard woken by a shot or a blast doesn't
@@ -231,3 +233,5 @@ aimed walk. On a floor:
 9. Hunting guards follow you across floors when their card lets them, but never out of
    the building.
 10. In a fight on a floor, every hunting guard on that floor takes turns, seen or not.
+11. Only guards on the fight's floor hold still; guards on other floors keep walking.
+12. Off a fight, a hunting guard that reaches `seen` without sight turns calm at once.
