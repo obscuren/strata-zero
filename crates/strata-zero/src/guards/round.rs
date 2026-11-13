@@ -63,6 +63,10 @@ pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
     let n = goals.len();
     let from = foe.pos;
     if goal_level != level {
+        // The link is found on its own floor's map: drawn, though it hasn't stepped yet.
+        if let Some(city) = st.city.as_ref() {
+            st.interiors.ensure(city, building, level);
+        }
         return match links::link_to(st, i, goal_level) {
             None => next_leg(st, i, n, now + GUARD_STEP_TICKS),
             Some((link, at)) if from == at => links::take(st, i, link, goal_level, now),
@@ -281,5 +285,53 @@ mod tests {
         run(&mut st, 1 + GUARD_PAUSE_TICKS + GUARD_STEP_TICKS);
         assert!(st.interiors.floor(b, level).is_some(), "drawn for it");
         assert_ne!(st.foes[i].pos, from);
+    }
+
+    #[test]
+    fn a_guard_that_stands_its_post_on_a_floor_not_drawn_yet_walks_to_its_stop() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(crate::venues::SITE_NET_SECURITY);
+        let i = (st.foes.iter())
+            .position(|f| {
+                f.post.as_ref().is_some_and(|p| p.building == b)
+                    && matches!(f.place, Place::Floor { level, .. } if level != 0)
+            })
+            .expect("a guard off L");
+        let Place::Floor { level, .. } = st.foes[i].place else {
+            unreachable!()
+        };
+        // Its stop: the far end of the first link off its level its card rides.
+        let plan = crate::interiors::plan_now(&st, b).unwrap().into_owned();
+        let mut it = st.foes[i].clone();
+        let post = it.post.as_mut().unwrap();
+        let (to, at) = (0..plan.links.len())
+            .find_map(|k| {
+                let to = *links::hops(&st, post, &plan, k, level).first()?;
+                Some((to, plan.links[k].stop(to)?.at))
+            })
+            .expect("a link off its level");
+        // One spot and the stop, its round from the start.
+        post.patrol = vec![it.pos];
+        post.stop = Some((to, at));
+        post.round = Default::default();
+        // Alone: no other guard's walk draws its floor for it.
+        no_guards(&mut st, b);
+        st.foes.push(it);
+        let i = st.foes.len() - 1;
+        st.interiors.drop_floors(b);
+        let city = st.city.clone().unwrap();
+        let floor = st.interiors.ensure(&city, b, 0).unwrap();
+        let door = floor.doorstep(&floor.exits[0]);
+        crate::sitenet::testutil::stand_on_floor(&mut st, b, 0, door); // you on L, inside
+        assert!(
+            st.interiors.floor(b, level).is_none(),
+            "its own floor not drawn"
+        );
+        let stop = Place::Floor {
+            building: b,
+            level: to,
+        };
+        run_until(&mut st, 5000, |st| {
+            (st.foes[i].place, st.foes[i].pos) == (stop, at)
+        });
     }
 }

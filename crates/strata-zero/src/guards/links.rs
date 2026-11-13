@@ -228,6 +228,11 @@ mod tests {
         crate::net::lock_down(&mut st, WARD);
         run(&mut st, 4 * GUARD_LIFT_TICKS);
         assert_eq!(st.foes[i].place, on(0));
+        assert_eq!(
+            st.foes[i].post.as_ref().unwrap().round.lift,
+            Some((1, 1)),
+            "still waiting for it"
+        );
     }
 
     #[test]
