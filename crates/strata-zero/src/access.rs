@@ -1002,7 +1002,8 @@ mod tests {
             "ROOT ONLY · CRACK THE SERVER"
         );
         let seed = st.city.as_ref().unwrap().seed;
-        st.backdoors.plant_net(b, 99, seed, now);
+        st.backdoors
+            .plant_net(b, 99, seed, now, crate::rig::STOCK.hold_days);
         assert_eq!(
             release_doors(&mut st, b).unwrap_err(),
             "LOCKDOWN IN FORCE · THE LOCKS HOLD UNTIL THE ALERT ENDS"

@@ -229,8 +229,13 @@ mod tests {
     fn a_backdoor_on_a_sites_server_lands_on_gs_hub() {
         let (mut st, b) = office_copy(190);
         let now = st.net.now(&st);
-        st.backdoors
-            .plant_net(b, 99, st.city.as_ref().unwrap().seed, now);
+        st.backdoors.plant_net(
+            b,
+            99,
+            st.city.as_ref().unwrap().seed,
+            now,
+            crate::rig::STOCK.hold_days,
+        );
         stand_at_the_rig(&mut st);
         let line = crate::net::land_at(&mut st, b).unwrap();
         let p = st.player.as_ref().unwrap();
@@ -259,8 +264,13 @@ mod tests {
     fn a_hop_onto_a_sites_backdoor_lands_on_gs_hub() {
         let (mut st, b) = office_copy(190);
         let now = st.net.now(&st);
-        st.backdoors
-            .plant_net(b, 99, st.city.as_ref().unwrap().seed, now);
+        st.backdoors.plant_net(
+            b,
+            99,
+            st.city.as_ref().unwrap().seed,
+            now,
+            crate::rig::STOCK.hold_days,
+        );
         stand_at_the_rig(&mut st);
         crate::net::jack_in_here(&mut st).unwrap();
         let line = crate::net::hop(&mut st, b).unwrap();
@@ -289,8 +299,10 @@ mod tests {
             .find(|x| x.kind.is_closed() && x.id != b && x.id != home)
             .unwrap()
             .id;
-        st.backdoors.plant_net(b, 99, seed, now);
-        st.backdoors.plant_net(other, 99, seed, now);
+        st.backdoors
+            .plant_net(b, 99, seed, now, crate::rig::STOCK.hold_days);
+        st.backdoors
+            .plant_net(other, 99, seed, now, crate::rig::STOCK.hold_days);
         stand_at_the_rig(&mut st);
         crate::net::land_at(&mut st, b).unwrap();
         let rows_at = |st: &AppState, pos| {

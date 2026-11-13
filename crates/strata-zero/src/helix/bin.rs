@@ -1657,7 +1657,8 @@ mod tests {
         let (mut st, b) = crate::sitenet::testutil::office_copy(190);
         let seed = st.city.as_ref().unwrap().seed;
         let now = st.net.now(&st);
-        st.backdoors.plant_net(b, 99, seed, now);
+        st.backdoors
+            .plant_net(b, 99, seed, now, crate::rig::STOCK.hold_days);
         let mut sh = new_shell(&mut st, HostId::Rig);
         let host = hostname(&st, HostId::Building(b));
         let out = go(&mut st, &mut sh, &format!("ssh {host}"));
