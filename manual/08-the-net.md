@@ -12,6 +12,8 @@ You can jack in with nothing, but you can't run a program without a deck in your
 
 Your body stays where you jacked in. Cameras pay it no attention while you're away. Jacked in on a hotel's or office's floor, the `BODY` line in the HERE pane says where your body stands and who is near it: `nobody on L`, or how many guards are on that floor and how close the nearest one is.
 
+A guard who sees your body pulls you out: you're dumped (Getting out, below) with `a guard found you · jacked out`, the building's alarm goes off, and the guard is hunting you as you wake. Jack in where a guard can see you and it finds you at once. The `BODY` line follows the nearest guard as it walks, so keep an eye on it.
+
 ## Moving in the Net
 
 The open Net lies over the city as a stratum of its own, the **grid**, with every tile in plain sight. Nodes sit where the systems are; lanes run between them.

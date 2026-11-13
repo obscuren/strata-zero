@@ -6360,3 +6360,184 @@ fn site_net_shot(dir: &str, name: &str, st: &mut AppState) {
         write_svg(dir, &format!("site_net_{name}_{w}x{h}"), st, &buf, false);
     }
 }
+
+/// Guards on the DEVELOPER office copy's floors (#33), each at 120 x 40 and 100 x 30:
+/// `guards_round` you in a dark spot as a walking guard's round brings it 3 to 6 tiles
+/// from you (on the first floor that has one: the copy's L is lit wall to wall at every
+/// hour); `guards_fight` engaged on L after the guard that saw you radioed it in;
+/// `guards_body` jacked in at the lobby kiosk, the site Net's panel showing your body
+/// and the nearest guard.
+#[test]
+#[ignore]
+fn guards_shots() {
+    use crate::guards::testutil::{logged, pace_once, run};
+    use crate::render::map::TileMap;
+    use crate::sitenet::testutil::{jacked_in_at_the_kiosk, office_copy, stand_on_floor};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    // The office copy with every floor drawn.
+    let copy = || {
+        let (mut st, b) = office_copy(crate::venues::SITE_NET_SECURITY);
+        let city = st.city.clone().expect("a city");
+        let plan = crate::interiors::plan_now(&st, b)
+            .expect("a plan")
+            .into_owned();
+        for level in plan.levels {
+            st.interiors.ensure(&city, b, level).expect("its floor");
+        }
+        (st, b)
+    };
+    let floor = |building, level| Place::Floor { building, level };
+    // The standing guards on `place` that walk a round, by index.
+    let walkers = |st: &AppState, place: Place| -> Vec<usize> {
+        (st.foes.iter().enumerate())
+            .filter(|(_, f)| f.place == place && f.standing())
+            .filter(|(_, f)| f.post.as_ref().is_some_and(|p| p.patrol.len() > 1))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    // The tiles of `place` you could stand on: walkable, no exit, no foe.
+    let free_tiles = |st: &AppState, place: Place| -> Vec<Pos> {
+        let map = crate::foes::map_of(st, place).expect("drawn");
+        let (_, floor) = map.floor().expect("a floor");
+        (floor.tiles.iter())
+            .map(|(p, _)| p)
+            .filter(|p| map.walkable(*p) && floor.exit_at(*p).is_none())
+            .filter(|p| crate::foes::foe_at(st, place, *p).is_none())
+            .collect()
+    };
+
+    // On its round: a dark tile of a room a spot of a guard's round lies in, 4 to 6
+    // tiles from that spot in a clear line; the clock runs until the guard stands 3 to
+    // 6 tiles from you, not seeing you.
+    let (mut st, b) = copy();
+    let levels = crate::interiors::plan_now(&st, b)
+        .expect("a plan")
+        .levels
+        .clone();
+    let (place, i, me) = (levels.iter())
+        .map(|&level| floor(b, level))
+        .find_map(|place| {
+            let map = crate::foes::map_of(&st, place)?;
+            let (_, floor) = map.floor()?;
+            let free = free_tiles(&st, place);
+            (walkers(&st, place).into_iter())
+                .flat_map(|i| {
+                    let patrol = st.foes[i].post.as_ref().unwrap().patrol.clone();
+                    patrol.into_iter().map(move |spot| (i, spot))
+                })
+                .find_map(|(i, spot)| {
+                    let room = floor.rooms.iter().find(|r| r.rect.contains(spot))?;
+                    let me = (free.iter().copied())
+                        .filter(|p| room.rect.contains(*p))
+                        .filter(|p| map.light(*p) < crate::foes::GUARD_LIT)
+                        .filter(|p| (4..=6).contains(&p.chebyshev(spot)))
+                        .find(|p| crate::foes::line_clear(&map, spot, *p))?;
+                    Some((place, i, me))
+                })
+        })
+        .expect("a dark spot by a guard's round");
+    let Place::Floor { level, .. } = place else {
+        unreachable!()
+    };
+    stand_on_floor(&mut st, b, level, me);
+    let near = |st: &AppState| (3..=6).contains(&st.foes[i].pos.chebyshev(me));
+    for _ in 0..20_000 {
+        if near(&st) {
+            break;
+        }
+        run(&mut st, 1);
+    }
+    assert!(near(&st), "the guard's round brings it by");
+    let map = crate::foes::map_of(&st, place).expect("drawn");
+    assert!(
+        !crate::foes::sees(&map, &st.foes[i], me),
+        "you're in the dark"
+    );
+    guards_shot(&dir, "round", &mut st);
+
+    // A fight on L: a tile 3 to 5 tiles from a walking guard, in its sight. It spots
+    // you, the fight starts, and on its turn it radios it in.
+    let (mut st, b) = copy();
+    let on_l = floor(b, 0);
+    let (i, me) = {
+        let map = crate::foes::map_of(&st, on_l).expect("L drawn");
+        let free = free_tiles(&st, on_l);
+        (walkers(&st, on_l).into_iter())
+            .find_map(|i| {
+                let foe = &st.foes[i];
+                let me = (free.iter().copied())
+                    .filter(|p| (3..=5).contains(&p.chebyshev(foe.pos)))
+                    .find(|p| crate::foes::sees(&map, foe, *p))?;
+                Some((i, me))
+            })
+            .expect("a guard on L that sees a tile near it")
+    };
+    stand_on_floor(&mut st, b, 0, me);
+    assert!(crate::foes::look_all(&mut st));
+    assert!(logged(&st, "guard spots you"));
+    crate::net::engage(&mut st, on_l, false);
+    // Your first turn passes if you act first, and the guards take theirs until the
+    // one that saw you radios it in: its turn, the call the log's latest line.
+    if crate::net::your_turn(&st) {
+        crate::net::end_turn(&mut st);
+    }
+    for _ in 0..80 {
+        if logged(&st, "guard radios it in · ALARM") {
+            break;
+        }
+        pace_once(&mut st);
+    }
+    assert!(st.foes[i].post.as_ref().unwrap().radioed);
+    assert!(logged(&st, "guard radios it in · ALARM"));
+    // A few seconds on: the log's lines typed out whole, with room for the lines before
+    // the alarm's (JOBS and the map folded away, as F2 and F3 do).
+    st.tick += 300;
+    st.sidebar.set(crate::ui::sidebar::Section::Jobs, false);
+    st.sidebar.set(crate::ui::sidebar::Section::Map, false);
+    guards_shot(&dir, "fight", &mut st);
+
+    // Your body at the lobby kiosk while you're on the site's Net, the guards of L out
+    // of its sight: the panel's `BODY` names the nearest. A guard of L that would see
+    // the body stands at the free tile nearest it that doesn't: the moment before it
+    // walks into view.
+    let (mut st, b) = copy();
+    jacked_in_at_the_kiosk(&mut st, b);
+    let (place, at) = st.player.as_ref().unwrap().body.expect("your body");
+    let free = free_tiles(&st, place);
+    for i in 0..st.foes.len() {
+        let map = crate::foes::map_of(&st, place).expect("L drawn");
+        let foe = &st.foes[i];
+        if foe.place != place || !crate::foes::sees(&map, foe, at) {
+            continue;
+        }
+        let blind = |p: &Pos| {
+            let mut there = foe.clone();
+            there.pos = *p;
+            !crate::foes::sees(&map, &there, at)
+        };
+        let spot = (free.iter().copied())
+            .filter(|p| blind(p) && crate::foes::foe_at(&st, place, *p).is_none())
+            .min_by_key(|p| (p.chebyshev(foe.pos), p.y, p.x))
+            .expect("a tile out of the body's sight");
+        st.foes[i].pos = spot;
+    }
+    let map = crate::foes::map_of(&st, place).expect("L drawn");
+    assert!(
+        !(st.foes.iter()).any(|f| f.place == place && crate::foes::sees(&map, f, at)),
+        "no guard sees the body yet"
+    );
+    let lines = crate::sitenet::body_lines(&st);
+    assert!(lines.iter().any(|l| l.contains("nearest")), "{lines:?}");
+    guards_shot(&dir, "body", &mut st);
+}
+
+/// The screen where you stand as `guards_{name}_{w}x{h}`, at 120 x 40 and 100 x 30, the
+/// camera landed on you (`sitenet::testutil::drawn`).
+fn guards_shot(dir: &str, name: &str, st: &mut AppState) {
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let buf = crate::sitenet::testutil::drawn(st, (w, h));
+        write_svg(dir, &format!("guards_{name}_{w}x{h}"), st, &buf, false);
+    }
+}

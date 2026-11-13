@@ -2,9 +2,21 @@
 
 Most of the time the city runs in real time: the clock ticks, people walk, and you move when you like. When something sees you and means you harm, the map goes to **turns**. The log says `ENGAGED`, and a column at the top right of the map lists everyone in the fight in the order they act.
 
-Who goes first depends on where you are: on the street your REFLEX, on the Net your NET. Ties go to you.
+Who goes first depends on where you are: on foot your REFLEX, on the Net your NET. Ties go to you.
 
 `e` goes to turns on your own, before anything has seen you, and `e` again goes back to real time once nothing hunts you. When the fight is over the log says `calm`.
+
+## Fights indoors
+
+A fight on a hotel's or office's floor works as it does on the street, a floor at a time: you step, shoot, push and throw the same. If something kills you there, what killed you names the building, not the street.
+
+A guard who sees you says so, `guard spots you`, and on its next turn it radios it in: `guard radios it in · ALARM`, and the building's alarm goes off (The Net). Drop it or stun it before that turn comes and the call is never made. Each guard calls once, and none calls while the alarm is already on.
+
+Guards hear what they can't see. A gunshot, yours or a guard's, or anything thrown going off wakes every guard within twelve tiles of it on that floor, through walls, and they come looking. A guard that only heard you has nothing to radio yet. A strike makes no sound.
+
+On a floor, every guard hunting you takes a turn, seen or not. One you haven't seen stays out of the column, and its turn reads `FOOTSTEPS`. A fight started only by things you haven't seen, on a floor or on the street, opens with `ENGAGED · footsteps`.
+
+Taking the stairs or a lift ends the fight, but the guards hunting you on that floor follow you up or down where their card lets them. You never land on a guard: you step out beside it, and when every tile at the landing is taken the log says `the landing is blocked`. No guard follows you out of the building; once you're out, they lose you.
 
 ## Your turn
 
