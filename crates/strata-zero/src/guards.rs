@@ -27,7 +27,8 @@ pub const HEAR_RADIUS: i32 = 12;
 /// The guards' step on the clock. Every building with a posted foe, in id order: while
 /// you (or your body) are in it, each standing guard of it whose time has come acts, but
 /// one on the floor of a fight, which the turns move: a calm one walks its round, a
-/// hunting one hunts (`hunt::hunt_step`). Out of it, its guards lose you and hold.
+/// hunting one hunts (`hunt::hunt_step`). Out of it, its guards lose you and hold. Then a
+/// guard that sees the body you left jacked in finds it (`hunt::body_check`).
 pub fn tick(st: &mut AppState) {
     let mut buildings: Vec<BuildingId> = (st.foes.iter())
         .filter_map(|f| f.post.as_ref().map(|p| p.building))
@@ -59,6 +60,7 @@ pub fn tick(st: &mut AppState) {
             }
         }
     }
+    hunt::body_check(st);
 }
 
 #[cfg(test)]

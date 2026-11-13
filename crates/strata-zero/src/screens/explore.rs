@@ -13080,6 +13080,7 @@ mod tests {
     fn beside_a_sites_kiosk_space_and_j_jack_you_in_on_its_node() {
         use crate::sitenet::testutil::{office_copy, stand_beside_the_kiosk};
         let (mut st, b) = office_copy(190);
+        crate::guards::testutil::no_guards(&mut st, b);
         let kiosk = stand_beside_the_kiosk(&mut st, b);
         let body = player(&st);
         let mut s = MapScreen::walking(&mut st);

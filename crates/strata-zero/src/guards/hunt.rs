@@ -133,6 +133,39 @@ fn held_by_another(st: &AppState, i: usize, at: citygen::Pos) -> bool {
     st.foes[i].pos.chebyshev(at) <= 1 && round::avoid(st, i).contains(&at)
 }
 
+/// While you're jacked in with your body on a floor, the first standing guard of that
+/// floor's building there that sees the body finds it: it radios it in (the alarm, unless
+/// the site is already on alert), you're dumped back into it, and it hunts from the body.
+pub(crate) fn body_check(st: &mut AppState) {
+    let Some((place, at)) = st.player.as_ref().and_then(|p| p.body) else {
+        return;
+    };
+    let Place::Floor { building: b, .. } = place else {
+        return;
+    };
+    let Some(map) = crate::foes::map_of(st, place) else {
+        return;
+    };
+    let ours = |f: &crate::foes::Foe| f.post.as_ref().is_some_and(|p| p.building == b);
+    let found = (st.foes.iter())
+        .position(|f| f.place == place && ours(f) && crate::foes::sees(&map, f, at));
+    let Some(i) = found else {
+        return;
+    };
+    if let Some(post) = st.foes[i].post.as_mut() {
+        post.radioed = true;
+        if post.follow.is_some() && post.round.lift == post.follow {
+            post.round.lift = None;
+        }
+        post.follow = None;
+    }
+    if !st.net.alert(b, st.net.now(st)) {
+        crate::net::lock_down(st, b);
+    }
+    crate::net::dump(st, "a guard found you · jacked out");
+    st.foes[i].mode = FoeMode::Hunting { seen: at, lost: 0 };
+}
+
 /// Guard `i` loses you: calm, its trail and the lift it waited on to follow you let go,
 /// it walks back into its round a step on from `now`.
 pub(super) fn lose_you(st: &mut AppState, i: usize, now: u64) {
@@ -149,9 +182,11 @@ pub(super) fn lose_you(st: &mut AppState, i: usize, now: u64) {
 
 #[cfg(test)]
 mod tests {
+    use crate::app::AppState;
     use crate::guards::GUARD_RUN_TICKS;
     use crate::guards::testutil::*;
-    use citygen::Pos;
+    use crate::render::map::TileMap;
+    use citygen::{BuildingId, Place, Pos};
 
     #[test]
     fn a_hunting_guard_follows_you_up_the_stairs() {
@@ -460,5 +495,110 @@ mod tests {
         assert!(crate::foes::look(&mut st, i), "you stand in the lit hall");
         let post = st.foes[i].post.as_ref().unwrap();
         assert_eq!((post.round.lift, post.follow), (None, None));
+    }
+
+    /// Site `b`'s first guard moved onto a tile of the body's floor two tiles from it with a
+    /// clear line, lit or not (2 is within the dark reach), its round held so it stands
+    /// there; its index.
+    fn guard_by_the_body(st: &mut AppState, b: BuildingId) -> usize {
+        let (place, at) = st.player.as_ref().unwrap().body.unwrap();
+        let map = crate::foes::map_of(st, place).unwrap();
+        let spot = (at.x - 2..=at.x + 2)
+            .flat_map(|x| (at.y - 2..=at.y + 2).map(move |y| Pos::new(x, y)))
+            .filter(|p| {
+                p.chebyshev(at) == 2 && map.walkable(*p) && crate::foes::line_clear(&map, *p, at)
+            })
+            .find(|p| crate::foes::foe_at(st, place, *p).is_none())
+            .expect("a tile beside the body");
+        let i = st
+            .foes
+            .iter()
+            .position(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .unwrap();
+        st.foes[i].place = place;
+        st.foes[i].pos = spot;
+        st.foes[i].post.as_mut().unwrap().round.next = u64::MAX;
+        i
+    }
+
+    #[test]
+    fn a_guard_that_finds_your_body_dumps_you_and_raises_the_alarm() {
+        use crate::sitenet::testutil::{jacked_in_at_the_kiosk, office_copy};
+        let (mut st, b) = office_copy(190);
+        jacked_in_at_the_kiosk(&mut st, b);
+        let (_, at) = st.player.as_ref().unwrap().body.unwrap();
+        let i = guard_by_the_body(&mut st, b);
+        crate::guards::tick(&mut st);
+        assert!(!st.player.as_ref().unwrap().jacked_in());
+        assert!(
+            st.log
+                .iter()
+                .any(|e| e.text == "DUMPED · a guard found you · jacked out")
+        );
+        assert!(st.net.alert(b, st.net.now(&st)));
+        assert_eq!(st.character.focus, 0);
+        assert_eq!(
+            st.foes[i].mode,
+            crate::foes::FoeMode::Hunting { seen: at, lost: 0 }
+        );
+        assert!(st.foes[i].post.as_ref().unwrap().radioed);
+    }
+
+    #[test]
+    fn the_body_panel_follows_a_guard_as_it_walks() {
+        use crate::foes::{Foe, Post};
+        use crate::sitenet::testutil::{jacked_in_at_the_kiosk, office_copy};
+        let (mut st, b) = office_copy(190);
+        jacked_in_at_the_kiosk(&mut st, b);
+        let (place, at) = st.player.as_ref().unwrap().body.unwrap();
+        let Place::Floor { level, .. } = place else {
+            panic!("a body on a floor")
+        };
+        // One guard, walking between the tile of the body's floor farthest from it and a
+        // tile beside that: far past its sight.
+        let (far, next) = {
+            let (_, floor) = st.interiors.floor(b, level).unwrap();
+            let open = |p: Pos| {
+                floor
+                    .tiles
+                    .get(p)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::Floor)
+            };
+            let far = (floor.tiles.iter())
+                .map(|(p, _)| p)
+                .filter(|p| open(*p))
+                .max_by_key(|p| (p.chebyshev(at), p.y, p.x))
+                .unwrap();
+            let next = far
+                .neighbors4()
+                .filter(|p| open(*p))
+                .min_by_key(|p| p.chebyshev(at))
+                .unwrap();
+            (far, next)
+        };
+        no_guards(&mut st, b);
+        st.foes.push(Foe {
+            name: "guard".to_string(),
+            glyph: '@',
+            post: Some(Post {
+                home: Some(level),
+                ..Post::new(b, 1, vec![far, next])
+            }),
+            ..Foe::goon(place, far)
+        });
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..400 {
+            advance(&mut st, 1);
+            crate::guards::tick(&mut st);
+            let d = st.foes[st.foes.len() - 1].pos.chebyshev(at);
+            let lines = crate::sitenet::body_lines(&st);
+            assert!(lines[1].contains(&format!("nearest {d} ")), "{lines:?}");
+            seen.insert(d);
+        }
+        assert!(
+            st.player.as_ref().unwrap().jacked_in(),
+            "never near enough to find you"
+        );
+        assert!(seen.len() > 1, "the line followed it");
     }
 }
