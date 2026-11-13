@@ -166,6 +166,21 @@ pub(crate) fn body_check(st: &mut AppState) {
     st.foes[i].mode = FoeMode::Hunting { seen: at, lost: 0 };
 }
 
+/// A downed guard of a zone above public leaves its zone's card where it fell, and the
+/// copy lists it among the cards lying about, so the job's end takes it too.
+pub(crate) fn drop_card(st: &mut AppState, i: usize) {
+    let foe = &st.foes[i];
+    let Some(post) = foe.post.as_ref().filter(|p| p.zone > 0) else {
+        return;
+    };
+    let (place, at, b) = (foe.place, foe.pos, post.building);
+    let id = crate::credentials::zone_card_id(b, post.zone);
+    st.ground.add(place, at, id.clone(), 1);
+    if let Some(left) = st.interiors.left_mut(b) {
+        left.push((place, at, id));
+    }
+}
+
 /// Guard `i` loses you: calm, its trail and the lift it waited on to follow you let go,
 /// it walks back into its round a step on from `now`.
 pub(super) fn lose_you(st: &mut AppState, i: usize, now: u64) {
@@ -501,6 +516,12 @@ mod tests {
     /// clear line, lit or not (2 is within the dark reach), its round held so it stands
     /// there; its index.
     fn guard_by_the_body(st: &mut AppState, b: BuildingId) -> usize {
+        nth_guard_by_the_body(st, b, 0)
+    }
+
+    /// The `n`th guard of building `b` (index order), set two tiles from the body in its
+    /// sight, on a tile no foe holds.
+    fn nth_guard_by_the_body(st: &mut AppState, b: BuildingId, n: usize) -> usize {
         let (place, at) = st.player.as_ref().unwrap().body.unwrap();
         let map = crate::foes::map_of(st, place).unwrap();
         let spot = (at.x - 2..=at.x + 2)
@@ -513,7 +534,10 @@ mod tests {
         let i = st
             .foes
             .iter()
-            .position(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .enumerate()
+            .filter(|(_, f)| f.post.as_ref().is_some_and(|p| p.building == b))
+            .nth(n)
+            .map(|(i, _)| i)
             .unwrap();
         st.foes[i].place = place;
         st.foes[i].pos = spot;
@@ -600,5 +624,82 @@ mod tests {
             "never near enough to find you"
         );
         assert!(seen.len() > 1, "the line followed it");
+    }
+
+    /// Site `b`'s first guard of a zone above public, and its zone.
+    fn a_carded_guard(st: &AppState, b: BuildingId) -> (usize, u8) {
+        (st.foes.iter().enumerate())
+            .find_map(|(i, f)| {
+                f.post
+                    .as_ref()
+                    .filter(|p| p.building == b && p.zone > 0)
+                    .map(|p| (i, p.zone))
+            })
+            .expect("a carded guard")
+    }
+
+    #[test]
+    fn a_downed_guard_leaves_its_zone_card() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let (i, zone) = a_carded_guard(&st, b);
+        let (place, at) = (st.foes[i].place, st.foes[i].pos);
+        crate::combat::wound_foe(&mut st, i, 255);
+        let id = crate::credentials::zone_card_id(b, zone);
+        assert!(st.ground.at(place, at).iter().any(|s| s.item == id));
+        assert!(
+            st.interiors
+                .copy(b)
+                .unwrap()
+                .left
+                .contains(&(place, at, id))
+        );
+    }
+
+    #[test]
+    fn a_public_guard_drops_nothing() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let (i, _) = a_carded_guard(&st, b);
+        st.foes[i].post.as_mut().unwrap().zone = 0;
+        let (place, at) = (st.foes[i].place, st.foes[i].pos);
+        let left = st.interiors.copy(b).unwrap().left.len();
+        crate::combat::wound_foe(&mut st, i, 255);
+        assert!(st.ground.at(place, at).is_empty());
+        assert_eq!(st.interiors.copy(b).unwrap().left.len(), left);
+    }
+
+    #[test]
+    fn the_jobs_end_takes_a_dropped_card_and_a_picked_up_guard_card_stays_in_your_pack() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        let (i, zone) = a_carded_guard(&st, b);
+        let (place, at) = (st.foes[i].place, st.foes[i].pos);
+        crate::combat::wound_foe(&mut st, i, 255);
+        let id = crate::credentials::zone_card_id(b, zone);
+        let mut other = (st.foes.iter().enumerate()).filter(|(j, f)| {
+            *j != i
+                && f.post
+                    .as_ref()
+                    .is_some_and(|p| p.building == b && p.zone > 0)
+        });
+        let (j, _) = other.next().expect("a second carded guard");
+        let (jp, ja, jz) = (
+            st.foes[j].place,
+            st.foes[j].pos,
+            st.foes[j].post.as_ref().unwrap().zone,
+        );
+        crate::combat::wound_foe(&mut st, j, 255);
+        let jid = crate::credentials::zone_card_id(b, jz);
+        assert_eq!(st.ground.take(jp, ja, &jid, 1), 1);
+        st.character.give(jid.clone(), 1); // picked up
+        crate::venues::end(&mut st, b).unwrap(); // you're outside: it ends now
+        assert!(
+            st.ground.at(place, at).iter().all(|s| s.item != id),
+            "the one left lying goes"
+        );
+        assert_eq!(st.character.count(&jid), 1, "the one you took stays");
+        assert!(
+            !st.foes
+                .iter()
+                .any(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+        );
     }
 }

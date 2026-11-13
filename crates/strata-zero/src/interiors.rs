@@ -237,6 +237,15 @@ impl Interiors {
         self.copies.get_mut(&b)
     }
 
+    /// The cards lying where venue `b`'s copy left them, to change: unlike `copy_mut` it
+    /// keeps the site's Net, since a card changes no Net.
+    pub(crate) fn left_mut(
+        &mut self,
+        b: BuildingId,
+    ) -> Option<&mut Vec<(Place, Pos, game::ItemId)>> {
+        self.copies.get_mut(&b).map(|c| &mut c.left)
+    }
+
     /// Records venue `b`'s copy, or with None lets it go; the site's Net kept goes too.
     pub(crate) fn set_copy(&mut self, b: BuildingId, copy: Option<crate::venues::MissionCopy>) {
         self.drop_site_net(b);

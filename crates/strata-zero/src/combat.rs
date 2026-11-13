@@ -340,6 +340,7 @@ pub(crate) fn wound_foe(st: &mut AppState, foe: usize, damage: u8) {
         f.marked = false;
         let name = f.name.clone();
         st.say(format!("{name} down"));
+        crate::guards::drop_card(st, foe);
     }
 }
 
