@@ -141,8 +141,10 @@ pub(crate) fn arrive(st: &mut AppState, i: usize, link: usize, to: i32) -> bool 
 }
 
 /// Where a body coming off a link at tile `at` of floor `place` lands: `at`, else the
-/// first of its eight neighbours that is walkable, no exit, and free of you, your body
-/// and every standing foe. None when the floor isn't drawn or nothing there is free.
+/// first of its eight neighbours that is walkable, no exit, no door a lock or a private
+/// room holds (a landing there would be past a door it may have no card for), and free
+/// of you, your body and every standing foe. None when the floor isn't drawn or nothing
+/// there is free.
 pub(crate) fn free_landing(st: &AppState, place: Place, at: Pos) -> Option<Pos> {
     let Place::Floor { building, level } = place else {
         return None;
@@ -156,6 +158,8 @@ pub(crate) fn free_landing(st: &AppState, place: Place, at: Pos) -> Option<Pos> 
     std::iter::once(at).chain(at.neighbors8()).find(|p| {
         floor.tiles.get(*p).is_some_and(|t| t.is_walkable())
             && floor.exit_at(*p).is_none()
+            && floor.lock_at(*p).is_none()
+            && !floor.door_of(*p).is_some_and(|r| r.private)
             && !held(*p)
     })
 }
@@ -242,5 +246,19 @@ mod tests {
         assert!(arrive(&mut st, i, 0, 1));
         assert_eq!(st.foes[i].place, on(1));
         assert_eq!(st.foes[i].pos.chebyshev(Pos::new(2, 1)), 1);
+    }
+
+    #[test]
+    fn a_guard_never_lands_on_a_lock_or_a_private_door() {
+        let mut st = ward();
+        doors_by_the_stair(&mut st, 1);
+        stand(&mut st, 1, Pos::new(2, 1)); // you on 1F's stair landing
+        let i = guard(&mut st, 0, 0, &[Pos::new(2, 1)]);
+        let held = goon(&mut st, 1, Pos::new(1, 1)); // and its one plain tile held
+        assert!(!arrive(&mut st, i, 0, 1), "no door: it waits");
+        assert_eq!((st.foes[i].place, st.foes[i].pos), (on(0), Pos::new(2, 1)));
+        st.foes[held].pos = Pos::new(20, 3);
+        assert!(arrive(&mut st, i, 0, 1));
+        assert_eq!((st.foes[i].place, st.foes[i].pos), (on(1), Pos::new(1, 1)));
     }
 }

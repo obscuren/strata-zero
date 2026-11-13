@@ -197,6 +197,39 @@ pub(crate) fn stand(st: &mut AppState, level: i32, at: Pos) {
     crate::constructs::land(st, on(level), at);
 }
 
+/// The stair landing (2,1) of the ward's floor `level` hemmed in by doors: a card lock
+/// (zone 1) at (3,1) and a private office's door (zone 2) at (3,2), the first two of its
+/// neighbours a landing tries, and walls at (2,2) and (1,2), so (1,1) is its only plain
+/// free neighbour.
+pub(crate) fn doors_by_the_stair(st: &mut AppState, level: i32) {
+    let mut f = st.interiors.floor(WARD, level).unwrap().1.clone();
+    for door in [Pos::new(3, 1), Pos::new(3, 2)] {
+        f.tiles.set(door, Tile::new(Terrain::Door));
+    }
+    for wall in [Pos::new(2, 2), Pos::new(1, 2)] {
+        f.tiles.set(wall, Tile::new(Terrain::Wall));
+    }
+    f.locks.push(DoorLock {
+        at: Pos::new(3, 1),
+        number: 2,
+        zone: 1,
+        kind: LockKind::Card,
+        ways: Ways::CARD,
+        free_from: Some(Pos::new(4, 1)),
+    });
+    f.rooms.push(Room {
+        zone: 2,
+        ..Room::new(
+            Rect::new(4, 2, 3, 3),
+            RoomKind::Office,
+            Some(Pos::new(3, 2)),
+            true,
+            8,
+        )
+    });
+    st.interiors.put_floor(WARD, f);
+}
+
 /// A post of the ward's: zone `zone`'s card and `patrol`.
 pub(crate) fn post(zone: u8, patrol: &[Pos]) -> Post {
     Post::new(WARD, zone, patrol.to_vec())

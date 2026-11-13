@@ -1687,4 +1687,20 @@ mod tests {
         assert_ne!(me, st.foes[i].pos);
         assert_eq!(me.chebyshev(Pos::new(2, 1)), 1);
     }
+
+    #[test]
+    fn you_never_land_on_a_lock_or_a_private_door() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        doors_by_the_stair(&mut st, 1);
+        guard(&mut st, 1, 0, &[Pos::new(2, 1)]);
+        let held = goon(&mut st, 1, Pos::new(1, 1));
+        stand(&mut st, 0, Pos::new(2, 1));
+        assert_eq!(climb(&mut st, true), Err(BLOCKED.to_string()));
+        assert_eq!(st.player.as_ref().unwrap().place, on(0), "still on L");
+        st.foes[held].pos = Pos::new(20, 3);
+        climb(&mut st, true).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (on(1), Pos::new(1, 1)));
+    }
 }
