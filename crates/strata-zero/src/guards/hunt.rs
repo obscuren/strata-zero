@@ -298,6 +298,25 @@ mod tests {
     }
 
     #[test]
+    fn a_strike_on_a_floor_is_not_heard_but_a_shot_is() {
+        let mut st = ward();
+        st.character.skills.insert(game::SkillId::new("handguns"));
+        st.character.give(game::ItemId::new("neural_port"), 1);
+        st.character
+            .chrome
+            .insert(game::Site::Neural, game::ItemId::new("neural_port"));
+        let target = goon(&mut st, 0, Pos::new(10, 3));
+        let near = guard(&mut st, 0, 1, &[Pos::new(18, 3)]); // 12, behind the wall
+        crate::net::engage(&mut st, on(0), true);
+        crate::net::stay(&mut st);
+        crate::combat::strike(&mut st, &game::AbilityId::new("static"), target).unwrap();
+        assert!(!st.foes[near].hunting(), "a strike is no gunshot");
+        st.net.engaged.as_mut().unwrap().ap = crate::net::BASE_AP;
+        crate::combat::fire(&mut st, target).unwrap();
+        assert!(st.foes[near].hunting(), "a gunshot carries");
+    }
+
+    #[test]
     fn a_guards_shot_wakes_the_guards_near_it() {
         let mut st = ward();
         let shooter = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);

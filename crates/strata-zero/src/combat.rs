@@ -375,8 +375,6 @@ fn volley(
             lost: 0,
         };
     }
-    // A shot on a floor wakes the calm guards in earshot, toward you.
-    crate::guards::hear(st, place, from, from);
     let mut out = Vec::new();
     for k in 0..w.rounds as usize {
         let hit = game::round_hits(roll(st), chance);
@@ -424,6 +422,11 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
     crate::net::spend_ap(st)?;
     let from = st.player.as_ref().map(|p| p.pos).unwrap_or_default();
     let name = st.foes[foe].name.clone();
+    // A gunshot on a floor wakes the calm guards in earshot, toward you; a strike
+    // (which shares `volley`) is no gunshot.
+    if let Some(place) = st.player.as_ref().map(|p| p.place) {
+        crate::guards::hear(st, place, from, from);
+    }
     let rounds = volley(st, from, foe, &w, chance, &w.fx.clone());
     st.say(format!("you fire · {name} {}", outcomes(&rounds)));
     Ok(())
