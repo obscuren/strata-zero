@@ -720,3 +720,123 @@ fn a_layer_never_shuts_anyone_in() {
     }
     assert!(laid > 0 && refused > 0, "{laid} laid, {refused} refused");
 }
+
+/// The kept plan of a laid layer.
+fn kept_plan(x: &Laid) -> FloorPlan {
+    FloorPlan::of_venue(&x.layout).kept(&x.layer.kept)
+}
+
+/// Whether link `k` of `plan` joins `a` and `b` both ways for a guard of `zone`.
+fn joins(plan: &FloorPlan, k: usize, a: i32, b: i32, zone: u8) -> bool {
+    let card = |l: i32| plan.links[k].stop(l).map_or(u8::MAX, |s| s.card);
+    plan.hops(k, a).contains(&b)
+        && plan.hops(k, b).contains(&a)
+        && (plan.links[k].kind != LinkKind::Lift || (card(a) <= zone && card(b) <= zone))
+}
+
+/// What `lay` has taken by the time it gives guards their stops: the objective, every
+/// card, code and post, and every device and container.
+fn occupied(layer: &MissionLayer) -> BTreeSet<(i32, Pos)> {
+    let mut used = BTreeSet::from([(layer.objective.level, layer.objective.at)]);
+    used.extend(layer.cards.iter().map(|c| (c.level, c.at)));
+    used.extend(layer.codes.iter().map(|c| (c.level, c.at)));
+    used.extend(layer.guards.iter().map(|g| (g.level, g.at)));
+    used.extend(layer.devices.iter().map(|d| (d.level, d.at)));
+    used.extend(layer.containers.iter().map(|c| (c.level, c.at)));
+    used
+}
+
+#[test]
+fn a_stop_is_a_spot_of_its_zone_one_link_away() {
+    let mut any = 0;
+    for x in layers().iter().chain(builtin_layers()) {
+        let plan = kept_plan(x);
+        for g in &x.layer.guards {
+            let Some(s) = g.stop else { continue };
+            any += 1;
+            assert!(
+                s.level != g.level && x.layer.kept.contains(&s.level),
+                "{}: {g:?}",
+                x.what
+            );
+            let lv = x.layout.level(s.level).unwrap();
+            assert!(
+                (lv.rooms.iter()).any(|r| r.zone == g.zone && r.spots.contains(&s.at)),
+                "{}: {g:?}",
+                x.what
+            );
+            assert!(
+                (0..plan.links.len()).any(|k| joins(&plan, k, g.level, s.level, g.zone)),
+                "{}: {g:?}",
+                x.what
+            );
+        }
+    }
+    assert!(any > 0, "some guard somewhere has a stop");
+}
+
+#[test]
+fn about_one_guard_in_three_has_a_stop() {
+    for x in layers().iter().chain(builtin_layers()) {
+        let stops = x.layer.guards.iter().filter(|g| g.stop.is_some()).count();
+        assert!(stops <= (x.layer.guards.len() / 3).max(1), "{}", x.what);
+        // At least one where a guard could have one.
+        let used = occupied(&x.layer);
+        let plan = kept_plan(x);
+        let could = x.layer.guards.iter().any(|g| {
+            x.layer.kept.iter().filter(|&&m| m != g.level).any(|&m| {
+                (0..plan.links.len()).any(|k| joins(&plan, k, g.level, m, g.zone))
+                    && x.layout.level(m).unwrap().rooms.iter().any(|r| {
+                        r.zone == g.zone && r.spots.iter().any(|p| !used.contains(&(m, *p)))
+                    })
+            })
+        });
+        assert_eq!(stops > 0, could, "{}", x.what);
+    }
+}
+
+#[test]
+fn no_stop_stands_on_a_post_a_device_or_another_stop() {
+    for x in layers() {
+        let stops: Vec<(i32, Pos)> = (x.layer.guards.iter())
+            .filter_map(|g| g.stop)
+            .map(|s| (s.level, s.at))
+            .collect();
+        let mut seen = BTreeSet::new();
+        for s in &stops {
+            assert!(seen.insert(*s), "{}: two stops at {s:?}", x.what);
+            let what = &x.what;
+            assert!(
+                !(x.layer.guards.iter()).any(|g| (g.level, g.at) == *s),
+                "{what}"
+            );
+            assert!(
+                !(x.layer.devices.iter()).any(|d| (d.level, d.at) == *s),
+                "{what}"
+            );
+            assert!(
+                !(x.layer.containers.iter()).any(|c| (c.level, c.at) == *s),
+                "{what}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_guard_post_saved_before_reads_with_no_stop() {
+    #[derive(serde::Serialize)]
+    struct Old {
+        level: i32,
+        at: Pos,
+        zone: u8,
+        patrol: Vec<Pos>,
+    }
+    let old = Old {
+        level: 2,
+        at: Pos::new(3, 4),
+        zone: 1,
+        patrol: vec![Pos::new(3, 4)],
+    };
+    let g: GuardPost = rmp_serde::from_slice(&rmp_serde::to_vec_named(&old).unwrap()).unwrap();
+    assert_eq!((g.level, g.zone, g.stop), (2, 1, None));
+}

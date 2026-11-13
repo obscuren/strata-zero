@@ -962,6 +962,7 @@ fn guards_are_awake_foes_at_their_posts() {
         assert_eq!((f.place, f.pos), (place, g.at));
         let post = crate::foes::Post {
             home: Some(g.level),
+            stop: g.stop.map(|s| (s.level, s.at)),
             ..crate::foes::Post::new(b, g.zone, g.patrol.clone())
         };
         assert_eq!(f.post, Some(post));

@@ -179,7 +179,10 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   a change to `flavor/sites.ron` or to the layer's code can't put other locks, devices or
   notes beside the floors, guards and cards a save already holds. A copy saved before
   the layer was kept has none: `venues::tick` ends it as lost, as it does a copy whose
-  type is gone.
+  type is gone. A guard's post in the layer carries its `stop` on another level
+  (`GuardPost.stop`, `#[serde(default)]`), drawn last from a stream of its own and saved
+  with the rest: a layer saved before guards took stops has none, and its guards walk
+  their own level.
 - **What a copy keeps.** While it's live the building's plan is the layout cut to the
   kept levels (`FloorPlan::kept`) and its floors are drawn with the layer on them; both
   are saved as any plan and floor are. The rest is play state saved where it always is:

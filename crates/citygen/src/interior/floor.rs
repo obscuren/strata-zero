@@ -124,6 +124,13 @@ impl Room {
             zone: 0,
         }
     }
+
+    /// Whether its door is shut to someone stepping onto it from `from`: a private room's
+    /// (not a home, whose door opens for its owner) from outside it. Who has the key is
+    /// the caller's to say.
+    pub fn shut_from(&self, from: Pos) -> bool {
+        self.private && self.kind != RoomKind::Home && !self.rect.contains(from)
+    }
 }
 
 /// The lock on a door between two zones: a card reader or a keypad, and the ways past it.

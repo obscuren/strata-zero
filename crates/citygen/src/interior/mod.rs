@@ -416,6 +416,20 @@ mod tests {
         assert_eq!(plan.next_stop(1, 2, true), Some(4));
         assert_eq!(plan.rides(2, 0), vec![2, 4]);
         assert_eq!(plan.rides(2, 1), Vec::<i32>::new());
+        // One hop: a lift's rides, the next stop up and down by anything else, none by
+        // a crawl.
+        plan.links.push(LevelLink {
+            kind: LinkKind::Crawl,
+            stops: vec![stop(0, true, true), stop(1, true, true)],
+            name: None,
+        });
+        assert_eq!(plan.hops(0, 0), vec![1]);
+        assert_eq!(plan.hops(0, 1), Vec::<i32>::new());
+        assert_eq!(plan.hops(1, 2), vec![4, 0]);
+        assert_eq!(plan.hops(1, 4), vec![0]);
+        assert_eq!(plan.hops(2, 0), vec![2, 4]);
+        assert_eq!(plan.hops(2, 1), Vec::<i32>::new());
+        assert_eq!(plan.hops(3, 0), Vec::<i32>::new());
     }
 
     #[test]

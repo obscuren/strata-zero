@@ -2539,12 +2539,7 @@ impl MapScreen {
                     crate::venues::Meets::Nothing => {}
                 }
                 let (_, floor) = st.interiors.floor(building, level)?;
-                let room = floor
-                    .door_of(target)
-                    .filter(|r| {
-                        r.private && r.kind != citygen::RoomKind::Home && !r.rect.contains(here)
-                    })
-                    .cloned();
+                let room = floor.door_of(target).filter(|r| r.shut_from(here)).cloned();
                 // Your own door opens for you; the step onto it from outside names the flat.
                 let home = floor
                     .door_of(target)

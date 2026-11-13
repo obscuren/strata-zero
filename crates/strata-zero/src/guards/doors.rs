@@ -2,7 +2,7 @@
 
 use crate::foes::Post;
 use citygen::venue::Ways;
-use citygen::{Floor, Pos, RoomKind};
+use citygen::{Floor, Pos};
 
 /// Whether a foe with `post` (a guard's card; None for any other foe) gets from `from`
 /// onto `to` on `floor`: a lock opens from its free side, or to a card of its zone or
@@ -13,9 +13,9 @@ pub fn opens(post: Option<&Post>, floor: &Floor, from: Pos, to: Pos) -> bool {
     if let Some(lock) = floor.lock_at(to) {
         return lock.free_from == Some(from) || (lock.ways.has(Ways::CARD) && card(lock.zone));
     }
-    let shut = (floor.door_of(to))
-        .filter(|r| r.private && r.kind != RoomKind::Home && !r.rect.contains(from));
-    shut.is_none_or(|r| card(r.zone))
+    (floor.door_of(to))
+        .filter(|r| r.shut_from(from))
+        .is_none_or(|r| card(r.zone))
 }
 
 #[cfg(test)]

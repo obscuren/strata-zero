@@ -6,7 +6,7 @@ use crate::app::AppState;
 use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::{astar, bfs_nearest};
 use citygen::{
-    BuildingId, City, ConnectorKind, Floor, FloorPlan, Grid, LinkKind, Place, Pos, RoomKind, Size,
+    BuildingId, City, ConnectorKind, Floor, FloorPlan, Grid, LinkKind, Place, Pos, Size,
     StratumKind, Terrain,
 };
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -349,25 +349,23 @@ struct Access<'a> {
 }
 
 impl Access<'_> {
-    /// The levels link `link` takes you to from `level` in one go: a lift's rides when it
-    /// answers, but a ride to a stop whose card you lack; a stair's, an escalator's or
-    /// a ladder's next stop up and down; none by a crawl, or where you can't get on.
+    /// The levels link `link` takes you to from `level` in one go (`FloorPlan::hops`), a
+    /// lift's only when it answers and to a stop whose card you hold.
     fn hops(&self, link: usize, level: i32) -> Vec<i32> {
         let plan = self.plan;
-        match plan.links[link].kind {
-            LinkKind::Crawl => Vec::new(),
-            LinkKind::Lift if !self.lifts[link] => Vec::new(),
-            LinkKind::Lift => (plan.rides(link, level).into_iter())
-                .filter(|&to| {
-                    let card = crate::venues::ride_card(plan, link, to);
-                    crate::credentials::opens_stop(self.st, plan.building, link, card).is_some()
-                })
-                .collect(),
-            _ => [true, false]
-                .into_iter()
-                .filter_map(|up| plan.next_stop(link, level, up))
-                .collect(),
+        let hops = plan.hops(link, level);
+        if plan.links[link].kind != LinkKind::Lift {
+            return hops;
         }
+        if !self.lifts[link] {
+            return Vec::new();
+        }
+        (hops.into_iter())
+            .filter(|&to| {
+                let card = crate::venues::ride_card(plan, link, to);
+                crate::credentials::opens_stop(self.st, plan.building, link, card).is_some()
+            })
+            .collect()
     }
 }
 
@@ -529,9 +527,7 @@ pub(crate) fn shut_to_you(
     if let Some(lock) = floor.lock_at(to) {
         return crate::credentials::opens_lock(st, b, level, lock, from).is_none();
     }
-    let private = (floor.door_of(to))
-        .filter(|r| r.private && r.kind != RoomKind::Home && !r.rect.contains(from));
-    if let Some(r) = private {
+    if let Some(r) = floor.door_of(to).filter(|r| r.shut_from(from)) {
         return crate::credentials::opens(st, b, level, r.number).is_none();
     }
     crate::venues::grille_at(plan, level, to) && !crate::venues::can_crawl(st)
