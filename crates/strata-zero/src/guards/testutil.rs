@@ -237,6 +237,26 @@ pub(crate) fn advance(st: &mut AppState, n: u64) {
     }
 }
 
+/// `n` ticks of the clock, the guards' step after each.
+pub(crate) fn run(st: &mut AppState, n: u64) {
+    for _ in 0..n {
+        advance(st, 1);
+        crate::guards::tick(st);
+    }
+}
+
+/// Ticks of the clock as `run`'s until `done`; panics when it isn't in `max`.
+#[expect(dead_code, reason = "the links' and the hunt's tests wait on it")]
+pub(crate) fn run_until(st: &mut AppState, max: u64, done: impl Fn(&AppState) -> bool) {
+    for _ in 0..max {
+        if done(st) {
+            return;
+        }
+        run(st, 1);
+    }
+    assert!(done(st), "not done in {max} ticks");
+}
+
 /// Whether a line of the log holds `needle`.
 pub(crate) fn logged(st: &AppState, needle: &str) -> bool {
     st.log.iter().any(|e| e.text.contains(needle))

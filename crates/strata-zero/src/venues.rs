@@ -8,10 +8,10 @@
 mod copy;
 mod dev;
 
-pub(crate) use copy::copy_floor;
 pub use copy::{
     DoorMark, MissionCopy, begin, copy_live, door_mark_at, door_marks, end, note_at, tick,
 };
+pub(crate) use copy::{copy_floor, inside};
 #[cfg(test)]
 pub use dev::dev_start_with;
 pub use dev::{building_at_door, dev_site, dev_site_net, dev_start};

@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn foe_and_dummy_spawn_on_a_floor() {
-        use crate::guards::testutil::*;
+        use crate::guards::testutil::{on, ward};
         let mut st = ward();
         let at = At {
             place: on(0),

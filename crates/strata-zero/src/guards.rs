@@ -1,8 +1,54 @@
 //! Guards in a mission's copy of a venue: what only they do beside every other foe.
 
 mod doors;
+mod round;
+
+use crate::app::AppState;
+use citygen::BuildingId;
 
 pub use doors::opens;
+
+/// A calm guard's step: an amble, three times your walk.
+pub const GUARD_STEP_TICKS: u64 = 3 * crate::net::WALK_TICKS;
+/// A hunting guard's step off a fight: your walk.
+#[expect(dead_code, reason = "the hunt off a fight walks at it")]
+pub const GUARD_RUN_TICKS: u64 = crate::net::WALK_TICKS;
+/// How long a guard stands at each spot of its round: three seconds at 30 fps.
+pub const GUARD_PAUSE_TICKS: u64 = 90;
+/// How long a guard waits for a lift.
+#[expect(dead_code, reason = "a guard taking a lift waits it")]
+pub const GUARD_LIFT_TICKS: u64 = 60;
+/// How far a shot wakes the calm guards of its floor, walls or not.
+#[expect(dead_code, reason = "hearing a shot reads it")]
+pub const HEAR_RADIUS: i32 = 12;
+
+/// The guards' step on the clock. Every building with a posted foe, in id order: while
+/// you (or your body) are in it, each standing calm guard of it whose time has come walks
+/// its round, but one on the floor of a fight, which the turns move; elsewhere they hold.
+pub fn tick(st: &mut AppState) {
+    let mut buildings: Vec<BuildingId> = (st.foes.iter())
+        .filter_map(|f| f.post.as_ref().map(|p| p.building))
+        .collect();
+    buildings.sort();
+    buildings.dedup();
+    let now = st.clock_tick();
+    for b in buildings {
+        if !crate::venues::inside(st, b) {
+            continue;
+        }
+        for i in 0..st.foes.len() {
+            let f = &st.foes[i];
+            let due = f
+                .post
+                .as_ref()
+                .is_some_and(|p| p.building == b && now >= p.round.next);
+            let held = (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place);
+            if due && f.standing() && !f.hunting() && !held {
+                round::round_step(st, i, now);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod testutil;

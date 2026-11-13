@@ -49,7 +49,7 @@ pub(crate) fn copy_floor(plan: &FloorPlan, copy: &MissionCopy, level: i32) -> Op
 /// Whether the player is in building `b`: on a floor of it, in its construct (an old one
 /// or its own Net), or jacked in with the body waiting on a floor of it. A copy waits for
 /// them to be out.
-pub(super) fn inside(st: &AppState, b: BuildingId) -> bool {
+pub(crate) fn inside(st: &AppState, b: BuildingId) -> bool {
     let Some(p) = st.player.as_ref() else {
         return false;
     };

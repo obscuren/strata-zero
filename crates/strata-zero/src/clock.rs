@@ -35,6 +35,8 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     crate::jobs::tick(st);
     // A mission's copy taken or let go once you're out of its building.
     crate::venues::tick(st);
+    // The guards of a building you're in walk their rounds.
+    crate::guards::tick(st);
     // Out in the world the city holds still for you: its cameras look at no one, and
     // its story waits (a call keeps ringing from the start when you're back).
     if crate::outside::away(st) {

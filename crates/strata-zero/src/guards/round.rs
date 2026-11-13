@@ -1,0 +1,239 @@
+//! The calm round: a guard walks its patrol out and back, then its stop, on the clock.
+
+use super::{GUARD_PAUSE_TICKS, GUARD_STEP_TICKS};
+use crate::app::AppState;
+use crate::foes::{self, Foe, Post};
+use citygen::{Place, Pos};
+
+/// A guard's round as goals, each a level and a tile: its patrol out on `home`, back the
+/// way it came (the ends left out), then its stop on another level if it has one. Its
+/// round's `leg` indexes these, and wraps to 0, its post.
+pub fn goals(post: &Post, home: i32) -> Vec<(i32, Pos)> {
+    let n = post.patrol.len();
+    let out = post.patrol.iter().map(|p| (home, *p));
+    let back = (1..n.saturating_sub(1))
+        .rev()
+        .map(|k| (home, post.patrol[k]));
+    out.chain(back).chain(post.stop).collect()
+}
+
+/// The level a guard's round walks: its post's, else the level it stands on.
+pub(crate) fn home(foe: &Foe) -> i32 {
+    let here = match foe.place {
+        Place::Floor { level, .. } => level,
+        _ => 0,
+    };
+    foe.post.as_ref().and_then(|p| p.home).unwrap_or(here)
+}
+
+/// The tiles foe `i` doesn't step onto, on the place it stands: yours, your body's,
+/// and every other standing foe's.
+pub(crate) fn avoid(st: &AppState, i: usize) -> Vec<Pos> {
+    let place = st.foes[i].place;
+    let you = st.player.as_ref().into_iter().flat_map(|p| {
+        let body = p.body.filter(|(at, _)| *at == place).map(|(_, pos)| pos);
+        (p.place == place).then_some(p.pos).into_iter().chain(body)
+    });
+    let others = (st.foes.iter().enumerate())
+        .filter(|(j, f)| *j != i && f.standing() && f.place == place)
+        .map(|(_, f)| f.pos);
+    you.chain(others).collect()
+}
+
+/// One calm action of guard `i` at clock tick `now`. Standing on its goal, it takes the
+/// next leg and pauses; else it steps a tile toward the goal round the tiles held, or
+/// along the way that ignores them when there's none round (waiting while that tile is
+/// held), and a step that lands on the goal takes the next leg and pauses at once. A
+/// goal with no way at all, or on another level (links come later), is skipped.
+pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
+    let foe = &st.foes[i];
+    let (Some(post), Place::Floor { building, level }) = (foe.post.as_ref(), foe.place) else {
+        return;
+    };
+    let goals = goals(post, home(foe));
+    let Some(&(goal_level, goal)) = goals.get(post.round.leg % goals.len().max(1)) else {
+        return;
+    };
+    let from = foe.pos;
+    if goal_level != level {
+        return next_leg(st, i, goals.len(), now + GUARD_STEP_TICKS);
+    }
+    if from == goal {
+        return next_leg(st, i, goals.len(), now + GUARD_PAUSE_TICKS);
+    }
+    if let Some(city) = st.city.as_ref() {
+        st.interiors.ensure(city, building, level);
+    }
+    let held = avoid(st, i);
+    let next = {
+        let Some(map) = foes::map_of(st, st.foes[i].place) else {
+            return;
+        };
+        let post = st.foes[i].post.as_ref();
+        foes::step_toward(&map, from, goal, &held, post)
+            .or_else(|| foes::step_toward(&map, from, goal, &[], post))
+    };
+    match next {
+        None => next_leg(st, i, goals.len(), now + GUARD_STEP_TICKS),
+        Some(to) if held.contains(&to) => wait(st, i, now + GUARD_STEP_TICKS),
+        Some(to) => {
+            st.foes[i].pos = to;
+            if to == goal {
+                next_leg(st, i, goals.len(), now + GUARD_PAUSE_TICKS);
+            } else {
+                wait(st, i, now + GUARD_STEP_TICKS);
+            }
+        }
+    }
+}
+
+/// Guard `i` takes the next of its `n` legs and acts again at `next`.
+fn next_leg(st: &mut AppState, i: usize, n: usize, next: u64) {
+    if let Some(post) = st.foes[i].post.as_mut() {
+        post.round.leg = (post.round.leg + 1) % n.max(1);
+        post.round.next = next;
+    }
+}
+
+/// Guard `i` acts again at `next`.
+fn wait(st: &mut AppState, i: usize, next: u64) {
+    if let Some(post) = st.foes[i].post.as_mut() {
+        post.round.next = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guards::testutil::*;
+    use crate::guards::{GUARD_PAUSE_TICKS, GUARD_STEP_TICKS};
+    use citygen::{Place, Pos};
+
+    #[test]
+    fn goals_walk_the_patrol_out_and_back_then_the_stop() {
+        let (a, b, c, d, s) = (
+            Pos::new(1, 1),
+            Pos::new(2, 1),
+            Pos::new(3, 1),
+            Pos::new(4, 1),
+            Pos::new(9, 9),
+        );
+        let mut p = post(0, &[a, b, c, d]);
+        assert_eq!(
+            goals(&p, 0),
+            vec![(0, a), (0, b), (0, c), (0, d), (0, c), (0, b)]
+        );
+        p.stop = Some((1, s));
+        assert_eq!(goals(&p, 0).last(), Some(&(1, s)));
+        assert_eq!(goals(&post(0, &[a]), 0), vec![(0, a)]);
+    }
+
+    #[test]
+    fn a_guard_walks_its_round_a_step_every_twelve_ticks_and_pauses() {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(20, 3)); // in the building, out of its sight
+        let i = guard(&mut st, 0, 0, &[Pos::new(2, 3), Pos::new(10, 3)]);
+        run(&mut st, 1); // at its post: the pause
+        run(&mut st, GUARD_PAUSE_TICKS);
+        assert_eq!(st.foes[i].pos, Pos::new(3, 3));
+        run(&mut st, GUARD_STEP_TICKS - 1);
+        assert_eq!(st.foes[i].pos, Pos::new(3, 3), "not yet");
+        run(&mut st, 1);
+        assert_eq!(st.foes[i].pos, Pos::new(4, 3));
+        run(&mut st, 6 * GUARD_STEP_TICKS);
+        assert_eq!(st.foes[i].pos, Pos::new(10, 3), "there");
+        run(&mut st, GUARD_PAUSE_TICKS);
+        assert_eq!(
+            st.foes[i].pos,
+            Pos::new(9, 3),
+            "paused, and on its way back"
+        );
+    }
+
+    #[test]
+    fn guards_hold_while_you_are_out_of_the_building() {
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(2, 3), Pos::new(10, 3)]);
+        st.player.as_mut().unwrap().place = Place::Stratum(citygen::StratumKind::Street);
+        run(&mut st, 400);
+        assert_eq!(st.foes[i].pos, Pos::new(2, 3));
+    }
+
+    #[test]
+    fn a_calm_guard_holds_in_a_fight_on_its_floor_and_walks_in_one_elsewhere() {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(20, 3));
+        let i = guard(&mut st, 0, 0, &[Pos::new(2, 3), Pos::new(10, 3)]);
+        crate::net::engage(&mut st, on(0), true); // a fight on its floor (as when you were there)
+        run(&mut st, 400);
+        assert_eq!(st.foes[i].pos, Pos::new(2, 3));
+        crate::net::disengage(&mut st);
+        crate::net::engage(&mut st, on(1), true);
+        run(&mut st, GUARD_PAUSE_TICKS + GUARD_STEP_TICKS + 1);
+        assert_ne!(st.foes[i].pos, Pos::new(2, 3));
+    }
+
+    #[test]
+    fn an_unreachable_spot_is_skipped_and_nothing_reachable_stands() {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(20, 3));
+        let i = guard(
+            &mut st,
+            0,
+            0,
+            &[Pos::new(2, 3), Pos::new(20, 3), Pos::new(6, 3)],
+        );
+        run(&mut st, 1 + GUARD_PAUSE_TICKS + 2 * GUARD_STEP_TICKS);
+        assert_eq!(st.foes[i].pos.y, 3);
+        assert!(
+            st.foes[i].pos.x > 2 && st.foes[i].pos.x <= 6,
+            "on to (6,3), past the east hall"
+        );
+        let j = guard(&mut st, 0, 0, &[Pos::new(20, 4)]);
+        st.foes[j].pos = Pos::new(10, 5);
+        run(&mut st, 300);
+        assert_eq!(st.foes[j].pos, Pos::new(10, 5), "nothing it can reach");
+    }
+
+    #[test]
+    fn a_guard_waits_for_you_to_clear_its_way() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(15, 3)); // in the only doorway west
+        let i = guard(&mut st, 0, 1, &[Pos::new(18, 3), Pos::new(10, 3)]);
+        st.foes[i].post.as_mut().unwrap().round.leg = 1; // on its way west
+        run(&mut st, 6 * GUARD_STEP_TICKS);
+        assert_eq!(
+            st.foes[i].pos,
+            Pos::new(16, 3),
+            "it waits at the door, never shares"
+        );
+        stand(&mut st, 0, Pos::new(12, 5));
+        run(&mut st, 3 * GUARD_STEP_TICKS);
+        assert!(st.foes[i].pos.x < 15, "through once you're clear");
+    }
+
+    #[test]
+    fn a_guard_on_a_floor_not_drawn_yet_walks() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(crate::venues::SITE_NET_SECURITY);
+        let i = (st.foes.iter())
+            .position(|f| {
+                f.post
+                    .as_ref()
+                    .is_some_and(|p| p.building == b && p.patrol.len() > 1)
+                    && matches!(f.place, Place::Floor { level, .. } if level != 0)
+            })
+            .expect("a walking guard off L");
+        let Place::Floor { level, .. } = st.foes[i].place else {
+            unreachable!()
+        };
+        st.interiors.drop_floors(b);
+        let city = st.city.clone().unwrap();
+        let floor = st.interiors.ensure(&city, b, 0).unwrap();
+        let door = floor.doorstep(&floor.exits[0]);
+        crate::sitenet::testutil::stand_on_floor(&mut st, b, 0, door); // you on L, inside
+        let from = st.foes[i].pos;
+        run(&mut st, 1 + GUARD_PAUSE_TICKS + GUARD_STEP_TICKS);
+        assert!(st.interiors.floor(b, level).is_some(), "drawn for it");
+        assert_ne!(st.foes[i].pos, from);
+    }
+}
