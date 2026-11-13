@@ -13,6 +13,11 @@ pub const GOON_REFLEX: u8 = 5;
 pub const GOON_SIGHT: i32 = 8;
 pub const GOON_MOVE: u8 = 3;
 pub const GOON_AP: u8 = 1;
+/// How far a foe on a floor makes out a dark tile (a circle in cells).
+pub const GUARD_DARK_REACH: i32 = 3;
+/// The light on a floor's tile, its ambient included, from which a foe sees it at any
+/// range in its sight: where the exposure bands' `lit` begins.
+pub const GUARD_LIT: u8 = 100;
 
 /// What a foe is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -56,13 +61,61 @@ pub struct Foe {
     pub post: Option<Post>,
 }
 
-/// A guard's post in a mission's copy: whose it is, its zone (the card it carries) and
-/// its patrol, recorded for when guards act on floors (#33).
+/// A guard's post in a mission's copy: whose it is, its zone (the card it carries), its
+/// patrol, and where it is on its round. The round's state came after the first saves,
+/// so each part defaults: a guard they hold starts its round at its post.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Post {
     pub building: BuildingId,
     pub zone: u8,
     pub patrol: Vec<Pos>,
+    /// The level its round walks; None in a save from before, filled on reopening with
+    /// the level it stands on.
+    #[serde(default)]
+    pub home: Option<i32>,
+    /// A stop on another level its round takes in.
+    #[serde(default)]
+    pub stop: Option<(i32, Pos)>,
+    #[serde(default)]
+    pub round: Round,
+    /// The link you took off its floor, and the level you went to.
+    #[serde(default)]
+    pub follow: Option<(usize, i32)>,
+    /// It has seen you since it last radioed.
+    #[serde(default)]
+    pub spotted: bool,
+    #[serde(default)]
+    pub radioed: bool,
+}
+
+impl Post {
+    /// A post of `building` with zone `zone`'s card and `patrol`, its round not begun.
+    pub fn new(building: BuildingId, zone: u8, patrol: Vec<Pos>) -> Post {
+        Post {
+            building,
+            zone,
+            patrol,
+            home: None,
+            stop: None,
+            round: Round::default(),
+            follow: None,
+            spotted: false,
+            radioed: false,
+        }
+    }
+}
+
+/// Where a guard is on its round.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Round {
+    /// The goal it walks to, by index into `guards::goals`.
+    pub leg: usize,
+    /// The clock tick it next acts at.
+    pub next: u64,
+    /// The lift it waits for: the link and the level it rides to.
+    pub lift: Option<(usize, i32)>,
+    /// The link it took to its stop, so it comes back the same way.
+    pub via: Option<usize>,
 }
 
 impl Foe {
@@ -154,9 +207,31 @@ pub fn line_clear(map: &MapRef, from: Pos, to: Pos) -> bool {
         .all(|p| map.tile(p).is_some_and(|t| !blocks_sight(t)))
 }
 
-/// A standing foe sees a tile within its sight with a clear line to it.
+/// A standing foe sees a tile within its sight with a clear line to it. On a floor the
+/// tile must also be lit (`GUARD_LIT`) or within `GUARD_DARK_REACH`; a stratum keeps
+/// no light rule.
 pub fn sees(map: &MapRef, foe: &Foe, to: Pos) -> bool {
-    foe.standing() && foe.pos.chebyshev(to) <= foe.sight && line_clear(map, foe.pos, to)
+    if !foe.standing() || foe.pos.chebyshev(to) > foe.sight {
+        return false;
+    }
+    if !matches!(map, MapRef::Floor(_)) {
+        return line_clear(map, foe.pos, to);
+    }
+    let lit = |p: Pos| {
+        if map.light(p) >= GUARD_LIT {
+            citygen::lighting::tuning::LIT_SIGHT
+        } else {
+            0
+        }
+    };
+    citygen::sight::sees(
+        foe.pos,
+        to,
+        GUARD_DARK_REACH,
+        |p| map.tile(p).is_none_or(blocks_sight),
+        lit,
+        |_| false,
+    )
 }
 
 /// Whether a foe with `post` (a guard's; None for any other foe) may step from `from`
@@ -592,6 +667,26 @@ mod tests {
                 }
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn a_foe_on_a_floor_sees_by_its_light() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        let mut g = Foe::goon(on(0), Pos::new(2, 3));
+        assert!(sees(&map, &g, Pos::new(10, 3)), "lit at 8");
+        assert!(!sees(&map, &g, Pos::new(11, 3)), "past its sight");
+        g.pos = Pos::new(17, 3);
+        assert!(sees(&map, &g, Pos::new(20, 3)), "dark within 3");
+        assert!(!sees(&map, &g, Pos::new(21, 3)), "dark at 4");
+        g.pos = Pos::new(14, 3);
+        assert!(!sees(&map, &g, Pos::new(17, 3)), "through the shut door");
+        g.pos = Pos::new(15, 3);
+        assert!(
+            sees(&map, &g, Pos::new(12, 3)) && sees(&map, &g, Pos::new(18, 3)),
+            "a doorway sees both rooms"
         );
     }
 

@@ -929,7 +929,7 @@ fn a_card_readers_door_reads_as_one_on_the_map() {
 }
 
 #[test]
-fn guards_are_inert_foes_at_their_posts() {
+fn guards_are_awake_foes_at_their_posts() {
     let (st, b) = first_venue();
     let plan = st.interiors.plan_of(b).unwrap();
     let layout = plan.venue.as_deref().unwrap();
@@ -954,17 +954,23 @@ fn guards_are_inert_foes_at_their_posts() {
     assert_eq!(foes.len(), layer.guards.len());
     for (f, g) in foes.iter().zip(&layer.guards) {
         assert_eq!((f.name.as_str(), f.glyph), ("guard", '@'));
-        assert!(f.inert && !f.down && !f.hunting(), "{f:?}");
+        assert!(!f.inert && !f.down && !f.hunting(), "{f:?}");
         let place = Place::Floor {
             building: b,
             level: g.level,
         };
         assert_eq!((f.place, f.pos), (place, g.at));
         let post = crate::foes::Post {
-            building: b,
-            zone: g.zone,
-            patrol: g.patrol.clone(),
+            home: Some(g.level),
+            ..crate::foes::Post::new(b, g.zone, g.patrol.clone())
         };
         assert_eq!(f.post, Some(post));
     }
+    // A guard takes damage like any foe: enough of it downs it.
+    let (mut st, b) = crate::sitenet::testutil::office_copy(SITE_NET_SECURITY);
+    let i = (st.foes.iter())
+        .position(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+        .expect("a guard in the copy");
+    crate::combat::wound_foe(&mut st, i, 255);
+    assert!(st.foes[i].down, "{:?}", st.foes[i]);
 }

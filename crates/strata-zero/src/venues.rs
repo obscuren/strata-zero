@@ -372,7 +372,8 @@ pub fn floors_met_without_a_key(plan: &FloorPlan) -> Option<Vec<i32>> {
     Some(plan.work_floors().into_iter().filter(|&l| met(l)).collect())
 }
 
-/// The layer's guards as inert foes at their posts: name "guard", glyph '@', post set.
+/// The layer's guards as foes at their posts, awake: name "guard", glyph '@', post set
+/// with its round on the level each stands on.
 pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
     (layer.guards.iter())
         .map(|g| {
@@ -382,12 +383,10 @@ pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
             };
             Foe {
                 name: "guard".to_string(),
-                inert: true,
                 glyph: '@',
                 post: Some(Post {
-                    building: b,
-                    zone: g.zone,
-                    patrol: g.patrol.clone(),
+                    home: Some(g.level),
+                    ..Post::new(b, g.zone, g.patrol.clone())
                 }),
                 ..Foe::goon(place, g.at)
             }

@@ -199,11 +199,14 @@ pub(crate) fn stand(st: &mut AppState, level: i32, at: Pos) {
 
 /// A post of the ward's: zone `zone`'s card and `patrol`.
 pub(crate) fn post(zone: u8, patrol: &[Pos]) -> Post {
-    Post {
-        building: WARD,
-        zone,
-        patrol: patrol.to_vec(),
-    }
+    Post::new(WARD, zone, patrol.to_vec())
+}
+
+/// Building `b` with no guards: every foe posted there is gone, for a test about
+/// something else that stands in a copy while guards act.
+pub(crate) fn no_guards(st: &mut AppState, b: BuildingId) {
+    st.foes
+        .retain(|f| f.post.as_ref().is_none_or(|p| p.building != b));
 }
 
 /// A guard of zone `zone` on the ward's floor `level`, standing on the first tile of
@@ -271,6 +274,21 @@ mod tests {
             p.vis().get(Pos::new(10, 3)),
             Some(&crate::render::Visibility::Visible)
         );
+    }
+
+    #[test]
+    fn no_guards_drops_only_that_buildings_posted_foes() {
+        let mut st = ward();
+        guard(&mut st, 0, 1, &[Pos::new(20, 2)]);
+        let goon = goon(&mut st, 0, Pos::new(10, 3));
+        let elsewhere = Foe {
+            post: Some(Post::new(BuildingId(1), 0, Vec::new())),
+            ..Foe::goon(on(1), Pos::new(5, 3))
+        };
+        st.foes.push(elsewhere.clone());
+        let kept = vec![st.foes[goon].clone(), elsewhere];
+        no_guards(&mut st, WARD);
+        assert_eq!(st.foes, kept);
     }
 
     #[test]

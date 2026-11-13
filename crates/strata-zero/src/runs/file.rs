@@ -218,6 +218,29 @@ mod tests {
         st
     }
 
+    #[test]
+    fn old_guards_wake_after_a_reopen() {
+        use citygen::Place;
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        for f in a.foes.iter_mut().filter(|f| f.post.is_some()) {
+            f.inert = true; // as a save from before holds them
+            f.post.as_mut().unwrap().home = None;
+        }
+        let dir = Dir::new("old-guards");
+        let st = reopened(&write(&dir.0, &running(a)).unwrap());
+        let guards: Vec<_> = (st.foes.iter())
+            .filter(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .collect();
+        assert!(!guards.is_empty());
+        for f in guards {
+            let Place::Floor { level, .. } = f.place else {
+                panic!("{f:?}")
+            };
+            assert!(!f.inert, "{f:?}");
+            assert_eq!(f.post.as_ref().unwrap().home, Some(level));
+        }
+    }
+
     /// A small city entered, with a run: enough for a file.
     fn small_run() -> AppState {
         let mut st = AppState::new();
