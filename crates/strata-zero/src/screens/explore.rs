@@ -1671,6 +1671,10 @@ impl MapScreen {
                     .unwrap_or("the");
                 (format!("{grade} ICE ACTS"), "wait".to_string())
             }
+            // One you haven't seen: you hear it coming, no more.
+            Actor::Foe(i) if crate::foes::unseen(st, i) => {
+                ("FOOTSTEPS".to_string(), "wait".to_string())
+            }
             Actor::Foe(i) => {
                 let name = st
                     .foes
@@ -15077,6 +15081,32 @@ mod tests {
                 "THROW".to_string(),
                 "hjkl aim · space throw · esc back".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn the_banner_hides_an_unseen_actor() {
+        use crate::guards::testutil::{guard, on, stand, ward};
+        use crate::net::{Actor, end_turn, engage};
+        let mut st = ward();
+        let s = MapScreen::walking(&mut st);
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        engage(&mut st, on(0), false);
+        while st.net.engaged.as_ref().unwrap().actor() != Actor::Foe(woken) {
+            end_turn(&mut st);
+        }
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some(("FOOTSTEPS".to_string(), "wait".to_string()))
+        );
+        stand(&mut st, 0, Pos::new(16, 3));
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some(("THE GUARD ACTS".to_string(), "wait".to_string()))
         );
     }
 

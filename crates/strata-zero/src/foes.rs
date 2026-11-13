@@ -301,6 +301,20 @@ pub fn in_memory(st: &AppState) -> Vec<usize> {
     known(st, Visibility::Remembered)
 }
 
+/// A foe out of your sight memory: one you hear on turns but haven't seen.
+pub fn unseen(st: &AppState, i: usize) -> bool {
+    !known(st, Visibility::Remembered).contains(&i)
+}
+
+/// The standing guards of `place` that hunt, by index: on a floor each takes a seat
+/// on turns, seen or not.
+pub fn hunting_on(st: &AppState, place: Place) -> Vec<usize> {
+    standing(st, place)
+        .into_iter()
+        .filter(|i| st.foes[*i].post.is_some() && st.foes[*i].hunting())
+        .collect()
+}
+
 /// Any standing foe of the place hunts.
 pub fn any_hunting(st: &AppState, place: Place) -> bool {
     // On the open Net only what hunts near you holds a fight.
@@ -348,10 +362,20 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         None => sees(&map, foe, me.1),
     };
     if seen {
-        st.foes[i].mode = FoeMode::Hunting {
+        let calm = !foe.hunting();
+        let foe = &mut st.foes[i];
+        foe.mode = FoeMode::Hunting {
             seen: me.1,
             lost: 0,
         };
+        // A guard marks that it saw you, for its radio, and stops following a trail.
+        let guard = foe.post.as_mut().map(|post| {
+            post.spotted = true;
+            post.follow = None;
+        });
+        if guard.is_some() && calm {
+            st.warn("guard spots you");
+        }
         return true;
     }
     foe.hunting()
@@ -394,8 +418,9 @@ pub fn step_toward(
     path.into_iter().find(|p| *p != from)
 }
 
-/// A foe's turn begins: a stun counts down and the turn passes; else it looks, and
-/// acts only when it hunts. A down foe never does.
+/// A foe's turn begins: a stun counts down and the turn passes (a guard's call to make
+/// is lost with it); else a guard that saw you radios it in, then it looks, and acts
+/// only when it hunts. A down foe never does.
 pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     let Some(foe) = st.foes.get_mut(i) else {
         return false;
@@ -405,11 +430,33 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     }
     if foe.stunned > 0 {
         foe.stunned -= 1;
+        if let Some(post) = foe.post.as_mut().filter(|p| p.spotted && !p.radioed) {
+            post.radioed = true;
+        }
         let name = foe.name.clone();
         st.say(format!("{name} · stunned"));
         return false;
     }
+    radio(st, i);
     look(st, i)
+}
+
+/// Guard `i`, having seen you since its last call and never having made one, radios it
+/// in: the building's alarm and alert, unless it's on alert already. Once ever.
+fn radio(st: &mut AppState, i: usize) {
+    let Some(post) = (st.foes.get_mut(i))
+        .and_then(|f| f.post.as_mut())
+        .filter(|p| p.spotted && !p.radioed)
+    else {
+        return;
+    };
+    post.radioed = true;
+    post.spotted = false;
+    let b = post.building;
+    if !st.net.alert(b, st.net.now(st)) {
+        st.warn("guard radios it in · ALARM");
+        crate::net::lock_down(st, b);
+    }
 }
 
 /// The weapon a foe carries: its reach, for the turn; nothing unarmed.
@@ -612,7 +659,7 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::guards::testutil::{advance, logged};
+    use crate::guards::testutil::{advance, logged, settle};
     use crate::net::Step;
     use citygen::StratumKind;
 
@@ -841,17 +888,6 @@ mod tests {
     fn pace(st: &mut AppState) {
         advance(st, crate::net::PACE_TICKS);
         crate::net::pace(st);
-    }
-
-    /// Lets the foe act on the pace until the turn is yours or the fight ends.
-    fn settle(st: &mut AppState) {
-        for _ in 0..80 {
-            if crate::net::your_turn(st) {
-                return;
-            }
-            pace(st);
-        }
-        panic!("the foe never hands the turn back");
     }
 
     fn hunting_from(st: &mut AppState, seen: Pos) {

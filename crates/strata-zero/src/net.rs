@@ -2289,7 +2289,7 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
                 0,
                 Actor::You,
             ));
-            for i in crate::foes::in_memory(st) {
+            for i in foe_seats(st, place) {
                 scored.push((st.foes[i].reflex as i32, 1 + i as u16, Actor::Foe(i)));
             }
             // Your bots on the map, after foes of the same score.
@@ -2374,10 +2374,33 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     start_turn(st);
 }
 
+/// The foes that take a seat at `place`: each standing in your sight memory, and on a
+/// floor every standing guard of it that hunts, seen or not (index order there).
+fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
+    let mut seats = crate::foes::in_memory(st);
+    if matches!(place, Place::Floor { .. }) {
+        seats.extend(crate::foes::hunting_on(st, place));
+        seats.sort_unstable();
+        seats.dedup();
+    }
+    seats
+}
+
 /// Every standing foe in sight memory the order does not hold yet takes its place
-/// at the end: one that came hunting mid-fight.
+/// at the end: one that came hunting mid-fight. On a floor every calm guard of it looks
+/// first, and every guard of it that hunts takes a seat, seen or not.
 pub fn seat_foes(st: &mut AppState) {
-    let known = crate::foes::in_memory(st);
+    let Some(place) = st.net.engaged.as_ref().map(|e| e.place) else {
+        return;
+    };
+    if matches!(place, Place::Floor { .. }) {
+        for i in crate::foes::standing(st, place) {
+            if st.foes[i].post.is_some() && !st.foes[i].hunting() {
+                crate::foes::look(st, i);
+            }
+        }
+    }
+    let known = foe_seats(st, place);
     let bots = st
         .net
         .engaged
@@ -2640,7 +2663,8 @@ fn start_turn(st: &mut AppState) {
     }
 }
 
-/// From the frame loop while an enemy acts: one action every `PACE_TICKS`.
+/// From the frame loop while an enemy acts: one action every `PACE_TICKS`. A foe you
+/// haven't seen acts without the wait: there's nothing to watch.
 pub fn pace(st: &mut AppState) {
     let Some(e) = st.net.engaged.as_ref() else {
         return;
@@ -2649,7 +2673,8 @@ pub fn pace(st: &mut AppState) {
     if actor == Actor::You {
         return;
     }
-    if st.clock_tick() < e.acting_since + PACE_TICKS {
+    let unseen = matches!(actor, Actor::Foe(i) if crate::foes::unseen(st, i));
+    if !unseen && st.clock_tick() < e.acting_since + PACE_TICKS {
         return;
     }
     let place = e.place;
@@ -2758,7 +2783,10 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                 }
             }
             Actor::Foe(i) => {
-                let Some(f) = st.foes.get(i).filter(|f| f.standing()) else {
+                // One you haven't seen isn't read out: you hear it, no more.
+                let Some(f) =
+                    (st.foes.get(i)).filter(|f| f.standing() && !crate::foes::unseen(st, i))
+                else {
                     continue;
                 };
                 Chip {
@@ -2789,6 +2817,8 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
     ));
     let theirs = match actor {
         Actor::You => None,
+        // What an unseen foe is up to isn't yours to read.
+        Actor::Foe(i) if crate::foes::unseen(st, i) => None,
         Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) => {
             let verb = if matches!(actor, Actor::Ice(_)) {
                 "hits"
@@ -2836,6 +2866,12 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         // A bot's seat it has left (stowed, waiting for room) is not read out.
         if let Actor::Bot(site, k) = a
             && crate::bots::name(st, (site, k)).is_none()
+        {
+            continue;
+        }
+        // Nor a foe you haven't seen: you hear it, no more.
+        if let Actor::Foe(i) = a
+            && crate::foes::unseen(st, i)
         {
             continue;
         }
@@ -5111,5 +5147,160 @@ pub(crate) mod tests {
         }
         let e = st.net.engaged.as_ref().unwrap();
         assert_eq!((e.actor(), e.ap), (Actor::You, BASE_AP));
+    }
+
+    #[test]
+    fn every_hunting_guard_on_your_floor_takes_a_seat() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let seen = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        assert!(crate::foes::look_all(&mut st));
+        engage(&mut st, on(0), false);
+        let order = &st.net.engaged.as_ref().unwrap().order;
+        assert!(order.contains(&Actor::Foe(seen)) && order.contains(&Actor::Foe(woken)));
+        let readout = turn_readout(&st).unwrap();
+        assert_eq!(readout.matches("guard").count(), 1, "{readout}");
+    }
+
+    #[test]
+    fn an_unseen_guard_acts_without_the_pace() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        engage(&mut st, on(0), false);
+        while st.net.engaged.as_ref().unwrap().actor() != Actor::Foe(woken) {
+            end_turn(&mut st);
+        }
+        crate::net::pace(&mut st); // explicitly net's, not a testutil copy: no tick passed
+        assert_eq!(st.foes[woken].pos, Pos::new(19, 3));
+    }
+
+    #[test]
+    fn an_unseen_guard_is_not_in_the_turn_column_until_seen() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        engage(&mut st, on(0), false);
+        // The chips carry no actor: the ward's only foe is the one guard.
+        let chip = |st: &AppState| {
+            turn_view(st)
+                .unwrap()
+                .chips
+                .iter()
+                .any(|c| c.name == "guard")
+        };
+        assert!(crate::foes::unseen(&st, woken));
+        assert!(!chip(&st), "not before you see it");
+        stand(&mut st, 0, Pos::new(16, 3)); // the doorway sees the east hall
+        assert!(!crate::foes::unseen(&st, woken));
+        assert!(chip(&st), "once seen");
+    }
+
+    #[test]
+    fn a_guard_that_sees_you_radios_on_its_next_turn() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        assert!(crate::foes::look_all(&mut st));
+        assert!(logged(&st, "guard spots you"));
+        engage(&mut st, on(0), false);
+        let now = st.net.now(&st);
+        assert!(!st.net.alert(WARD, now), "not before its turn");
+        while st
+            .net
+            .engaged
+            .as_ref()
+            .is_some_and(|e| e.actor() != Actor::Foe(i))
+        {
+            end_turn(&mut st);
+        }
+        assert!(logged(&st, "guard radios it in · ALARM"));
+        assert!(st.net.alert(WARD, st.net.now(&st)));
+        assert!(st.foes[i].post.as_ref().unwrap().radioed);
+    }
+
+    #[test]
+    fn drop_it_before_its_turn_and_nobody_hears() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        crate::foes::look_all(&mut st);
+        engage(&mut st, on(0), true);
+        crate::combat::wound_foe(&mut st, i, 255);
+        for _ in 0..4 {
+            end_turn(&mut st);
+        }
+        assert!(!st.net.alert(WARD, st.net.now(&st)) && !logged(&st, "radios"));
+    }
+
+    #[test]
+    fn a_guard_woken_by_noise_or_stunned_does_not_radio() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(3, 5));
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        let stunned = guard(&mut st, 0, 0, &[Pos::new(8, 5)]);
+        crate::foes::look_all(&mut st);
+        st.foes[stunned].stunned = 1;
+        engage(&mut st, on(0), true);
+        for _ in 0..6 {
+            end_turn(&mut st);
+        }
+        assert!(!st.net.alert(WARD, st.net.now(&st)));
+        assert!(
+            st.foes[stunned].post.as_ref().unwrap().radioed,
+            "the stun spent its call"
+        );
+        assert!(!st.foes[woken].post.as_ref().unwrap().radioed);
+    }
+
+    #[test]
+    fn a_guard_radios_once_ever_and_not_into_an_alarm() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        lock_down(&mut st, WARD);
+        let lines = st.log.iter().count();
+        crate::foes::look_all(&mut st);
+        engage(&mut st, on(0), true);
+        while st
+            .net
+            .engaged
+            .as_ref()
+            .is_some_and(|e| e.actor() != Actor::Foe(i))
+        {
+            end_turn(&mut st);
+        }
+        assert!(st.foes[i].post.as_ref().unwrap().radioed);
+        assert!(!st.log.iter().skip(lines).any(|e| e.text.contains("radios")));
+    }
+
+    #[test]
+    fn a_calm_guard_looks_each_round_and_joins() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        engage(&mut st, on(0), true);
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        end_turn(&mut st); // the round wraps
+        let order = &st.net.engaged.as_ref().unwrap().order;
+        assert!(order.contains(&Actor::Foe(i)));
+        assert!(st.foes[i].hunting());
     }
 }

@@ -289,6 +289,24 @@ pub(crate) fn run_until(st: &mut AppState, max: u64, done: impl Fn(&AppState) ->
     assert!(done(st), "not done in {max} ticks");
 }
 
+/// One pace of the clock, and whoever acts acts. Not exported: a test that globs this
+/// module in would have it shadow `net::pace`.
+fn pace(st: &mut AppState) {
+    advance(st, crate::net::PACE_TICKS);
+    crate::net::pace(st);
+}
+
+/// Lets the foes act on the pace until the turn is yours or the fight ends.
+pub(crate) fn settle(st: &mut AppState) {
+    for _ in 0..80 {
+        if crate::net::your_turn(st) {
+            return;
+        }
+        pace(st);
+    }
+    panic!("the foe never hands the turn back");
+}
+
 /// Whether a line of the log holds `needle`.
 pub(crate) fn logged(st: &AppState, needle: &str) -> bool {
     st.log.iter().any(|e| e.text.contains(needle))
