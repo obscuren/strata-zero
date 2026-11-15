@@ -193,6 +193,12 @@ impl Interiors {
         self.plans.insert(plan.building, plan);
     }
 
+    /// Puts a floor of building `b` drawn by hand, in place of any drawn from its plan.
+    #[cfg(test)]
+    pub(crate) fn put_floor(&mut self, b: BuildingId, floor: Floor) {
+        self.floors.insert((b, floor.level), floor);
+    }
+
     /// Site `b`'s Net as kept, else worked out by `work_out` and kept: `sitenet::net_of`.
     pub(crate) fn site_net(
         &self,
@@ -229,6 +235,15 @@ impl Interiors {
     pub(crate) fn copy_mut(&mut self, b: BuildingId) -> Option<&mut crate::venues::MissionCopy> {
         self.drop_site_net(b);
         self.copies.get_mut(&b)
+    }
+
+    /// The cards lying where venue `b`'s copy left them, to change: unlike `copy_mut` it
+    /// keeps the site's Net, since a card changes no Net.
+    pub(crate) fn left_mut(
+        &mut self,
+        b: BuildingId,
+    ) -> Option<&mut Vec<(Place, Pos, game::ItemId)>> {
+        self.copies.get_mut(&b).map(|c| &mut c.left)
     }
 
     /// Records venue `b`'s copy, or with None lets it go; the site's Net kept goes too.
@@ -523,9 +538,13 @@ fn link_under(st: &mut AppState, b: BuildingId) -> Option<(i32, usize, FloorPlan
     Some((level, link, plan))
 }
 
+/// What a ride or a climb says when every tile at its landing is held.
+const BLOCKED: &str = "the landing is blocked";
+
 /// Rides the lift under the player to a floor it stops at: the player steps out at its
-/// bank there. A stop that asks for a zone card asks it of a ride there, never of a ride
-/// away from it: getting out is free.
+/// bank there, or beside it when a guard holds it. A stop that asks for a zone card asks
+/// it of a ride there, never of a ride away from it: getting out is free. The guards
+/// hunting you on the floor you leave follow.
 pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, String> {
     let (here, link, plan) = link_under(st, b)
         .filter(|(_, link, plan)| plan.links[*link].kind == LinkKind::Lift)
@@ -549,13 +568,17 @@ pub fn ride(st: &mut AppState, b: BuildingId, level: i32) -> Result<String, Stri
     st.interiors
         .ensure(city, b, level)
         .ok_or("that floor is missing")?;
+    let place = Place::Floor { building: b, level };
+    let at = crate::guards::free_landing(st, place, at).ok_or(BLOCKED)?;
     crate::credentials::prepare(st, b);
-    land(st, Place::Floor { building: b, level }, at);
+    crate::guards::you_left(st, b, here, link, level);
+    land(st, place, at);
     Ok(format!("Entering `{}`", FloorPlan::label(level)))
 }
 
 /// Takes the stair, escalator, ladder or crawl under the player to its next stop up or
-/// down, landing on its landing there. A crawl wants a crawler.
+/// down, landing on its landing there, or beside it when a guard holds it. A crawl wants
+/// a crawler. The guards hunting you on the floor you leave follow.
 pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     let b = match st.player.as_ref().map(|p| p.place) {
         Some(Place::Floor { building, .. }) => building,
@@ -582,15 +605,14 @@ pub fn climb(st: &mut AppState, up: bool) -> Result<String, String> {
     st.interiors
         .ensure(city, b, next)
         .ok_or("that floor is missing")?;
+    let place = Place::Floor {
+        building: b,
+        level: next,
+    };
+    let at = crate::guards::free_landing(st, place, at).ok_or(BLOCKED)?;
     crate::credentials::prepare(st, b);
-    land(
-        st,
-        Place::Floor {
-            building: b,
-            level: next,
-        },
-        at,
-    );
+    crate::guards::you_left(st, b, level, link, next);
+    land(st, place, at);
     Ok(format!("Entering `{}`", FloorPlan::label(next)))
 }
 
@@ -1664,5 +1686,33 @@ mod tests {
         assert!(line.starts_with("Entering `"), "{line}");
         assert!(!line.contains("Leaving"), "{line}");
         assert!(!line.contains("the building"), "{line}");
+    }
+
+    #[test]
+    fn you_land_beside_a_guard_on_the_landing() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 1));
+        let i = guard(&mut st, 1, 0, &[Pos::new(2, 1)]);
+        assert_eq!(climb(&mut st, true).unwrap(), "Entering `1F`"); // the ward's level 1
+        let me = st.player.as_ref().unwrap().pos;
+        assert_ne!(me, st.foes[i].pos);
+        assert_eq!(me.chebyshev(Pos::new(2, 1)), 1);
+    }
+
+    #[test]
+    fn you_never_land_on_a_lock_or_a_private_door() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        doors_by_the_stair(&mut st, 1);
+        guard(&mut st, 1, 0, &[Pos::new(2, 1)]);
+        let held = goon(&mut st, 1, Pos::new(1, 1));
+        stand(&mut st, 0, Pos::new(2, 1));
+        assert_eq!(climb(&mut st, true), Err(BLOCKED.to_string()));
+        assert_eq!(st.player.as_ref().unwrap().place, on(0), "still on L");
+        st.foes[held].pos = Pos::new(20, 3);
+        climb(&mut st, true).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (on(1), Pos::new(1, 1)));
     }
 }

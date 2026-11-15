@@ -436,6 +436,11 @@ impl Outside {
         self.kept.saved_mut()
     }
 
+    /// The foes of each city and town kept and made again.
+    pub(crate) fn kept_foes_mut(&mut self) -> impl Iterator<Item = &mut Vec<crate::foes::Foe>> {
+        self.kept.stays.values_mut().map(|s| &mut s.foes)
+    }
+
     /// City or town `s` no longer held (a test's way to see the stream answer for it).
     #[cfg(test)]
     pub fn let_go(&mut self, s: Settlement) {

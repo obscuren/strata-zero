@@ -9,6 +9,7 @@
 use crate::app::AppState;
 use crate::foes::{Foe, FoeMode};
 use crate::owners::Owner;
+use crate::render::map::MapRef;
 use citygen::{City, Dir, DistrictId, IceGrade, NodeKind, Place, Pos, StratumKind, Terrain};
 
 /// On the open Net only pieces this near you count for a fight.
@@ -201,11 +202,11 @@ fn on_lane(city: &City, p: Pos) -> bool {
 
 /// Whether a grid piece sees you at `to`: on a lane or gate in its row or column,
 /// within its grade's sight (half while you are masked), no wall between.
-pub fn sees(city: &City, foe: &Foe, to: Pos, masked: bool) -> bool {
+pub fn sees(map: &MapRef, foe: &Foe, to: Pos, masked: bool) -> bool {
     let Some(ice) = foe.ice.as_ref() else {
         return false;
     };
-    if foe.down || foe.stunned > 0 || !on_lane(city, to) {
+    if foe.down || foe.stunned > 0 || !on_lane(map.city(), to) {
         return false;
     }
     if foe.pos.x != to.x && foe.pos.y != to.y {
@@ -216,7 +217,7 @@ pub fn sees(city: &City, foe: &Foe, to: Pos, masked: bool) -> bool {
     } else {
         ice.grade.sight()
     };
-    foe.pos.chebyshev(to) <= sight && crate::foes::line_clear(city, foe.place, foe.pos, to)
+    foe.pos.chebyshev(to) <= sight && crate::foes::line_clear(map, foe.pos, to)
 }
 
 /// Whether a grid piece takes you for a threat when it sees you. A tracer always:
@@ -631,13 +632,13 @@ fn step_tracers(st: &mut AppState) {
         if pos == goal {
             continue;
         }
-        let Some(city) = st.city.as_ref() else {
-            return;
+        let Some(map) = crate::foes::map_of(st, st.foes[i].place) else {
+            continue;
         };
         let to = if pos.chebyshev(goal) <= 1 {
             Some(goal)
         } else {
-            crate::foes::step_toward(city, st.foes[i].place, pos, goal, &[me])
+            crate::foes::step_toward(&map, pos, goal, &[me], None)
         };
         if let Some(to) = to.filter(|t| !on_net || *t != me) {
             st.foes[i].pos = to;
@@ -680,6 +681,7 @@ fn step_sentinels(st: &mut AppState) {
         .filter(|f| !f.down && f.place == Place::Stratum(StratumKind::Net))
         .map(|f| f.pos)
         .collect();
+    let minute = st.minute_of_day();
     for f in &mut st.foes {
         if f.down || f.stunned > 0 || f.hunting() {
             continue;
@@ -702,9 +704,11 @@ fn step_sentinels(st: &mut AppState) {
         let home = beat[(*step).min(beat.len() - 1)];
         if f.pos != home {
             // Back to the beat after a hunt, along the lanes to its spot on it.
-            if let Some(city) = st.city.as_ref() {
+            if let (Some(city), Some(k)) = (st.city.as_ref(), f.place.stratum()) {
+                // Its stratum's map, built from the city: the foes are borrowed to move.
+                let map = MapRef::stratum_at(city, k, minute);
                 let avoid: Vec<Pos> = me.into_iter().chain(others.iter().copied()).collect();
-                if let Some(to) = crate::foes::step_toward(city, f.place, f.pos, home, &avoid) {
+                if let Some(to) = crate::foes::step_toward(&map, f.pos, home, &avoid, None) {
                     f.pos = to;
                 }
             }
@@ -844,18 +848,17 @@ pub fn lift(st: &mut AppState, i: usize) -> String {
 
 /// The grid pieces a program reaches from `pos`: beside you, or in sight at range.
 pub fn in_reach(st: &AppState, pos: Pos) -> Vec<(usize, String)> {
-    let Some(city) = st.city.as_ref() else {
+    let net = Place::Stratum(StratumKind::Net);
+    let Some(map) = crate::foes::map_of(st, net) else {
         return Vec::new();
     };
-    let net = Place::Stratum(StratumKind::Net);
     st.foes
         .iter()
         .enumerate()
         .filter(|(_, f)| f.ice.is_some() && !f.down && f.place == net)
         .filter(|(_, f)| {
             let d = f.pos.chebyshev(pos);
-            d <= 1
-                || (d <= crate::net::ATTACK_RANGE && crate::foes::line_clear(city, net, pos, f.pos))
+            d <= 1 || (d <= crate::net::ATTACK_RANGE && crate::foes::line_clear(&map, pos, f.pos))
         })
         .map(|(i, f)| (i, f.name.clone()))
         .collect()
@@ -958,17 +961,18 @@ mod tests {
         let (mut st, _) = under_kiroflux();
         let (me, them) = on_a_lane(&mut st, 4).expect("a straight lane");
         let city = st.city.as_ref().unwrap();
+        let map = crate::foes::map_of(&st, Place::Stratum(StratumKind::Net)).unwrap();
         let o = Owner::District(district(&st));
         let f = piece(IceGrade::Grey, Role::Tracer { at: 0, wait: None }, o, them);
-        assert!(sees(city, &f, me, false), "along the lane");
-        assert!(!sees(city, &f, me, true), "masked, half the sight");
+        assert!(sees(&map, &f, me, false), "along the lane");
+        assert!(!sees(&map, &f, me, true), "masked, half the sight");
         let off = piece(
             IceGrade::Grey,
             Role::Tracer { at: 0, wait: None },
             o,
             Pos::new(them.x, them.y + 1),
         );
-        assert!(!sees(city, &off, me, false), "not off its row or column");
+        assert!(!sees(&map, &off, me, false), "not off its row or column");
         // A Net wall between: nothing.
         let wall = city
             .stratum(StratumKind::Net)
@@ -988,7 +992,7 @@ mod tests {
                 o,
                 Pos::new(w.x + 1, w.y),
             );
-            assert!(!sees(city, &f, Pos::new(w.x - 1, w.y), false));
+            assert!(!sees(&map, &f, Pos::new(w.x - 1, w.y), false));
         }
         assert!(crate::foes::blocks_sight(&citygen::Tile {
             terrain: Terrain::NetWall,

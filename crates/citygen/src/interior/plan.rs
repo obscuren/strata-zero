@@ -860,6 +860,20 @@ impl FloorPlan {
         self.alights(link, from).collect()
     }
 
+    /// The levels link `link` takes you to from `from` in one go, whatever it asks of you:
+    /// a lift's rides; a stair's, an escalator's or a ladder's next stop up, then down;
+    /// none by a crawl, or where you can't get on.
+    pub fn hops(&self, link: usize, from: i32) -> Vec<i32> {
+        match self.links.get(link).map(|l| l.kind) {
+            None | Some(LinkKind::Crawl) => Vec::new(),
+            Some(LinkKind::Lift) => self.rides(link, from),
+            Some(_) => [true, false]
+                .into_iter()
+                .filter_map(|up| self.next_stop(link, from, up))
+                .collect(),
+        }
+    }
+
     /// The first lift's landing on `level`: the west tile of its bank.
     pub fn lift_on(&self, level: i32) -> Option<Pos> {
         self.landing_of(LinkKind::Lift, level)

@@ -310,8 +310,8 @@ pub(crate) fn look_round(st: &mut AppState) {
     look(st);
 }
 
-/// Whether a step `dir` from where you stand on a stratum lands on ground you can stand
-/// on, past the city's edge where the map goes on.
+/// Whether a step `dir` from where you stand on a stratum or a floor lands on ground you
+/// can stand on, past the city's edge where the map goes on.
 fn open_step(st: &AppState, dir: Dir) -> bool {
     st.player
         .as_ref()
@@ -319,16 +319,19 @@ fn open_step(st: &AppState, dir: Dir) -> bool {
 }
 
 /// Whether `to` on stratum `place` is ground you can stand on, past the city's edge where
-/// the map goes on.
+/// the map goes on; on a floor, a walkable tile of the floor drawn.
 fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
     let Some(city) = st.city.as_ref() else {
         return false;
     };
-    if place.stratum().is_none() {
-        return false;
+    match place {
+        Place::Stratum(_) => {
+            let beyond = Beyond::of(st);
+            walked_map(st, city, place, beyond.as_ref()).walkable(to)
+        }
+        Place::Floor { .. } => crate::foes::map_of(st, place).is_some_and(|m| m.walkable(to)),
+        Place::Construct(_) | Place::SiteNet { .. } => false,
     }
-    let beyond = Beyond::of(st);
-    walked_map(st, city, place, beyond.as_ref()).walkable(to)
 }
 
 /// The ride a step `dir` from `from` takes over the Net, past the city's edge where it
@@ -1165,17 +1168,15 @@ impl MapScreen {
     /// The footprint the armed item's blast would have at `at`: nothing when it
     /// cannot come down there.
     fn armed_footprint(st: &AppState, id: &game::ItemId, at: Pos) -> Vec<(Pos, i32)> {
-        let (Some((range, _, blast)), Some(p), Some(city)) = (
-            crate::blast::your_throw(st, id),
-            st.player.as_ref(),
-            st.city.as_ref(),
-        ) else {
+        let (Some((range, _, blast)), Some(p)) =
+            (crate::blast::your_throw(st, id), st.player.as_ref())
+        else {
             return Vec::new();
         };
         if crate::blast::landing(st, range, at).is_err() {
             return Vec::new();
         }
-        crate::blast::footprint(city, p.place, at, blast.radius)
+        crate::blast::footprint_at(st, p.place, at, blast.radius)
     }
 
     /// The readout over the cursor with a throwable armed: the item, the distance,
@@ -1374,6 +1375,18 @@ impl MapScreen {
         if let Some(cmd) = self.off_the_edge(st, dir) {
             return cmd;
         }
+        // On a floor its doors first, as a calm step meets them: an exit leaves (the
+        // fight ends with the place), a door that holds says so and costs nothing. How
+        // a door opened is said once the move is spent.
+        let mut through = Vec::new();
+        if st
+            .player
+            .as_ref()
+            .is_some_and(|p| matches!(p.place, Place::Floor { .. }))
+            && let Some(cmd) = self.door_ahead(st, dir, &mut through)
+        {
+            return cmd;
+        }
         // A blocked step costs nothing.
         if !open_step(st, dir) {
             say_why_not(st, dir);
@@ -1382,6 +1395,9 @@ impl MapScreen {
         if let Err(why) = crate::net::spend_move(st) {
             st.warn(why);
             return ScreenCmd::Stay;
+        }
+        for line in through {
+            st.say(line);
         }
         if step(st, dir) {
             self.hand_over(st);
@@ -1654,6 +1670,10 @@ impl MapScreen {
                     .map(|g| g.label())
                     .unwrap_or("the");
                 (format!("{grade} ICE ACTS"), "wait".to_string())
+            }
+            // One you haven't seen: you hear it coming, no more.
+            Actor::Foe(i) if crate::foes::unseen(st, i) => {
+                ("FOOTSTEPS".to_string(), "wait".to_string())
             }
             Actor::Foe(i) => {
                 let name = st
@@ -2452,8 +2472,25 @@ impl MapScreen {
     }
 
     /// A step onto a closed building's door goes inside; onto an exit, back out; onto
-    /// a locked door or a grille you can't crawl through, nowhere.
+    /// a locked door or a grille you can't crawl through, nowhere. A door the step goes
+    /// through says how it opened.
     fn doorway(&mut self, st: &mut AppState, dir: Dir) -> Option<ScreenCmd> {
+        let mut through = Vec::new();
+        let cmd = self.door_ahead(st, dir, &mut through);
+        for line in through {
+            st.say(line);
+        }
+        cmd
+    }
+
+    /// `doorway`, the lines of a door the step goes through (how it opened) held in
+    /// `through` for the caller to say once the step is taken.
+    fn door_ahead(
+        &mut self,
+        st: &mut AppState,
+        dir: Dir,
+        through: &mut Vec<String>,
+    ) -> Option<ScreenCmd> {
         let player = st.player.as_ref()?;
         let (here, target, place) = (player.pos, player.pos.step(dir), player.place);
         let city = st.city.as_ref()?;
@@ -2500,20 +2537,13 @@ impl MapScreen {
                         return Some(ScreenCmd::Stay);
                     }
                     crate::venues::Meets::Through(line) => {
-                        if let Some(line) = line {
-                            st.say(line);
-                        }
+                        through.extend(line);
                         return None;
                     }
                     crate::venues::Meets::Nothing => {}
                 }
                 let (_, floor) = st.interiors.floor(building, level)?;
-                let room = floor
-                    .door_of(target)
-                    .filter(|r| {
-                        r.private && r.kind != citygen::RoomKind::Home && !r.rect.contains(here)
-                    })
-                    .cloned();
+                let room = floor.door_of(target).filter(|r| r.shut_from(here)).cloned();
                 // Your own door opens for you; the step onto it from outside names the flat.
                 let home = floor
                     .door_of(target)
@@ -2554,12 +2584,12 @@ impl MapScreen {
                             return Some(ScreenCmd::Stay);
                         }
                         Some(How::Cracked | How::Free) => {}
-                        Some(How::Keycard) => st.say(format!("{lit} · the keycard opens it")),
-                        Some(How::Code(c)) => st.say(format!("{lit} · you key in {c:04}")),
+                        Some(How::Keycard) => through.push(format!("{lit} · the keycard opens it")),
+                        Some(How::Code(c)) => through.push(format!("{lit} · you key in {c:04}")),
                     }
                 }
                 if let Some(n) = home {
-                    st.say(format!("Entering `home` · flat {n}"));
+                    through.push(format!("Entering `home` · flat {n}"));
                 }
                 None
             }
@@ -2572,9 +2602,7 @@ impl MapScreen {
                     Some(ScreenCmd::Stay)
                 }
                 crate::venues::Meets::Through(line) => {
-                    if let Some(line) = line {
-                        st.say(line);
-                    }
+                    through.extend(line);
                     None
                 }
                 crate::venues::Meets::Nothing => None,
@@ -2937,14 +2965,29 @@ impl MapScreen {
     /// The path from the player to the aim and how many tiles the moves left cover;
     /// `None` when nothing reaches the aim. An aim off the map past the entry is
     /// the gate: the path runs to the entry and one tile out.
-    /// The tiles you would walk over a stratum from `from` to `to`, after your
-    /// own: the shortest way over walkable tiles with standing foes in the way.
+    /// The tiles you would walk over a stratum or a floor from `from` to `to`, after
+    /// your own: the shortest way over walkable tiles round standing foes; on a floor
+    /// never onto an exit or a door shut to you (`route::shut_to_you`).
     fn street_path(&self, st: &AppState, from: Pos, to: Pos) -> Option<Vec<Pos>> {
         let city = st.city.as_ref()?;
         let place = st.player.as_ref()?.place;
-        place.stratum()?;
+        if !matches!(place, Place::Stratum(_) | Place::Floor { .. }) {
+            return None;
+        }
         if from == to {
             return Some(Vec::new());
+        }
+        if let Place::Floor { .. } = place {
+            let map = crate::foes::map_of(st, place)?;
+            let (plan, floor) = map.floor()?;
+            let path = citygen::pathing::astar(map.size(), from, to, |p, n| {
+                (map.walkable(n)
+                    && floor.exit_at(n).is_none()
+                    && crate::foes::foe_at(st, place, n).is_none()
+                    && !crate::track::route::shut_to_you(st, plan, floor, p, n))
+                .then_some(1)
+            })?;
+            return Some(path.into_iter().filter(|p| *p != from).collect());
         }
         // over the street past the city's edge too, but not across it while something
         // holds you in the city
@@ -3012,8 +3055,8 @@ impl MapScreen {
         ScreenCmd::Stay
     }
 
-    /// One tile of an aimed walk over a stratum: a move spent, sight refreshed, the
-    /// act half opening on the last move.
+    /// One tile of an aimed walk over a stratum or a floor: a move spent, sight
+    /// refreshed, the act half opening on the last move.
     fn street_walk_step(&mut self, st: &mut AppState, next: Pos) {
         let Some((place, here)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             self.walking = None;
@@ -3024,7 +3067,14 @@ impl MapScreen {
             st.warn(why);
             return;
         }
+        // A floor's exit is never a walked tile: the walk stops short of it.
+        let exit = match place {
+            Place::Floor { building, level } => (st.interiors.floor(building, level))
+                .is_some_and(|(_, floor)| floor.exit_at(next).is_some()),
+            _ => false,
+        };
         let open = here.chebyshev(next) <= 1
+            && !exit
             && open_at(st, place, next)
             && crate::foes::foe_at(st, place, next).is_none();
         if !open {
@@ -3032,10 +3082,27 @@ impl MapScreen {
             st.warn("the way is blocked");
             return;
         }
+        // On a floor a lock or a grille on the way is met as a step meets it; how it
+        // opened is said once the move is spent.
+        let mut through = None;
+        if let Place::Floor { building, level } = place {
+            match crate::venues::step_onto(st, building, level, here, next) {
+                crate::venues::Meets::Held(why) => {
+                    self.walking = None;
+                    st.warn(why);
+                    return;
+                }
+                crate::venues::Meets::Through(line) => through = line,
+                crate::venues::Meets::Nothing => {}
+            }
+        }
         if let Err(why) = crate::net::spend_move(st) {
             self.walking = None;
             st.warn(why);
             return;
+        }
+        if let Some(line) = through {
+            st.say(line);
         }
         if let Some(player) = st.player.as_mut() {
             player.pos = next;
@@ -3073,7 +3140,7 @@ impl MapScreen {
         if st
             .player
             .as_ref()
-            .is_some_and(|p| p.place.stratum().is_some())
+            .is_some_and(|p| matches!(p.place, Place::Stratum(_) | Place::Floor { .. }))
         {
             self.street_walk_step(st, next);
             return;
@@ -5079,6 +5146,128 @@ mod tests {
         st.foes[0].down = true;
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(7, 8));
+    }
+
+    #[test]
+    fn an_engaged_step_on_a_floor_spends_a_move() {
+        let mut st = crate::guards::testutil::ward();
+        let mut s = MapScreen::walking(&mut st);
+        crate::net::engage(&mut st, crate::guards::testutil::on(0), true);
+        let moves = st.net.engaged.as_ref().unwrap().moves;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(7, 3));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, moves - 1);
+    }
+
+    #[test]
+    fn an_engaged_step_onto_a_lock_that_holds_costs_nothing() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(14, 3));
+        let mut s = MapScreen::walking(&mut st);
+        crate::net::engage(&mut st, on(0), true);
+        let moves = st.net.engaged.as_ref().unwrap().moves;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(14, 3));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, moves);
+        assert!(st.log.iter().any(|e| e.text.starts_with("locked · ")));
+    }
+
+    #[test]
+    fn an_engaged_step_out_the_exit_leaves_and_ends_the_fight() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(1, 3));
+        let mut s = MapScreen::walking(&mut st);
+        crate::net::engage(&mut st, on(0), true);
+        s.update(&mut st, &[key(KeyCode::Char('h'))]);
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Stratum(StratumKind::Street)
+        );
+        assert!(st.net.engaged.is_none());
+    }
+
+    #[test]
+    fn a_door_says_how_it_opened_only_once_the_move_is_spent() {
+        use crate::guards::testutil::*;
+        let opened = |st: &AppState| {
+            (st.log.iter())
+                .filter(|e| e.text.contains("the keycard opens it"))
+                .count()
+        };
+        let mut st = ward();
+        st.character
+            .give(crate::credentials::zone_card_id(WARD, 1), 1);
+        stand(&mut st, 0, Pos::new(14, 3));
+        let mut s = MapScreen::walking(&mut st);
+        crate::net::engage(&mut st, on(0), true);
+        let moves = st.net.engaged.as_ref().unwrap().moves;
+        st.net.engaged.as_mut().unwrap().moves = 0;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(14, 3));
+        assert_eq!(opened(&st), 0, "a refused step says nothing of the door");
+        // The aimed walk: refused too, and nothing said.
+        s.walking = Some(Walk {
+            path: vec![Pos::new(15, 3)],
+            next_at: 0,
+        });
+        s.street_walk_step(&mut st, Pos::new(15, 3));
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(14, 3));
+        assert_eq!(opened(&st), 0);
+        st.net.engaged.as_mut().unwrap().moves = moves;
+        s.update(&mut st, &[key(KeyCode::Char('l'))]);
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(15, 3));
+        assert_eq!(opened(&st), 1);
+        // The aimed walk with its moves: the step through says it once.
+        stand(&mut st, 0, Pos::new(14, 3));
+        st.net.engaged.as_mut().unwrap().moves = moves;
+        s.walking = Some(Walk {
+            path: vec![Pos::new(15, 3)],
+            next_at: 0,
+        });
+        s.street_walk_step(&mut st, Pos::new(15, 3));
+        assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(15, 3));
+        assert_eq!(opened(&st), 2, "one line for the walked step");
+    }
+
+    #[test]
+    fn the_aimed_walk_never_steps_onto_a_floors_exit() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(1, 3));
+        let mut s = MapScreen::walking(&mut st);
+        crate::net::engage(&mut st, on(0), true);
+        let moves = st.net.engaged.as_ref().unwrap().moves;
+        s.walking = Some(Walk {
+            path: vec![Pos::new(0, 3)],
+            next_at: 0,
+        });
+        s.street_walk_step(&mut st, Pos::new(0, 3));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (on(0), Pos::new(1, 3)));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, moves);
+        assert!(s.walking.is_none());
+        assert!(logged(&st, "the way is blocked"));
+    }
+
+    #[test]
+    fn the_aimed_walk_on_a_floor_goes_round_what_holds() {
+        let mut st = crate::guards::testutil::ward();
+        let s = MapScreen::walking(&mut st);
+        let path = s
+            .street_path(&st, Pos::new(6, 3), Pos::new(12, 5))
+            .expect("a way");
+        assert_eq!(path.last(), Some(&Pos::new(12, 5)));
+        assert!(
+            s.street_path(&st, Pos::new(6, 3), Pos::new(20, 3))
+                .is_none(),
+            "the lock holds you"
+        );
+        assert!(
+            s.street_path(&st, Pos::new(6, 3), Pos::new(0, 3)).is_none(),
+            "never onto the exit"
+        );
     }
 
     #[test]
@@ -12891,6 +13080,7 @@ mod tests {
     fn beside_a_sites_kiosk_space_and_j_jack_you_in_on_its_node() {
         use crate::sitenet::testutil::{office_copy, stand_beside_the_kiosk};
         let (mut st, b) = office_copy(190);
+        crate::guards::testutil::no_guards(&mut st, b);
         let kiosk = stand_beside_the_kiosk(&mut st, b);
         let body = player(&st);
         let mut s = MapScreen::walking(&mut st);
@@ -14892,6 +15082,32 @@ mod tests {
                 "THROW".to_string(),
                 "hjkl aim · space throw · esc back".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn the_banner_hides_an_unseen_actor() {
+        use crate::guards::testutil::{guard, on, stand, ward};
+        use crate::net::{Actor, end_turn, engage};
+        let mut st = ward();
+        let s = MapScreen::walking(&mut st);
+        let woken = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        st.foes[woken].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(16, 3),
+            lost: 0,
+        };
+        engage(&mut st, on(0), false);
+        while st.net.engaged.as_ref().unwrap().actor() != Actor::Foe(woken) {
+            end_turn(&mut st);
+        }
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some(("FOOTSTEPS".to_string(), "wait".to_string()))
+        );
+        stand(&mut st, 0, Pos::new(16, 3));
+        assert_eq!(
+            s.turn_prompt(&st),
+            Some(("THE GUARD ACTS".to_string(), "wait".to_string()))
         );
     }
 

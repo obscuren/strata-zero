@@ -495,11 +495,7 @@ mod tests {
         crate::net::jack_in_here(&mut st).unwrap();
         let on = |level: i32| Place::Floor { building: b, level };
         let guard = |building, level: i32, dx: i32| Foe {
-            post: Some(Post {
-                building,
-                zone: 0,
-                patrol: Vec::new(),
-            }),
+            post: Some(Post::new(building, 0, Vec::new())),
             ..Foe::goon(
                 Place::Floor { building, level },
                 Pos::new(body.x + dx, body.y),

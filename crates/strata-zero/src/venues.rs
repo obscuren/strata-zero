@@ -8,10 +8,10 @@
 mod copy;
 mod dev;
 
-pub(crate) use copy::copy_floor;
 pub use copy::{
     DoorMark, MissionCopy, begin, copy_live, door_mark_at, door_marks, end, note_at, tick,
 };
+pub(crate) use copy::{copy_floor, inside};
 #[cfg(test)]
 pub use dev::dev_start_with;
 pub use dev::{building_at_door, dev_site, dev_site_net, dev_start};
@@ -372,7 +372,8 @@ pub fn floors_met_without_a_key(plan: &FloorPlan) -> Option<Vec<i32>> {
     Some(plan.work_floors().into_iter().filter(|&l| met(l)).collect())
 }
 
-/// The layer's guards as inert foes at their posts: name "guard", glyph '@', post set.
+/// The layer's guards as foes at their posts, awake: name "guard", glyph '@', post set
+/// with its round on the level each stands on and its stop on another, if it has one.
 pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
     (layer.guards.iter())
         .map(|g| {
@@ -382,12 +383,11 @@ pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
             };
             Foe {
                 name: "guard".to_string(),
-                inert: true,
                 glyph: '@',
                 post: Some(Post {
-                    building: b,
-                    zone: g.zone,
-                    patrol: g.patrol.clone(),
+                    home: Some(g.level),
+                    stop: g.stop.map(|s| (s.level, s.at)),
+                    ..Post::new(b, g.zone, g.patrol.clone())
                 }),
                 ..Foe::goon(place, g.at)
             }

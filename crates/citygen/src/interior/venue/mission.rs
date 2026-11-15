@@ -18,9 +18,9 @@ use super::{
     SizeRule, VenueGraph, VenueLayout, VenueType, Ways,
 };
 use crate::geom::Pos;
-use crate::interior::RoomKind;
 use crate::interior::floor::doorstep_of;
 use crate::interior::layouts::walled_kind;
+use crate::interior::{FloorPlan, LinkKind, RoomKind};
 use crate::rng::hash64;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -48,8 +48,8 @@ pub struct Placed {
     pub at: Pos,
 }
 
-/// A guard's post: where it stands, the zone whose card it carries, and the spots it
-/// walks, starting at its post.
+/// A guard's post: where it stands, the zone whose card it carries, the spots it walks,
+/// starting at its post, and a stop on another level its round takes in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardPost {
     pub level: i32,
@@ -57,7 +57,14 @@ pub struct GuardPost {
     pub zone: u8,
     #[serde(default)]
     pub patrol: Vec<Pos>,
+    /// A spot of its zone on a level one link from its own; None in a layer laid before
+    /// guards took stops.
+    #[serde(default)]
+    pub stop: Option<Placed>,
 }
+
+/// Salts the stream the stops are drawn from, so drawing them moves nothing laid before.
+const STOP_SALT: u64 = 0x5709_0033;
 
 /// What a device is. Saved with a copy's layer, so a new kind joins at the end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +159,70 @@ impl MissionLayer {
         layer.leave_keys(layout, &mut used, &mut rng)?;
         layer.post_guards(layout, t, rule, security, &mut used, &mut rng)?;
         layer.stand_devices(layout, t, security, &mut used, &mut rng);
+        let mut stops =
+            ChaCha8Rng::seed_from_u64(hash64(hash64(layout.seed, inputs.seed), STOP_SALT));
+        layer.cross_floors(layout, &mut used, &mut stops);
         Ok(layer)
+    }
+
+    /// About one guard in three gets a stop on another kept level: of the guards that can
+    /// have one (another kept level a link hops to and back from, a lift's stops both
+    /// asking at most the guard's card, and a free spot of a room of its zone there),
+    /// `max(1, guards / 3)`, each to one of its levels and a free spot there.
+    fn cross_floors(
+        &mut self,
+        layout: &VenueLayout,
+        used: &mut BTreeSet<(i32, Pos)>,
+        rng: &mut ChaCha8Rng,
+    ) {
+        let plan = FloorPlan::of_venue(layout).kept(&self.kept);
+        let joined = |a: i32, b: i32, zone: u8| {
+            (0..plan.links.len()).any(|k| {
+                let link = &plan.links[k];
+                let card = |l: i32| link.stop(l).map_or(u8::MAX, |s| s.card);
+                plan.hops(k, a).contains(&b)
+                    && plan.hops(k, b).contains(&a)
+                    && (link.kind != LinkKind::Lift || (card(a) <= zone && card(b) <= zone))
+            })
+        };
+        let free = |level: i32, zone: u8, used: &BTreeSet<(i32, Pos)>| -> Vec<Pos> {
+            let mut v: Vec<Pos> = (layout.level(level).into_iter())
+                .flat_map(|x| x.rooms.iter().filter(|r| r.zone == zone))
+                .flat_map(|r| r.spots.iter().copied())
+                .filter(|p| !used.contains(&(level, *p)))
+                .collect();
+            v.sort_by_key(|p| (p.y, p.x));
+            v.dedup();
+            v
+        };
+        let levels_for = |g: &GuardPost, used: &BTreeSet<(i32, Pos)>| -> Vec<i32> {
+            (self.kept.iter().copied())
+                .filter(|&m| m != g.level && joined(g.level, m, g.zone))
+                .filter(|&m| !free(m, g.zone, used).is_empty())
+                .collect()
+        };
+        let mut eligible: Vec<usize> = (0..self.guards.len())
+            .filter(|&i| !levels_for(&self.guards[i], used).is_empty())
+            .collect();
+        eligible.shuffle(rng);
+        let n = (self.guards.len() / 3).max(1);
+        let mut given = 0;
+        for i in eligible {
+            if given == n {
+                break;
+            }
+            // An earlier stop may have taken the last free spot it had.
+            let levels = levels_for(&self.guards[i], used);
+            if levels.is_empty() {
+                continue;
+            }
+            let level = levels[rng.random_range(0..levels.len())];
+            let spots = free(level, self.guards[i].zone, used);
+            let at = spots[rng.random_range(0..spots.len())];
+            used.insert((level, at));
+            self.guards[i].stop = Some(Placed { level, at });
+            given += 1;
+        }
     }
 
     /// Fits locks to candidate doors on the kept levels until the objective lies at least
@@ -361,6 +431,7 @@ impl MissionLayer {
                 at,
                 zone,
                 patrol,
+                stop: None,
             });
         }
         Ok(())

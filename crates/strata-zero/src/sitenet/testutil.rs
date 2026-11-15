@@ -358,7 +358,7 @@ fn stand_on(st: &mut AppState, place: Place, at: Pos) {
 }
 
 /// You on foot on site `b`'s floor `level`, on tile `at`.
-fn stand_on_floor(st: &mut AppState, b: BuildingId, level: i32, at: Pos) {
+pub(crate) fn stand_on_floor(st: &mut AppState, b: BuildingId, level: i32, at: Pos) {
     stand_on(st, Place::Floor { building: b, level }, at);
 }
 

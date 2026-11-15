@@ -154,7 +154,9 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
 - **New fields default.** `FloorPlan.sizes`, `crawls` and `venue`; `Room.name` and
   `Room.zone`; `Floor.locks` (the `DoorLock`s on a venue's zone borders and ways in, and
   the readers a copy fits); `LinkStop.card`, `on` and `off` (`on` and `off` default to
-  true); `LevelLink.name`; `FrameDoor.enclosed`; `Foe.post`. The new `Terrain`,
+  true); `LevelLink.name`; `FrameDoor.enclosed`; `Foe.post`, and in it `Post.home`,
+  `stop`, `round`, `follow`, `spotted` and `radioed` (a `Round` defaults to its first
+  leg, nothing waited for). The new `Terrain`,
   `Feature` and `RoomKind` variants, and `Place::SiteNet` (you on a site's own Net, below),
   join their enums at the end, so saved indices keep their meaning.
 - **The venue's own enums grow only at their end too.** A saved layout and a copy hold
@@ -177,14 +179,30 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   a change to `flavor/sites.ron` or to the layer's code can't put other locks, devices or
   notes beside the floors, guards and cards a save already holds. A copy saved before
   the layer was kept has none: `venues::tick` ends it as lost, as it does a copy whose
-  type is gone.
+  type is gone. A guard's post in the layer carries its `stop` on another level
+  (`GuardPost.stop`, `#[serde(default)]`), drawn last from a stream of its own and saved
+  with the rest: a layer saved before guards took stops has none, and its guards walk
+  their own level.
 - **What a copy keeps.** While it's live the building's plan is the layout cut to the
   kept levels (`FloorPlan::kept`) and its floors are drawn with the layer on them; both
   are saved as any plan and floor are. The rest is play state saved where it always is:
   its guards are foes with a `post` (`foes::Post`: the building, their zone, their
-  patrol), the items on its floors are in `Ground`, the codes learned are in the journal
-  and the Net's holds in `NetState`. Zone cards are run-made `keycard:` items, so their
+  patrol, and their round: `home` the level it walks, `stop` a stop on another level,
+  `round` the leg, the tick it next acts and the lift or link it's on, `follow` the link
+  you took off its floor, `spotted` and `radioed`; all of the round defaulting), the
+  items on its floors are in `Ground`, the codes learned are in the journal and the
+  Net's holds in `NetState`. Zone cards are run-made `keycard:` items, so their
   catalogue entries are saved by `credentials::run_items`.
+- **Guards from before they acted.** A save from before guards walked holds them
+  `inert` with no `home`. `after_restore` wakes them (`runs::snapshot::wake_guards`):
+  every foe with a post, in the city you're in, the home city held while you're away
+  and every city kept, gets `inert` off and, without a `home`, the level it stands on.
+- **A guard's links by index.** `round.lift`, `round.via` and `follow` name a link by
+  its index into a plan made again from code, which a later build may order otherwise.
+  `after_restore` lets go of any whose link no longer stops on the level the guard stands
+  on (`guards::forget_stale`: `FloorPlan::hops` empty), for the guards of the city you're
+  in; every guard does the same again before each step, so those of a city held or kept
+  let theirs go when they next walk.
 - **Ending.** `venues::end` marks the copy, and `venues::tick` (every step of the clock)
   ends it once you're out: the foes posted to that building go, the cards still lying
   where `left` says go, the floors are dropped and the plan is made again from its

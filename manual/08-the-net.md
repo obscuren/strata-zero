@@ -12,6 +12,8 @@ You can jack in with nothing, but you can't run a program without a deck in your
 
 Your body stays where you jacked in. Cameras pay it no attention while you're away. Jacked in on a hotel's or office's floor, the `BODY` line in the HERE pane says where your body stands and who is near it: `nobody on L`, or how many guards are on that floor and how close the nearest one is.
 
+A guard who sees your body pulls you out: you're dumped (Getting out, below) with `a guard found you · jacked out`, the building's alarm goes off if it isn't already on, and the guard is hunting you as you wake. Jack in where a guard can see you and it finds you at once. The `BODY` line follows the nearest guard as it walks, so keep an eye on it.
+
 ## Moving in the Net
 
 The open Net lies over the city as a stratum of its own, the **grid**, with every tile in plain sight. Nodes sit where the systems are; lanes run between them.
@@ -87,7 +89,7 @@ A hotel's or office's cameras and terminals are held the same way, from its own 
 
 Everything you do in the Net makes **noise**, and noise raises the **trace** of the building or district you're working in. The footer shows it.
 
-- At 60 the alarm goes off for an hour: the building locks down, its hacks end, its ICE wakes, its gate closes and its ports lock, on its floors and beside it. A firewall's broken locks close again; break them all again and its gate lets you through, until the alarm ends.
+- At 60 the alarm goes off for an hour, or until a job on there ends: the building locks down, its hacks end, its ICE wakes, its gate closes and its ports lock, on its floors and beside it. A firewall's broken locks close again; break them all again and its gate lets you through, until the alarm ends.
 - At 100 you're **dumped**: thrown back into your body.
 
 Trace falls by itself, a little each minute, once you've left. A camera that sees you, on the street or on a hotel's or office's floor, raises its building's trace too: enough to set off the alarm, never enough to dump you.

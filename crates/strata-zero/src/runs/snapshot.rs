@@ -348,6 +348,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
 
 /// Rebuilds what a restored run leaves out (the world's places and labels, the home,
 /// the kept cities' maps, the street's lamps cut by a lights out, the tracked walk),
+/// wakes the guards of a save from before they acted,
 /// drops whatever the run
 /// holds that this build's content lacks, and logs a warning for each thing gone:
 /// `lost`, from `file::read`, and those.
@@ -363,6 +364,13 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     // the other cities and towns kept: their maps made again from the world, what they
     // held put back with them
     lost.extend(crate::outside::kept::remake(st));
+    wake_guards(st);
+    // a guard's saved lift, way back or trail names a link of a plan made again from
+    // code: one that no longer stops on its level is let go (the guards of other cities
+    // let theirs go when they next step)
+    for i in 0..st.foes.len() {
+        crate::guards::forget_stale(st, i);
+    }
     // the flat is the home city's: none in another city of the world
     let away = st.outside.as_ref().is_some_and(|o| o.here.is_some());
     st.home = if away {
@@ -386,4 +394,26 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     // The overworld is skipped by the save: made again from its params, and you back
     // in the city if what you stood on out there is gone.
     crate::outside::reopened(st);
+}
+
+/// A save from before guards acted holds them inert with no home level: they wake,
+/// their round on the level each stands on. The guards of the city you're in, of the
+/// home city held while you're away, and of every city kept.
+fn wake_guards(st: &mut AppState) {
+    let away = st.away.as_mut().map(|s| &mut s.foes);
+    let kept = st.outside.iter_mut().flat_map(|o| o.kept_foes_mut());
+    let held = std::iter::once(&mut st.foes).chain(away).chain(kept);
+    for f in held.flat_map(|foes| foes.iter_mut()) {
+        let level = match f.place {
+            citygen::Place::Floor { level, .. } => Some(level),
+            _ => None,
+        };
+        let Some(post) = f.post.as_mut() else {
+            continue;
+        };
+        f.inert = false;
+        if post.home.is_none() {
+            post.home = level;
+        }
+    }
 }

@@ -3,8 +3,9 @@
 
 use crate::app::AppState;
 use crate::render::Visibility;
+use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::{astar, bresenham};
-use citygen::{BuildingId, City, Place, Pos, Terrain, Tile};
+use citygen::{BuildingId, Place, Pos, Terrain, Tile};
 use game::ItemId;
 
 pub const GOON_HP: u8 = 30;
@@ -12,6 +13,11 @@ pub const GOON_REFLEX: u8 = 5;
 pub const GOON_SIGHT: i32 = 8;
 pub const GOON_MOVE: u8 = 3;
 pub const GOON_AP: u8 = 1;
+/// How far a foe on a floor makes out a dark tile (a circle in cells).
+pub const GUARD_DARK_REACH: i32 = 3;
+/// The light on a floor's tile, its ambient included, from which a foe sees it at any
+/// range in its sight: where the exposure bands' `lit` begins.
+pub const GUARD_LIT: u8 = 100;
 
 /// What a foe is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -55,13 +61,63 @@ pub struct Foe {
     pub post: Option<Post>,
 }
 
-/// A guard's post in a mission's copy: whose it is, its zone (the card it carries) and
-/// its patrol, recorded for when guards act on floors (#33).
+/// A guard's post in a mission's copy: whose it is, its zone (the card it carries), its
+/// patrol, and where it is on its round. The round's state came after the first saves,
+/// so each part defaults: a guard they hold starts its round at its post.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Post {
     pub building: BuildingId,
     pub zone: u8,
     pub patrol: Vec<Pos>,
+    /// The level its round walks; None in a save from before, filled on reopening with
+    /// the level it stands on.
+    #[serde(default)]
+    pub home: Option<i32>,
+    /// A stop on another level its round takes in.
+    #[serde(default)]
+    pub stop: Option<(i32, Pos)>,
+    /// Where it is on its round: the leg, the tick it next acts, the lift or link it's on.
+    #[serde(default)]
+    pub round: Round,
+    /// The link you took off its floor, and the level you went to.
+    #[serde(default)]
+    pub follow: Option<(usize, i32)>,
+    /// It has seen you since it last radioed.
+    #[serde(default)]
+    pub spotted: bool,
+    /// It has radioed what it saw (or lost the call to a stun), so it doesn't again.
+    #[serde(default)]
+    pub radioed: bool,
+}
+
+impl Post {
+    /// A post of `building` with zone `zone`'s card and `patrol`, its round not begun.
+    pub fn new(building: BuildingId, zone: u8, patrol: Vec<Pos>) -> Post {
+        Post {
+            building,
+            zone,
+            patrol,
+            home: None,
+            stop: None,
+            round: Round::default(),
+            follow: None,
+            spotted: false,
+            radioed: false,
+        }
+    }
+}
+
+/// Where a guard is on its round.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Round {
+    /// The goal it walks to, by index into `guards::goals`.
+    pub leg: usize,
+    /// The clock tick it next acts at.
+    pub next: u64,
+    /// The lift it waits for: the link and the level it rides to.
+    pub lift: Option<(usize, i32)>,
+    /// The link it took to its stop, so it comes back the same way.
+    pub via: Option<usize>,
 }
 
 impl Foe {
@@ -128,21 +184,68 @@ pub fn blocks_sight(t: &Tile) -> bool {
     )
 }
 
-/// Nothing blocks the line between two tiles of a stratum, the ends excluded.
-/// False off a stratum (floors are not shot across yet) or off the map.
-pub fn line_clear(city: &City, place: Place, from: Pos, to: Pos) -> bool {
-    let Some(k) = place.stratum() else {
-        return false;
-    };
+/// The map foes fight over at `place`: a stratum, or a floor already drawn. None for a
+/// construct, a site's Net or a floor not drawn: there no foe sees, shoots or steps.
+pub fn map_of(st: &AppState, place: Place) -> Option<MapRef<'_>> {
+    if !matches!(place, Place::Stratum(_) | Place::Floor { .. }) {
+        return None;
+    }
+    let city = st.city.as_ref()?;
+    MapRef::for_place(
+        city,
+        &st.interiors,
+        &st.constructs,
+        place,
+        st.minute_of_day(),
+    )
+}
+
+/// Nothing blocks the line between two tiles of a map, the ends excluded. A tile off
+/// the map blocks it.
+pub fn line_clear(map: &MapRef, from: Pos, to: Pos) -> bool {
     bresenham(from, to)
         .into_iter()
         .filter(|p| *p != from && *p != to)
-        .all(|p| city.tile(k, p).is_some_and(|t| !blocks_sight(t)))
+        .all(|p| map.tile(p).is_some_and(|t| !blocks_sight(t)))
 }
 
-/// A standing foe sees a tile within its sight with a clear line to it.
-pub fn sees(city: &City, foe: &Foe, to: Pos) -> bool {
-    foe.standing() && foe.pos.chebyshev(to) <= foe.sight && line_clear(city, foe.place, foe.pos, to)
+/// A standing foe sees a tile within its sight with a clear line to it. On a floor the
+/// tile must also be lit (`GUARD_LIT`) or within `GUARD_DARK_REACH`; a stratum keeps
+/// no light rule.
+pub fn sees(map: &MapRef, foe: &Foe, to: Pos) -> bool {
+    if !foe.standing() || foe.pos.chebyshev(to) > foe.sight {
+        return false;
+    }
+    if map.floor().is_none() {
+        return line_clear(map, foe.pos, to);
+    }
+    let lit = |p: Pos| {
+        if map.light(p) >= GUARD_LIT {
+            citygen::lighting::tuning::LIT_SIGHT
+        } else {
+            0
+        }
+    };
+    citygen::sight::sees(
+        foe.pos,
+        to,
+        GUARD_DARK_REACH,
+        |p| map.tile(p).is_none_or(blocks_sight),
+        lit,
+        |_| false,
+    )
+}
+
+/// Whether a foe with `post` (a guard's; None for any other foe) may step from `from`
+/// onto `to`: a walkable tile, and on a floor no exit (every foe stays in) and a door
+/// that opens to it (`guards::opens`).
+pub fn can_step(map: &MapRef, post: Option<&Post>, from: Pos, to: Pos) -> bool {
+    if !map.walkable(to) {
+        return false;
+    }
+    map.floor().is_none_or(|(_, floor)| {
+        floor.exit_at(to).is_none() && crate::guards::opens(post, floor, from, to)
+    })
 }
 
 /// The standing foe on a tile.
@@ -198,6 +301,20 @@ pub fn in_memory(st: &AppState) -> Vec<usize> {
     known(st, Visibility::Remembered)
 }
 
+/// A foe out of your sight memory: one you hear on turns but haven't seen.
+pub fn unseen(st: &AppState, i: usize) -> bool {
+    !known(st, Visibility::Remembered).contains(&i)
+}
+
+/// The standing guards of `place` that hunt, by index: on a floor each takes a seat
+/// on turns, seen or not.
+pub fn hunting_on(st: &AppState, place: Place) -> Vec<usize> {
+    standing(st, place)
+        .into_iter()
+        .filter(|i| st.foes[*i].post.is_some() && st.foes[*i].hunting())
+        .collect()
+}
+
 /// Any standing foe of the place hunts.
 pub fn any_hunting(st: &AppState, place: Place) -> bool {
     // On the open Net only what hunts near you holds a fight.
@@ -216,11 +333,7 @@ pub fn any_hunting(st: &AppState, place: Place) -> bool {
 /// A foe looks: idle and seeing you, it hunts; hunting and seeing you, it marks
 /// where. Returns whether it hunts after looking. A stunned or down foe sees nothing.
 pub fn look(st: &mut AppState, i: usize) -> bool {
-    let Some((city, me)) = st
-        .city
-        .as_ref()
-        .zip(st.player.as_ref().map(|p| (p.place, p.pos)))
-    else {
+    let Some(me) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
     };
     let Some(foe) = st.foes.get(i) else {
@@ -237,19 +350,33 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         };
         return true;
     }
+    let Some(map) = map_of(st, foe.place) else {
+        return foe.hunting();
+    };
     let seen = match &foe.ice {
         // On the open Net a piece only takes you for a threat while you're traced.
         Some(ice) => {
             (foe.hunting() || crate::grid::threat(st, ice))
-                && crate::grid::sees(city, foe, me.1, st.net.mask > 0)
+                && crate::grid::sees(&map, foe, me.1, st.net.mask > 0)
         }
-        None => sees(city, foe, me.1),
+        None => sees(&map, foe, me.1),
     };
     if seen {
-        st.foes[i].mode = FoeMode::Hunting {
+        let calm = !foe.hunting();
+        let foe = &mut st.foes[i];
+        foe.mode = FoeMode::Hunting {
             seen: me.1,
             lost: 0,
         };
+        // A guard marks that it saw you, for its radio, and stops following a trail,
+        // letting go of the lift it waited on to follow it.
+        let guard = foe.post.as_mut().map(|post| {
+            post.spotted = true;
+            crate::guards::release_follow(post);
+        });
+        if guard.is_some() && calm {
+            st.warn("guard spots you");
+        }
         return true;
     }
     foe.hunting()
@@ -273,24 +400,28 @@ pub fn look_all(st: &mut AppState) -> bool {
     any
 }
 
-/// One step along the shortest walkable path from `from` to `goal`, never onto a
-/// tile in `avoid` (the player's, other foes') unless it is the goal itself.
-pub fn step_toward(city: &City, place: Place, from: Pos, goal: Pos, avoid: &[Pos]) -> Option<Pos> {
+/// One step along the shortest path from `from` to `goal` that a foe with `post` may
+/// walk (`can_step`), never onto a tile in `avoid` (the player's, other foes') unless
+/// it is the goal itself.
+pub fn step_toward(
+    map: &MapRef,
+    from: Pos,
+    goal: Pos,
+    avoid: &[Pos],
+    post: Option<&Post>,
+) -> Option<Pos> {
     if from == goal {
         return None;
     }
-    let k = place.stratum()?;
-    let path = astar(city.size, from, goal, |_, to| {
-        if avoid.contains(&to) && to != goal {
-            return None;
-        }
-        city.walkable(k, to).then_some(1)
+    let path = astar(map.size(), from, goal, |p, n| {
+        (can_step(map, post, p, n) && (!avoid.contains(&n) || n == goal)).then_some(1)
     })?;
     path.into_iter().find(|p| *p != from)
 }
 
-/// A foe's turn begins: a stun counts down and the turn passes; else it looks, and
-/// acts only when it hunts. A down foe never does.
+/// A foe's turn begins: a stun counts down and the turn passes (a guard's call to make
+/// is lost with it); else a guard that saw you radios it in, then it looks, and acts
+/// only when it hunts. A down foe never does.
 pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     let Some(foe) = st.foes.get_mut(i) else {
         return false;
@@ -300,11 +431,33 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     }
     if foe.stunned > 0 {
         foe.stunned -= 1;
+        if let Some(post) = foe.post.as_mut().filter(|p| p.spotted && !p.radioed) {
+            post.radioed = true;
+        }
         let name = foe.name.clone();
         st.say(format!("{name} · stunned"));
         return false;
     }
+    radio(st, i);
     look(st, i)
+}
+
+/// Guard `i`, having seen you since its last call and never having made one, radios it
+/// in: the building's alarm and alert, unless it's on alert already. Once ever.
+fn radio(st: &mut AppState, i: usize) {
+    let Some(post) = (st.foes.get_mut(i))
+        .and_then(|f| f.post.as_mut())
+        .filter(|p| p.spotted && !p.radioed)
+    else {
+        return;
+    };
+    post.radioed = true;
+    post.spotted = false;
+    let b = post.building;
+    if !st.net.alert(b, st.net.now(st)) {
+        st.warn("guard radios it in · ALARM");
+        crate::net::lock_down(st, b);
+    }
 }
 
 /// The weapon a foe carries: its reach, for the turn; nothing unarmed.
@@ -316,12 +469,12 @@ fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
         .map_or(0, |w| w.range)
 }
 
-/// Where a foe standing in a live footprint goes: of the walkable neighbours that
-/// are free, one outside every footprint, nearest `seen`, else the greatest ring.
+/// Where a foe standing in a live footprint goes: of the neighbours any foe may step
+/// to (on a floor no exit and no door shut to it, whatever card it carries) that are
+/// free, one outside every footprint, nearest `seen`, else the greatest ring.
 fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<Pos> {
     let foe = &st.foes[i];
-    let city = st.city.as_ref()?;
-    let k = foe.place.stratum()?;
+    let map = map_of(st, foe.place)?;
     let me = st.player.as_ref().map(|p| p.pos);
     let ring = |p: Pos| live.iter().filter(|(q, _)| *q == p).map(|(_, r)| *r).max();
     let free: Vec<Pos> = (-1..=1)
@@ -329,7 +482,7 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
         .filter(|d| *d != (0, 0))
         .map(|(dx, dy)| Pos::new(foe.pos.x + dx, foe.pos.y + dy))
         .filter(|p| {
-            city.walkable(k, *p)
+            can_step(&map, None, foe.pos, *p)
                 && Some(*p) != me
                 && !st
                     .foes
@@ -372,9 +525,8 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         st.foes[i].pos = to;
         return Step::Moved(to);
     }
-    let Some(city) = st.city.as_ref() else {
-        return Step::Nothing;
-    };
+    // With no map there is no line and no step.
+    let map = map_of(st, foe.place);
     // ICE on the grid hits from beside you, by its grade.
     if foe.ice.is_some() && foe.pos.chebyshev(me) <= 1 {
         if can_hit {
@@ -385,8 +537,9 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     }
     let in_reach = foe.ice.is_none()
         && foe.pos.chebyshev(me) <= weapon_range(st, &foe)
-        && line_clear(city, foe.place, foe.pos, me)
-        && sees(city, &foe, me);
+        && map
+            .as_ref()
+            .is_some_and(|m| line_clear(m, foe.pos, me) && sees(m, &foe, me));
     // In reach it fires, and with its shots gone it holds where it stands: no
     // point closing in on what it can already hit.
     if in_reach {
@@ -411,7 +564,9 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
     let next = if foe.pos == seen {
         None
     } else {
-        step_toward(city, foe.place, foe.pos, seen, &avoid).filter(|p| *p != me)
+        map.as_ref()
+            .and_then(|m| step_toward(m, foe.pos, seen, &avoid, foe.post.as_ref()))
+            .filter(|p| *p != me)
     };
     match next {
         // The way on runs into a live blast: it waits outside it.
@@ -481,7 +636,7 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
 #[cfg(test)]
 pub(crate) mod testutil {
     use super::*;
-    use crate::render::map::MapRef;
+    use citygen::City;
     use citygen::StratumKind;
 
     /// The lot with you at (6,8) and one goon at `goon`, sight refreshed.
@@ -505,6 +660,7 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guards::testutil::{logged, pace_once, settle};
     use crate::net::Step;
     use citygen::StratumKind;
 
@@ -513,34 +669,127 @@ mod tests {
     #[test]
     fn a_goon_sees_you_at_eight_not_nine() {
         let st = testutil::lot(Pos::new(14, 8));
-        let city = st.city.as_ref().unwrap();
-        assert!(sees(city, &st.foes[0], Pos::new(6, 8)));
+        let map = map_of(&st, STREET).unwrap();
+        assert!(sees(&map, &st.foes[0], Pos::new(6, 8)));
         let mut far = st.foes[0].clone();
         far.pos = Pos::new(15, 8);
-        assert!(!sees(city, &far, Pos::new(6, 8)));
+        assert!(!sees(&map, &far, Pos::new(6, 8)));
         far.pos = Pos::new(14, 16);
         assert!(
-            sees(city, &far, Pos::new(6, 8)),
+            sees(&map, &far, Pos::new(6, 8)),
             "chebyshev: 8 on both axes"
         );
         let mut down = st.foes[0].clone();
         down.down = true;
-        assert!(!sees(city, &down, Pos::new(6, 8)));
+        assert!(!sees(&map, &down, Pos::new(6, 8)));
     }
 
     #[test]
     fn a_wall_blocks_sight() {
         let st = testutil::lot(Pos::new(14, 8));
-        let city = st.city.as_ref().unwrap();
-        assert!(line_clear(city, STREET, Pos::new(2, 2), Pos::new(38, 2)));
+        let map = map_of(&st, STREET).unwrap();
+        assert!(line_clear(&map, Pos::new(2, 2), Pos::new(38, 2)));
         // Across the wall ring at x = 0.
-        assert!(!line_clear(city, STREET, Pos::new(-1, 8), Pos::new(2, 8)));
-        assert!(!line_clear(
-            city,
-            Place::Construct(citygen::BuildingId(0)),
-            Pos::new(2, 2),
-            Pos::new(3, 2)
-        ));
+        assert!(!line_clear(&map, Pos::new(-1, 8), Pos::new(2, 8)));
+        assert!(map_of(&st, Place::Construct(BuildingId(0))).is_none());
+    }
+
+    #[test]
+    fn a_floors_walls_and_doors_block_the_line() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        assert!(line_clear(&map, Pos::new(2, 3), Pos::new(14, 3)));
+        assert!(
+            !line_clear(&map, Pos::new(14, 3), Pos::new(17, 3)),
+            "the lock's door"
+        );
+        assert!(
+            line_clear(&map, Pos::new(15, 3), Pos::new(18, 3)),
+            "from the doorway"
+        );
+        assert!(
+            map_of(
+                &st,
+                Place::Floor {
+                    building: WARD,
+                    level: 5
+                }
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_foe_on_a_floor_sees_by_its_light() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        let mut g = Foe::goon(on(0), Pos::new(2, 3));
+        assert!(sees(&map, &g, Pos::new(10, 3)), "lit at 8");
+        assert!(!sees(&map, &g, Pos::new(11, 3)), "past its sight");
+        g.pos = Pos::new(17, 3);
+        assert!(sees(&map, &g, Pos::new(20, 3)), "dark within 3");
+        assert!(!sees(&map, &g, Pos::new(21, 3)), "dark at 4");
+        g.pos = Pos::new(14, 3);
+        assert!(!sees(&map, &g, Pos::new(17, 3)), "through the shut door");
+        g.pos = Pos::new(15, 3);
+        assert!(
+            sees(&map, &g, Pos::new(12, 3)) && sees(&map, &g, Pos::new(18, 3)),
+            "a doorway sees both rooms"
+        );
+    }
+
+    #[test]
+    fn a_foe_on_a_floor_walks_round_walls_and_never_out_an_exit() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        assert_eq!(
+            step_toward(&map, Pos::new(2, 3), Pos::new(10, 3), &[], None),
+            Some(Pos::new(3, 3))
+        );
+        assert_eq!(
+            step_toward(&map, Pos::new(2, 3), Pos::new(0, 3), &[], None),
+            None,
+            "the exit"
+        );
+        assert_eq!(
+            step_toward(&map, Pos::new(14, 3), Pos::new(20, 3), &[], None),
+            None,
+            "no card"
+        );
+        assert_eq!(
+            step_toward(
+                &map,
+                Pos::new(14, 3),
+                Pos::new(20, 3),
+                &[],
+                Some(&post(0, &[]))
+            ),
+            None
+        );
+        assert_eq!(
+            step_toward(
+                &map,
+                Pos::new(14, 3),
+                Pos::new(20, 3),
+                &[],
+                Some(&post(1, &[]))
+            ),
+            Some(Pos::new(15, 3))
+        );
+        assert_eq!(
+            step_toward(
+                &map,
+                Pos::new(16, 3),
+                Pos::new(10, 3),
+                &[],
+                Some(&post(0, &[]))
+            ),
+            Some(Pos::new(15, 3)),
+            "getting out is free"
+        );
     }
 
     #[test]
@@ -574,34 +823,21 @@ mod tests {
     #[test]
     fn step_toward_walks_the_shortest_way_and_never_onto_you() {
         let st = testutil::lot(Pos::new(14, 8));
-        let city = st.city.as_ref().unwrap();
+        let map = map_of(&st, STREET).unwrap();
         let me = Pos::new(6, 8);
         assert_eq!(
-            step_toward(city, STREET, Pos::new(14, 8), me, &[me]),
+            step_toward(&map, Pos::new(14, 8), me, &[me], None),
             Some(Pos::new(13, 8))
         );
         // Beside you the only step left is onto your tile, which the goal allows;
         // the turn engine never asks for it (it fires instead).
-        assert_eq!(
-            step_toward(city, STREET, Pos::new(7, 8), me, &[me]),
-            Some(me)
-        );
-        assert_eq!(step_toward(city, STREET, me, me, &[]), None);
+        assert_eq!(step_toward(&map, Pos::new(7, 8), me, &[me], None), Some(me));
+        assert_eq!(step_toward(&map, me, me, &[], None), None);
         // Another foe's tile is walked around.
         let block = Pos::new(13, 8);
-        let next = step_toward(city, STREET, Pos::new(14, 8), me, &[me, block]).unwrap();
+        let next = step_toward(&map, Pos::new(14, 8), me, &[me, block], None).unwrap();
         assert_ne!(next, block);
         assert_eq!(next.chebyshev(Pos::new(14, 8)), 1);
-        assert!(
-            step_toward(
-                city,
-                Place::Construct(citygen::BuildingId(0)),
-                me,
-                Pos::new(7, 8),
-                &[]
-            )
-            .is_none()
-        );
     }
 
     #[test]
@@ -649,32 +885,6 @@ mod tests {
         assert!(any_hunting(&st, STREET));
     }
 
-    /// The clock moves `n` ticks: the app's and the living city's, which the clock
-    /// reads while there is a city.
-    fn advance(st: &mut AppState, n: u64) {
-        st.tick += n;
-        if let (Some(city), Some(world)) = (st.city.as_ref(), st.world.as_mut()) {
-            world.advance(city, world.tick() + n);
-        }
-    }
-
-    /// One pace of the clock, and whoever acts acts.
-    fn pace(st: &mut AppState) {
-        advance(st, crate::net::PACE_TICKS);
-        crate::net::pace(st);
-    }
-
-    /// Lets the foe act on the pace until the turn is yours or the fight ends.
-    fn settle(st: &mut AppState) {
-        for _ in 0..80 {
-            if crate::net::your_turn(st) {
-                return;
-            }
-            pace(st);
-        }
-        panic!("the foe never hands the turn back");
-    }
-
     fn hunting_from(st: &mut AppState, seen: Pos) {
         st.foes[0].mode = FoeMode::Hunting { seen, lost: 0 };
     }
@@ -694,7 +904,7 @@ mod tests {
             crate::net::Actor::Foe(0)
         );
         // Three steps, one a pace; at nine tiles the pistol is out of range.
-        pace(&mut st);
+        pace_once(&mut st);
         assert_eq!(st.foes[0].pos, Pos::new(17, 8));
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, 2);
         settle(&mut st);
@@ -742,7 +952,7 @@ mod tests {
         }
         crate::net::engage(&mut st, STREET, true);
         crate::net::end_turn(&mut st);
-        pace(&mut st);
+        pace_once(&mut st);
         assert_eq!(st.foes[0].pos, Pos::new(1, 1));
         assert_ne!(
             st.net.engaged.as_ref().unwrap().actor(),
@@ -774,10 +984,6 @@ mod tests {
         crate::net::end_turn(&mut st);
         settle(&mut st);
         assert_eq!(st.foes[0].mode, FoeMode::Idle);
-    }
-
-    fn logged(st: &AppState, needle: &str) -> bool {
-        st.log.iter().any(|e| e.text.contains(needle))
     }
 
     #[test]
@@ -836,6 +1042,36 @@ mod tests {
         assert!(!inside(&st, to));
         assert_eq!(st.foes[0].pos, to);
         assert_eq!(st.character.hp, hp, "no shot fired");
+    }
+
+    #[test]
+    fn a_foe_out_of_a_blast_on_a_floor_never_takes_the_exit_or_a_shut_door() {
+        use crate::guards::testutil::*;
+        // Each blast's footprint stops at the door beside it, so the door is the one
+        // tile round the foe outside it: still never a step.
+        for (at, door) in [
+            (Pos::new(1, 3), Pos::new(0, 3)),
+            (Pos::new(14, 3), Pos::new(15, 3)),
+        ] {
+            let mut st = ward();
+            let i = goon(&mut st, 0, at);
+            st.foes[i].mode = FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0,
+            };
+            live_at(&mut st, at, 1);
+            st.live[0].place = on(0);
+            let live = crate::blast::live_footprints(&st, on(0));
+            assert!(
+                live.iter().all(|(p, _)| *p != door),
+                "the door is out of it"
+            );
+            let Step::Moved(to) = step(&mut st, i, true, true) else {
+                panic!("it should move");
+            };
+            assert_ne!(to, door);
+            assert!(live.iter().any(|(p, _)| *p == to), "it takes a ring");
+        }
     }
 
     #[test]

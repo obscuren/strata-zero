@@ -22,6 +22,7 @@ mod credentials;
 mod exposure;
 mod foes;
 mod grid;
+mod guards;
 mod helix;
 mod holds;
 mod home;

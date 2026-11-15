@@ -5,6 +5,7 @@
 use crate::anim::effects::pulse;
 use crate::app::AppState;
 use crate::messages::{Entry, Kind};
+use crate::render::map::TileMap;
 use crate::ui::chrome::{CYAN, DIM, MAGENTA, MAGENTA_RGB, TEXT};
 use crate::ui::console::Console;
 use citygen::Pos;
@@ -297,9 +298,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 .map(|p| (p.place, p.pos))
                 .ok_or("no body")?;
             let at = pos.offset(n, 0);
-            let open = place.stratum().is_some_and(|k| {
-                st.city.as_ref().is_some_and(|c| c.walkable(k, at))
-            }) && crate::foes::foe_at(st, place, at).is_none();
+            let open = crate::foes::map_of(st, place).is_some_and(|m| m.walkable(at))
+                && crate::foes::foe_at(st, place, at).is_none();
             if !open {
                 return Err("no room there".to_string());
             }
@@ -1059,6 +1059,23 @@ mod tests {
         };
         st.city = Some(city);
         (st, at)
+    }
+
+    #[test]
+    fn foe_and_dummy_spawn_on_a_floor() {
+        use crate::guards::testutil::{on, ward};
+        let mut st = ward();
+        let at = At {
+            place: on(0),
+            pos: Pos::new(6, 3),
+        };
+        assert_eq!(run(&mut st, at, "foe 4"), Ok("a goon at 10,3".to_string()));
+        assert_eq!(
+            run(&mut st, at, "dummy 4"),
+            Err("no room there".to_string()),
+            "the goon stands there"
+        );
+        assert_eq!(st.foes[0].place, on(0));
     }
 
     #[test]

@@ -218,6 +218,156 @@ mod tests {
         st
     }
 
+    #[test]
+    fn old_guards_wake_after_a_reopen() {
+        use citygen::Place;
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        for f in a.foes.iter_mut().filter(|f| f.post.is_some()) {
+            f.inert = true; // as a save from before holds them
+            f.post.as_mut().unwrap().home = None;
+        }
+        let dir = Dir::new("old-guards");
+        let st = reopened(&write(&dir.0, &running(a)).unwrap());
+        let guards: Vec<_> = (st.foes.iter())
+            .filter(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .collect();
+        assert!(!guards.is_empty());
+        for f in guards {
+            let Place::Floor { level, .. } = f.place else {
+                panic!("{f:?}")
+            };
+            assert!(!f.inert, "{f:?}");
+            assert_eq!(f.post.as_ref().unwrap().home, Some(level));
+        }
+    }
+
+    #[test]
+    fn a_guards_round_comes_back_whole() {
+        use citygen::Place;
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        // A guard on a level links 0 and 1 stop on: a link that doesn't is let go.
+        let plan = crate::interiors::plan_now(&a, b).unwrap().into_owned();
+        let i = (a.foes.iter())
+            .position(|f| {
+                f.post.as_ref().is_some_and(|p| p.building == b)
+                    && matches!(f.place, Place::Floor { level, .. }
+                        if [0, 1].iter().all(|k| !plan.hops(*k, level).is_empty()))
+            })
+            .expect("a guard by both links");
+        let p = a.foes[i].post.as_mut().unwrap();
+        p.round = crate::foes::Round {
+            leg: 2,
+            next: 12345,
+            lift: Some((1, 3)),
+            via: Some(1),
+        };
+        p.follow = Some((0, 2));
+        p.radioed = true;
+        p.spotted = true;
+        a.foes[i].mode = crate::foes::FoeMode::Hunting {
+            seen: a.foes[i].pos,
+            lost: 1,
+        };
+        // And a calm one paused on its round, due a little on.
+        let j = (a.foes.iter().enumerate())
+            .position(|(j, f)| {
+                j != i
+                    && !f.hunting()
+                    && f.post
+                        .as_ref()
+                        .is_some_and(|p| p.building == b && p.patrol.len() > 1)
+            })
+            .expect("a calm guard with a walk");
+        let due = a.clock_tick() + 30;
+        let p = a.foes[j].post.as_mut().unwrap();
+        p.round.leg = 1;
+        p.round.next = due;
+        let dir = Dir::new("guard-round");
+        let a = running(a);
+        let mut st = reopened(&write(&dir.0, &a).unwrap());
+        assert_eq!(st.foes[i], a.foes[i]);
+        assert_eq!(st.foes[j], a.foes[j]);
+        // In the building, it carries on from there: it waits out its pause, then sets off.
+        let city = st.city.clone().unwrap();
+        let floor = st.interiors.ensure(&city, b, 0).unwrap();
+        let door = floor.doorstep(&floor.exits[0]);
+        crate::sitenet::testutil::stand_on_floor(&mut st, b, 0, door);
+        let wait = due - 1 - st.clock_tick();
+        crate::guards::testutil::run(&mut st, wait);
+        assert_eq!(st.foes[j], a.foes[j], "still paused");
+        crate::guards::testutil::run(&mut st, 1);
+        let r = &st.foes[j].post.as_ref().unwrap().round;
+        assert!(r.next > due, "it acted at its saved tick");
+        assert!(
+            st.foes[j].pos != a.foes[j].pos || r.leg != 1,
+            "on its way: {:?}",
+            st.foes[j]
+        );
+    }
+
+    #[test]
+    fn a_saved_link_that_no_longer_stops_on_the_level_is_dropped() {
+        let (mut a, b) = crate::sitenet::testutil::office_copy(190);
+        let i = (a.foes.iter())
+            .position(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+            .unwrap();
+        let p = a.foes[i].post.as_mut().unwrap();
+        p.round.lift = Some((99, 1)); // a link the plan no longer has
+        p.round.via = Some(99);
+        p.follow = Some((99, 1));
+        let dir = Dir::new("guard-stale-links");
+        let st = reopened(&write(&dir.0, &running(a)).unwrap());
+        let r = &st.foes[i].post.as_ref().unwrap();
+        assert_eq!((r.round.lift, r.round.via, r.follow), (None, None, None));
+    }
+
+    #[test]
+    fn old_guards_wake_in_the_home_city_held_and_a_city_kept() {
+        use crate::foes::{Foe, Post};
+        use crate::outside::tests::{beside_another, home_run, reopen};
+        use citygen::{BuildingId, Place, Pos};
+        // Home held while you're away in a second city, and a first one kept.
+        let mut st = home_run();
+        let (first, _) = beside_another(&st);
+        let second = (st.outside.as_ref().unwrap().others().into_iter())
+            .map(|(s, _)| s)
+            .find(|&s| s != first)
+            .expect("a second city or town");
+        crate::outside::enter(&mut st, first).unwrap();
+        crate::outside::enter(&mut st, second).unwrap();
+        // A guard as a save from before holds one: inert, with no home.
+        let old = |level: i32| {
+            let place = Place::Floor {
+                building: BuildingId(1),
+                level,
+            };
+            Foe {
+                post: Some(Post::new(BuildingId(1), 1, vec![Pos::new(3, 4)])),
+                inert: true,
+                ..Foe::goon(place, Pos::new(3, 4))
+            }
+        };
+        st.away.as_mut().expect("home held").foes.push(old(2));
+        let kept = |st: &mut AppState| -> Vec<Vec<Foe>> {
+            let o = st.outside.as_mut().unwrap();
+            o.kept_foes_mut().map(|foes| foes.clone()).collect()
+        };
+        assert_eq!(kept(&mut st).len(), 1, "the first city kept");
+        let o = st.outside.as_mut().unwrap();
+        o.kept_foes_mut().next().unwrap().push(old(3));
+        let mut back = reopen(st, "old-guards-held");
+        let kept = kept(&mut back);
+        assert_eq!(kept.len(), 1, "kept still");
+        let held = &back.away.as_ref().expect("home held still").foes;
+        for (foes, level) in [(held, 2), (&kept[0], 3)] {
+            let f = (foes.iter())
+                .find(|f| f.post.is_some())
+                .expect("the guard comes back");
+            assert!(!f.inert, "{f:?}");
+            assert_eq!(f.post.as_ref().unwrap().home, Some(level), "{f:?}");
+        }
+    }
+
     /// A small city entered, with a run: enough for a file.
     fn small_run() -> AppState {
         let mut st = AppState::new();
