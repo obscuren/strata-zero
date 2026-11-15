@@ -143,8 +143,11 @@ impl Stay {
             .cloned()
             .collect();
         crate::credentials::purge(&mut st.content, &mut st.character);
+        let city = st.city.take()?;
+        // A cloak is the city's: none goes with you across the overworld.
+        crate::cloak::end(st, crate::cloak::End::Off);
         Some(Stay {
-            city: st.city.take()?,
+            city,
             player: st.player.take(),
             world: st.world.take(),
             interiors: take(&mut st.interiors),
@@ -1365,6 +1368,22 @@ pub(crate) mod tests {
         assert_eq!(st.away.as_ref().unwrap().city.seed, home, "home set aside");
         assert!(st.home.is_none(), "no flat in another city");
         assert!(away_from_home(&st));
+    }
+
+    #[test]
+    fn a_cloak_stays_in_the_city_you_leave() {
+        let mut st = home_run();
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        assert_eq!(
+            crate::cloak::testutil::fire(&mut st, "cloak"),
+            Ok("CLOAKED".to_string())
+        );
+        let (_, from) = beside_another(&st);
+        st.outside.as_mut().unwrap().at = At::Overworld(from);
+        let moved = moves::world_step(&mut st, citygen::Dir::E);
+        assert!(matches!(moved, moves::Moved::City(_)));
+        assert!(st.cloak.is_none(), "no cloak across the overworld");
     }
 
     #[test]

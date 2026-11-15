@@ -149,6 +149,14 @@ fn on_the_net(place: Place) -> bool {
 /// A cloak key: switches the cloak that's on off, or this key's on. The line for the
 /// status strip, or the refusal.
 pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
+    let source = (st.character.abilities(&st.content).into_iter())
+        .find(|(have, _)| have == id)
+        .map(|(_, source)| source);
+    let Some(source) = source else {
+        let name = (st.character.ability(&st.content, id))
+            .map_or_else(|| id.to_string(), |a| a.name.clone());
+        return Err(format!("you do not have {name}"));
+    };
     if let Some(c) = st.cloak.as_ref() {
         let line = match c.pool {
             Pool::Cell(copy) => format!(
@@ -172,11 +180,8 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not in a fight".to_string());
     }
-    let source = (st.character.abilities(&st.content).into_iter())
-        .find(|(have, _)| have == id)
-        .map(|(_, source)| source);
     // A scrambler's key runs on the fullest carried cell, any other on FOCUS.
-    let pool = if matches!(&source, Some(Source::Item(item))
+    let pool = if matches!(&source, Source::Item(item)
         if st.content.item(item).is_some_and(|i| i.cell))
     {
         match cell::best(st) {
@@ -353,6 +358,22 @@ mod tests {
         st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Net);
         assert_eq!(fire(&mut st, "cloak"), Err("not on the Net".to_string()));
         assert!(st.cloak.is_none());
+    }
+
+    #[test]
+    fn a_cloak_key_you_dont_own_refuses() {
+        let mut st = street();
+        st.character.focus = 20;
+        assert_eq!(
+            fire(&mut st, "cloak"),
+            Err("you do not have Cloak".to_string())
+        );
+        assert_eq!(
+            fire(&mut st, "scramble"),
+            Err("you do not have Scramble".to_string())
+        );
+        assert!(st.cloak.is_none());
+        assert_eq!(st.character.focus, 20);
     }
 
     #[test]

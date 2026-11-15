@@ -17,7 +17,7 @@ pub(crate) fn stealthy(st: &mut AppState) {
 }
 
 /// A Ratchet SMG copy worn in the primary slot.
-#[allow(dead_code)] // for the ambush's tests
+#[expect(dead_code, reason = "for the ambush's tests")]
 pub(crate) fn armed(st: &mut AppState) {
     let gun = ItemId::new("ratchet_smg");
     let copy = st.character.new_copy(&st.content, &gun);
