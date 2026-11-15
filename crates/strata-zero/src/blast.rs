@@ -320,10 +320,13 @@ fn throw_allowed(st: &AppState) -> Result<(), String> {
 }
 
 /// You throw a consumable at a tile: it leaves the pack, the flight plays, the
-/// blast goes off when it lands or lies live for its fuse. One action point.
+/// blast goes off when it lands or lies live for its fuse. One action point. A throw
+/// made from the cloak ends it with no ambush; a refused one keeps it.
 pub fn throw(st: &mut AppState, id: &ItemId, at: Pos) -> Result<(), String> {
     throw_allowed(st)?;
-    throw_from_hand(st, id, at, true)
+    throw_from_hand(st, id, at, true)?;
+    crate::cloak::end(st, crate::cloak::End::Off);
+    Ok(())
 }
 
 /// `throw` without the engagement or the action point: the console's door, and
@@ -1061,5 +1064,46 @@ mod tests {
         st.live[0].place = Place::Stratum(StratumKind::Undercity);
         tick_live(&mut st);
         assert_eq!(st.live.len(), 1, "another map's fuse does not burn");
+    }
+
+    /// The ward, a frag in the pack, cloaked on FOCUS and on turns by hand from it,
+    /// on your act half.
+    fn cloaked_on_turns(st: &mut AppState) {
+        use crate::cloak::testutil::{fire, stealthy};
+        st.character.give(ItemId::new("frag"), 1);
+        stealthy(st);
+        st.character.focus = 10;
+        fire(st, "cloak").unwrap();
+        crate::cloak::engage_by_hand(st, crate::guards::testutil::on(0));
+        crate::guards::testutil::settle(st);
+        assert!(crate::net::stay(st));
+    }
+
+    #[test]
+    fn a_refused_throw_keeps_the_cloak() {
+        let mut st = crate::guards::testutil::ward();
+        cloaked_on_turns(&mut st);
+        assert_eq!(
+            throw(&mut st, &ItemId::new("frag"), Pos::new(40, 3)).unwrap_err(),
+            "out of range"
+        );
+        assert!(crate::cloak::hidden(&st));
+        assert_eq!(st.character.count(&ItemId::new("frag")), 1);
+    }
+
+    #[test]
+    fn a_throw_from_the_cloak_ends_it_with_no_bonus() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = goon(&mut st, 0, Pos::new(10, 3));
+        cloaked_on_turns(&mut st);
+        throw(&mut st, &ItemId::new("frag"), Pos::new(10, 3)).unwrap();
+        assert!(!crate::cloak::hidden(&st));
+        assert_eq!(
+            st.veil.fade.unwrap().phase,
+            crate::cloak::Phase::SwitchingOff
+        );
+        assert!(!logged(&st, "AMBUSH"));
+        assert_eq!(st.foes[i].hp, foes::GOON_HP - 12, "the blast's own");
     }
 }

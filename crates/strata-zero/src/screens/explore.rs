@@ -3363,8 +3363,14 @@ impl MapScreen {
                 (Some(_), Some(_)) if crate::net::hunting(st) => st.warn("still hunted"),
                 (Some(_), Some(_)) => crate::net::disengage(st),
                 (Some(place), None) if place.in_construct() => crate::net::engage(st, place, true),
+                // From the cloak the turns are yours to start: it holds for your
+                // first attack.
                 (Some(place), None) if !crate::foes::in_memory(st).is_empty() => {
-                    crate::net::engage(st, place, true)
+                    if crate::cloak::hidden(st) {
+                        crate::cloak::engage_by_hand(st, place)
+                    } else {
+                        crate::net::engage(st, place, true)
+                    }
                 }
                 (Some(_), None) => st.warn("nothing to engage"),
             }
@@ -5290,6 +5296,50 @@ mod tests {
             cell_of(&s, &st, &buf, Pos::new(14, 8)),
             ("%".to_string(), Color::Rgb(120, 30, 30))
         );
+    }
+
+    /// The ward with a goon in sight 4 tiles off, cloaked on FOCUS: the map's screen.
+    fn cloaked_by_a_goon() -> (AppState, MapScreen) {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        goon(&mut st, 0, Pos::new(10, 3));
+        stand(&mut st, 0, Pos::new(6, 3));
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        st.veil.off = true;
+        let s = MapScreen::walking(&mut st);
+        (st, s)
+    }
+
+    #[test]
+    fn e_from_the_cloak_goes_to_turns_and_keeps_it() {
+        let (mut st, mut s) = cloaked_by_a_goon();
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_some());
+        assert!(crate::cloak::hidden(&st));
+        assert!(st.cloak.as_ref().unwrap().waiting);
+        // The goon may have won the roll: its turn is over before yours opens.
+        crate::guards::testutil::settle(&mut st);
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        assert!(st.net.engaged.is_none(), "nothing hunts: back to the beat");
+        assert!(crate::cloak::hidden(&st));
+        assert!(!st.cloak.as_ref().unwrap().waiting);
+    }
+
+    #[test]
+    fn a_turn_passed_by_hand_ends_the_cloak() {
+        let (mut st, mut s) = cloaked_by_a_goon();
+        s.update(&mut st, &[key(KeyCode::Char('e'))]);
+        crate::guards::testutil::settle(&mut st);
+        crate::net::end_turn(&mut st);
+        assert!(!crate::cloak::hidden(&st));
+        assert_eq!(
+            st.veil.fade.unwrap().phase,
+            crate::cloak::Phase::SwitchingOff
+        );
+        assert!(st.net.engaged.is_some(), "the fight stands");
+        assert!(!logged(&st, "AMBUSH"));
     }
 
     #[test]

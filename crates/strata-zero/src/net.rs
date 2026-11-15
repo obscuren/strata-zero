@@ -2594,6 +2594,11 @@ pub fn end_turn(st: &mut AppState) {
     else {
         return;
     };
+    // Your turn on turns by hand from the cloak ends without an attack: the cloak goes.
+    let yours = (st.net.engaged.as_ref()).is_some_and(|e| e.actor() == Actor::You);
+    if yours && st.cloak.as_ref().is_some_and(|c| c.waiting) {
+        crate::cloak::end(st, crate::cloak::End::Fight);
+    }
     let mut turn = turn + 1;
     let mut round = round;
     if turn >= len {

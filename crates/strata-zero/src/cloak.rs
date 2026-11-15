@@ -98,7 +98,6 @@ pub enum End {
     /// The pool ran dry.
     Burnout,
     /// Your first hit from it.
-    #[expect(dead_code, reason = "the ambush ends it, once your rounds take it")]
     Ambush,
     /// A fight started.
     Fight,
@@ -310,6 +309,26 @@ pub fn end(st: &mut AppState, why: End) -> bool {
         st.warn(format!("the {what} burns out · you're in the open"));
     }
     true
+}
+
+/// Your attack's ambush: from the cloak it ends the cloak, and every round of it lands
+/// for double. True when it is one.
+pub fn ambush(st: &mut AppState) -> bool {
+    if !hidden(st) {
+        return false;
+    }
+    end(st, End::Ambush);
+    st.warn("AMBUSH");
+    true
+}
+
+/// `e` from the cloak: turns by hand, the cloak kept for your first attack. It ends
+/// with that attack, a throw, or your turn ending without one.
+pub fn engage_by_hand(st: &mut AppState, place: Place) {
+    if let Some(c) = st.cloak.as_mut() {
+        c.waiting = true;
+    }
+    crate::net::engage(st, place, true);
 }
 
 #[cfg(test)]
