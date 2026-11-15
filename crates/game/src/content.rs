@@ -38,7 +38,7 @@ pub enum ContentError {
     UnknownAbility { where_: String, id: String },
     #[error("item `{item}` has a use but is not a consumable")]
     UseOnNonConsumable { item: String },
-    #[error("item `{item}` has perks or grants but no slot, implant or bot")]
+    #[error("item `{item}` has perks or grants but no slot, implant, bot or cell")]
     PerkWithoutSlot { item: String },
     #[error("item `{item}` cannot sit in slot {slot:?}")]
     SlotMismatch { item: String, slot: Slot },
@@ -4161,14 +4161,29 @@ mod tests {
             .unwrap();
         let mut bad = c.clone();
         bad.items[i].grants = vec![AbilityId::new("ping")];
-        assert!(bad.validate().is_err(), "a cell grants a cloak");
+        assert!(
+            matches!(bad.validate(), Err(ContentError::ItemInvalid { .. })),
+            "a cell grants a cloak"
+        );
+        let mut bad = c.clone();
+        bad.items[i].grants = vec![AbilityId::new("scramble"), AbilityId::new("cloak")];
+        assert!(
+            matches!(bad.validate(), Err(ContentError::ItemInvalid { .. })),
+            "a cell grants one cloak, not two"
+        );
         let mut bad = c.clone();
         bad.items[i].cell = false;
-        assert!(bad.validate().is_err(), "no slot, no cell, no grants");
+        assert!(
+            matches!(bad.validate(), Err(ContentError::PerkWithoutSlot { .. })),
+            "no slot, no cell, no grants"
+        );
         let mut bad = c.clone();
         let s = bad.skills.iter().position(|s| s.id.0 == "stealth").unwrap();
         bad.skills[s].grants.push(AbilityId::new("no_such"));
-        assert!(bad.validate().is_err());
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::UnknownAbility { .. })
+        ));
         assert!(
             c.recipes
                 .iter()

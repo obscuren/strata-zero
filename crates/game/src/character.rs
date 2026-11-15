@@ -1062,52 +1062,46 @@ impl Character {
     /// order, then by equipment in slot order, then by installed chrome (see
     /// `chrome_ids`), then by talents; deduplicated, the first source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
-        let mut out: Vec<(AbilityId, Source)> = self
-            .abilities
-            .iter()
-            .map(|id| (id.clone(), Source::Innate))
-            .collect();
+        let mut out: Vec<(AbilityId, Source)> = Vec::new();
+        let mut push = |id: &AbilityId, source: Source| {
+            if !out.iter().any(|(have, _)| have == id) {
+                out.push((id.clone(), source));
+            }
+        };
+        for id in &self.abilities {
+            push(id, Source::Innate);
+        }
         for cat in c
             .categories
             .iter()
             .filter(|cat| self.categories.contains(&cat.id))
         {
             for id in &cat.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Category(cat.id.clone())));
-                }
+                push(id, Source::Category(cat.id.clone()));
             }
         }
         for skill in c.skills.iter().filter(|s| self.skills.contains(&s.id)) {
             for id in &skill.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Skill(skill.id.clone())));
-                }
+                push(id, Source::Skill(skill.id.clone()));
             }
         }
         let carried = self.inventory.iter().map(|s| &s.item);
         for item in carried.filter_map(|id| c.item(id)).filter(|i| i.cell) {
             for id in &item.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Item(item.id.clone())));
-                }
+                push(id, Source::Item(item.id.clone()));
             }
         }
         let worn = Slot::ALL.iter().filter_map(|s| self.equipment.get(s));
         for item in worn.chain(self.chrome_ids()).filter_map(|id| c.item(id)) {
             for id in &item.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Item(item.id.clone())));
-                }
+                push(id, Source::Item(item.id.clone()));
             }
         }
         for t in &c.talents {
             let rank = self.talent_rank(&t.id) as usize;
             for b in t.effects.iter().take(rank).flatten() {
-                if let Boon::Grant(id) = b
-                    && !out.iter().any(|(have, _)| have == id)
-                {
-                    out.push((id.clone(), Source::Talent(t.id.clone())));
+                if let Boon::Grant(id) = b {
+                    push(id, Source::Talent(t.id.clone()));
                 }
             }
         }
@@ -3727,6 +3721,30 @@ mod tests {
             .left,
             FULL_CELL,
             "none reads full"
+        );
+    }
+
+    #[test]
+    fn a_carried_cell_grant_wins_over_worn_gear() {
+        let mut c = Content::load().unwrap();
+        let jacket = ItemId::new("salvage_jacket");
+        let i = c.items.iter().position(|i| i.id == jacket).unwrap();
+        c.items[i].grants = vec![AbilityId::new("scramble")];
+        let mut ch = vex(&c);
+        ch.wear(Slot::Torso, jacket.clone(), None);
+        let scramble = |ch: &Character| -> Vec<Source> {
+            (ch.abilities(&c).into_iter())
+                .filter(|(id, _)| id.0 == "scramble")
+                .map(|(_, s)| s)
+                .collect()
+        };
+        assert_eq!(scramble(&ch), vec![Source::Item(jacket)]);
+        let scrambler = ItemId::new("field_scrambler");
+        ch.give_item(&c, scrambler.clone(), 1);
+        assert_eq!(
+            scramble(&ch),
+            vec![Source::Item(scrambler)],
+            "first source wins"
         );
     }
 
