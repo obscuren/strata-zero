@@ -10,7 +10,7 @@ use citygen::BuildingId;
 
 pub use doors::opens;
 pub use hunt::hear;
-pub(crate) use hunt::{drop_card, release_follow, you_left};
+pub(crate) use hunt::{drop_card, lose_you, release_follow, you_left};
 pub(crate) use links::{forget_stale, free_landing};
 
 /// A calm guard's step: an amble, three times your walk.

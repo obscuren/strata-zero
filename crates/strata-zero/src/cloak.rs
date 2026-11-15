@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub mod cell;
 #[cfg(test)]
 pub(crate) mod testutil;
+mod vanish;
+
+pub use vanish::vanish;
 
 /// Frame ticks on one tile before you count as standing still.
 pub const STILL_TICKS: u64 = 15;
@@ -26,6 +29,8 @@ pub const BREAK_TICKS: u64 = 72;
 pub const SNAP_TICKS: u64 = 15;
 /// How hot Vanish's free cloak runs: a calm drift.
 pub const VANISH_HEAT: f32 = 0.2;
+/// How long Vanish's free cloak lasts in frame ticks: 4 s.
+pub const VANISH_TICKS: u64 = 120;
 
 /// The cloak that's on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -193,6 +198,13 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
         }
     };
     let on_cell = matches!(pool, Pool::Cell(_));
+    put_on(st, pool, at);
+    Ok(if on_cell { "SCRAMBLED" } else { "CLOAKED" }.to_string())
+}
+
+/// A cloak goes on from `pool` with you at `at`, the veil going in from its heat.
+fn put_on(st: &mut AppState, pool: Pool, at: Pos) {
+    let cell = matches!(pool, Pool::Cell(_));
     st.cloak = Some(Cloak {
         pool,
         since: st.tick,
@@ -205,9 +217,8 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
         phase: Phase::GoingIn,
         since: st.tick,
         hot: heat(st).unwrap_or(0.0),
-        cell: on_cell,
+        cell,
     });
-    Ok(if on_cell { "SCRAMBLED" } else { "CLOAKED" }.to_string())
 }
 
 /// This frame's drain: moving, or standing still with Blind spot.

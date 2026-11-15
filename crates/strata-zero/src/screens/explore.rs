@@ -1057,7 +1057,7 @@ impl MapScreen {
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
-    /// boosts, marks; content order), then the throwables in the pack; at most ten,
+    /// boosts, marks, Vanish; content order), then the throwables in the pack; at most ten,
     /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
     /// does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
@@ -1073,6 +1073,7 @@ impl MapScreen {
                 Active(A::Strike { push, .. }) => !net || push == 0,
                 Active(A::Boost { .. }) => true,
                 Active(A::Mark { .. }) => !net,
+                Active(A::Vanish) => !net,
                 _ => false,
             })
             .map(|a| Act::Ability(a.id.clone()))
@@ -1336,7 +1337,7 @@ impl MapScreen {
     }
 
     /// An ability of the `ACT` list fired: a strike or a mark at the enemy under the
-    /// cursor, a boost at once. The engine says why not.
+    /// cursor, a boost or Vanish at once. The engine says why not.
     fn use_ability(&mut self, st: &mut AppState, place: Place, id: &game::AbilityId) {
         use game::{AbilityKind::Active, Active as A};
         let Some(kind) = st.content.ability(id).map(|a| a.kind.clone()) else {
@@ -1345,6 +1346,7 @@ impl MapScreen {
         let enemy = self.target.and_then(|t| Self::enemy_at(st, t));
         let result = match (kind, enemy, place) {
             (Active(A::Boost { .. }), _, _) => crate::casts::boost(st, id),
+            (Active(A::Vanish), _, _) => crate::cloak::vanish(st, id),
             (Active(A::Strike { .. }), Some(Enemy::Foe(foe)), _) => {
                 self.last_enemy = enemy;
                 crate::combat::strike(st, id, foe)
@@ -1422,10 +1424,11 @@ impl MapScreen {
             .abilities(&st.content)
             .into_iter()
             .map(|(id, _)| id)
+            // Vanish is the fight's: the act list has it, and the calm bar keeps its slot.
             .filter(|id| {
-                st.content
-                    .ability(id)
-                    .is_some_and(|a| matches!(a.kind, game::AbilityKind::Active(_)))
+                st.content.ability(id).is_some_and(|a| {
+                    matches!(&a.kind, game::AbilityKind::Active(k) if *k != game::Active::Vanish)
+                })
             })
             .take(hud::SLOTS)
             .collect()
@@ -14716,6 +14719,8 @@ mod tests {
     fn runner_half(goon: Pos) -> (AppState, MapScreen) {
         let (mut st, mut s) = lot(goon);
         st.character = game::Character::combat_runner(&st.content);
+        // Its Shadow step's Vanish would take the tenth key from the last throwable.
+        (st.character.talents).remove(&game::TalentId::new("shadow_step"));
         s.update(&mut st, &[]);
         assert!(st.net.engaged.is_some() && crate::net::your_turn(&st));
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
@@ -14800,6 +14805,59 @@ mod tests {
         assert_eq!(keys, "67890");
         assert_eq!(MapScreen::act_key(&st, 0), Some(act_ability("boost_1")));
         assert_eq!(MapScreen::act_key(&st, 1), None, "1 stays a program");
+    }
+
+    fn shadow_step(st: &mut AppState) {
+        st.character
+            .talents
+            .insert(game::TalentId::new("shadow_step"), 1);
+    }
+
+    #[test]
+    fn vanish_is_on_the_act_list() {
+        let (mut st, _) = runner_half(Pos::new(12, 8));
+        shadow_step(&mut st);
+        assert!(MapScreen::act_list(&st).contains(&act_ability("vanish_out")));
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Net);
+        assert!(!MapScreen::act_list(&st).contains(&act_ability("vanish_out")));
+    }
+
+    #[test]
+    fn vanish_from_the_act_list_breaks_the_fight() {
+        let (mut st, mut s) = runner_half(Pos::new(12, 8));
+        shadow_step(&mut st);
+        let at = (MapScreen::act_list(&st).iter())
+            .position(|a| *a == act_ability("vanish_out"))
+            .unwrap();
+        let n = MapScreen::act_base(&st) + at as u32;
+        let digit = char::from_digit(n % 10, 10).unwrap();
+        s.update(&mut st, &[key(KeyCode::Char(digit))]);
+        assert!(st.net.engaged.is_none());
+        assert!(crate::cloak::hidden(&st));
+    }
+
+    #[test]
+    fn vanish_is_off_the_calm_bar_and_the_scramble_key_stays() {
+        let vanish = game::AbilityId::new("vanish_out");
+        let mut st = crate::cloak::testutil::street();
+        shadow_step(&mut st);
+        let owned = st.character.abilities(&st.content);
+        assert!(
+            owned.iter().any(|(id, _)| *id == vanish),
+            "Shadow step grants it"
+        );
+        assert!(
+            MapScreen::actives(&st).len() < hud::SLOTS,
+            "a bar with room for it"
+        );
+        assert!(!MapScreen::actives(&st).contains(&vanish));
+        st.character = game::Character::combat_runner(&st.content);
+        shadow_step(&mut st);
+        crate::cloak::testutil::scrambler(&mut st);
+        let bar = MapScreen::actives(&st);
+        assert_eq!(bar.len(), hud::SLOTS, "a full kit");
+        assert!(!bar.contains(&vanish), "{bar:?}");
+        assert!(bar.contains(&game::AbilityId::new("scramble")), "{bar:?}");
     }
 
     #[test]
