@@ -164,7 +164,7 @@ spec), drawn as cells after the map's layers and your `@`, before the HUD, where
   its left and a cyan copy to its right, drawn only on empty floor; where both land on one
   cell it shows near-white. A band of rows shifts sideways, rolling down the map; now and
   then the whole map slips one cell for a frame. A faint cyan wash and scanline over the
-  map. Your `@` and your row never move or get copies.
+  map. Your `@` and your row never move, and your `@` never throws or takes a copy; your row's empty floor can take one, as the mock draws it.
 - **Strength** (`heat`, 0–1, past 1 out of control) is how empty the pool is: at full
   the split is 1 cell and faint, one slow row in the wave; near empty, 3 cells,
   shivering and bright, a thick fast band. Everything grows smoothly with it.
