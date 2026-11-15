@@ -1230,6 +1230,13 @@ impl Deck {
                     .map(|t| t.name.clone())
                     .unwrap_or_else(|| t.to_string())
             ),
+            Source::Skill(s) => format!(
+                "from {}",
+                st.content
+                    .skill(s)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| s.to_string())
+            ),
         };
         out.push(dim(format!("{kind} · {from}")));
         if a.cooldown > 0 {
@@ -1262,6 +1269,8 @@ impl Deck {
                 Active::Mark { range, bonus, ap } => {
                     format!("mark: one foe within {range} tiles · +{bonus}% · {ap} AP")
                 }
+                Active::Cloak => "cloak: nobody on foot sees you · the first hit lands ×2".into(),
+                Active::Vanish => "vanish: ends the fight · 4s cloaked".into(),
             };
             out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
         }

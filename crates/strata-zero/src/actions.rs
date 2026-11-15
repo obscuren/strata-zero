@@ -269,7 +269,11 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
             AbilityKind::Active(
-                Active::Strike { .. } | Active::Boost { .. } | Active::Mark { .. },
+                Active::Strike { .. }
+                | Active::Boost { .. }
+                | Active::Mark { .. }
+                | Active::Cloak
+                | Active::Vanish,
             )
             | AbilityKind::Passive => 0,
         };

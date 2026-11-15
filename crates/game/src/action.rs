@@ -699,7 +699,9 @@ pub fn apply(
                 | Active::Trace { .. }
                 | Active::Strike { .. }
                 | Active::Boost { .. }
-                | Active::Mark { .. } => Vec::new(),
+                | Active::Mark { .. }
+                | Active::Cloak
+                | Active::Vanish => Vec::new(),
             };
             Ok(Outcome {
                 message: format!("{}: pulse sent", ability.name),

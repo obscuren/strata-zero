@@ -223,6 +223,7 @@ mod tests {
                 copy: None,
             })],
             stickers: Vec::new(),
+            charge: None,
         }
     }
 

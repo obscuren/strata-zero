@@ -966,7 +966,8 @@ pub struct Item {
     /// Modifiers while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub perks: Vec<Perk>,
-    /// Abilities conferred while equipped or installed (slot items and chrome only).
+    /// Abilities conferred while equipped or installed (slot items and chrome only),
+    /// or while carried (an item with a `cell`).
     #[serde(default)]
     pub grants: Vec<AbilityId>,
     /// What using it does (consumables only).
@@ -1012,6 +1013,9 @@ pub struct Item {
     /// shard does for the shard it was.
     #[serde(default)]
     pub stands_for: Option<ItemId>,
+    /// It runs on its own cell, held per copy, and grants its ability while carried.
+    #[serde(default)]
+    pub cell: bool,
 }
 
 impl Item {
@@ -1024,9 +1028,12 @@ impl Item {
     }
 
     /// Held per copy, since it can carry state or be fitted: it has sockets, is
-    /// hardware or chrome that fits a socket, or takes stickers.
+    /// hardware or chrome that fits a socket, takes stickers, or holds a cell.
     pub fn per_copy(&self) -> bool {
-        !self.sockets.is_empty() || self.fits_socket().is_some() || self.takes_stickers()
+        !self.sockets.is_empty()
+            || self.fits_socket().is_some()
+            || self.takes_stickers()
+            || self.cell
     }
 
     /// The kind of socket it goes in: hardware's, socket chrome's, a bot's dock.
@@ -1093,6 +1100,11 @@ pub enum Active {
     /// Marks one foe in sight within `range` for the fight: `bonus` on the chance;
     /// it costs `ap` action points.
     Mark { range: i32, bonus: u8, ap: u8 },
+    /// No target: switches the cloak on or off; it hides you on foot until your first
+    /// hit, drawing on FOCUS or, granted by a carried cell, on that cell.
+    Cloak,
+    /// In a fight: breaks it and cloaks you a moment to get away.
+    Vanish,
 }
 
 fn default_net() -> Attribute {
@@ -1222,6 +1234,9 @@ pub struct Skill {
     /// The skills it wants first; shown on its card, not yet enforced.
     #[serde(default)]
     pub after: Vec<SkillId>,
+    /// Abilities conferred while you have it.
+    #[serde(default)]
+    pub grants: Vec<AbilityId>,
 }
 
 /// Text over a drawing's folded cells: cell x, cell y, the text, its ink and ground.

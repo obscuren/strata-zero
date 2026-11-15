@@ -256,7 +256,7 @@ fn sight(st: &AppState) -> i32 {
 
 /// The kinds of source, in the order the readout lists them, each with its word: a
 /// docked bot by its body's.
-const KINDS: [&str; 8] = [
+const KINDS: [&str; 9] = [
     "gear",
     "hardware",
     "chrome",
@@ -265,6 +265,7 @@ const KINDS: [&str; 8] = [
     "talents",
     "category",
     "innate",
+    "skill",
 ];
 
 /// A bot's kind of source, by its body.
@@ -315,6 +316,10 @@ fn granted(st: &AppState, from: &Source) -> (usize, Option<String>) {
             ),
         ),
         Source::Innate => (7, None),
+        Source::Skill(s) => (
+            8,
+            Some(c.skill(s).map_or_else(|| s.to_string(), |s| s.name.clone())),
+        ),
     }
 }
 
