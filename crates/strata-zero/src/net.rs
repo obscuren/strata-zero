@@ -1775,6 +1775,7 @@ pub fn landing_popup(st: &AppState) -> crate::screens::popup::Popup {
 /// A rig run begins: an empty route from your block, or one relay when you landed
 /// through a backdoor. A street jack-in leaves the route alone.
 pub fn after_jack_in(st: &mut AppState, from: Place, via: Option<BuildingId>) {
+    crate::cloak::end(st, crate::cloak::End::Off);
     if st.home.is_some_and(|h| h.place() == from) {
         st.backdoors.start_route(via);
     }
@@ -2338,6 +2339,10 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     if st.net.engaged.is_some() {
         return;
     }
+    // A fight starting ends the cloak, bar one you start by hand from it.
+    if !st.cloak.as_ref().is_some_and(|c| c.waiting) {
+        crate::cloak::end(st, crate::cloak::End::Fight);
+    }
     if let Some(b) = place.construct()
         && let Some(k) = st.constructs.get(b)
     {
@@ -2477,6 +2482,9 @@ pub fn disengage(st: &mut AppState) {
         f.marked = false;
     }
     st.net.stunned_you = 0;
+    if let Some(c) = st.cloak.as_mut() {
+        c.waiting = false;
+    }
     if st.net.engaged.take().is_some() {
         st.net.beat = st.clock_tick();
         st.say("calm");

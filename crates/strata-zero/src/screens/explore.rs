@@ -3983,6 +3983,11 @@ impl Screen for MapScreen {
                 crate::net::beat(st);
             }
         }
+        // The cloak drains by the map's frames, and ends where it can't be, before
+        // anyone looks.
+        if self.mode == Mode::Walk {
+            crate::cloak::frame(st);
+        }
         // On foot: a foe that sees you puts the map on turns; while it is, they act
         // on the pace.
         if self.mode == Mode::Walk

@@ -132,6 +132,10 @@ pub struct AppState {
     pub live: Vec<crate::blast::Live>,
     /// Rounds fired this session: the roll's seed.
     pub shots: u64,
+    /// The cloak that's on: its pool and its drain.
+    pub cloak: Option<crate::cloak::Cloak>,
+    /// The cloak's look: the fade playing, and the switch that keeps it off.
+    pub veil: crate::cloak::VeilState,
     /// Every round lands, or none; for tests.
     #[cfg(test)]
     pub force_hit: Option<bool>,
@@ -355,6 +359,8 @@ impl AppState {
             bots: Vec::new(),
             live: Vec::new(),
             shots: 0,
+            cloak: None,
+            veil: crate::cloak::VeilState::default(),
             #[cfg(test)]
             force_hit: None,
             repaint: false,
@@ -520,6 +526,8 @@ impl AppState {
         self.foes.clear();
         self.bots.clear();
         self.live.clear();
+        self.cloak = None;
+        self.veil.fade = None;
         // Another city is another run: JACK IN names it.
         self.run = None;
         self.save_due = false;

@@ -15,6 +15,7 @@ mod cameras;
 mod casts;
 mod cli;
 mod clinic;
+mod cloak;
 mod clock;
 mod combat;
 mod constructs;
