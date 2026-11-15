@@ -176,11 +176,11 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not in a fight".to_string());
     }
-    // A scrambler's key runs on the fullest carried cell, any other on FOCUS.
-    let pool = if matches!(&source, Source::Item(item)
-        if st.content.item(item).is_some_and(|i| i.cell))
+    // A scrambler's key runs on the fullest carried copy of its item, any other on FOCUS.
+    let pool = if let Source::Item(item) = &source
+        && st.content.item(item).is_some_and(|i| i.cell)
     {
-        match cell::best(st) {
+        match cell::best(st, item) {
             Some((copy, c)) if cell::runs(c) => Pool::Cell(copy),
             Some((_, c)) if c.left > 0 => return Err("the cell is burned out".to_string()),
             _ => return Err("the cell is empty".to_string()),

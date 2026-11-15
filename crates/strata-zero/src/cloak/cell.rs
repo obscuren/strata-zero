@@ -4,7 +4,7 @@
 
 use super::Pool;
 use crate::app::AppState;
-use game::{Charge, CopyId, FULL_CELL, SkillId};
+use game::{Charge, CopyId, FULL_CELL, ItemId, SkillId};
 
 /// What a drain unit costs a cell: a full one lasts 600 frames moving, 20 s.
 pub const CELL_RATE: u32 = 9;
@@ -29,15 +29,12 @@ pub fn runs(c: Charge) -> bool {
     c.left > 0 && !c.burned
 }
 
-/// The carried scrambler copy a cloak runs on: the one with the most left of those
+/// The carried copy of `item` a cloak runs on: the one with the most left of those
 /// that can run, else (none can) the one with the most left. Ties by pack order.
-pub fn best(st: &AppState) -> Option<(CopyId, Charge)> {
+pub fn best(st: &AppState, item: &ItemId) -> Option<(CopyId, Charge)> {
     let mut best: Option<(CopyId, Charge)> = None;
-    for s in &st.character.inventory {
+    for s in (st.character.inventory.iter()).filter(|s| s.item == *item) {
         let Some(k) = s.copy.as_ref() else { continue };
-        if !st.content.item(&s.item).is_some_and(|i| i.cell) {
-            continue;
-        }
         let c = k.cell();
         if best.is_none_or(|(_, b)| (runs(c), c.left) > (runs(b), b.left)) {
             best = Some((k.id, c));
@@ -219,6 +216,37 @@ mod tests {
     }
 
     #[test]
+    fn the_key_runs_on_a_copy_of_its_own_item() {
+        let mut st = street();
+        // Another cell item that grants the same key, carried after the scrambler, so
+        // the key's source is the scrambler.
+        let mut other = st
+            .content
+            .item(&ItemId::new("field_scrambler"))
+            .unwrap()
+            .clone();
+        other.id = ItemId::new("other_scrambler");
+        st.content.items.push(other);
+        let own = scrambler(&mut st);
+        set_charge(
+            &mut st,
+            own,
+            Charge {
+                left: FULL_CELL / 2,
+                burned: false,
+            },
+        );
+        st.character
+            .give_item(&st.content, ItemId::new("other_scrambler"), 1);
+        fire(&mut st, "scramble").unwrap();
+        assert_eq!(
+            st.cloak.as_ref().unwrap().pool,
+            Pool::Cell(own),
+            "not the fuller copy of another item"
+        );
+    }
+
+    #[test]
     fn the_cell_in_use_doesnt_recharge_and_off_says_whats_left() {
         let mut st = street();
         let k = scrambler(&mut st);
@@ -288,7 +316,11 @@ mod tests {
             burned: true,
         };
         // A night lain down and woken with no clock run: only the wake can fill it.
-        for (kind, full) in [(Kind::Wait, false), (Kind::Sleep, true)] {
+        let full = Charge {
+            left: FULL_CELL,
+            burned: false,
+        };
+        for (kind, after) in [(Kind::Wait, low), (Kind::Sleep, full)] {
             let mut st = crate::jobs::testutil::state_home();
             // a night on, so there's one to have lain down at
             crate::clock::run(&mut st, Some(NIGHT * sim::TICKS_PER_MINUTE), 0);
@@ -298,7 +330,7 @@ mod tests {
             start(&mut st, kind, at + NIGHT);
             st.rest.as_mut().unwrap().from = at - NIGHT;
             wake(&mut st, Why::Esc);
-            assert_eq!(charge(&st, k) != Some(low), full, "{kind:?}");
+            assert_eq!(charge(&st, k), Some(after), "{kind:?}");
         }
     }
 

@@ -27,9 +27,10 @@ pub(crate) fn armed(st: &mut AppState) {
 /// A field scrambler in the pack, its cell full; its copy.
 pub(crate) fn scrambler(st: &mut AppState) -> CopyId {
     let item = ItemId::new("field_scrambler");
-    st.character.give_item(&st.content, item, 1);
-    let last = st.character.inventory.last();
-    last.and_then(|s| s.copy_id()).expect("a copy in the pack")
+    st.character.give_item(&st.content, item.clone(), 1);
+    // The pack takes a new copy last: the newest of the item's is this one.
+    let new = (st.character.inventory.iter().rev()).find(|s| s.item == item);
+    new.and_then(|s| s.copy_id()).expect("a copy in the pack")
 }
 
 /// Writes a carried copy's charge.
