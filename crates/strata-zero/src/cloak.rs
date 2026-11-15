@@ -115,10 +115,6 @@ pub fn fade_ticks(phase: Phase) -> u64 {
 }
 
 /// Whether you're cloaked. A burnout's fade isn't: you're in the open from its start.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "nobody looks past it yet but the tests")
-)]
 pub fn hidden(st: &AppState) -> bool {
     st.cloak.is_some()
 }
