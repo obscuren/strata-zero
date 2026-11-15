@@ -230,7 +230,7 @@ in on an alarm, from #36's original list, set aside for the simple cloak.
 ## Calls made
 
 1. 1 FOCUS a second for the ability; the scrambler's cell lasts 20 s (30 with Stealth)
-   and recharges in 2 game minutes.
+   and recharges in 30 game minutes.
 2. The drain runs on real time on foot.
 3. The ambush is every round of the first shot or strike: sure hits, double damage.
 4. A thrown grenade ends the cloak without an ambush.
