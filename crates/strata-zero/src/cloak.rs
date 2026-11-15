@@ -8,6 +8,7 @@ use citygen::{Place, Pos, StratumKind};
 use game::{AbilityId, CopyId, FULL_CELL, Source};
 use serde::{Deserialize, Serialize};
 
+pub mod cell;
 #[cfg(test)]
 pub(crate) mod testutil;
 
@@ -128,7 +129,9 @@ pub fn heat(st: &AppState) -> Option<f32> {
     Some(match c.pool {
         Pool::Focus { start: 0, .. } => 0.0,
         Pool::Focus { start, .. } => start.saturating_sub(st.character.focus) as f32 / start as f32,
-        Pool::Cell(id) => 1.0 - cell_left(st, id).unwrap_or(0) as f32 / FULL_CELL as f32,
+        Pool::Cell(id) => {
+            1.0 - cell::charge(st, id).map_or(0, |c| c.left) as f32 / FULL_CELL as f32
+        }
         Pool::Free { .. } => VANISH_HEAT,
     })
 }
@@ -136,12 +139,6 @@ pub fn heat(st: &AppState) -> Option<f32> {
 /// A cell's charge as a percentage: 0 only when empty.
 pub fn pct(left: u32) -> u32 {
     (left.min(FULL_CELL) * 100).div_ceil(FULL_CELL)
-}
-
-/// The charge left on a carried copy's cell.
-fn cell_left(st: &AppState, id: CopyId) -> Option<u32> {
-    let copy = st.character.copy_in_pack(id)?.copy.as_ref()?;
-    Some(copy.cell().left)
 }
 
 /// Where no cloak works: inside a construct or on the Net.
@@ -156,7 +153,7 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
         let line = match c.pool {
             Pool::Cell(copy) => format!(
                 "scrambler off · {}% left",
-                pct(cell_left(st, copy).unwrap_or(0))
+                pct(cell::charge(st, copy).map_or(0, |c| c.left))
             ),
             Pool::Focus { .. } | Pool::Free { .. } => "cloak off".to_string(),
         };
@@ -178,19 +175,23 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
     let source = (st.character.abilities(&st.content).into_iter())
         .find(|(have, _)| have == id)
         .map(|(_, source)| source);
-    // A scrambler's key runs on its cell, any other on FOCUS.
-    if matches!(&source, Some(Source::Item(item))
+    // A scrambler's key runs on the fullest carried cell, any other on FOCUS.
+    let pool = if matches!(&source, Some(Source::Item(item))
         if st.content.item(item).is_some_and(|i| i.cell))
     {
-        return Err("the cell is empty".to_string());
-    }
-    if st.character.focus == 0 {
+        match cell::best(st) {
+            Some((copy, c)) if c.left > 0 => Pool::Cell(copy),
+            _ => return Err("the cell is empty".to_string()),
+        }
+    } else if st.character.focus == 0 {
         return Err("no FOCUS left".to_string());
-    }
-    let pool = Pool::Focus {
-        start: st.character.focus,
-        owed: 0,
+    } else {
+        Pool::Focus {
+            start: st.character.focus,
+            owed: 0,
+        }
     };
+    let on_cell = matches!(pool, Pool::Cell(_));
     st.cloak = Some(Cloak {
         pool,
         since: st.tick,
@@ -203,9 +204,9 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
         phase: Phase::GoingIn,
         since: st.tick,
         hot: heat(st).unwrap_or(0.0),
-        cell: false,
+        cell: on_cell,
     });
-    Ok("CLOAKED".to_string())
+    Ok(if on_cell { "SCRAMBLED" } else { "CLOAKED" }.to_string())
 }
 
 /// This frame's drain: moving, or standing still with Blind spot.
@@ -259,6 +260,7 @@ pub fn frame(st: &mut AppState) {
     }
     c.drained_to = tick;
     let units = units(st);
+    let rate = cell::rate(st);
     let c = st.cloak.as_mut().expect("on");
     match &mut c.pool {
         Pool::Focus { owed, .. } => {
@@ -271,8 +273,13 @@ pub fn frame(st: &mut AppState) {
                 end(st, End::Burnout);
             }
         }
-        // No cell cloak goes on yet (`toggle`), so no cell drains.
-        Pool::Cell(_) => {}
+        // The copy is in the pack: a gone one ended it above.
+        Pool::Cell(id) => {
+            let id = *id;
+            if cell::drain(st, id, units * rate) {
+                end(st, End::Burnout);
+            }
+        }
         // Vanish's costs nothing: it runs out on its tick, above.
         Pool::Free { .. } => {}
     }

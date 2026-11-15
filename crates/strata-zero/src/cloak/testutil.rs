@@ -2,7 +2,7 @@
 
 use crate::app::AppState;
 use citygen::Pos;
-use game::{AbilityId, Action, ItemId, SkillId, Slot};
+use game::{AbilityId, Action, Charge, CopyId, ItemId, SkillId, Slot};
 
 /// The lot with you at (6,8) and a goon at (20,8), out of its sight; the veil off.
 pub(crate) fn street() -> AppState {
@@ -22,6 +22,20 @@ pub(crate) fn armed(st: &mut AppState) {
     let gun = ItemId::new("ratchet_smg");
     let copy = st.character.new_copy(&st.content, &gun);
     st.character.wear(Slot::Primary, gun, Some(copy));
+}
+
+/// A field scrambler in the pack, its cell full; its copy.
+pub(crate) fn scrambler(st: &mut AppState) -> CopyId {
+    let item = ItemId::new("field_scrambler");
+    st.character.give_item(&st.content, item, 1);
+    let last = st.character.inventory.last();
+    last.and_then(|s| s.copy_id()).expect("a copy in the pack")
+}
+
+/// Writes a carried copy's charge.
+pub(crate) fn set_charge(st: &mut AppState, id: CopyId, charge: Charge) {
+    let s = (st.character.inventory.iter_mut()).find(|s| s.copy_id() == Some(id));
+    s.and_then(|s| s.copy.as_mut()).expect("carried").charge = Some(charge);
 }
 
 /// `n` frames on the map: the tick moves on and the cloak takes its frame.

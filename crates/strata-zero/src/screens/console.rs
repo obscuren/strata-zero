@@ -1079,6 +1079,25 @@ mod tests {
     }
 
     #[test]
+    fn spawn_gives_a_charged_scrambler() {
+        let (mut st, at) = setup();
+        assert_eq!(
+            run(&mut st, at, "spawn field_scrambler"),
+            Ok("spawned 1× `Field scrambler`".to_string())
+        );
+        let stack = (st.character.inventory.iter())
+            .find(|s| s.item == ItemId::new("field_scrambler"))
+            .expect("in the pack");
+        assert_eq!(
+            stack.copy.as_ref().and_then(|k| k.charge),
+            Some(game::Charge {
+                left: game::FULL_CELL,
+                burned: false
+            })
+        );
+    }
+
+    #[test]
     fn commands_change_the_world() {
         let (mut st, at) = setup();
         let coil = ItemId::new("copper_coil");

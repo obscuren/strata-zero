@@ -161,6 +161,10 @@ pub fn wake(st: &mut AppState, why: Why) {
         let focus_max = st.character.focus_max(&st.content);
         st.character.hp = (st.character.hp + rise(hp_max)).min(hp_max);
         st.character.focus = (st.character.focus + rise(focus_max)).min(focus_max);
+        // A night's sleep fills a scrambler's cell; a nap leaves it to the clock.
+        if slept >= NIGHT {
+            crate::cloak::cell::fill_cells(st);
+        }
     }
     let (h, m) = st.clock();
     let at = format!("{h:02}:{m:02}");
