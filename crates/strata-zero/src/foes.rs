@@ -331,7 +331,8 @@ pub fn any_hunting(st: &AppState, place: Place) -> bool {
 }
 
 /// A foe looks: idle and seeing you, it hunts; hunting and seeing you, it marks
-/// where. Returns whether it hunts after looking. A stunned or down foe sees nothing.
+/// where. Returns whether it hunts after looking. A stunned or down foe sees nothing,
+/// and nobody on foot sees you cloaked (`cloak::hidden`): no hunt, no spotting.
 pub fn look(st: &mut AppState, i: usize) -> bool {
     let Some(me) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
@@ -386,7 +387,8 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
     foe.hunting()
 }
 
-/// Every standing foe on the player's map looks; true when any hunts.
+/// Every standing foe on the player's map looks; true when any hunts. Never true
+/// while you're cloaked (`cloak::hidden`): no fight starts from the cloak.
 pub fn look_all(st: &mut AppState) -> bool {
     let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
@@ -1213,8 +1215,15 @@ mod tests {
             seen: Pos::new(8, 3),
             lost: 0,
         };
-        assert!(!look_all(&mut st), "no fight from the cloak");
-        run_until(&mut st, 600, |st| !st.foes[i].hunting());
+        // The calm look each tick, as the map's frame takes it: never a fight.
+        for _ in 0..600 {
+            assert!(!look_all(&mut st), "no fight from the cloak");
+            if !st.foes[i].hunting() {
+                break;
+            }
+            run(&mut st, 1);
+        }
+        assert!(!st.foes[i].hunting(), "it lost you");
         assert!(st.net.engaged.is_none());
         assert_eq!(
             st.character.hp,
