@@ -268,10 +268,41 @@ mod tests {
             seen: a.foes[i].pos,
             lost: 1,
         };
+        // And a calm one paused on its round, due a little on.
+        let j = (a.foes.iter().enumerate())
+            .position(|(j, f)| {
+                j != i
+                    && !f.hunting()
+                    && f.post
+                        .as_ref()
+                        .is_some_and(|p| p.building == b && p.patrol.len() > 1)
+            })
+            .expect("a calm guard with a walk");
+        let due = a.clock_tick() + 30;
+        let p = a.foes[j].post.as_mut().unwrap();
+        p.round.leg = 1;
+        p.round.next = due;
         let dir = Dir::new("guard-round");
         let a = running(a);
-        let st = reopened(&write(&dir.0, &a).unwrap());
+        let mut st = reopened(&write(&dir.0, &a).unwrap());
         assert_eq!(st.foes[i], a.foes[i]);
+        assert_eq!(st.foes[j], a.foes[j]);
+        // In the building, it carries on from there: it waits out its pause, then sets off.
+        let city = st.city.clone().unwrap();
+        let floor = st.interiors.ensure(&city, b, 0).unwrap();
+        let door = floor.doorstep(&floor.exits[0]);
+        crate::sitenet::testutil::stand_on_floor(&mut st, b, 0, door);
+        let wait = due - 1 - st.clock_tick();
+        crate::guards::testutil::run(&mut st, wait);
+        assert_eq!(st.foes[j], a.foes[j], "still paused");
+        crate::guards::testutil::run(&mut st, 1);
+        let r = &st.foes[j].post.as_ref().unwrap().round;
+        assert!(r.next > due, "it acted at its saved tick");
+        assert!(
+            st.foes[j].pos != a.foes[j].pos || r.leg != 1,
+            "on its way: {:?}",
+            st.foes[j]
+        );
     }
 
     #[test]

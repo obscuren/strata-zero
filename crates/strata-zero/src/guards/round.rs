@@ -46,7 +46,8 @@ pub(crate) fn avoid(st: &AppState, i: usize) -> Vec<Pos> {
 /// a tile toward the goal round the tiles held, or along the way that ignores them when
 /// there's none round (waiting while that tile is held), and a step that lands on the goal
 /// takes the next leg and pauses at once. A goal on another level it walks to by the link
-/// `links::link_to` picks, and takes that link standing on its stop. A goal (or a link)
+/// `links::link_to` picks, and takes that link standing on its stop, a hop at a time when
+/// no link goes there in one. A goal (or a link)
 /// with no way at all is skipped. Off a floor, or with no map, it waits a step. A saved
 /// link that no longer stops on its level is let go first (`links::forget_stale`).
 pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
@@ -71,8 +72,8 @@ pub(crate) fn round_step(st: &mut AppState, i: usize, now: u64) {
         }
         return match links::link_to(st, i, goal_level) {
             None => next_leg(st, i, n, now + GUARD_STEP_TICKS),
-            Some((link, at)) if from == at => links::take(st, i, link, goal_level, now),
-            Some((_, at)) => match step(st, i, building, level, at) {
+            Some((link, at, hop)) if from == at => links::take(st, i, link, hop, now),
+            Some((_, at, _)) => match step(st, i, building, level, at) {
                 Step::NoWay => next_leg(st, i, n, now + GUARD_STEP_TICKS),
                 Step::NoMap | Step::Held | Step::To(_) => wait(st, i, now + GUARD_STEP_TICKS),
             },
@@ -206,6 +207,32 @@ mod tests {
             crate::clock::run(&mut st, Some(1), 0);
         }
         assert_ne!(st.foes[i].pos, Pos::new(2, 3), "off its post");
+    }
+
+    #[test]
+    fn a_rest_walks_a_calm_guard_as_far_as_the_frames_would() {
+        let walked = |rest: bool| {
+            let mut st = ward();
+            stand(&mut st, 0, Pos::new(28, 3)); // in the private room, out of sight
+            let i = guard(&mut st, 1, 0, &[Pos::new(1, 3), Pos::new(30, 3)]);
+            let (minutes, frame) = (3, sim::TICKS_PER_MINUTE);
+            if rest {
+                // A rest runs the clock a game minute at a time.
+                for _ in 0..minutes {
+                    st.tick += frame;
+                    crate::clock::run(&mut st, Some(frame), crate::clock::PATHS_PER_FRAME);
+                }
+            } else {
+                for _ in 0..minutes * frame {
+                    st.tick += 1;
+                    crate::clock::run(&mut st, Some(1), crate::clock::PATHS_PER_FRAME);
+                }
+            }
+            st.foes[i].pos
+        };
+        let (awake, asleep) = (walked(false), walked(true));
+        assert!(awake.x > 10, "it walks in play: {awake:?}");
+        assert_eq!(asleep, awake);
     }
 
     #[test]

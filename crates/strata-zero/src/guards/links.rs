@@ -7,13 +7,14 @@ use crate::foes::{self, Post};
 use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::astar;
 use citygen::{FloorPlan, LinkKind, Place, Pos};
+use std::collections::BTreeMap;
 
 /// The levels a guard of `post` reaches by link `link` of `plan` from level `from` in one
 /// go: none by a crawl; a lift's rides only while it answers and to stops its card opens;
 /// a stair's, an escalator's or a ladder's next stop up and down, which ask no card.
 pub fn hops(st: &AppState, post: &Post, plan: &FloorPlan, link: usize, from: i32) -> Vec<i32> {
     let hops = plan.hops(link, from);
-    if plan.links.get(link).map(|l| l.kind) != Some(LinkKind::Lift) {
+    if !is_lift(plan, link) {
         return hops;
     }
     if !crate::sitenet::lift_answers(st, post.building, link) {
@@ -24,10 +25,19 @@ pub fn hops(st: &AppState, post: &Post, plan: &FloorPlan, link: usize, from: i32
         .collect()
 }
 
-/// The link guard `i` takes to level `to`, and its stop tile on the guard's level: the
-/// one it came by (`round.via`) while that still goes there, so it comes back the way it
-/// went; else of the links one hop there, the nearest by its walk (ties: link order).
-pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos)> {
+/// Whether link `link` of `plan` is a lift.
+pub(crate) fn is_lift(plan: &FloorPlan, link: usize) -> bool {
+    plan.links
+        .get(link)
+        .is_some_and(|l| l.kind == LinkKind::Lift)
+}
+
+/// The link guard `i` takes toward level `to`, its stop tile on the guard's level, and
+/// the level it rides to: the one it came by (`round.via`) while that still goes there,
+/// so it comes back the way it went; else of the links one hop there, the nearest by its
+/// walk (ties: link order). With none (a stair goes a stop at a time), the first link of
+/// the fewest hops there its card rides, the nearest of those the same way.
+pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos, i32)> {
     let foe = st.foes.get(i)?;
     let post = foe.post.as_ref()?;
     let Place::Floor { building, level } = foe.place else {
@@ -36,16 +46,64 @@ pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos)> 
     let plan = crate::interiors::plan_now(st, building)?;
     let stop = |k: usize| Some((k, plan.links.get(k)?.stop(level)?.at));
     let goes = |k: &usize| hops(st, post, &plan, *k, level).contains(&to);
-    if let Some(way) = post.round.via.filter(goes).and_then(stop) {
-        return Some(way);
+    if let Some((k, at)) = post.round.via.filter(goes).and_then(stop) {
+        return Some((k, at, to));
     }
     let map = foes::map_of(st, foe.place)?;
-    (0..plan.links.len())
+    let nearest = |ways: Vec<(usize, i32)>| {
+        (ways.into_iter())
+            .filter_map(|(k, hop)| Some((stop(k)?, hop)))
+            .filter_map(|((k, at), hop)| Some((walk(&map, post, foe.pos, at)?, k, at, hop)))
+            .min_by_key(|(steps, k, _, _)| (*steps, *k))
+            .map(|(_, k, at, hop)| (k, at, hop))
+    };
+    let one_hop = (0..plan.links.len())
         .filter(goes)
-        .filter_map(stop)
-        .filter_map(|(k, at)| Some((walk(&map, post, foe.pos, at)?, k, at)))
-        .min_by_key(|(steps, k, _)| (*steps, *k))
-        .map(|(_, k, at)| (k, at))
+        .map(|k| (k, to))
+        .collect();
+    if let Some(way) = nearest(one_hop) {
+        return Some(way);
+    }
+    let dist = hops_to(st, post, &plan, to);
+    let ways: Vec<(usize, usize, i32)> = (0..plan.links.len())
+        .filter_map(|k| {
+            (hops(st, post, &plan, k, level).into_iter())
+                .filter_map(|hop| Some((*dist.get(&hop)?, k, hop)))
+                .min()
+        })
+        .collect();
+    let fewest = ways.iter().map(|(d, _, _)| *d).min()?;
+    nearest(
+        (ways.into_iter())
+            .filter(|(d, _, _)| *d == fewest)
+            .map(|(_, k, hop)| (k, hop))
+            .collect(),
+    )
+}
+
+/// The fewest hops from each level of `plan` to level `to` by the links a guard of
+/// `post` rides (`hops`), for the levels that reach it at all: `to` itself 0.
+fn hops_to(st: &AppState, post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
+    let rides: Vec<(i32, Vec<i32>)> = (plan.levels.iter())
+        .map(|l| {
+            let next = (0..plan.links.len()).flat_map(|k| hops(st, post, plan, k, *l));
+            (*l, next.collect())
+        })
+        .collect();
+    let mut dist = BTreeMap::from([(to, 0)]);
+    for d in 1..=rides.len() {
+        let reached: Vec<i32> = (rides.iter())
+            .filter(|(l, next)| {
+                !dist.contains_key(l) && next.iter().any(|n| dist.get(n) == Some(&(d - 1)))
+            })
+            .map(|(l, _)| *l)
+            .collect();
+        if reached.is_empty() {
+            break;
+        }
+        dist.extend(reached.into_iter().map(|l| (l, d)));
+    }
+    dist
 }
 
 /// The steps of a guard's walk from `from` to `to` on `map`, its card's doors open:
@@ -68,8 +126,7 @@ pub(crate) fn take(st: &mut AppState, i: usize, link: usize, to: i32, now: u64) 
     let Place::Floor { building, level } = st.foes[i].place else {
         return;
     };
-    let lift = (crate::interiors::plan_now(st, building))
-        .is_some_and(|plan| plan.links.get(link).map(|l| l.kind) == Some(LinkKind::Lift));
+    let lift = (crate::interiors::plan_now(st, building)).is_some_and(|plan| is_lift(&plan, link));
     let Some(post) = st.foes[i].post.as_mut() else {
         return;
     };
@@ -227,6 +284,20 @@ mod tests {
     }
 
     #[test]
+    fn a_guard_two_floors_from_home_walks_back_into_its_round() {
+        let mut st = ward3();
+        stand(&mut st, 0, Pos::new(28, 3)); // in the private room, out of sight
+        let i = guard(&mut st, 2, 0, &[Pos::new(6, 3), Pos::new(10, 3)]);
+        // It followed you up twice and lost you: calm on 3F, its round on L.
+        st.foes[i].pos = Pos::new(20, 3);
+        st.foes[i].post.as_mut().unwrap().home = Some(0);
+        run_until(&mut st, 3000, |st| st.foes[i].place == on(1));
+        run_until(&mut st, 3000, |st| st.foes[i].place == on(0));
+        run_until(&mut st, 3000, |st| st.foes[i].pos == Pos::new(10, 3));
+        assert_eq!(st.foes[i].post.as_ref().unwrap().round.via, None);
+    }
+
+    #[test]
     fn a_guard_waits_for_the_lift_its_card_rides() {
         let mut st = ward();
         stand(&mut st, 0, Pos::new(28, 3));
@@ -256,7 +327,7 @@ mod tests {
             "the lift doesn't answer"
         );
         let i = guard(&mut st, 0, 1, &[Pos::new(12, 3)]);
-        assert_eq!(link_to(&st, i, 1).map(|(k, _)| k), Some(0), "the stairs");
+        assert_eq!(link_to(&st, i, 1).map(|(k, _, _)| k), Some(0), "the stairs");
     }
 
     #[test]

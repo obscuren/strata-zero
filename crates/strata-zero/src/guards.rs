@@ -10,7 +10,7 @@ use citygen::BuildingId;
 
 pub use doors::opens;
 pub use hunt::hear;
-pub(crate) use hunt::{drop_card, you_left};
+pub(crate) use hunt::{drop_card, release_follow, you_left};
 pub(crate) use links::{forget_stale, free_landing};
 
 /// A calm guard's step: an amble, three times your walk.
@@ -24,18 +24,26 @@ pub const GUARD_LIFT_TICKS: u64 = 60;
 /// How far a shot wakes the calm guards of its floor, walls or not.
 pub const HEAR_RADIUS: i32 = 12;
 
-/// The guards' step on the clock. Every building with a posted foe, in id order: while
-/// you (or your body) are in it, each standing guard of it whose time has come acts, but
-/// one on the floor of a fight, which the turns move: a calm one walks its round, a
-/// hunting one hunts (`hunt::hunt_step`). Out of it, its guards lose you and hold. Then a
-/// guard that sees the body you left jacked in finds it (`hunt::body_check`).
-pub fn tick(st: &mut AppState) {
+/// The most a guard does in one step of the clock: a rest's game minute is a few steps of
+/// a walk, and this bounds a step that ran long.
+const MOST_ACTIONS: usize = 64;
+
+/// The guards' step on a clock that moved `ticks` ticks: a frame's 1, a rest's game
+/// minute. Every building with a posted foe, in id order: while you (or your body) are in
+/// it, each standing guard of it acts as often as its time comes in those ticks (at most
+/// `MOST_ACTIONS`), each action at the tick it fell due, the step's first tick at the
+/// earliest, so a minute's rest walks it as far as a minute of frames. One on the floor of
+/// a fight, which the turns move, holds. A calm one walks its round, a hunting one hunts
+/// (`hunt::hunt_step`). Out of it, its guards lose you and hold. Then a guard that sees
+/// the body you left jacked in finds it (`hunt::body_check`).
+pub fn tick(st: &mut AppState, ticks: u64) {
     let mut buildings: Vec<BuildingId> = (st.foes.iter())
         .filter_map(|f| f.post.as_ref().map(|p| p.building))
         .collect();
     buildings.sort();
     buildings.dedup();
     let now = st.clock_tick();
+    let first = now.saturating_sub(ticks.max(1) - 1);
     for b in buildings {
         let ours = |f: &crate::foes::Foe| f.post.as_ref().is_some_and(|p| p.building == b);
         if !crate::venues::inside(st, b) {
@@ -47,16 +55,21 @@ pub fn tick(st: &mut AppState) {
             continue;
         }
         for i in 0..st.foes.len() {
-            let f = &st.foes[i];
-            let due = ours(f) && f.post.as_ref().is_some_and(|p| now >= p.round.next);
-            let held = (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place);
-            if !due || !f.standing() || held {
-                continue;
-            }
-            if f.hunting() {
-                hunt::hunt_step(st, i, now);
-            } else {
-                round::round_step(st, i, now);
+            for _ in 0..MOST_ACTIONS {
+                let f = &st.foes[i];
+                let Some(due) = (f.post.as_ref()).filter(|_| ours(f)).map(|p| p.round.next) else {
+                    break;
+                };
+                let held = (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place);
+                if now < due || !f.standing() || held {
+                    break;
+                }
+                let at = due.max(first);
+                if f.hunting() {
+                    hunt::hunt_step(st, i, at);
+                } else {
+                    round::round_step(st, i, at);
+                }
             }
         }
     }

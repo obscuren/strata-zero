@@ -5,7 +5,7 @@ use super::round::{self, Step};
 use super::{GUARD_LIFT_TICKS, GUARD_RUN_TICKS, GUARD_STEP_TICKS, HEAR_RADIUS, links};
 use crate::app::AppState;
 use crate::foes::{FoeMode, Post};
-use citygen::{BuildingId, LinkKind, Place};
+use citygen::{BuildingId, Place};
 
 /// You took link `link` off level `level` of building `b` to level `to`: every standing
 /// guard of that floor that hunts you follows (`post.follow`), setting off at once.
@@ -72,7 +72,7 @@ pub(crate) fn hunt_step(st: &mut AppState, i: usize, now: u64) {
         drop(plan);
         return run_to(st, i, building, level, at, now);
     }
-    let lift = plan.links[link].kind == LinkKind::Lift;
+    let lift = links::is_lift(&plan, link);
     let rides = links::hops(st, post, &plan, link, level).contains(&to);
     let waited = post.round.lift == Some((link, to));
     drop(plan);
@@ -164,7 +164,7 @@ pub(crate) fn body_check(st: &mut AppState) {
 }
 
 /// Lets a trail go: the follow, and the lift it waited on to follow it.
-fn release_follow(post: &mut Post) {
+pub(crate) fn release_follow(post: &mut Post) {
     if post.follow.is_some() && post.round.lift == post.follow {
         post.round.lift = None;
     }
@@ -252,7 +252,7 @@ mod tests {
             .exit_at(Pos::new(0, 3))
             .unwrap();
         crate::interiors::leave(&mut st, &exit).unwrap();
-        crate::guards::tick(&mut st);
+        crate::guards::tick(&mut st, 1);
         assert!(!st.foes[i].hunting());
         assert_eq!(st.foes[i].place, on(0), "it never leaves the building");
         assert_eq!(st.foes[i].post.as_ref().unwrap().follow, None);
@@ -556,7 +556,7 @@ mod tests {
         let i = guard_by_the_body(&mut st, b);
         let second = nth_guard_by_the_body(&mut st, b, 1);
         assert!(second > i);
-        crate::guards::tick(&mut st);
+        crate::guards::tick(&mut st, 1);
         assert!(!st.player.as_ref().unwrap().jacked_in());
         assert!(
             !st.foes[second].post.as_ref().unwrap().radioed,
@@ -622,7 +622,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for _ in 0..400 {
             advance(&mut st, 1);
-            crate::guards::tick(&mut st);
+            crate::guards::tick(&mut st, 1);
             let d = st.foes[st.foes.len() - 1].pos.chebyshev(at);
             let lines = crate::sitenet::body_lines(&st);
             assert!(lines[1].contains(&format!("nearest {d} ")), "{lines:?}");

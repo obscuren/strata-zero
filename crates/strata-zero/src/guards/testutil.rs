@@ -15,7 +15,8 @@
 //!
 //! `X` an exit onto the street, `K` a card lock (zone 1, free from its east side), `P`
 //! the door of a private office (zone 2). The east hall is dark. Level 1 (`2F`) is one
-//! lit hall with the same stair and lift.
+//! lit hall with the same stair and lift. `ward3` adds level 2 (`3F`), another such hall
+//! that only the stair goes on to.
 
 use crate::app::AppState;
 use crate::foes::{Foe, Post};
@@ -112,9 +113,9 @@ fn ground() -> Floor {
     f
 }
 
-/// 2F: one lit hall.
-fn upstairs() -> Floor {
-    let mut f = frame(1, |_| LIT);
+/// An upper floor: one lit hall.
+fn upstairs(level: i32) -> Floor {
+    let mut f = frame(level, |_| LIT);
     f.rooms = vec![Room::new(
         Rect::new(1, 1, 30, 5),
         RoomKind::Hall,
@@ -136,8 +137,9 @@ fn stop(level: i32, at: Pos, card: u8) -> LinkStop {
     }
 }
 
-/// The ward's plan: two levels, a stair and a lift whose 2F stop asks card 1.
-fn plan() -> FloorPlan {
+/// The ward's plan on `levels` (L and up): a stair stopping on each, and a lift on L and
+/// 2F whose 2F stop asks card 1.
+fn plan(levels: &[i32]) -> FloorPlan {
     let link = |kind, stops| LevelLink {
         kind,
         stops,
@@ -149,12 +151,14 @@ fn plan() -> FloorPlan {
         theme: Theme::CorpCore,
         footprint: Rect::new(0, 0, 32, 7),
         size: SIZE,
-        levels: vec![0, 1],
+        levels: levels.to_vec(),
         doors: Vec::new(),
         links: vec![
             link(
                 LinkKind::Stair,
-                vec![stop(0, Pos::new(2, 1), 0), stop(1, Pos::new(2, 1), 0)],
+                (levels.iter())
+                    .map(|l| stop(*l, Pos::new(2, 1), 0))
+                    .collect(),
             ),
             link(
                 LinkKind::Lift,
@@ -173,11 +177,24 @@ fn plan() -> FloorPlan {
 /// The lot with the ward's plan and both its floors, you on L at (6,3) with your
 /// sight refreshed, and no foes.
 pub(crate) fn ward() -> AppState {
+    ward_of(&[0, 1])
+}
+
+/// The ward with a third level, 3F, that only the stair reaches: two hops from L, as a
+/// stair goes a stop at a time.
+pub(crate) fn ward3() -> AppState {
+    ward_of(&[0, 1, 2])
+}
+
+/// The ward on `levels`, laid as `ward` says.
+fn ward_of(levels: &[i32]) -> AppState {
     let mut st = AppState::new();
     st.enter_city(City::lot(1));
-    st.interiors.put_plan(plan());
+    st.interiors.put_plan(plan(levels));
     st.interiors.put_floor(WARD, ground());
-    st.interiors.put_floor(WARD, upstairs());
+    for level in levels.iter().filter(|l| **l > 0) {
+        st.interiors.put_floor(WARD, upstairs(*level));
+    }
     st.foes.clear();
     st.player = Some(crate::walker::Player::at(on(0), Pos::new(6, 3)));
     stand(&mut st, 0, Pos::new(6, 3));
@@ -274,7 +291,7 @@ pub(crate) fn advance(st: &mut AppState, n: u64) {
 pub(crate) fn run(st: &mut AppState, n: u64) {
     for _ in 0..n {
         advance(st, 1);
-        crate::guards::tick(st);
+        crate::guards::tick(st, 1);
     }
 }
 

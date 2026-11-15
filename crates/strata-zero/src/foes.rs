@@ -372,10 +372,7 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         // letting go of the lift it waited on to follow it.
         let guard = foe.post.as_mut().map(|post| {
             post.spotted = true;
-            if post.follow.is_some() && post.round.lift == post.follow {
-                post.round.lift = None;
-            }
-            post.follow = None;
+            crate::guards::release_follow(post);
         });
         if guard.is_some() && calm {
             st.warn("guard spots you");
