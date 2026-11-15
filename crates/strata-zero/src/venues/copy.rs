@@ -104,6 +104,8 @@ pub fn end(st: &mut AppState, b: BuildingId) -> Result<String, String> {
     let name = crate::net::building_name(st, b);
     Ok(if st.interiors.copy(b).is_none() {
         format!("the job on `{name}` is over")
+    } else if !inside(st, b) {
+        format!("the job on `{name}` ends once the fight's over")
     } else {
         format!("the job on `{name}` ends once you're out")
     })
@@ -111,7 +113,9 @@ pub fn end(st: &mut AppState, b: BuildingId) -> Result<String, String> {
 
 /// Takes a waiting copy, or ends one, once the player is out of its building. A copy whose
 /// type this build lacks, or saved with no layer, ends at once (ending needs only the
-/// layout, which the plan holds), and the log says it's lost.
+/// layout, which the plan holds), and the log says it's lost. No copy ends during a fight,
+/// wherever it is: ending takes its guards out of the foes, which the fight holds by their
+/// place in the list.
 pub fn tick(st: &mut AppState) {
     let copies: Vec<(BuildingId, MissionCopy)> = (st.interiors.copies())
         .map(|(b, c)| (b, c.clone()))
@@ -120,7 +124,12 @@ pub fn tick(st: &mut AppState) {
         let typed = (st.interiors.plan_of(b))
             .and_then(|p| p.venue.as_deref())
             .is_some_and(|v| VenuePack::builtin().by_id(&v.type_id).is_some());
-        if !typed || copy.layer.is_none() {
+        let lost = !typed || copy.layer.is_none();
+        let ends = lost || (copy.ending && !inside(st, b));
+        if ends && st.net.engaged.is_some() {
+            continue;
+        }
+        if lost {
             lose(st, b, &copy);
         } else if inside(st, b) {
             continue;
@@ -169,15 +178,19 @@ fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
 }
 
 /// Ends the copy: a live one's guards and the cards still lying where it left them go,
-/// the site's Net as it had it is dropped, and the plain building comes back from the
-/// layout, its floors drawn again from the seed (the one you stand on at once, once the
-/// copy is gone). One that never went live changed nothing. A copy lost while you're
-/// inside (`lose` doesn't wait) leaves the site's Net as it stands: nothing is dropped
-/// under you.
+/// the site's Net as it had it is dropped, the alarm the job raised (a guard's radio, your
+/// body found) ends, and the plain building comes back from the layout, its floors drawn
+/// again from the seed (the one you stand on at once, once the copy is gone). One that
+/// never went live changed nothing. A copy lost while you're inside (`lose` doesn't wait)
+/// leaves the site's Net and its alarm as they stand: nothing is dropped under you.
 fn finish(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     if copy.live {
         if !inside(st, b) {
             crate::sitenet::forget(st, b);
+            if let Some(t) = st.net.traces.get_mut(&b) {
+                t.alert_until = None;
+                t.heat = t.heat.min(game::ALARM_HEAT / 2);
+            }
         }
         st.foes
             .retain(|f| f.post.as_ref().is_none_or(|p| p.building != b));

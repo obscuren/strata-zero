@@ -878,3 +878,39 @@ fn a_rooms_code_note_and_the_keyjack_open_its_door() {
     assert_eq!(opened, Verdict::Open);
     assert_eq!(step(&mut st), door);
 }
+
+#[test]
+fn ending_waits_out_a_fight_on_the_street() {
+    let (mut st, b) = hotel();
+    begin(&mut st, b, inputs(MissionSize::Small)).unwrap();
+    let at = st.player.as_ref().unwrap().pos;
+    let goon = st.foes.len(); // after the guards: the fight holds it by its place here
+    st.foes
+        .push(crate::foes::Foe::goon(STREET, at.offset(1, 0)));
+    crate::net::engage(&mut st, STREET, true);
+    assert!(st.net.engaged.is_some());
+    end(&mut st, b).unwrap();
+    assert!(copy_live(&st, b), "the guards stay while the fight's on");
+    assert_eq!(st.foes[goon].place, STREET);
+    crate::net::disengage(&mut st);
+    tick(&mut st);
+    assert!(st.interiors.copy(b).is_none());
+    assert!(st.foes.iter().all(|f| f.post.is_none()));
+}
+
+#[test]
+fn ending_clears_the_alarm_the_job_raised() {
+    let (mut st, b) = hotel();
+    begin(&mut st, b, inputs(MissionSize::Small)).unwrap();
+    crate::net::lock_down(&mut st, b); // a guard radioed it in
+    let now = st.net.now(&st);
+    assert!(st.net.alert(b, now));
+    end(&mut st, b).unwrap();
+    assert!(st.interiors.copy(b).is_none());
+    assert!(!st.net.alert(b, now), "the plain building isn't on alert");
+    assert!(st.net.lifts_answer(b, now));
+    assert!(
+        st.net.trace(b).heat < game::ALARM_HEAT,
+        "under the alarm line"
+    );
+}
