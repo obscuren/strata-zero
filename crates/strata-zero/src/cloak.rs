@@ -185,7 +185,8 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
         if st.content.item(item).is_some_and(|i| i.cell))
     {
         match cell::best(st) {
-            Some((copy, c)) if c.left > 0 => Pool::Cell(copy),
+            Some((copy, c)) if cell::runs(c) => Pool::Cell(copy),
+            Some((_, c)) if c.left > 0 => return Err("the cell is burned out".to_string()),
             _ => return Err("the cell is empty".to_string()),
         }
     } else if st.character.focus == 0 {

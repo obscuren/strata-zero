@@ -23,7 +23,14 @@ pub fn rate(st: &AppState) -> u32 {
     }
 }
 
-/// The carried scrambler copy with the most left, ties by pack order.
+/// Whether a cell can run a cloak: charge left, and not burned out (one that burned out
+/// runs again once it recharges past a tenth).
+pub fn runs(c: Charge) -> bool {
+    c.left > 0 && !c.burned
+}
+
+/// The carried scrambler copy a cloak runs on: the one with the most left of those
+/// that can run, else (none can) the one with the most left. Ties by pack order.
 pub fn best(st: &AppState) -> Option<(CopyId, Charge)> {
     let mut best: Option<(CopyId, Charge)> = None;
     for s in &st.character.inventory {
@@ -32,7 +39,7 @@ pub fn best(st: &AppState) -> Option<(CopyId, Charge)> {
             continue;
         }
         let c = k.cell();
-        if best.is_none_or(|(_, b)| c.left > b.left) {
+        if best.is_none_or(|(_, b)| (runs(c), c.left) > (runs(b), b.left)) {
             best = Some((k.id, c));
         }
     }
@@ -178,6 +185,37 @@ mod tests {
         assert!(!charge(&st, k).unwrap().burned);
         recharge(&mut st, 30 * sim::TICKS_PER_MINUTE);
         assert_eq!(charge(&st, k).unwrap().left, FULL_CELL);
+    }
+
+    #[test]
+    fn a_burned_cell_waits_for_a_tenth_and_a_clean_one_runs_first() {
+        let mut st = street();
+        let burned = scrambler(&mut st);
+        let clean = scrambler(&mut st);
+        let at = |pct: u32, burned: bool| Charge {
+            left: FULL_CELL * pct / 100,
+            burned,
+        };
+        set_charge(&mut st, burned, at(8, true));
+        set_charge(&mut st, clean, at(4, false));
+        fire(&mut st, "scramble").unwrap();
+        assert_eq!(
+            st.cloak.as_ref().unwrap().pool,
+            Pool::Cell(clean),
+            "not the burned one"
+        );
+        fire(&mut st, "scramble").unwrap();
+        st.character
+            .inventory
+            .retain(|s| s.copy_id() != Some(clean));
+        assert_eq!(
+            fire(&mut st, "scramble"),
+            Err("the cell is burned out".to_string())
+        );
+        recharge(&mut st, (FULL_CELL / 50 / CELL_RECHARGE + 1) as u64); // past a tenth
+        assert!(!charge(&st, burned).unwrap().burned);
+        assert_eq!(fire(&mut st, "scramble"), Ok("SCRAMBLED".to_string()));
+        assert_eq!(st.cloak.as_ref().unwrap().pool, Pool::Cell(burned));
     }
 
     #[test]
