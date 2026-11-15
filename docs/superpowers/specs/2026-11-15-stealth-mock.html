@@ -1,0 +1,269 @@
+<title>Stealth Mocks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one live terminal screen with its controls, the phases explained beside it. Single dark look by choice: it is the game's screen. */
+:root {
+  --bg: #07090c; --fg: #c9d1d9; --dim: #5b6573; --rule: #1d2530;
+  --foe: #ff4b55; --cyan: #00e5ff; --pink: #ff2bd6; --amber: #ffb000; --green: #4be37a;
+  --mono: "Fira Code", ui-monospace, Menlo, monospace; --head: "Space Grotesk", system-ui, sans-serif;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--head); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 60px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+h1 { font-size: 28px; margin: 0; letter-spacing: .02em; text-wrap: balance; }
+.lede { color: #9aa4b1; max-width: 72ch; line-height: 1.5; margin: 6px 0 0; }
+.mock { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .mock { grid-template-columns: 1fr; } }
+.notes h2 { font-size: 15px; margin: 14px 0 4px; color: var(--cyan); font-family: var(--mono); letter-spacing: .08em; }
+.notes h2:first-child { margin-top: 0; }
+.notes p { color: #9aa4b1; line-height: 1.5; font-size: 14px; margin: 0; }
+.screen { overflow-x: auto; background: #000; border: 1px solid var(--rule); border-radius: 4px; }
+pre { margin: 0; padding: 10px 12px; font-family: var(--mono); font-size: 13px; line-height: 1.32; color: var(--fg); white-space: pre; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+button { font-family: var(--mono); font-size: 13px; background: #0e151c; color: var(--cyan); border: 1px solid #1f3440; border-radius: 3px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--cyan); }
+button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.phase { font-family: var(--mono); font-size: 13px; color: var(--dim); margin-top: 8px; }
+b { font-weight: 600; }
+.d { color: var(--dim); } .w { color: #fff; } .r { color: var(--foe); } .c { color: var(--cyan); } .p { color: var(--pink); } .a { color: var(--amber); } .g { color: var(--green); }
+.f { color: #3a434e; }
+.fv { color: rgba(0,229,255,.28); }
+.kp { color: var(--pink); } .kc { color: var(--cyan); } .kw { color: #f4f8ff; text-shadow: 0 0 6px rgba(255,255,255,.7); }
+.flash { color: #fff; text-shadow: 0 0 8px #fff; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Stealth: the scrambler's veil</h1>
+    <p class="lede">An office copy's floor at night, two guards on their rounds. The scrambler hides you behind its interference, and you see the floor through the same interference: the picture splits into its pink and cyan channels. Everything here is built from that split, going in, holding, running low, burning out and switching off. Use the buttons; the phase shows under the screen.</p>
+  </header>
+
+  <section class="mock">
+    <div>
+      <div class="screen"><pre id="s"></pre></div>
+      <div class="controls">
+        <button id="on">cloak</button>
+        <button id="low">charge low</button>
+        <button id="dry">run it dry</button>
+        <button id="off">switch it off</button>
+        <button id="full">full charge</button>
+      </div>
+      <div class="phase" id="ph"></div>
+    </div>
+    <div class="notes">
+      <h2>ONE EFFECT, TURNED UP AND DOWN</h2>
+      <p>Every phase is the same drift: the pink and cyan split beside walls and guards, and the wave rolling down the map. Only its strength changes, so nothing jumps.</p>
+      <h2>GOING IN</h2>
+      <p>The cell catches: the drift sputters in, frames of it flickering over the plain map, wide and wild at first. Then it holds and calms down to its resting split. About a second.</p>
+      <h2>HOLDING</h2>
+      <p>The split widens to three cells and shivers as the cell drains, and the wave thickens.</p>
+      <h2>BURNING OUT</h2>
+      <p>The drift keeps going the way it was heading, past empty: the split pulls wider, the wave covers the map and speeds up, the picture slips more often. Then it sputters, the plain map showing through for more and more frames, until it cuts out. The HUD flashes <b>FAILING</b> the whole time. About two and a half seconds.</p>
+      <h2>SWITCHING IT OFF</h2>
+      <p>The same drift eased out in half a second: the split closes, the wave stops, the veil fades.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+const W = 58, H = 13;
+const YOU = [21, 7];
+const ACTORS = [[12, 6], [47, 3]];
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const rnd = n => Math.floor(Math.random() * n);
+const lerp = (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t));
+const ease = t => t * t * (3 - 2 * t);
+const DUR = { start: 1100, break: 2400, snap: 500 };
+const dur = s => s.phase === 'snap' && s.offStyle === 'shutter' ? 420 : DUR[s.phase];
+
+// the floor as cells [char, class]; solid ones get channel copies
+function floor() {
+  const g = [];
+  for (let y = 0; y < H; y++) {
+    const row = [];
+    for (let x = 0; x < W; x++) {
+      let ch = '·', k = 'f';
+      if (y === 0 || y === H - 1) { ch = '═'; k = 'w'; }
+      else if (x === 0 || x === W - 1) { ch = '║'; k = 'w'; }
+      else if (x === 40 && y !== 6) { ch = '║'; k = 'w'; }
+      else if (x === 40 && y === 6) { ch = '▯'; k = 'c'; }
+      else if ((y === 3 || y === 9) && x > 3 && x < 37 && (x % 9) < 3) { ch = '▬'; k = 'w'; }
+      else if (y === 11 && x > 42 && x < 55 && x % 4 === 0) { ch = '▪'; k = 'c'; }
+      row.push({ ch, k, o: 1 });
+    }
+    g.push(row);
+  }
+  for (const [x, y] of ACTORS) g[y][x] = { ch: '@', k: 'r', o: 1 };
+  g[YOU[1]][YOU[0]] = { ch: '@', k: 'w', o: 1, you: true };
+  return g;
+}
+
+// how the picture looks at time t, from the phase
+// Every phase is the same drift, turned up or down: `heat` drives the split, its
+// shiver and the wave (0 calm, 1 an empty cell, past 1 out of control), and `plain`
+// is a frame where the scrambler cuts out and the plain map shows through.
+function look(s, t) {
+  const hot = 1 - s.charge / 100;
+  const rest = h => 1 + Math.round(h * 2.4);
+  const shiver = h => (!reduced && h > .35 && Math.random() < Math.min(1, h)) ? (Math.random() < .5 ? -1 : 1) * (h > 1.2 ? 1 + rnd(2) : 1) : 0;
+  const L = { split: 0, heat: 0, veil: 0, wave: false, plain: false, all: false, base: 1, tear: 0, drop: 0, flash: false, shutter: -1 };
+  const p = s.phase === 'off' || s.phase === 'on' ? 1 : Math.min(1, (t - s.since) / dur(s));
+  const drift = (h, veil) => Object.assign(L, { heat: h, split: Math.max(1, rest(h) + shiver(h)), veil, wave: true });
+  switch (s.phase) {
+    case 'on':
+      drift(hot, 1);
+      break;
+    case 'start': {
+      // the cell catches: it sputters in, wide and wild, then settles to its resting drift
+      if (p < .45) {
+        const q = p / .45;
+        if (Math.random() < lerp(.85, .1, q)) L.plain = true;
+        else drift(lerp(.9, 1.5, q), q);
+      } else drift(lerp(1.5, hot, ease((p - .45) / .55)), 1);
+      break;
+    }
+    case 'break': {
+      // the drift you know, pushed past empty, then sputtering out
+      if (p < .55) drift(lerp(hot, 1.7, ease(p / .55)), 1);
+      else {
+        const q = (p - .55) / .45;
+        if (Math.random() < lerp(.2, 1, q * q)) L.plain = true;
+        else drift(lerp(1.7, .6, q), 1 - q * .6);
+      }
+      break;
+    }
+    case 'snap': {
+      if (s.offStyle === 'shutter') {
+        // v5: the split closes fast, then a white line opens and shuts across your row
+        if (p < .6) { const q = ease(p / .6); Object.assign(L, { split: Math.round(lerp(rest(hot), 0, q)), veil: 1 - q }); }
+        else { const q = (p - .6) / .4; L.shutter = q < .5 ? Math.round(q * 4) : Math.round((1 - q) * 4); }
+      } else {
+        // v6: the same drift, eased out
+        const q = ease(p);
+        Object.assign(L, { heat: lerp(hot, 0, q), split: Math.round(lerp(rest(hot), 0, q)), veil: 1 - q, wave: q < .6 });
+      }
+      break;
+    }
+  }
+  if (L.plain) Object.assign(L, { split: 0, veil: 0, wave: false });
+  if (s.phase === 'snap' && s.offStyle === 'shutter' && p >= .6) Object.assign(L, { split: 0, veil: 0, wave: false });
+  if (reduced) L.split = Math.min(L.split, 2);
+  return { L, p, hot };
+}
+
+function frame(s, t) {
+  const { L, p, hot } = look(s, t);
+  const g = floor();
+  // the channels: each solid cell (or every cell, while the picture breaks) throws a pink
+  // copy to the left and a cyan one to the right, on ground that's empty
+  const out = g.map(r => r.map(c => ({ ...c, o: c.you ? 1 : L.base })));
+  if (L.split > 0) {
+    const chan = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const c = g[y][x];
+      if (c.you) continue;
+      const src = L.all || c.k !== 'f';
+      if (!src) continue;
+      chan.push([x - L.split, y, c.ch, 'kp'], [x + L.split, y, c.ch, 'kc']);
+    }
+    const hit = new Map();
+    for (const [x, y, ch, k] of chan) {
+      if (x < 0 || x >= W) continue;
+      const key = y * W + x;
+      const prev = hit.get(key);
+      hit.set(key, prev && prev.k !== k ? { ch, k: 'kw' } : { ch, k });
+    }
+    for (const [key, c] of hit) {
+      const x = key % W, y = Math.floor(key / W);
+      const here = out[y][x];
+      if (here.you) continue;
+      const ground = here.k === 'f' || L.base < .5;
+      if (ground) out[y][x] = { ch: c.ch, k: c.k, o: Math.min(1, .5 + L.heat * .45) };
+    }
+  }
+  if (L.flash) for (const row of out) for (const c of row) { c.k = c.you ? 'w' : 'flash'; c.o = 1; }
+  if (L.shutter >= 0) for (let dy = -L.shutter; dy <= L.shutter; dy++) {
+    const y = YOU[1] + dy;
+    if (y > 0 && y < H - 1) for (const c of out[y]) if (!c.you) { c.k = 'flash'; c.o = dy === 0 ? 1 : .5; }
+  }
+  if (L.veil > .5) for (const row of out) for (const c of row) if (c.k === 'f') c.k = 'fv';
+  // rows: the drift's wave, the tear, rows dropping out
+  const heat = L.heat;
+  const band = Math.min(H - 2, 1 + Math.round(heat * 4));
+  const period = Math.max(35, 150 - 100 * heat);
+  const head = Math.floor(t / period) % (H + band + 4);
+  const slip = L.wave && !reduced && Math.random() < Math.min(.5, .12 * heat * heat);
+  const rows = out.map((r, y) => {
+    let cells = r.map(c => `<span class="${c.k}" style="opacity:${c.o.toFixed(2)}">${c.ch}</span>`);
+    if (y === YOU[1] || y === 0 || y === H - 1) return cells.join('');
+    if (L.drop && Math.random() < L.drop) return ' '.repeat(W);
+    let shift = 0;
+    if (L.wave) {
+      const into = head - y;
+      if (into >= 0 && into < band) {
+        const mid = 1 - Math.abs(into - (band - 1) / 2) / Math.max(1, band / 2);
+        shift = Math.max(1, Math.round((1 + heat * 2) * mid));
+        if (Math.floor(t / 600) % 2) shift = -shift;
+      }
+      if (slip) shift += 1;
+    }
+    if (L.tear && Math.random() < L.tear) shift = (Math.random() < .5 ? -1 : 1) * (1 + rnd(3));
+    if (shift > 0) cells = Array(shift).fill(' ').concat(cells.slice(0, W - shift));
+    if (shift < 0) cells = cells.slice(-shift).concat(Array(-shift).fill(' '));
+    return cells.join('');
+  });
+  // HUD and bottom bar by phase
+  const pct = String(Math.round(s.charge)).padStart(3) + '%';
+  const blink = Math.floor(t / 120) % 2;
+  const cloaked = s.phase === 'on' || s.phase === 'start';
+  const failing = s.phase === 'break';
+  const label = cloaked ? `<span class="c">◌ FIELD SCRAMBLER</span> <span class="${hot > .75 ? 'p' : 'c'}">${pct}</span>`
+    : failing ? `<span class="${blink ? 'p' : 'c'}">◌ FIELD SCRAMBLER ▓▓ FAILING</span>`
+    : s.burnt ? `<span class="p">◌ field scrambler   0% · burned out</span>`
+    : `<span class="d">◌ field scrambler  ${pct}</span>`;
+  const n = Math.round(s.charge / 5);
+  const top = [
+    `<span class="a">DEV</span> <span class="c">D'SHAWN</span> <span class="d">:: LVL 50 :: ¤ 320 ::</span>  ${label}`,
+    `HP     <span class="g">████████████████████</span> 80/80`,
+    `FOCUS  <span class="c">██████████████████░░</span> 46/51`,
+    `CELL   <span class="${hot > .75 ? 'p' : 'c'}">${'█'.repeat(n)}${'░'.repeat(20 - n)}</span> <span class="d">${cloaked ? Math.ceil(s.charge * .3) + 's left' : 'idle'}</span>`,
+  ].join('\n');
+  const rule = '<span class="d">' + '─'.repeat(W) + '</span>';
+  const mid = cloaked ? `<span class="c">▒▒ SCRAMBLED ▒▒</span>` : failing ? `<span class="${blink ? 'p' : 'c'}">▓▓ SIGNAL LOST ▓▓</span>` : '';
+  const line2 = cloaked ? `<span class="r">guard</span> <span class="d">· calm · 9 tiles</span>   <span class="a">AMBUSH</span> <span class="d">· your first hit lands, ×2</span>`
+    : failing ? `<span class="p">! the scrambler burns out · you're in the open</span>`
+    : s.burnt ? `<span class="p">! the scrambler burned out · recharge the cell</span>`
+    : s.phase === 'snap' || s.wasOn ? `<span class="d">scrambler off · ${pct} left</span>` : `<span class="d">the scrambler is off</span>`;
+  const bottom = [
+    `<span class="d">on foot · L</span>                     ${mid}`,
+    line2,
+    `ABILITIES [1] scout ○ [2] arc trace ○ [3] shove ○   <span class="d">MOV</span> ▬▬▬▬ 4/6`,
+  ].join('\n');
+  const wash = L.veil > 0 ? `background:linear-gradient(rgba(0,229,255,${(.05 * L.veil).toFixed(3)}),rgba(0,229,255,${(.05 * L.veil).toFixed(3)})),repeating-linear-gradient(0deg,rgba(0,229,255,${(.08 * L.veil).toFixed(3)}) 0 1px,transparent 1px 3px)` : '';
+  return top + '\n' + rule + '\n' + `<span style="display:block;${wash}">${rows.join('\n')}</span>` + '\n' + rule + '\n' + bottom;
+}
+
+const s = { phase: 'on', since: 0, charge: 70, burnt: false, wasOn: false };
+const el = document.getElementById('s'), ph = document.getElementById('ph');
+const go = (phase) => { s.phase = phase; s.since = performance.now(); };
+function tick() {
+  const t = performance.now();
+  if (s.phase === 'on') {
+    s.charge -= .35;
+    if (s.charge <= 0) { s.charge = 0; go('break'); }
+  }
+  if (s.phase === 'start' && t - s.since > DUR.start) go('on');
+  if (s.phase === 'break' && t - s.since > DUR.break) { s.phase = 'off'; s.burnt = true; }
+  if (s.phase === 'snap' && t - s.since > dur(s)) { s.phase = 'off'; s.wasOn = true; }
+  el.innerHTML = frame(s, t);
+  ph.textContent = { on: 'holding', start: 'going in', break: 'burning out', snap: 'switching off', off: s.burnt ? 'off · burned out' : 'off' }[s.phase];
+}
+setInterval(tick, reduced ? 500 : 90);
+document.getElementById('on').onclick = () => { if (s.phase === 'off' && s.charge > 0) { s.burnt = false; go('start'); } };
+document.getElementById('low').onclick = () => { s.charge = 18; s.burnt = false; if (s.phase === 'off') go('start'); };
+document.getElementById('dry').onclick = () => { s.charge = 2; s.burnt = false; if (s.phase !== 'on') go('on'); };
+document.getElementById('off').onclick = () => { if (s.phase === 'on' || s.phase === 'start') { s.offStyle = 'ease'; go('snap'); } };
+document.getElementById('full').onclick = () => { s.charge = 100; s.burnt = false; if (s.phase === 'off') go('start'); };
+tick();
+</script>
