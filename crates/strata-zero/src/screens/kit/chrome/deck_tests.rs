@@ -1702,9 +1702,9 @@ fn the_chair_opens_gear_on_chrome() {
         (Tab::Kit, View::Chrome, Stop::Site(Site::Neural))
     );
     assert_eq!(d.kit.state.picker, None);
-    // Left on ATTRIBUTES, on its ledger.
+    // Left on ATTRIBUTES.
     st.deck_tab = Tab::Attributes;
-    st.deck_sheet.pane = crate::screens::sheet::SheetPane::Ledger;
+
     let mut d = Deck::chair(&st);
     assert_eq!(
         (d.tab, d.kit.state.view, d.kit.state.stop),

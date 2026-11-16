@@ -191,12 +191,7 @@ pub(crate) fn chrome_mark(st: &AppState) -> Vec<(String, Style)> {
 /// pick, the load `after` it goes in, what leaves counted: what it adds in amber (in
 /// magenta when it won't fit) and the total with it; a lighter one, the lower share and
 /// total. The segments, then ` 19` and `/24`.
-pub(crate) fn gauge(
-    st: &AppState,
-    after: Option<u32>,
-    segments: u32,
-    focused: bool,
-) -> Vec<(String, Style)> {
+pub(crate) fn gauge(st: &AppState, after: Option<u32>, segments: u32) -> Vec<(String, Style)> {
     let ch = &st.character;
     let (load, max) = (ch.chrome_load(&st.content), ch.load_max());
     let share = |n: u32| match max {
@@ -209,10 +204,7 @@ pub(crate) fn gauge(
     let (have, after) = (share(load.min(total)), share(total));
     let fg = |c: Color| Style::default().fg(c);
     vec![
-        (
-            "▰".repeat(have as usize),
-            fg(if focused { CYAN } else { DIM }),
-        ),
+        ("▰".repeat(have as usize), fg(CYAN)),
         ("▰".repeat((after - have) as usize), fg(change)),
         ("▱".repeat((segments - after) as usize), fg(FAINTER)),
         (

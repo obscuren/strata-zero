@@ -1,10 +1,7 @@
 //! ATTRIBUTES, the character sheet: on the left the attributes you buy, the secondary numbers
 //! gear and chrome move and the resistances, as rack tiles with a readout of the one
-//! selected; on the right the ledger of the chrome in you (`ledger`).
-
-pub mod ledger;
-
-pub use ledger::LedgerRow;
+//! selected; on the right the selected number's readout: where it comes from, and what it
+//! feeds. The chrome in you is on GEAR & INVENTORY.
 
 use crate::actions::{perform, report};
 use crate::app::AppState;
@@ -31,10 +28,8 @@ use std::ops::Range;
 const PANE_W: u16 = 43;
 /// The rule between the panes, from the body's left edge.
 const RULE_X: u16 = 45;
-/// The rule over the readout, right under the last block's tiles (it separates them
-/// itself), and the readout under it, from the body's top.
-const READOUT_RULE: u16 = 17;
-const READOUT_Y: u16 = 18;
+/// Where the readout starts, from the body's left edge: two columns past the rule.
+const READOUT_X: u16 = RULE_X + 2;
 
 /// The left pane's blocks of tiles, in `Num::ALL` order: a header's title, the row
 /// it sits on, and each tile's width. A blank row parts one block from the next.
@@ -656,35 +651,17 @@ impl Readout {
     }
 }
 
-/// Which pane holds the cursor.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SheetPane {
-    #[default]
-    Left,
-    Ledger,
-}
-
 /// Where the cursor is, kept between visits to the tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SheetState {
-    pub pane: SheetPane,
-    /// The left pane's tile, an index into `Num::ALL`.
+    /// The selected tile, an index into `Num::ALL`.
     pub tile: usize,
-    /// The ledger's row: a site or a socket, kept as itself so it stays put when
-    /// the rows above it change.
-    pub row: LedgerRow,
-    /// The picker's pick, while it is open.
-    pub picker: Option<usize>,
 }
 
 pub struct Sheet {
     pub state: SheetState,
     /// Tick of the last change of tile: drives the readout's typewriter.
     pub changed: u64,
-    /// Tick of the last change of the ledger's card: its own typewriter.
-    pub card: u64,
-    /// The row `x` asked about: a second `x` there pulls it out and pays the doc.
-    pub pulling: Option<LedgerRow>,
 }
 
 impl Sheet {
@@ -692,13 +669,10 @@ impl Sheet {
         Sheet {
             state: SheetState::default(),
             changed: tick,
-            card: tick,
-            pulling: None,
         }
     }
 
-    /// Reopens where the tab was left (`st.deck_sheet`): on the left pane, with the
-    /// tile it had. The readout types out afresh.
+    /// Reopens where the tab was left (`st.deck_sheet`): with the tile it had. The readout types out afresh.
     pub fn restore(st: &AppState) -> Sheet {
         let mut sheet = Sheet::new(st.tick);
         sheet.state = st.deck_sheet;
@@ -706,15 +680,10 @@ impl Sheet {
         sheet
     }
 
-    /// The tab comes up: on the left pane with the last tile, no picker open, the
-    /// readout typing.
+    /// The tab comes up: on the last tile, the readout typing.
     pub(crate) fn opened(&mut self, tick: u64) {
-        self.state.pane = SheetPane::Left;
-        self.state.picker = None;
-        self.pulling = None;
         self.state.tile = self.tile();
         self.changed = tick;
-        self.card = tick;
     }
 
     /// The selected tile, always one that exists.
@@ -742,54 +711,49 @@ impl Sheet {
             let s = span(b);
             s.start + col.min(s.len() - 1)
         };
-        match (self.state.pane, code) {
-            (SheetPane::Left, KeyCode::Left | KeyCode::Char('h')) => {
+        match code {
+            KeyCode::Left | KeyCode::Char('h') => {
                 if col > 0 {
                     self.select(tile - 1, tick);
                 }
             }
-            (SheetPane::Left, KeyCode::Right | KeyCode::Char('l')) => {
+            KeyCode::Right | KeyCode::Char('l') => {
                 if tile + 1 < here.end {
                     self.select(tile + 1, tick);
-                } else {
-                    self.state.pane = SheetPane::Ledger;
                 }
             }
-            (SheetPane::Left, KeyCode::Up | KeyCode::Char('k')) => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 if b > 0 {
                     self.select(at(b - 1), tick);
                 }
             }
-            (SheetPane::Left, KeyCode::Down | KeyCode::Char('j')) => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 if b + 1 < BLOCKS.len() {
                     self.select(at(b + 1), tick);
                 }
             }
             // A point buys straight away; the refusal lands in the strip.
-            (SheetPane::Left, KeyCode::Char(' ') | KeyCode::Enter) => {
+            KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Num::Attribute(s) = Num::ALL[tile] {
                     let result = perform(st, Action::BuyAttribute(s));
                     report(st, result);
                 }
             }
-            (SheetPane::Ledger, _) => return self.ledger_key(st, code),
             _ => return false,
         }
         true
     }
 
-    /// Draws the tab into `body`: the left pane's three blocks of tiles, the rule, the
-    /// selected tile's readout typing out under it, the rule between the panes, and the
-    /// right pane's ledger and card.
+    /// Draws the tab into `body`: the left pane's three blocks of tiles, the rule, and
+    /// the selected tile's readout typing out in the right half, from two columns past
+    /// the rule to the right edge.
     pub fn draw(&self, st: &AppState, body: Rect, buf: &mut Buffer) {
         let x0 = body.x + 1;
         let right = (x0 + PANE_W).min(body.right());
-        let focused = self.state.pane == SheetPane::Left;
         let readings: Vec<Reading> = Num::ALL.iter().map(|&n| Reading::of(st, n)).collect();
         let in_body = |dy: u16| (body.y + dy < body.bottom()).then_some(body.y + dy);
         // The pane is solid, so the map's ghost stays out of the gaps between tiles.
-        let pane_w = RULE_X.min(body.width);
-        solid(buf, Rect::new(body.x, body.y, pane_w, body.height));
+        solid(buf, body);
 
         for (b, &(title, dy, w)) in BLOCKS.iter().enumerate() {
             let Some(y) = in_body(dy) else {
@@ -810,7 +774,7 @@ impl Sheet {
                 )],
                 _ => Vec::new(),
             };
-            header(buf, (x0, right), y, title, &tail, focused);
+            header(buf, (x0, right), y, title, &tail);
             let ty = y + TILES_DY;
             for (k, i) in span(b).enumerate() {
                 let x = x0 + k as u16 * w;
@@ -821,18 +785,10 @@ impl Sheet {
             }
         }
 
-        if let Some(y) = in_body(READOUT_RULE) {
-            put(
-                buf,
-                x0,
-                y,
-                &"─".repeat(PANE_W as usize),
-                Style::default().fg(RULE),
-                right,
-            );
-        }
-        if let Some(y) = in_body(READOUT_Y) {
-            let area = Rect::new(x0, y, right - x0, body.bottom() - y);
+        let rx = body.x + READOUT_X;
+        let rx_end = body.right().saturating_sub(1);
+        if rx + 2 < rx_end {
+            let area = Rect::new(rx, body.y, rx_end - rx, body.height);
             let (w, h) = (area.width as usize, area.height as usize);
             let lines = Readout::of(st, &readings[self.tile()], w).fit(w, h);
             let p = st.tick.saturating_sub(self.changed) as f32 / REVEAL_TICKS as f32;
@@ -843,35 +799,22 @@ impl Sheet {
             );
         }
 
-        self.draw_right(st, body, buf);
-
-        // Amber while chrome can change: in the doc's chair, or free.
         let rule_x = body.x + RULE_X;
-        let rule = if crate::screens::kit::chrome::rules::changing(st) {
-            AMBER
-        } else {
-            RULE
-        };
         if rule_x < body.right() {
             for y in body.y..body.bottom() {
-                buf[(rule_x, y)].set_char('║').set_fg(rule);
+                buf[(rule_x, y)].set_char('║').set_fg(RULE);
             }
         }
     }
 
     /// One number's tile: its label set in the top edge, the value inside, what gear,
     /// chrome and talents add set in the bottom edge. The selected tile's edge is cyan
-    /// and its inside lit while the pane has the focus, dim while it does not.
+    /// and its inside lit.
     fn draw_tile(&self, st: &AppState, r: &Reading, t: Rect, sel: bool, buf: &mut Buffer) {
         let (x, y, w, right) = (t.x, t.y, t.width, t.right());
         let inner = right.saturating_sub(1);
-        let focused = self.state.pane == SheetPane::Left;
-        let on = sel && focused;
-        let edge = Style::default().fg(match (sel, focused) {
-            (false, _) => RULE,
-            (true, true) => CYAN,
-            (true, false) => DIM,
-        });
+        let on = sel;
+        let edge = Style::default().fg(if sel { CYAN } else { RULE });
 
         let label = r.num.label();
         let run = "─".repeat((w as usize).saturating_sub(label.chars().count() + 4));
@@ -933,56 +876,32 @@ impl Sheet {
         }
     }
 
-    /// The hint row's text, by where the cursor is.
+    /// The hint row's text.
     #[cfg(test)]
-    pub fn hints(&self, st: &AppState) -> String {
-        self.hint_line(st).to_string()
+    pub fn hints(&self) -> String {
+        self.hint_line().to_string()
     }
 
-    /// The hint row, by where the cursor is: dim, and what the lock refuses dimmer.
-    pub fn hint_line(&self, st: &AppState) -> Line<'static> {
-        match self.state.pane {
-            SheetPane::Left => Line::from(Span::styled(
-                "←↑↓→ select · space allocates attribute · → over to the chrome · Q/E tabs · tab close",
-                Style::default().fg(DIM),
-            )),
-            SheetPane::Ledger => self.ledger_hints(st),
-        }
+    /// The hint row: dim.
+    pub fn hint_line(&self) -> Line<'static> {
+        Line::from(Span::styled(
+            "←↑↓→ select · space allocates attribute · Q/E tabs · tab close",
+            Style::default().fg(DIM),
+        ))
     }
 }
 
-/// A block's header: its title, cyan while the pane has the focus, a rule, and the
-/// tail set at the right end.
+/// A block's header: its title in cyan, a rule, and the tail set at the right end.
 fn header(
     buf: &mut Buffer,
     (x0, right): (u16, u16),
     y: u16,
     title: &str,
     tail: &[(String, Style)],
-    lit: bool,
 ) {
-    marked_header(buf, (x0, right), y, title, &[], tail, lit);
-}
-
-/// `header` with a mark straight after the title, before the rule.
-fn marked_header(
-    buf: &mut Buffer,
-    (x0, right): (u16, u16),
-    y: u16,
-    title: &str,
-    mark: &[(String, Style)],
-    tail: &[(String, Style)],
-    lit: bool,
-) {
-    let title_style = Style::default()
-        .fg(if lit { CYAN } else { DIM })
-        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
     put(buf, x0, y, title, title_style, right);
-    let mut x = x0 + title.chars().count() as u16;
-    for (text, style) in mark {
-        put(buf, x, y, text, *style, right);
-        x += text.chars().count() as u16;
-    }
+    let x = x0 + title.chars().count() as u16;
     let tail_w: u16 = tail
         .iter()
         .map(|(t, _)| t.chars().count() as u16)
@@ -1024,6 +943,8 @@ mod tests {
     /// The deck's body at 100×30, and at 120×40.
     const BODY: Rect = Rect::new(1, 5, 98, 22);
     const WIDE: Rect = Rect::new(1, 10, 118, 27);
+    /// A body with four rows for the readout: the crowded ones.
+    const SHORT: Rect = Rect::new(1, 5, 98, 4);
 
     fn state() -> AppState {
         AppState::new()
@@ -1064,11 +985,27 @@ mod tests {
         buf
     }
 
-    /// The readout's rows, the left pane's columns only.
+    /// The readout's width at `body`: from two columns past the rule to the last column
+    /// but one.
+    fn readout_w(body: Rect) -> u16 {
+        body.right() - 1 - (body.x + READOUT_X)
+    }
+
+    /// The readout's rows, the right half's columns only.
     fn readout(buf: &Buffer, body: Rect) -> String {
-        (body.y + READOUT_Y..body.bottom())
-            .map(|y| cells(buf, body.x + 1, y, 43).trim_end().to_string() + "\n")
+        (body.y..body.bottom())
+            .map(|y| {
+                cells(buf, body.x + READOUT_X, y, readout_w(body))
+                    .trim_end()
+                    .to_string()
+                    + "\n"
+            })
             .collect()
+    }
+
+    /// The column of the readout's last cell: where line one's `next N pts` ends.
+    fn readout_end(body: Rect) -> u16 {
+        body.x + READOUT_X + readout_w(body) - 1
     }
 
     fn press(s: &mut Sheet, st: &mut AppState, code: KeyCode) -> usize {
@@ -1131,15 +1068,18 @@ mod tests {
         );
         assert_eq!(cells(buf, 2, 17, 11), "RESISTANCES");
         assert_eq!(cells(buf, 2, 19, 14), "┌ KIN ┐┌ THM ┐");
-        // Blank: under each header and between the blocks; the readout's rule sits right
-        // under the last tiles, and the readout has the four rows under it.
+        // Blank: under each header and between the blocks, and under the last tiles
+        // the left pane is empty; the readout is in the right half.
         for y in [6, 10, 12, 16, 18] {
             assert_eq!(cells(buf, 2, y, 43).trim(), "", "row {y}");
         }
         assert_eq!(cells(buf, 2, 21, 7), "└─────┘", "KIN's bottom edge");
-        assert_eq!(cells(buf, 2, 22, 43), "─".repeat(43), "the rule");
-        assert_eq!(BODY.bottom() - (BODY.y + READOUT_Y), 4);
-        assert_eq!(cells(buf, 2, 23, 4), "BODY", "the readout under the rule");
+        assert_eq!(BODY.height, 22);
+        assert_eq!(
+            cells(buf, 48, 5, 4),
+            "BODY",
+            "the readout, top of the right half"
+        );
         // The deck's +1 net in the NET tile's bottom edge, the jacket's +5 in HP's;
         // with no body SGT moved nothing, so its edge is bare.
         assert_eq!(cells(buf, 34, 9, 8), "└─ +1 ─┘");
@@ -1197,18 +1137,11 @@ mod tests {
             press(&mut s, &mut st, KeyCode::Right),
             tile_of(Num::Attribute(Attribute::Net))
         );
-        assert_eq!(s.state.pane, SheetPane::Left);
-        press(&mut s, &mut st, KeyCode::Right);
         assert_eq!(
-            s.state.pane,
-            SheetPane::Ledger,
-            "past NET, over to the chrome"
+            press(&mut s, &mut st, KeyCode::Right),
+            tile_of(Num::Attribute(Attribute::Net)),
+            "past NET there is nowhere to go"
         );
-        assert_eq!(
-            press(&mut s, &mut st, KeyCode::Left),
-            tile_of(Num::Attribute(Attribute::Net))
-        );
-        assert_eq!(s.state.pane, SheetPane::Left, "back to the tile it had");
         for _ in 0..3 {
             press(&mut s, &mut st, KeyCode::Char('h'));
         }
@@ -1331,14 +1264,13 @@ mod tests {
             text.lines().next().unwrap().ends_with(&next),
             "right-aligned: {text}"
         );
-        // Four rows at 100×30: the blurb's first line stays, marked cut.
-        assert_eq!(text.lines().count(), 4, "{text}");
-        assert!(text.lines().nth(1).unwrap().ends_with('…'), "{text}");
+        // The right half is the tab's height: nothing is cut.
+        assert!(!text.contains('…'), "{text}");
         assert_eq!(
-            buf[(2, BODY.y + READOUT_Y)].fg,
+            buf[(BODY.x + READOUT_X, BODY.y)].fg,
             attribute_colour(Attribute::Body)
         );
-        assert_eq!(buf[(BODY.x + 43, BODY.y + READOUT_Y)].fg, AMBER);
+        assert_eq!(buf[(readout_end(BODY), BODY.y)].fg, AMBER);
 
         // EMP, with nine pieces in: the tile and the readout say what they cost.
         nine_pieces(&mut st);
@@ -1426,8 +1358,8 @@ mod tests {
 
     /// The readout's row that starts with `lead`, as drawn.
     fn row_of(buf: &Buffer, body: Rect, lead: &str) -> u16 {
-        (body.y + READOUT_Y..body.bottom())
-            .find(|&y| cells(buf, body.x + 1, y, 43).starts_with(lead))
+        (body.y..body.bottom())
+            .find(|&y| cells(buf, body.x + READOUT_X, y, readout_w(body)).starts_with(lead))
             .unwrap_or_else(|| panic!("no row starts with {lead}"))
     }
 
@@ -1454,7 +1386,7 @@ mod tests {
             assert!(text.contains(want), "{want}: {text}");
         }
         let y = row_of(&buf, BODY, "capped at 10");
-        assert_eq!(buf[(2, y)].fg, FAINTER);
+        assert_eq!(buf[(BODY.x + READOUT_X, y)].fg, FAINTER);
 
         // MOV in a construct: your avatar walks BASE_MOVE whatever your spine does.
         let mut st = walking();
@@ -1509,7 +1441,7 @@ mod tests {
         s.state.tile = tile_of(Num::Attribute(Attribute::Cool));
         settle(&s, &mut st);
         // Six rows of readout: room for what it feeds, not for the whole blurb.
-        let body = Rect::new(1, 5, 98, READOUT_Y + 6);
+        let body = Rect::new(1, 5, 98, 6);
         let buf = drawn(&s, &st, body);
         let text = readout(&buf, body);
         let n = Build::from_character(&st.content, &st.character)
@@ -1521,16 +1453,16 @@ mod tests {
             first.ends_with(&next),
             "one row, the cost at the right: {text}"
         );
-        assert_eq!(buf[(body.x + 43, body.y + READOUT_Y)].fg, AMBER);
+        assert_eq!(buf[(readout_end(body), body.y)].fg, AMBER);
         for want in ["feeds", "gear +1 Mirrorshades", "hardware +1 Hushcan"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         // The blurb gave way to make room, and says so.
         assert!(text.lines().nth(1).unwrap().ends_with('…'), "{text}");
 
-        // On the real 100×30 body, four rows: line one with its cost, every source.
-        let buf = drawn(&s, &st, BODY);
-        let text = readout(&buf, BODY);
+        // Four rows: line one with its cost, every source.
+        let buf = drawn(&s, &st, SHORT);
+        let text = readout(&buf, SHORT);
         assert_eq!(text.lines().filter(|l| !l.is_empty()).count(), 4, "{text}");
         let first = text.lines().next().unwrap();
         assert!(first.starts_with("COOL 5 · 7 in all"), "{text}");
@@ -1562,8 +1494,8 @@ mod tests {
     #[test]
     fn a_crowded_readout_folds_its_note_into_line_one() {
         let (st, s) = crowded_reflex(9);
-        let buf = drawn(&s, &st, BODY);
-        let text = readout(&buf, BODY);
+        let buf = drawn(&s, &st, SHORT);
+        let text = readout(&buf, SHORT);
         let first = text.lines().next().unwrap();
         assert_eq!(first, "REFLEX 9 · 10 in all, capped", "{text}");
         for want in [
@@ -1575,9 +1507,9 @@ mod tests {
         }
         assert!(!text.contains('…'), "nothing cut: {text}");
         // The folded note in the note's own colour.
-        let x = BODY.x + 1 + "REFLEX 9 · 10 in all, ".chars().count() as u16;
-        assert_eq!(cells(&buf, x, BODY.y + READOUT_Y, 6), "capped");
-        assert_eq!(buf[(x, BODY.y + READOUT_Y)].fg, FAINTER);
+        let x = SHORT.x + READOUT_X + "REFLEX 9 · 10 in all, ".chars().count() as u16;
+        assert_eq!(cells(&buf, x, SHORT.y, 6), "capped");
+        assert_eq!(buf[(x, SHORT.y)].fg, FAINTER);
         // With room, the note keeps its own line.
         let wide = drawn(&s, &st, WIDE);
         let text = readout(&wide, WIDE);
@@ -1601,8 +1533,8 @@ mod tests {
             qty: 1,
             copy: Some(copy),
         });
-        let buf = drawn(&s, &st, BODY);
-        let text = readout(&buf, BODY);
+        let buf = drawn(&s, &st, SHORT);
+        let text = readout(&buf, SHORT);
         let n = Build::from_character(&st.content, &st.character)
             .attribute_cost(&st.content, Attribute::Reflex);
         let next = format!("next {n} pt{}", if n == 1 { "" } else { "s" });
@@ -1677,21 +1609,41 @@ mod tests {
     }
 
     #[test]
-    fn the_ledgers_focus_dims_the_tile() {
-        let mut st = state();
-        let mut s = Sheet::new(0);
-        s.state.pane = SheetPane::Ledger;
-        settle(&s, &mut st);
-        let buf = drawn(&s, &st, BODY);
-        assert_eq!(buf[(2, 7)].fg, DIM, "BODY keeps its place, dim");
-        assert_ne!(buf[(5, 8)].bg, BAR_BG);
-        assert_eq!(buf[(2, 5)].fg, DIM, "the headers go dim");
-        assert!(s.hints(&st).contains("← attributes"));
-        s.state.pane = SheetPane::Left;
+    fn the_hints_have_no_chrome_to_cross_to() {
+        let s = Sheet::new(0);
         assert_eq!(
-            s.hints(&st),
-            "←↑↓→ select · space allocates attribute · → over to the chrome · Q/E tabs · tab close"
+            s.hints(),
+            "←↑↓→ select · space allocates attribute · Q/E tabs · tab close"
         );
+    }
+
+    #[test]
+    fn the_readout_fills_the_right_half() {
+        // 120×40: the tiles stay left of the rule; the readout starts two columns past it
+        // on the tab's first row and runs to the right edge; nothing reads CHROME.
+        let mut st = state();
+        let s = Sheet::new(0);
+        settle(&s, &mut st);
+        let buf = drawn(&s, &st, WIDE);
+        assert_eq!(cells(&buf, WIDE.x + 45, WIDE.y, 1), "║");
+        assert_eq!(cells(&buf, WIDE.x + 47, WIDE.y, 6), "BODY 4");
+        let text = readout(&buf, WIDE);
+        assert!(text.contains("feeds"), "{text}");
+        assert!(!text.contains('…'), "{text}");
+        // Between the rule and the readout: only the rule.
+        assert_eq!(cells(&buf, WIDE.x + 46, WIDE.y, 1), " ");
+        let tab: String = (WIDE.y..WIDE.bottom())
+            .map(|y| cells(&buf, WIDE.x, y, WIDE.width))
+            .collect();
+        assert!(!tab.contains("CHROME"), "{tab}");
+        // The tiles above are unchanged, and under them the left pane is empty.
+        assert_eq!(cells(&buf, 2, WIDE.y + 2, 8), "┌ BOD ─┐");
+        assert_eq!(cells(&buf, 2, WIDE.y + 20, 43).trim(), "");
+        // `→` past the last tile does nothing: the tile stays, nothing else moves.
+        let mut s = s;
+        s.state.tile = tile_of(Num::Attribute(Attribute::Net));
+        press(&mut s, &mut st, KeyCode::Right);
+        assert_eq!(s.state.tile, tile_of(Num::Attribute(Attribute::Net)));
     }
 
     #[test]
@@ -1705,13 +1657,9 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         for body in [BODY, WIDE] {
             for tile in 0..Num::ALL.len() {
-                for pane in [SheetPane::Left, SheetPane::Ledger] {
+                {
                     let mut s = Sheet::new(0);
-                    s.state = SheetState {
-                        pane,
-                        tile,
-                        ..Default::default()
-                    };
+                    s.state = SheetState { tile };
                     settle(&s, &mut st);
                     let mut buf = Buffer::empty(area);
                     for c in &mut buf.content {
@@ -1744,7 +1692,7 @@ mod tests {
                     // Everything the number comes from is drawn, and why it doesn't add up.
                     let text = readout(&buf, body);
                     let r = Reading::of(&st, Num::ALL[tile]);
-                    for part in Readout::of(&st, &r, 43).says() {
+                    for part in Readout::of(&st, &r, readout_w(body) as usize).says() {
                         assert!(
                             text.contains(&part),
                             "{body:?} tile {tile}: {part:?} in {text}"
@@ -1768,7 +1716,7 @@ mod tests {
         let text = readout(&wide, WIDE);
         assert!(text.contains("feeds"), "{text}");
         assert!(!text.contains('…'), "{text}");
-        assert!(readout(&wide, WIDE).starts_with("BODY 4"));
+        assert!(text.starts_with("BODY 4"));
         assert_eq!(wide[(WIDE.x + 45, WIDE.bottom() - 1)].symbol(), "║");
     }
 }

@@ -1401,14 +1401,11 @@ fn kit_shots(
     }
 }
 
-/// ATTRIBUTES at each size: the spec's loadout on the Piston arm; the picker on R ARM with
-/// a Grip arm in the pack; the picker on the forearm with a Monowire spool; the swap
-/// picker on the Piston arm at L ARM, the Grip arm picked; the left pane on EMP, two
-/// off for each piece; and on REFLEX, its readout crowded with sources and its cap.
+/// ATTRIBUTES at each size, with the spec's loadout fitted: EMP, two off for each piece;
+/// and REFLEX, its readout crowded with sources and its cap.
 #[test]
 #[ignore]
 fn attributes_sheet() {
-    use crate::screens::sheet::{LedgerRow, SheetPane};
     use game::{Num, Site, Stack};
     let sizes = [(100, 30), (120, 40)];
     let fresh = || {
@@ -1449,57 +1446,6 @@ fn attributes_sheet() {
         st
     };
     let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_limb", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-    });
-
-    // The cradle, its bay with the Scout drone docked, and what docks there.
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_cradle", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::Back);
-    });
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_bay", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
-    });
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_picker_bay", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("grip_arm"), 1);
-    sheet_shots(&mut st, "attributes_picker_site", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::RightArm);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("monowire_spool"), 1);
-    sheet_shots(&mut st, "attributes_picker_socket", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 1);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("grip_arm"), 1);
-    sheet_shots(&mut st, "attributes_picker_swap", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
     let emp = Num::ALL
         .iter()
         .position(|&n| n == Num::Resist(game::Harm::Emp))
@@ -1522,8 +1468,8 @@ fn attributes_sheet() {
     });
 }
 
-/// The deck on `2` (ATTRIBUTES), `set` applied, then drawn at each size once the card and
-/// the readout have typed out, clear of the deck's signal jitter.
+/// The deck on `2` (ATTRIBUTES), `set` applied, then drawn at each size once the readout has
+/// typed out, clear of the deck's signal jitter.
 fn sheet_shots(
     st: &mut AppState,
     name: &str,
@@ -1535,7 +1481,6 @@ fn sheet_shots(
     deck.update(st, &[key(KeyCode::Char('2'))]);
     set(&mut deck, st);
     deck.sheet.changed = st.tick;
-    deck.sheet.card = st.tick;
     st.tick += 200;
     if st.tick % 90 < 3 {
         st.tick += 3;

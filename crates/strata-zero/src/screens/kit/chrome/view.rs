@@ -325,7 +325,7 @@ impl Kit {
             Style::default().fg(DIM).add_modifier(Modifier::BOLD),
             x1,
         );
-        let runs = gauge(st, after, u32::from(segments), true);
+        let runs = gauge(st, after, u32::from(segments));
         let (bar, tail) = runs.split_at(3);
         let mut x = x0 + label.len() as u16;
         for (text, style) in bar {

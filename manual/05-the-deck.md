@@ -24,9 +24,9 @@ The skill categories, each folded over its skills. A filled `◆` is yours, an e
 
 ## ATTRIBUTES
 
-Your character sheet. On the left are your five attributes, with any unspent points beside them; your secondary numbers (HP, focus, armour, sight, carry, moves), which your gear and chrome raise; and your resistances to each kind of harm. Under them, the number the cursor is on is explained: where it comes from, and what it feeds.
+Your character sheet. On the left are your five attributes, with any unspent points beside them; your secondary numbers (HP, focus, armour, sight, carry, moves), which your gear and chrome raise; and your resistances to each kind of harm. On the right, the number the cursor is on is explained: where it comes from, and what it feeds.
 
-`space` on an attribute spends a point on it. `→` past the last tile crosses to the chrome in your body, which only a ripperdoc can change (Chrome and drones).
+`space` on an attribute spends a point on it. The chrome in your body is on GEAR & INVENTORY, under CHROME.
 
 ## GEAR & INVENTORY
 

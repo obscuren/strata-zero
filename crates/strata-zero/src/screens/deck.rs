@@ -1420,9 +1420,6 @@ impl Deck {
         if self.tab == Tab::Kit {
             self.kit.reselect(st);
         }
-        if self.tab == Tab::Attributes {
-            self.sheet.reselect(st);
-        }
         if self.tab == Tab::Jobs {
             self.jobs.reselect(st);
         }
@@ -1455,13 +1452,9 @@ impl Deck {
                     continue;
                 }
             }
-            // ATTRIBUTES takes the arrows, `h j k l`, space, `x` on the ledger, and esc
-            // while its picker is open; the rest are the deck's.
-            if self.tab == Tab::Attributes {
-                self.sheet.reselect(st);
-                if self.sheet.key(st, k.code) {
-                    continue;
-                }
+            // ATTRIBUTES takes the arrows, `h j k l` and space; the rest are the deck's.
+            if self.tab == Tab::Attributes && self.sheet.key(st, k.code) {
+                continue;
             }
             let rows = self.rows(st);
             if self.row >= rows.len() || rows.get(self.row).is_some_and(|r| r.detail.is_none()) {
@@ -1908,7 +1901,7 @@ impl Screen for Deck {
 
         // Hints. The sheet's and CHROME's come with what the lock refuses dimmer.
         let hint = match self.tab {
-            Tab::Attributes => self.sheet.hint_line(st),
+            Tab::Attributes => self.sheet.hint_line(),
             Tab::Kit => self.kit.hint_line(st),
             tab => Line::from(Span::styled(
                 match tab {
@@ -3049,7 +3042,6 @@ mod tests {
 
     #[test]
     fn the_attributes_tab_reopens_where_it_was_left() {
-        use crate::screens::sheet::SheetPane;
         let mut st = state();
         let mut d = Deck::new(0);
         // BODY, down to HP, along to FOC.
@@ -3066,34 +3058,10 @@ mod tests {
         let again = Deck::new(5).restore(&st);
         assert_eq!((again.tab, again.sheet.state.tile), (Tab::Attributes, 6));
         assert_eq!(again.sheet.changed, 50, "the readout types out afresh");
-        // Left on the ledger, it opens on the left pane with the tile it had.
-        let mut d = again;
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.update(&mut st, &[]);
-        assert_eq!(st.deck_sheet.pane, SheetPane::Ledger);
-        let again = Deck::new(6).restore(&st);
-        assert_eq!(
-            (again.sheet.state.pane, again.sheet.state.tile),
-            (SheetPane::Left, 6)
-        );
         // Away to another tab and back: the same.
         let mut d = again;
-        d.update(
-            &mut st,
-            &[
-                key(KeyCode::Right),
-                key(KeyCode::Right),
-                key(KeyCode::Right),
-                key(KeyCode::Right),
-                key(KeyCode::Right),
-            ],
-        );
-        assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
         d.update(&mut st, &[key(KeyCode::Char('1')), key(KeyCode::Char('2'))]);
-        assert_eq!(
-            (d.sheet.state.pane, d.sheet.state.tile),
-            (SheetPane::Left, 10)
-        );
+        assert_eq!(d.sheet.state.tile, 6);
     }
 
     #[test]
