@@ -1,5 +1,5 @@
-//! The cloak on the HUD (#36): the scrambler's tag top right, its CELL row while it
-//! cloaks you, the footer's word where ENGAGED would be, the AMBUSH line, and the
+//! The cloak on the HUD (#36): the scrambler's charge on the footer, its CELL row while
+//! it cloaks you, the footer's word where ENGAGED would be, the AMBUSH line, and the
 //! ability slot that's on.
 
 use super::{DRAIN_MOVING, Phase, Pool, cell, fade_ticks, hidden, pct};
@@ -10,7 +10,7 @@ use game::{AbilityId, AbilityKind, Active, CopyId, FULL_CELL, ItemId, Source};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
-/// The item whose cell the tag reads while idle.
+/// The item whose cell the footer reads while idle.
 const SCRAMBLER: &str = "field_scrambler";
 
 /// The burnout playing out, if one is: whether its cloak ran on a cell. A fade left over
@@ -20,7 +20,7 @@ fn burning_out(st: &AppState) -> Option<bool> {
     (st.tick.saturating_sub(f.since) < fade_ticks(f.phase)).then_some(f.cell)
 }
 
-/// Whether a blinking word draws pink this frame, else cyan.
+/// Whether SIGNAL LOST draws pink this frame, else cyan.
 fn blink(st: &AppState) -> bool {
     (st.tick / 4).is_multiple_of(2)
 }
@@ -38,42 +38,34 @@ fn running_cell(st: &AppState) -> Option<CopyId> {
     }
 }
 
-/// The scrambler's name as the tag says it.
+/// The scrambler's name as the footer says it.
 fn scrambler_name(st: &AppState) -> String {
     (st.content.item(&ItemId::new(SCRAMBLER)))
         .map_or_else(|| "field scrambler".into(), |i| i.name.clone())
 }
 
-/// The tag top right, before the clock: the scrambler's charge while it cloaks you (the
-/// copy that runs) or idle (the carried one with the most), FAILING through a burnout
-/// (the scrambler's, or the FOCUS cloak's), and nothing with neither.
-pub fn tag(st: &AppState) -> Vec<Span<'static>> {
-    let name = scrambler_name(st);
-    let styled = |s: String, fg: Color| Span::styled(s, Style::default().fg(fg));
-    if let Some(id) = running_cell(st) {
-        let left = cell::charge(st, id).map_or(0, |c| c.left);
-        return vec![
-            styled(format!("◌ {} ", name.to_uppercase()), CYAN),
-            styled(format!("{:>3}%", pct(left)), charge_colour(left)),
-        ];
-    }
-    if let Some(on_cell) = burning_out(st) {
-        let what = if on_cell {
-            name.to_uppercase()
-        } else {
-            "CLOAK".into()
-        };
-        let fg = if blink(st) { MAGENTA } else { CYAN };
-        return vec![styled(format!("◌ {what} ▓▓ FAILING"), fg)];
+/// The scrambler's charge on the footer, before the help key: the carried one with the
+/// most, dim, or pink and burned out. Nothing without one, in a fight, or while a
+/// cloak's word shows: SCRAMBLED with the CELL row, CLOAKED, or SIGNAL LOST say it then.
+pub fn footer_charge(st: &AppState) -> Vec<Span<'static>> {
+    if footer_tag(st).is_some() || crate::net::engaged_on_foot(st) {
+        return Vec::new();
     }
     let Some((_, c)) = cell::best(st, &ItemId::new(SCRAMBLER)) else {
         return Vec::new();
     };
-    let words = format!("◌ {} {:>3}%", name.to_lowercase(), pct(c.left));
+    let words = format!(
+        "◌ {} {:>3}%",
+        scrambler_name(st).to_lowercase(),
+        pct(c.left)
+    );
     if c.burned {
-        vec![styled(format!("{words} · burned out"), MAGENTA)]
+        vec![Span::styled(
+            format!("{words} · burned out"),
+            Style::default().fg(MAGENTA),
+        )]
     } else {
-        vec![styled(words, DIM)]
+        vec![Span::styled(words, Style::default().fg(DIM))]
     }
 }
 
@@ -156,7 +148,6 @@ pub fn slot_on(st: &AppState, id: &AbilityId) -> bool {
 mod tests {
     use super::*;
     use crate::cloak::testutil::{armed, fire, frames, scrambler, set_charge, stealthy, street};
-    use crate::cloak::{Cloak, Pool};
     use crate::ui::chrome::MAGENTA;
     use citygen::Pos;
     use game::{Charge, FULL_CELL};
@@ -166,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn the_scramblers_tag_through_its_life() {
+    fn the_scramblers_charge_through_its_life() {
         let mut st = street();
         let k = scrambler(&mut st);
         set_charge(
@@ -177,23 +168,13 @@ mod tests {
                 burned: false,
             },
         );
-        assert_eq!(text(&tag(&st)), "◌ field scrambler  62%");
+        assert_eq!(text(&footer_charge(&st)), "◌ field scrambler  62%");
         fire(&mut st, "scramble").unwrap();
-        assert_eq!(text(&tag(&st)), "◌ FIELD SCRAMBLER  62%");
+        assert!(
+            footer_charge(&st).is_empty(),
+            "SCRAMBLED and the CELL row say it"
+        );
         assert_eq!(footer_tag(&st), Some(CloakTag::Scrambled));
-        set_charge(
-            &mut st,
-            k,
-            Charge {
-                left: FULL_CELL / 5,
-                burned: false,
-            },
-        );
-        assert_eq!(
-            tag(&st).last().unwrap().style.fg,
-            Some(MAGENTA),
-            "pink below a quarter"
-        );
         set_charge(
             &mut st,
             k,
@@ -203,11 +184,24 @@ mod tests {
             },
         );
         frames(&mut st, 1);
-        assert_eq!(text(&tag(&st)), "◌ FIELD SCRAMBLER ▓▓ FAILING");
+        assert!(footer_charge(&st).is_empty(), "SIGNAL LOST says it");
         assert!(matches!(footer_tag(&st), Some(CloakTag::SignalLost { .. })));
         frames(&mut st, 72);
-        assert_eq!(text(&tag(&st)), "◌ field scrambler   0% · burned out");
+        let burned = footer_charge(&st);
+        assert_eq!(text(&burned), "◌ field scrambler   0% · burned out");
+        assert_eq!(burned[0].style.fg, Some(MAGENTA));
         assert_eq!(footer_tag(&st), None);
+    }
+
+    #[test]
+    fn a_fight_hides_the_scramblers_charge() {
+        let mut st = crate::foes::testutil::lot(Pos::new(10, 8));
+        scrambler(&mut st);
+        assert!(!footer_charge(&st).is_empty());
+        let place = st.player.as_ref().unwrap().place;
+        crate::net::engage(&mut st, place, true);
+        assert!(crate::net::engaged_on_foot(&st));
+        assert!(footer_charge(&st).is_empty(), "it won't go on in a fight");
     }
 
     #[test]
@@ -221,67 +215,47 @@ mod tests {
     }
 
     #[test]
-    fn the_focus_cloak_has_no_tag_until_it_fails() {
+    fn the_focus_cloak_hides_the_scramblers_charge_until_it_is_over() {
         let mut st = street();
+        scrambler(&mut st);
         stealthy(&mut st);
         st.character.focus = 1;
         fire(&mut st, "cloak").unwrap();
-        assert!(tag(&st).is_empty());
+        assert!(footer_charge(&st).is_empty());
         assert_eq!(footer_tag(&st), Some(CloakTag::Cloaked));
         assert!(
             slot_on(&st, &game::AbilityId::new("cloak"))
                 && !slot_on(&st, &game::AbilityId::new("scramble"))
         );
         frames(&mut st, 30);
-        assert_eq!(text(&tag(&st)), "◌ CLOAK ▓▓ FAILING");
+        assert!(matches!(footer_tag(&st), Some(CloakTag::SignalLost { .. })));
+        assert!(footer_charge(&st).is_empty(), "SIGNAL LOST says it");
+        frames(&mut st, 72);
+        assert_eq!(text(&footer_charge(&st)), "◌ field scrambler 100%");
     }
 
     #[test]
-    fn the_tag_reads_the_copy_that_runs_and_a_focus_burnout_isnt_the_scramblers() {
+    fn the_charge_reads_the_fullest_carried_copy() {
         let mut st = street();
-        let spare = scrambler(&mut st);
-        let running = scrambler(&mut st);
+        let low = scrambler(&mut st);
+        let high = scrambler(&mut st);
         set_charge(
             &mut st,
-            spare,
+            low,
             Charge {
-                left: FULL_CELL,
+                left: FULL_CELL / 5,
                 burned: false,
             },
         );
         set_charge(
             &mut st,
-            running,
+            high,
             Charge {
                 left: FULL_CELL / 2,
                 burned: false,
             },
         );
-        st.cloak = None;
-        // Switch on from the copy at half: `best` would pick the spare, so run it by hand.
-        st.cloak = Some(Cloak {
-            pool: Pool::Cell(running),
-            since: st.tick,
-            drained_to: st.tick,
-            at: Pos::new(6, 8),
-            moved: st.tick,
-            waiting: false,
-        });
-        assert_eq!(
-            text(&tag(&st)),
-            "◌ FIELD SCRAMBLER  50%",
-            "the running copy, not the spare's 100%"
-        );
-        st.cloak = None;
-        stealthy(&mut st);
-        st.character.focus = 1;
-        fire(&mut st, "cloak").unwrap();
-        frames(&mut st, 30);
-        assert_eq!(
-            text(&tag(&st)),
-            "◌ CLOAK ▓▓ FAILING",
-            "a FOCUS burnout with scramblers carried"
-        );
+        assert_eq!(text(&footer_charge(&st)), "◌ field scrambler  50%");
     }
 
     #[test]
@@ -320,29 +294,25 @@ mod tests {
     }
 
     #[test]
-    fn the_tag_is_never_bold() {
+    fn the_charge_is_never_bold() {
         let mut st = street();
         let k = scrambler(&mut st);
         let bold = |st: &AppState| {
-            (tag(st).iter()).any(|s| {
+            (footer_charge(st).iter()).any(|s| {
                 s.style
                     .add_modifier
                     .contains(ratatui::style::Modifier::BOLD)
             })
         };
-        assert!(!tag(&st).is_empty() && !bold(&st), "idle");
-        fire(&mut st, "scramble").unwrap();
-        assert!(!bold(&st), "cloaked");
+        assert!(!footer_charge(&st).is_empty() && !bold(&st), "idle");
         set_charge(
             &mut st,
             k,
             Charge {
-                left: 1,
-                burned: false,
+                left: 0,
+                burned: true,
             },
         );
-        frames(&mut st, 1);
-        assert_eq!(text(&tag(&st)), "◌ FIELD SCRAMBLER ▓▓ FAILING");
-        assert!(!bold(&st), "failing");
+        assert!(!footer_charge(&st).is_empty() && !bold(&st), "burned out");
     }
 }

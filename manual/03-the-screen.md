@@ -12,7 +12,7 @@ On the left: your handle, your level and your money in credits (`¤`). Under the
 
 When mail is waiting you see `▣ NEW MAIL` beside your money.
 
-On the right: where you are, and the time, with a moon (`☾`) from six in the evening to six in the morning and a sun (`☀`) the rest of the day. A field scrambler you carry shows its charge before the time (The city and the world). Under them:
+On the right: where you are, and the time, with a moon (`☾`) from six in the evening to six in the morning and a sun (`☀`) the rest of the day. Under them:
 
 - **CARRY**, the weight you have on you against what you can take. It turns magenta when you carry too much, and then you can't pick anything else up.
 - How exposed you are: how much light you stand in, and how many cameras see you. Indoors it is blank: a camera on a hotel's or office's floor that sees you shows its cone in red instead. On the Net it says whether you are hunted.
@@ -47,7 +47,7 @@ New mail shows a moment as a pill in the map's top right corner, with who it's f
 
 ## The bottom lines
 
-- The first says where you are: `on foot`, or `⚡` and the place when you're jacked in. It flashes `:: SAVED` when the game saves. Jacked in, it carries your trace, any alert, and your shield and mask.
+- The first says where you are: `on foot`, or `⚡` and the place when you're jacked in. It flashes `:: SAVED` when the game saves. Jacked in, it carries your trace, any alert, and your shield and mask. On foot, a field scrambler you carry shows its charge at its right end (The city and the world).
 - The second tells you what the game wants from you right now, and the keys for it.
 - The third follows a fight or a run in progress: whose turn it is, and how a program is getting on.
 - The last holds your abilities on `1` to `5`, or your programs when you're jacked in. On turns it shows the moves and action points you have left.

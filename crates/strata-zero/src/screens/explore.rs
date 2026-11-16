@@ -1575,6 +1575,11 @@ impl MapScreen {
             flash_pools: self.flash_pools(st),
             cloak: crate::cloak::hud::footer_tag(st),
             ambush: crate::cloak::hud::ambush_ready(st),
+            scrambler: if jacked {
+                Vec::new()
+            } else {
+                crate::cloak::hud::footer_charge(st)
+            },
             budgets: st.net.engaged.as_ref().map(|e| {
                 let moves = crate::net::you_move(st, e.place);
                 if e.actor() == crate::net::Actor::You {
@@ -4896,12 +4901,7 @@ impl Screen for MapScreen {
             location = format!("ALERT · {location}");
         }
         f.render_widget(
-            Paragraph::new(hud::location_tag_line(
-                &location,
-                crate::cloak::hud::tag(st),
-                st.clock(),
-                rw,
-            )),
+            Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
         let exposure =

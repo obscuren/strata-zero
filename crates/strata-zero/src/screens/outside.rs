@@ -476,6 +476,7 @@ impl Screen for OutsideScreen {
             // leaving the city ends the cloak
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         };
         let recent = st.log.recent(st.tick);
         for (i, row) in hud::footer_rows(&footer, area.width)
