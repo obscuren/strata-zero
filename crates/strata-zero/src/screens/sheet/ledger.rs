@@ -8,6 +8,7 @@ use crate::app::AppState;
 use crate::clinic::{OUTSIDE, Operating, gone_line, operating};
 use crate::screens::create::wrap;
 use crate::screens::deck::{REVEAL_TICKS, cut, lit};
+use crate::screens::kit::chrome::socket_kind;
 use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, reveal, solid};
 use crate::ui::hud::{AMBER, BADGE_FG, GREEN};
 use crate::ui::implant_art;
@@ -170,15 +171,6 @@ fn held(st: &AppState, (site, socket): (Site, Option<usize>)) -> Option<&ItemId>
             .as_ref()
             .map(|s| &s.item),
     }
-}
-
-/// The kind of a socket of what a site holds.
-fn socket_kind(st: &AppState, site: Site, n: usize) -> Option<SocketKind> {
-    let item = st
-        .character
-        .chrome_at(site)
-        .and_then(|id| st.content.item(id))?;
-    item.sockets.get(n).copied()
 }
 
 /// A row whose contents change anywhere: a socket whose kind needs no doc, a drone's

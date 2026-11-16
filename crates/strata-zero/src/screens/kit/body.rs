@@ -52,7 +52,7 @@ impl<K: Copy + Eq> BodyLayout<K> {
 /// divider and 50 for the pack and the card; the header, its rule and the graph.
 pub(crate) const FULL_MIN: (u16, u16) = (113, 27);
 /// Columns the full body takes: the graph's 60 and a column each side.
-const FULL_W: u16 = 62;
+pub(crate) const FULL_W: u16 = 62;
 
 /// Where a part's tile sits from the graph's origin, its size, the column from its left
 /// edge where a line from above or below meets it, and the part its line runs to.
@@ -222,7 +222,7 @@ const RIGHT: u8 = 8;
 
 /// The cells the lines draw, with the glyph each takes: where a line meets a tile's
 /// border, or lines meet each other, the junction of all of them.
-fn joints<K>(l: &BodyLayout<K>) -> Vec<((u16, u16), char)> {
+pub(crate) fn joints<K>(l: &BodyLayout<K>) -> Vec<((u16, u16), char)> {
     let mut ways: std::collections::BTreeMap<(u16, u16), u8> = Default::default();
     for line in &l.lines {
         for pair in line.path.windows(2) {

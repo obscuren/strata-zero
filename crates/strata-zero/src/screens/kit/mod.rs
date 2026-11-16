@@ -3,6 +3,7 @@
 //! cursor, with its drawing at half size when there is room.
 
 pub(crate) mod body;
+pub(crate) mod chrome;
 
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
