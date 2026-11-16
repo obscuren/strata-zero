@@ -208,10 +208,10 @@ Content(
         Item(id: "keyjack", name: "Keyjack", kind: Component, weight: 0.3, value: 400,
              look: Some(Keyjack), sockets: [Fuse],
              desc: "A slab on a lead that clips onto a door's keypad and works its four digits out with you, a beat at a time."),
-        // The field scrambler: a cloak carried on its own cell.
-        Item(id: "field_scrambler", name: "Field scrambler", kind: Component, weight: 0.4, value: 900,
+        // The field scrambler: a cloak worn on the back, on its own cell.
+        Item(id: "field_scrambler", name: "Field scrambler", kind: Component, slot: Some(Back), weight: 0.4, value: 900,
              cell: true, grants: ["scramble"],
-             desc: "A matchbox of noise on a belt clip. It fills the air round you with what cameras and eyes expect to see, until its cell runs out."),
+             desc: "A matchbox of noise strapped between the shoulder blades. It fills the air round you with what cameras and eyes expect to see, until its cell runs out."),
         Item(id: "fuse_stock", name: "Stock fuse", kind: Hardware, weight: 0.05, value: 40,
              hardware: Some(Hardware(fits: Fuse, mods: [], look: FuseStock)),
              desc: "A hair of wire in clear glass. The Keyjack runs on it until you miss one beat too many."),
@@ -1095,6 +1095,11 @@ Content(
                  attributes: Attributes(body: 8, reflex: 7, tech: 4, cool: 7, net: 3),
                  categories: ["iron", "edge", "meat"], skills: ["handguns", "blades", "athletics"],
                  kit: [("cargo_pants", 1)]),
+        Template(id: "wren", handle: "WREN", line: "every camera on the block kept a smear, never a face",
+                 origin: "slab_rat", profession: "fixer",
+                 attributes: Attributes(body: 5, reflex: 8, tech: 4, cool: 8, net: 3),
+                 categories: ["ghost", "iron", "street"], skills: ["stealth", "lockpick", "handguns", "streetwise"],
+                 kit: [("field_scrambler", 1), ("whisper_smg", 1)]),
     ],
     // What a ripperdoc charges, in percent of a piece's value: to put it in, to take it out.
     surgery: (install: 12, pull: 4),

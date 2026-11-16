@@ -555,7 +555,10 @@ mod tests {
     /// A custom build, landing on ORIGIN.
     fn custom(st: &mut AppState) -> Create {
         let mut ch = chooser::Chooser::new(st, 0);
-        ch.update(st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        ch.update(
+            st,
+            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        );
         ch.choose(st)
     }
 
@@ -641,7 +644,10 @@ mod tests {
         st.tick = 60;
         let text = draw(&ch, &st, 120, 40);
         assert!(
-            text.contains("VEX") && text.contains("KESSLER") && text.contains("CUSTOM BUILD"),
+            text.contains("VEX")
+                && text.contains("KESSLER")
+                && text.contains("WREN")
+                && text.contains("CUSTOM BUILD"),
             "{text}"
         );
         assert!(text.contains("crèche kid behind the ICE"), "{text}");
@@ -659,7 +665,10 @@ mod tests {
         assert_eq!(st.build.as_ref().map(|b| b.handle.as_str()), Some("VEX"));
         let c = ch.choose(&mut st);
         assert_eq!(c.step, Step::Summary, "a template lands on the sheet");
-        ch.update(&mut st, &[key(KeyCode::Down), key(KeyCode::Down)]);
+        ch.update(
+            &mut st,
+            &[key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Down)],
+        );
         let c = ch.choose(&mut st);
         assert_eq!(
             c.step,

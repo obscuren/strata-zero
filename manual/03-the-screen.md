@@ -47,7 +47,7 @@ New mail shows a moment as a pill in the map's top right corner, with who it's f
 
 ## The bottom lines
 
-- The first says where you are: `on foot`, or `⚡` and the place when you're jacked in. It flashes `:: SAVED` when the game saves. Jacked in, it carries your trace, any alert, and your shield and mask. On foot, a field scrambler you carry shows its charge at its right end (The city and the world).
+- The first says where you are: `on foot`, or `⚡` and the place when you're jacked in. It flashes `:: SAVED` when the game saves. Jacked in, it carries your trace, any alert, and your shield and mask. On foot, the field scrambler on your back shows its charge at its right end (The city and the world).
 - The second tells you what the game wants from you right now, and the keys for it.
 - The third follows a fight or a run in progress: whose turn it is, and how a program is getting on.
 - The last holds your abilities on `1` to `5`, or your programs when you're jacked in. On turns it shows the moves and action points you have left.

@@ -32,7 +32,7 @@ Your character sheet. On the left are your five attributes, with any unspent poi
 
 On the left is your body, a tile for each part, joined the way the parts join: HEAD with FACE beside it; TORSO with an arm and a hand on each side (L ARM, L HAND, R ARM, R HAND); BACK and WAIST under it, your deck on the waist; LEGS, and FEET beside them. Arms take nothing yet; a weapon goes in a hand.
 
-A tile shows the name of what that part wears and, under it, what it gives: HP or carry for clothes, an attribute for shades, damage × rounds for a gun with a `■` for each fitted socket and a `□` for each empty one, the program slots and sockets of a deck. A hand starts that line with `●` if it's your main hand, the one that fires first, or `○` for the other. An empty part shows a `·`.
+A tile shows the name of what that part wears and, under it, what it gives: HP or carry for clothes, an attribute for shades, damage × rounds for a gun with a `■` for each fitted socket and a `□` for each empty one, the program slots and sockets of a deck, the charge of a field scrambler on your back (`◌ 62%`, or `· burned`). A hand starts that line with `●` if it's your main hand, the one that fires first, or `○` for the other. An empty part shows a `·`.
 
 On the right is your pack, grouped by kind, and under it the card of whatever the cursor is on, with its drawing when there is room for it. In a smaller window the body draws without the arms (each hand sits on the torso), and the drawing waits for Inspect.
 

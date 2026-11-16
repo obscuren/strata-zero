@@ -747,10 +747,16 @@ impl Content {
                     slot: kind,
                 });
             }
-            // Perks and grants count while worn, installed or docked; a cell's grant
-            // counts while carried.
+            // A cell runs worn: its item goes on a part.
+            if i.cell && i.slot.is_none() {
+                return Err(ContentError::ItemInvalid {
+                    id: i.id.0.clone(),
+                    why: "a cell is worn: it needs a slot".into(),
+                });
+            }
+            // Perks and grants count while worn, installed or docked.
             let fitted = i.slot.is_some() || i.implant.is_some() || i.bot.is_some();
-            if (!i.perks.is_empty() || (!i.grants.is_empty() && !i.cell)) && !fitted {
+            if (!i.perks.is_empty() || !i.grants.is_empty()) && !fitted {
                 return Err(ContentError::PerkWithoutSlot {
                     item: i.id.0.clone(),
                 });
@@ -1977,7 +1983,7 @@ mod tests {
         assert_eq!(c.origins.len(), 4);
         assert_eq!(c.professions.len(), 4);
         assert_eq!(c.categories.len(), 8);
-        assert_eq!(c.templates.len(), 2);
+        assert_eq!(c.templates.len(), 3);
         assert_eq!(c.skills.len(), 24);
         for o in &c.origins {
             assert_eq!(
@@ -4275,7 +4281,25 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_item_grants_one_cloak_and_only_a_cell_grants_carried() {
+    fn a_cell_item_needs_a_slot() {
+        let c = Content::load().unwrap();
+        let i = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "field_scrambler")
+            .unwrap();
+        assert_eq!(c.items[i].slot, Some(PartKind::Back), "worn on the back");
+        let mut bad = c.clone();
+        bad.items[i].slot = None;
+        assert!(
+            matches!(&bad.validate(), Err(ContentError::ItemInvalid { why, .. }) if why.contains("slot")),
+            "{:?}",
+            bad.validate()
+        );
+    }
+
+    #[test]
+    fn a_cell_item_grants_one_cloak() {
         let c = Content::load().unwrap();
         let i = c
             .items
@@ -4293,12 +4317,6 @@ mod tests {
         assert!(
             matches!(bad.validate(), Err(ContentError::ItemInvalid { .. })),
             "a cell grants one cloak, not two"
-        );
-        let mut bad = c.clone();
-        bad.items[i].cell = false;
-        assert!(
-            matches!(bad.validate(), Err(ContentError::PerkWithoutSlot { .. })),
-            "no slot, no cell, no grants"
         );
         let mut bad = c.clone();
         let s = bad.skills.iter().position(|s| s.id.0 == "stealth").unwrap();

@@ -1,10 +1,10 @@
-//! The field scrambler's cell (#36): the cloak it runs drains the copy's own charge,
-//! faster without the Stealth skill; off, the cell fills back on the world clock, and a
-//! night's sleep fills it.
+//! The field scrambler's cell (#36): worn on the back, the cloak it runs drains the
+//! copy's own charge, faster without the Stealth skill; off, the worn cell fills back
+//! on the world clock, and a night's sleep fills it. Spares in the pack keep theirs.
 
 use super::Pool;
 use crate::app::AppState;
-use game::{Charge, CopyId, FULL_CELL, ItemId, SkillId};
+use game::{BodyPart, Character, Charge, CopyId, FULL_CELL, ItemCopy, ItemId, SkillId};
 
 /// What a drain unit costs a cell: a full one lasts 600 frames moving, 20 s.
 pub const CELL_RATE: u32 = 9;
@@ -29,34 +29,40 @@ pub fn runs(c: Charge) -> bool {
     c.left > 0 && !c.burned
 }
 
-/// The carried copy of `item` a cloak runs on: the one with the most left of those
-/// that can run, else (none can) the one with the most left. Ties by pack order.
-pub fn best(st: &AppState, item: &ItemId) -> Option<(CopyId, Charge)> {
-    let mut best: Option<(CopyId, Charge)> = None;
-    for s in (st.character.inventory.iter()).filter(|s| s.item == *item) {
-        let Some(k) = s.copy.as_ref() else { continue };
-        let c = k.cell();
-        if best.is_none_or(|(_, b)| (runs(c), c.left) > (runs(b), b.left)) {
-            best = Some((k.id, c));
-        }
-    }
-    best
+/// The worn copy of `item` a cloak runs on, with the part that wears it and its
+/// charge; None when nothing worn is one.
+pub fn worn(st: &AppState, item: &ItemId) -> Option<(BodyPart, CopyId, Charge)> {
+    let ch = &st.character;
+    (ch.equipment.iter())
+        .filter(|(_, id)| *id == item)
+        .find_map(|(part, _)| ch.worn_copy(*part).map(|k| (*part, k.id, k.cell())))
 }
 
-/// The charge on a carried copy's cell; None when the pack holds no such copy.
+/// The charge on a worn copy's cell; None when nothing worn is that copy.
 pub fn charge(st: &AppState, id: CopyId) -> Option<Charge> {
-    Some(st.character.copy_in_pack(id)?.copy.as_ref()?.cell())
+    let part = st.character.part_wearing(id)?;
+    Some(st.character.worn_copy(part)?.cell())
 }
 
-/// The charge on a carried copy's cell, to write: one with none recorded is full.
+/// Every copy worn: `worn` counts only for a part that still wears something.
+fn worn_copies(ch: &mut Character) -> impl Iterator<Item = &mut ItemCopy> {
+    let Character {
+        equipment, worn, ..
+    } = ch;
+    let equipment = &*equipment;
+    (worn.iter_mut())
+        .filter(move |(part, _)| equipment.contains_key(part))
+        .map(|(_, k)| k)
+}
+
+/// The charge on a worn copy's cell, to write: one with none recorded is full.
 fn charge_mut(st: &mut AppState, id: CopyId) -> Option<&mut Charge> {
-    let s = (st.character.inventory.iter_mut()).find(|s| s.copy_id() == Some(id))?;
-    let k = s.copy.as_mut()?;
+    let k = worn_copies(&mut st.character).find(|k| k.id == id)?;
     let now = k.cell();
     Some(k.charge.get_or_insert(now))
 }
 
-/// Takes `cost` off a carried copy's cell; true when that empties it, burned out.
+/// Takes `cost` off a worn copy's cell; true when that empties it, burned out.
 pub(crate) fn drain(st: &mut AppState, id: CopyId, cost: u32) -> bool {
     let Some(c) = charge_mut(st, id) else {
         return false;
@@ -66,8 +72,9 @@ pub(crate) fn drain(st: &mut AppState, id: CopyId, cost: u32) -> bool {
     c.left == 0
 }
 
-/// `clock_ticks` of the world clock: every carried cell but the one a cloak runs on
-/// gains `CELL_RECHARGE` a tick, up to full, and a burned-out one is clear past a tenth.
+/// `clock_ticks` of the world clock: every worn cell but the one a cloak runs on gains
+/// `CELL_RECHARGE` a tick, up to full, and a burned-out one is clear past a tenth.
+/// Spares in the pack keep the charge they had.
 pub fn recharge(st: &mut AppState, clock_ticks: u64) {
     if clock_ticks == 0 {
         return;
@@ -77,10 +84,7 @@ pub fn recharge(st: &mut AppState, clock_ticks: u64) {
         _ => None,
     };
     let gain = clock_ticks.saturating_mul(CELL_RECHARGE as u64);
-    for s in &mut st.character.inventory {
-        let Some(k) = s.copy.as_mut().filter(|k| Some(k.id) != running) else {
-            continue;
-        };
+    for k in worn_copies(&mut st.character).filter(|k| Some(k.id) != running) {
         // A copy with no charge recorded reads full.
         let Some(c) = k.charge.as_mut() else {
             continue;
@@ -92,15 +96,13 @@ pub fn recharge(st: &mut AppState, clock_ticks: u64) {
     }
 }
 
-/// A night's sleep: every carried cell full.
+/// A night's sleep: every worn cell full.
 pub fn fill_cells(st: &mut AppState) {
-    for s in &mut st.character.inventory {
-        if let Some(c) = s.copy.as_mut().and_then(|k| k.charge.as_mut()) {
-            *c = Charge {
-                left: FULL_CELL,
-                burned: false,
-            };
-        }
+    for c in worn_copies(&mut st.character).filter_map(|k| k.charge.as_mut()) {
+        *c = Charge {
+            left: FULL_CELL,
+            burned: false,
+        };
     }
 }
 
@@ -203,65 +205,138 @@ mod tests {
     }
 
     #[test]
-    fn a_burned_cell_waits_for_a_tenth_and_a_clean_one_runs_first() {
+    fn a_burned_cell_waits_for_a_tenth() {
         let mut st = street();
-        let burned = scrambler(&mut st);
-        let clean = scrambler(&mut st);
-        let at = |pct: u32, burned: bool| Charge {
-            left: FULL_CELL * pct / 100,
-            burned,
-        };
-        set_charge(&mut st, burned, at(8, true));
-        set_charge(&mut st, clean, at(4, false));
-        fire(&mut st, "scramble").unwrap();
-        assert_eq!(
-            st.cloak.as_ref().unwrap().pool,
-            Pool::Cell(clean),
-            "not the burned one"
+        let k = scrambler(&mut st);
+        set_charge(
+            &mut st,
+            k,
+            Charge {
+                left: FULL_CELL * 8 / 100,
+                burned: true,
+            },
         );
-        fire(&mut st, "scramble").unwrap();
-        st.character
-            .inventory
-            .retain(|s| s.copy_id() != Some(clean));
         assert_eq!(
             fire(&mut st, "scramble"),
             Err("the cell is burned out".to_string())
         );
         recharge(&mut st, (FULL_CELL / 50 / CELL_RECHARGE + 1) as u64); // past a tenth
-        assert!(!charge(&st, burned).unwrap().burned);
+        assert!(!charge(&st, k).unwrap().burned);
         assert_eq!(fire(&mut st, "scramble"), Ok("SCRAMBLED".to_string()));
-        assert_eq!(st.cloak.as_ref().unwrap().pool, Pool::Cell(burned));
+        assert_eq!(st.cloak.as_ref().unwrap().pool, Pool::Cell(k));
     }
 
     #[test]
-    fn the_key_runs_on_a_copy_of_its_own_item() {
+    fn scramble_runs_on_the_worn_copy_and_only_it_recharges() {
         let mut st = street();
-        // Another cell item that grants the same key, carried after the scrambler, so
-        // the key's source is the scrambler.
-        let mut other = st
-            .content
-            .item(&ItemId::new("field_scrambler"))
-            .unwrap()
-            .clone();
-        other.id = ItemId::new("other_scrambler");
-        st.content.items.push(other);
-        let own = scrambler(&mut st);
-        set_charge(
-            &mut st,
-            own,
-            Charge {
-                left: FULL_CELL / 2,
-                burned: false,
-            },
-        );
-        st.character
-            .give_item(&st.content, ItemId::new("other_scrambler"), 1);
-        fire(&mut st, "scramble").unwrap();
+        let spare = spare_scrambler(&mut st);
         assert_eq!(
-            st.cloak.as_ref().unwrap().pool,
-            Pool::Cell(own),
-            "not the fuller copy of another item"
+            fire(&mut st, "scramble"),
+            Err("you do not have Scramble".to_string()),
+            "one in the pack grants nothing"
         );
+        let worn_id = scrambler(&mut st);
+        let at = |pct: u32| Charge {
+            left: FULL_CELL * pct / 100,
+            burned: false,
+        };
+        set_charge(&mut st, worn_id, at(50));
+        set_charge(&mut st, spare, at(20));
+        assert_eq!(
+            worn(&st, &ItemId::new("field_scrambler")),
+            Some((game::BodyPart::Back, worn_id, at(50)))
+        );
+        fire(&mut st, "scramble").unwrap();
+        assert_eq!(st.cloak.as_ref().unwrap().pool, Pool::Cell(worn_id));
+        frames(&mut st, 30);
+        fire(&mut st, "scramble").unwrap();
+        assert!(st.cloak.is_none());
+        let ran = charge(&st, worn_id).unwrap().left;
+        assert!(ran < at(50).left, "it drained");
+        assert_eq!(charge(&st, spare), None, "the spare isn't worn");
+        recharge(&mut st, 100);
+        assert_eq!(
+            charge(&st, worn_id).unwrap().left,
+            ran + 100 * CELL_RECHARGE
+        );
+        assert_eq!(
+            packed_charge(&st, spare),
+            Some(at(20)),
+            "the spare keeps its"
+        );
+        fill_cells(&mut st);
+        assert_eq!(charge(&st, worn_id).unwrap().left, FULL_CELL);
+        assert_eq!(
+            packed_charge(&st, spare),
+            Some(at(20)),
+            "sleep fills the worn one"
+        );
+    }
+
+    #[test]
+    fn taking_it_off_while_it_runs_switches_the_cloak_off() {
+        use game::{Action, BodyPart};
+        let sling = ItemId::new("courier_sling");
+        for off in [
+            Action::Unequip(BodyPart::Back),
+            Action::EquipAt(sling.clone(), BodyPart::Back),
+        ] {
+            let mut st = street();
+            st.character.give(sling.clone(), 1);
+            let k = scrambler(&mut st);
+            fire(&mut st, "scramble").unwrap();
+            frames(&mut st, 30);
+            let had = charge(&st, k).unwrap();
+            crate::actions::perform(&mut st, off.clone()).unwrap();
+            frames(&mut st, 1);
+            assert!(st.cloak.is_none(), "{off:?}");
+            assert_eq!(
+                packed_charge(&st, k),
+                Some(had),
+                "{off:?}: in the pack as it was"
+            );
+        }
+    }
+
+    #[test]
+    fn the_switch_off_plays_at_the_charge_it_had() {
+        use game::{Action, BodyPart};
+        let mut st = street();
+        let k = scrambler(&mut st);
+        let at = Charge {
+            left: FULL_CELL * 80 / 100,
+            burned: false,
+        };
+        set_charge(&mut st, k, at);
+        fire(&mut st, "scramble").unwrap();
+        let hot = super::super::heat(&st).unwrap();
+        crate::actions::perform(&mut st, Action::Unequip(BodyPart::Back)).unwrap();
+        frames(&mut st, 1);
+        assert!(st.cloak.is_none());
+        let fade = st.veil.fade.expect("a switch-off");
+        assert!(
+            (fade.hot - hot).abs() < 0.01 && fade.hot < 0.5,
+            "heat {} not {hot}",
+            fade.hot
+        );
+    }
+
+    #[test]
+    fn a_cloak_saved_on_a_pack_scrambler_opens_off() {
+        let mut st = street();
+        let k = spare_scrambler(&mut st);
+        let at = st.player.as_ref().unwrap().pos;
+        st.cloak = Some(super::super::Cloak {
+            pool: Pool::Cell(k),
+            since: st.tick,
+            drained_to: st.tick,
+            at,
+            moved: st.tick,
+            waiting: false,
+        });
+        frames(&mut st, 1);
+        assert!(st.cloak.is_none());
+        assert_eq!(packed_charge(&st, k).unwrap().left, FULL_CELL, "untouched");
     }
 
     #[test]
@@ -292,16 +367,6 @@ mod tests {
             matches!(st.cloak.as_ref().unwrap().pool, Pool::Cell(_)),
             "the scrambler's key, its cell"
         );
-    }
-
-    #[test]
-    fn dropping_the_scrambler_in_use_switches_it_off() {
-        let mut st = street();
-        let k = scrambler(&mut st);
-        fire(&mut st, "scramble").unwrap();
-        st.character.inventory.retain(|s| s.copy_id() != Some(k)); // dropped, stashed or taken apart
-        frames(&mut st, 1);
-        assert!(st.cloak.is_none());
     }
 
     #[test]

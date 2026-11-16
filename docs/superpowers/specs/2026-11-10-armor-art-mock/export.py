@@ -11,6 +11,19 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import gen  # noqa: E402
+import importlib.util  # noqa: E402
+
+
+def other(mock):
+    """Another mock's gen.py, loaded under its own name."""
+    path = os.path.join(HERE, "..", mock, "gen.py")
+    spec = importlib.util.spec_from_file_location(mock.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+scrambler = other("2026-11-16-scrambler-art-mock")
 
 CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -21,6 +34,7 @@ PICTURES = [
     ("cargo_pants", gen.cargo_pants),
     ("hardhat", gen.hardhat),
     ("mirrorshades", gen.mirrorshades),
+    ("field_scrambler", scrambler.field_scrambler),
 ]
 
 

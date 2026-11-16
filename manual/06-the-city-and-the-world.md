@@ -82,13 +82,13 @@ What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone 
 
 ### The field scrambler
 
-A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and fights covers the cloak). While it's in your pack you have the Scramble ability on your ability bar. A full cell holds the cloak 20 seconds, 30 with the Stealth skill. While it runs, your XP bar becomes a `CELL` bar that counts its seconds down.
+A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and fights covers the cloak). It's worn on your BACK (GEAR & INVENTORY, in The deck), and while you wear it you have the Scramble ability on your ability bar; one in your pack gives you nothing. The back holds one thing: the scrambler or the Courier sling, not both. A full cell holds the cloak 20 seconds, 30 with the Stealth skill. While it runs, your XP bar becomes a `CELL` bar that counts its seconds down.
 
-Switched off, it recharges: empty to full in 30 game minutes, about a minute and a half on foot, and a night's sleep fills it. Put it down, or take it apart, while it runs and the cloak switches off.
+Switched off, it recharges: empty to full in 30 game minutes, about a minute and a half on foot, and a night's sleep fills it. Only the one you wear recharges; a spare in your pack keeps the charge it had. Take it off, or put something else on your back, while it runs and the cloak switches off.
 
-The first bottom line shows its charge at its right end while it's off: `◌ field scrambler  62%`. Out of a fight only: in one it can't go on. While it runs, `▒▒ SCRAMBLED ▒▒` and the `CELL` bar take over, and `▓▓ SIGNAL LOST ▓▓` as it burns out. A cell that ran dry is **burned out**, `◌ field scrambler   0% · burned out`, and won't run (`the cell is burned out`) until it has more than a tenth back.
+The first bottom line shows the worn one's charge at its right end while it's off: `◌ field scrambler  62%`, and the BACK tile says it too, `◌ 62%`. Out of a fight only: in one it can't go on. While it runs, `▒▒ SCRAMBLED ▒▒` and the `CELL` bar take over, and `▓▓ SIGNAL LOST ▓▓` as it burns out. A cell that ran dry is **burned out**, `◌ field scrambler   0% · burned out`, and won't run (`the cell is burned out`) until it has more than a tenth back.
 
-Carry two and each has its own cell; the key runs the fuller one. With the WRENCH category you build one at the workbench from a dead phone, 3 copper coils and a scrap servo.
+Each scrambler has its own cell, and the key runs the one you wear: swap a spare onto your back to run on its cell. With the WRENCH category you build one at the workbench from a dead phone, 3 copper coils and a scrap servo.
 
 ## Reading the map
 

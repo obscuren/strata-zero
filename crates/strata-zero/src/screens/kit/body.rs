@@ -6,7 +6,7 @@ use super::lit_bold;
 use crate::app::AppState;
 use crate::screens::deck::{cut, lit};
 use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, PANEL_BG, RULE, TEXT, put};
-use game::{BodyPart, Item, PartKind, Perk};
+use game::{BodyPart, Item, ItemCopy, PartKind, Perk};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -329,8 +329,9 @@ fn name_lines(name: &str, room: usize, rows: usize) -> Vec<String> {
 
 /// What the item `part` wears gives, in a tile's `room` columns, as runs of text: a
 /// hand starts with `●` (the main hand) or `○`; then a gun's damage × rounds and a pip
-/// per socket (`■` fitted, `□` empty), a deck's program slots and its sockets, or the
-/// item's first perk, short. Nothing for an empty part.
+/// per socket (`■` fitted, `□` empty), a deck's program slots and its sockets, a cell's
+/// charge (`◌ 62%`, `· burned` when burned out), or the item's first perk, short.
+/// Nothing for an empty part.
 fn gives(st: &AppState, part: BodyPart, room: usize) -> Vec<(String, Ink)> {
     let Some(item) = st
         .character
@@ -372,6 +373,17 @@ fn gives(st: &AppState, part: BodyPart, room: usize) -> Vec<(String, Ink)> {
     } else if let Some(deck) = item.deck {
         out.push(("■".repeat(deck.slots as usize), Ink::Pips));
         sockets(&mut out);
+    } else if item.cell
+        && let Some(c) = copy.map(ItemCopy::cell)
+    {
+        out.push((
+            if c.burned {
+                "· burned".to_string()
+            } else {
+                format!("◌ {}%", crate::cloak::pct(c.left))
+            },
+            Ink::Label,
+        ));
     } else if let Some(perk) = item.perks.first() {
         let used: usize = out.iter().map(|(t, _)| t.chars().count()).sum();
         out.push((perk_short(perk, room.saturating_sub(used)), Ink::Label));
@@ -546,6 +558,48 @@ mod tests {
     fn tab(w: u16, h: u16) -> Rect {
         let top = if h >= 36 { 10 } else { 5 };
         Rect::new(1, top, w - 2, h - top - 3)
+    }
+
+    #[test]
+    fn the_footer_and_the_back_tile_read_the_worn_charge() {
+        use crate::cloak::hud::footer_charge;
+        use crate::cloak::testutil::{scrambler, set_charge, spare_scrambler, street};
+        use game::{Charge, FULL_CELL};
+        let text = |runs: Vec<(String, Ink)>| -> String { runs.into_iter().map(|r| r.0).collect() };
+        let footer = |st: &AppState| -> String {
+            footer_charge(st)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+        let mut st = street();
+        let k = scrambler(&mut st);
+        let at = |pct: u32, burned: bool| Charge {
+            left: FULL_CELL * pct / 100,
+            burned,
+        };
+        set_charge(&mut st, k, at(62, false));
+        assert_eq!(footer(&st), "◌ field scrambler  62%");
+        assert_eq!(text(gives(&st, Back, 9)), "◌ 62%");
+        set_charge(&mut st, k, at(5, true));
+        assert_eq!(text(gives(&st, Back, 9)), "· burned");
+
+        let mut st = street();
+        let k = scrambler(&mut st);
+        let spare = spare_scrambler(&mut st);
+        set_charge(&mut st, k, at(62, false));
+        set_charge(&mut st, spare, at(90, false));
+        assert_eq!(
+            footer(&st),
+            "◌ field scrambler  62%",
+            "the worn one, not the spare"
+        );
+        assert_eq!(text(gives(&st, Back, 9)), "◌ 62%");
+
+        let mut st = street();
+        spare_scrambler(&mut st);
+        assert_eq!(footer(&st), "", "one in the pack shows nothing");
+        assert!(gives(&st, Back, 9).iter().all(|r| !r.0.contains('◌')));
     }
 
     #[test]
