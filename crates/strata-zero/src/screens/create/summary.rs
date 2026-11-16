@@ -113,8 +113,8 @@ pub(super) fn sheet(st: &AppState, b: &Build, area: Rect, buf: &mut Buffer) {
             buf.set_string(rx, y, "KIT", dim);
             y += 1;
         }
-        let mut kit: Vec<(game::ItemId, u32)> = p.kit.clone();
-        kit.extend(b.kit.iter().cloned());
+        let mut kit: Vec<(game::ItemId, u32)> = b.kit.clone();
+        kit.extend(p.kit.iter().cloned());
         for (id, n) in kit {
             if y >= stop {
                 break;

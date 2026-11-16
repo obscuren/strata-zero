@@ -129,7 +129,14 @@ pub fn heat(st: &AppState) -> Option<f32> {
         Pool::Focus { start: 0, .. } => 0.0,
         Pool::Focus { start, .. } => start.saturating_sub(st.character.focus) as f32 / start as f32,
         Pool::Cell(id) => {
-            1.0 - cell::charge(st, id).map_or(0, |c| c.left) as f32 / FULL_CELL as f32
+            // Taken off, it is in the pack: the switch-off plays at the charge it had.
+            let left = cell::charge(st, id)
+                .or_else(|| {
+                    let k = st.character.copy_in_pack(id)?;
+                    Some(k.copy.as_ref()?.cell())
+                })
+                .map_or(0, |c| c.left);
+            1.0 - left as f32 / FULL_CELL as f32
         }
         Pool::Free { .. } => VANISH_HEAT,
     })

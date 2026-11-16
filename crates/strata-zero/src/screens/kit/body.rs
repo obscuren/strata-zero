@@ -585,6 +585,18 @@ mod tests {
         assert_eq!(text(gives(&st, Back, 9)), "· burned");
 
         let mut st = street();
+        let k = scrambler(&mut st);
+        let spare = spare_scrambler(&mut st);
+        set_charge(&mut st, k, at(62, false));
+        set_charge(&mut st, spare, at(90, false));
+        assert_eq!(
+            footer(&st),
+            "◌ field scrambler  62%",
+            "the worn one, not the spare"
+        );
+        assert_eq!(text(gives(&st, Back, 9)), "◌ 62%");
+
+        let mut st = street();
         spare_scrambler(&mut st);
         assert_eq!(footer(&st), "", "one in the pack shows nothing");
         assert!(gives(&st, Back, 9).iter().all(|r| !r.0.contains('◌')));

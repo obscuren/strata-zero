@@ -16,6 +16,7 @@
 - Saves: never regenerate `crates/strata-zero/src/runs/fixtures/*`; they keep opening. New saved fields need `#[serde(default)]` (none expected).
 - Copy: footer `◌ field scrambler  62%` as today; BACK tile gives line `◌ 62%`, `· burned` when burned out. Counts in digits.
 - WREN: handle `WREN`, line `every camera on the block kept a smear, never a face`, origin `slab_rat`, profession `fixer`, attributes BODY 5, REFLEX 7, TECH 4, COOL 8, NET 3, categories `ghost`, `iron`, `street`, skills `stealth`, `lockpick`, `handguns`, `streetwise`, kit `field_scrambler`, `whisper_smg`.
+- Rulings after this plan was written supersede it: WREN is REFLEX 8 (to spend exactly 20 points), and the Whisper is in the right hand and the Ratchet in the left (the build's kit is worn first), not REFLEX 7 and the Review Focus 5 hand order.
 - The manual chapter that describes a changed rule changes in the same task.
 
 ## Review Focus

@@ -299,6 +299,29 @@ mod tests {
     }
 
     #[test]
+    fn the_switch_off_plays_at_the_charge_it_had() {
+        use game::{Action, BodyPart};
+        let mut st = street();
+        let k = scrambler(&mut st);
+        let at = Charge {
+            left: FULL_CELL * 80 / 100,
+            burned: false,
+        };
+        set_charge(&mut st, k, at);
+        fire(&mut st, "scramble").unwrap();
+        let hot = super::super::heat(&st).unwrap();
+        crate::actions::perform(&mut st, Action::Unequip(BodyPart::Back)).unwrap();
+        frames(&mut st, 1);
+        assert!(st.cloak.is_none());
+        let fade = st.veil.fade.expect("a switch-off");
+        assert!(
+            (fade.hot - hot).abs() < 0.01 && fade.hot < 0.5,
+            "heat {} not {hot}",
+            fade.hot
+        );
+    }
+
+    #[test]
     fn a_cloak_saved_on_a_pack_scrambler_opens_off() {
         let mut st = street();
         let k = spare_scrambler(&mut st);

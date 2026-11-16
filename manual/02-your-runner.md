@@ -4,7 +4,7 @@ Every run starts with `NEW GAME` and the question "who are you tonight". You can
 
 - **VEX** is a crèche kid behind the ICE: a netrunner raised in the towers, with a deck and the programs to use it.
 - **KESSLER** came into the city in a freight can: a solo, all body.
-- **WREN** grew up on the slab where every camera kept a smear, never a face: a ghost with a scrambler on her back and a gun in each hand.
+- **WREN** grew up on the slab where every camera kept a smear, never a face: a ghost with a scrambler on the back and a gun in each hand.
 - **CUSTOM BUILD** walks you through every choice yourself.
 
 A ready-made runner opens on the finished sheet, where you can still look it over, go back and change anything, or give it another name.
