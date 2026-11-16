@@ -1,8 +1,8 @@
 //! The desk: the rig opened up at home. The map pane becomes the desk with the rack on
 //! it (a dark wall, the rack on its base, the desk's edge under it), the BAYS down the
 //! left (the frame first), the picked part outlined in the drawing with a dashed box,
-//! and its card in the side panel over what in your pack (or your flat, for the frame)
-//! fits there, each with the change it would make.
+//! and its card in the side panel over what in your pack fits there, each with the
+//! change it would make.
 
 use crate::actions::perform;
 use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
@@ -51,11 +51,10 @@ const TYPE_RATE: u64 = 3;
 /// What the bottom row says.
 const STATUS: &str = " at your rig · ↑↓ bays · space what fits · x pull · esc stand up";
 
-/// What can go in the picked row: another rack from your flat (row 0), or a sled in
-/// your pack.
+/// What can go in the picked row: a rack in your pack (row 0), or a sled in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
-    Frame(ItemId),
+    Frame { item: ItemId, copy: CopyId },
     Sled { item: ItemId, copy: CopyId },
 }
 
@@ -95,7 +94,7 @@ impl Desk {
     fn list(&mut self, st: &mut AppState) {
         if fits_here(st, self.row).is_empty() {
             st.warn(if self.row == 0 {
-                "no other rack in your flat"
+                "no rack in your pack"
             } else {
                 "nothing in your pack fits"
             });
@@ -113,20 +112,19 @@ impl Desk {
             return;
         };
         let done = match p {
-            Pick::Frame(frame) if st.content.item(&frame).is_none() => {
-                Err(format!("`{frame}` is no rack"))
-            }
-            Pick::Frame(frame) => {
-                let out = st.character.set_frame(&st.content, &frame);
-                let mut line = format!(
-                    "you move the rig into the {} · {FIT_MINUTES}m",
-                    name(st, &frame)
-                );
-                if !out.is_empty() {
-                    let names: Vec<String> = out.iter().map(|id| name(st, id)).collect();
-                    line.push_str(&format!(" · the {} to your pack", names.join(", the ")));
-                }
-                Ok(line)
+            Pick::Frame { item, copy } => {
+                let content = st.content.clone();
+                st.character.fit_frame(&content, copy).map(|out| {
+                    let mut line = format!(
+                        "you move the rig into the {} · {FIT_MINUTES}m",
+                        name(st, &item)
+                    );
+                    if !out.is_empty() {
+                        let names: Vec<String> = out.iter().map(|id| name(st, id)).collect();
+                        line.push_str(&format!(" · the {} to your pack", names.join(", the ")));
+                    }
+                    line
+                })
             }
             Pick::Sled { item, copy } => {
                 let fit = Action::Fit {
@@ -214,29 +212,31 @@ fn name(st: &AppState, id: &ItemId) -> String {
         .map_or_else(|| id.0.clone(), |i| i.name.clone())
 }
 
-/// What fits `row`: for the frame, the racks in your flat but the fitted one; for a
-/// bay, every sled copy in the pack of its kind, in pack order.
+/// What fits `row`: for the frame, every rack copy in the pack; for a bay, every sled
+/// copy in the pack of its kind. In pack order.
 pub fn fits_here(st: &AppState, row: usize) -> Vec<Pick> {
     let (c, ch) = (&st.content, &st.character);
-    if row == 0 {
-        let fitted = ch.rig_frame();
-        return ch
-            .frames
-            .iter()
-            .filter(|f| **f != fitted)
-            .map(|f| Pick::Frame(f.clone()))
-            .collect();
-    }
-    let Some(kind) = ch.rig_fitted(c).get(row - 1).map(|(k, _)| *k) else {
-        return Vec::new();
+    let kind = match row {
+        0 => None,
+        _ => match ch.rig_fitted(c).get(row - 1) {
+            Some((k, _)) => Some(*k),
+            None => return Vec::new(),
+        },
     };
     ch.inventory
         .iter()
-        .filter(|s| s.qty > 0 && c.item(&s.item).and_then(Item::fits_socket) == Some(kind))
+        .filter(|s| s.qty > 0)
+        .filter(|s| {
+            c.item(&s.item).is_some_and(|i| match kind {
+                None => i.kind == game::ItemKind::Frame,
+                Some(k) => i.fits_socket() == Some(k),
+            })
+        })
         .filter_map(|s| {
-            Some(Pick::Sled {
-                item: s.item.clone(),
-                copy: s.copy_id()?,
+            let (item, copy) = (s.item.clone(), s.copy_id()?);
+            Some(match kind {
+                None => Pick::Frame { item, copy },
+                Some(_) => Pick::Sled { item, copy },
             })
         })
         .collect()
@@ -248,7 +248,7 @@ fn after(st: &AppState, row: usize, pick: &Pick) -> (RigSpec, Vec<ItemId>) {
     let c = &st.content;
     let mut ch = st.character.clone();
     let out = match pick {
-        Pick::Frame(frame) => ch.set_frame(c, frame),
+        Pick::Frame { copy, .. } => ch.fit_frame(c, *copy).unwrap_or_default(),
         Pick::Sled { copy, .. } => {
             if let Some(i) = ch.inventory.iter().position(|s| s.copy_id() == Some(*copy)) {
                 let stack = ch.inventory.remove(i);
@@ -792,11 +792,7 @@ fn draw_side(
     y += u16::from(tall);
     rule(buf, y);
     y += 1;
-    let head = if d.row == 0 {
-        "IN YOUR FLAT"
-    } else {
-        "FITS HERE · IN YOUR PACK"
-    };
+    let head = "FITS HERE · IN YOUR PACK";
     if y < foot {
         put(buf, x, y, head, DIM, SIDE, true, right);
     }
@@ -808,7 +804,7 @@ fn draw_side(
     let room = foot.saturating_sub(1).saturating_sub(y);
     if entries.is_empty() {
         let none = if d.row == 0 {
-            "no other rack in your flat"
+            "no rack in your pack"
         } else {
             "nothing in your pack fits"
         };
@@ -866,7 +862,7 @@ fn entry(st: &AppState, row: usize, p: &Pick, before: RigSpec) -> Vec<(String, C
     let (after, out) = after(st, row, p);
     let mut lines = Vec::new();
     match p {
-        Pick::Frame(frame) => {
+        Pick::Frame { item: frame, .. } => {
             lines.push((name(st, frame).to_uppercase(), CARD_TX, true));
             let item = st.content.item(frame);
             let n = item.map_or(0, |i| i.sockets.len());
@@ -1000,7 +996,7 @@ mod tests {
             1,
             "the line bay takes the Longwire"
         );
-        assert!(fits_here(&st, 0).is_empty(), "no other rack in the flat");
+        assert!(fits_here(&st, 0).is_empty(), "no rack in the pack");
         press(&mut d, &mut st, KeyCode::Char(' '));
         assert_eq!(d.picker, Some(0));
         let text = drawn(&d, &st, 120, 40);
@@ -1091,10 +1087,62 @@ mod tests {
     }
 
     #[test]
+    fn a_rack_in_the_pack_shows_on_the_frame_row() {
+        let mut st = state_home();
+        let mut d = Desk::open(&st);
+        d.row = 0;
+        assert!(fits_here(&st, 0).is_empty());
+        let text = drawn(&d, &st, 120, 40);
+        assert!(text.contains("no rack in your pack"), "{text}");
+        press(&mut d, &mut st, KeyCode::Char(' '));
+        assert_eq!(d.picker, None);
+        assert_eq!(last(&st), "no rack in your pack");
+        // Spawned from the console, as any item: it is in the pack and on the row.
+        crate::screens::explore::MapScreen::walking(&mut st);
+        let p = st.player.as_ref().unwrap();
+        let at = game::At {
+            place: p.place,
+            pos: p.pos,
+        };
+        crate::screens::console::run(&mut st, at, "spawn rack_civitas").unwrap();
+        let copy = st
+            .character
+            .inventory
+            .iter()
+            .find(|s| s.item.0 == "rack_civitas")
+            .and_then(|s| s.copy_id())
+            .expect("a copy in the pack");
+        let civitas = ItemId::new("rack_civitas");
+        assert_eq!(
+            fits_here(&st, 0),
+            vec![Pick::Frame {
+                item: civitas.clone(),
+                copy
+            }]
+        );
+        assert!(fits_here(&st, 1).is_empty(), "a rack fits no bay");
+        press(&mut d, &mut st, KeyCode::Char(' '));
+        assert_eq!(d.picker, Some(0));
+        let text = drawn(&d, &st, 120, 40);
+        assert!(text.contains("FITS HERE · IN YOUR PACK"), "{text}");
+        assert!(text.contains("CIVITAS CABINET"), "{text}");
+        assert!(text.contains("ZENBO HALF-RACK to your pack"), "{text}");
+        press(&mut d, &mut st, KeyCode::Char(' '));
+        assert_eq!(st.character.rig_frame(), civitas);
+        assert_eq!(st.character.count(&civitas), 0);
+        assert_eq!(st.character.count(&ItemId::new("rack_zenbo")), 1);
+        // The Zenbo is the row's one pick now.
+        assert!(matches!(
+            fits_here(&st, 0).as_slice(),
+            [Pick::Frame { item, .. }] if item.0 == "rack_zenbo"
+        ));
+    }
+
+    #[test]
     fn changing_frame_sends_extras_to_the_pack() {
         let mut st = state_home();
         let lotus = ItemId::new("rack_lotus");
-        st.character.set_frame(&st.content, &lotus);
+        crate::rig::fit_new_rack(&mut st.character, &st.content, "rack_lotus");
         let piece = give(&mut st, "sled_tinman");
         st.at_desk = true;
         perform(
@@ -1108,23 +1156,25 @@ mod tests {
         .unwrap();
         let mut d = Desk::open(&st);
         d.row = 0;
-        assert_eq!(
-            fits_here(&st, 0),
-            vec![Pick::Frame(ItemId::new("rack_zenbo"))]
-        );
+        assert!(matches!(
+            fits_here(&st, 0).as_slice(),
+            [Pick::Frame { item, .. }] if item.0 == "rack_zenbo"
+        ));
         let from = st.net.now(&st);
         press(&mut d, &mut st, KeyCode::Char(' '));
         let text = drawn(&d, &st, 120, 40);
-        assert!(text.contains("IN YOUR FLAT"), "{text}");
-        assert!(text.contains("TINMAN 2X to your pack"), "{text}");
+        assert!(text.contains("FITS HERE · IN YOUR PACK"), "{text}");
+        assert!(text.contains("LOTUS, TINMAN 2X to your pack"), "{text}");
         press(&mut d, &mut st, KeyCode::Char(' '));
         assert_eq!(st.character.rig_frame(), ItemId::new("rack_zenbo"));
         assert_eq!(st.character.count(&ItemId::new("sled_tinman")), 1);
-        assert!(st.character.frames.contains(&lotus), "the old rack stays");
+        assert_eq!(st.character.count(&lotus), 1, "the old rack to the pack");
+        assert_eq!(st.character.count(&ItemId::new("rack_zenbo")), 0);
         assert_eq!(st.net.now(&st), from + FIT_MINUTES);
         let said = last(&st);
         assert!(
-            said.contains("Zenbo half-rack") && said.contains("Tinman 2X core"),
+            said.contains("into the Zenbo half-rack")
+                && said.contains("the Lotus tower, the Tinman 2X core to your pack"),
             "{said}"
         );
     }
@@ -1134,14 +1184,10 @@ mod tests {
     fn racks() -> Vec<(&'static str, AppState)> {
         let stock = AppState::new();
         let mut civitas = AppState::new();
-        civitas
-            .character
-            .set_frame(&civitas.content, &ItemId::new("rack_civitas"));
+        crate::rig::fit_new_rack(&mut civitas.character, &civitas.content, "rack_civitas");
         let mut halcyon = AppState::new();
         let c = halcyon.content.clone();
-        halcyon
-            .character
-            .set_frame(&c, &ItemId::new("rack_halcyon"));
+        crate::rig::fit_new_rack(&mut halcyon.character, &c, "rack_halcyon");
         let sleds = [
             "sled_qstack",
             "sled_tinman",
@@ -1263,16 +1309,18 @@ mod tests {
     #[test]
     fn a_refused_fit_leaves_the_list_open() {
         let mut st = state_home();
-        st.character.rig_copy_mut(&st.content.clone());
-        st.character.frames.push(ItemId::new("rack_nonesuch"));
+        give(&mut st, "sled_tinman");
         let mut d = Desk::open(&st);
-        d.row = 0;
+        d.row = 1;
         let from = st.net.now(&st);
         press(&mut d, &mut st, KeyCode::Char(' '));
-        press(&mut d, &mut st, KeyCode::Char(' '));
+        assert_eq!(d.picker, Some(0));
+        // Up from the seat as the pick goes in: the rig takes nothing.
+        st.at_desk = false;
+        d.fit(&mut st, 0);
         assert_eq!(d.picker, Some(0), "the list stays open");
         assert_eq!(st.net.now(&st), from, "no time gone");
-        assert_eq!(st.character.rig_frame(), ItemId::new("rack_zenbo"));
+        assert_eq!(bay(&st, 0).as_deref(), Some("sled_zb8"));
         assert_eq!(st.log.latest().map(|e| e.kind), Some(Kind::Warn));
     }
 
@@ -1304,7 +1352,7 @@ mod tests {
     fn the_desk_fits_100x30() {
         let mut st = AppState::new();
         for frame in ["rack_zenbo", "rack_halcyon"] {
-            st.character.set_frame(&st.content, &ItemId::new(frame));
+            crate::rig::fit_new_rack(&mut st.character, &st.content, frame);
             let d = Desk::open(&st);
             for (w, h) in [(100, 30), (120, 40)] {
                 let text = drawn(&d, &st, w, h);

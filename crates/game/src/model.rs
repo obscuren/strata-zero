@@ -230,14 +230,13 @@ pub enum ItemKind {
     Sticker,
     /// A small vehicle that docks in a socket and comes out with you: a drone.
     Bot,
-    /// A rig's rack: its bays take sleds. Stands in your flat, never carried.
+    /// A rig's rack: its bays take sleds. Fitted at the desk from the pack.
     Frame,
 }
 
 impl ItemKind {
-    /// Every kind a pack can hold: the KIT's filter chips. A frame stands in the flat
-    /// and is never carried, so it is not among them.
-    pub const ALL: [ItemKind; 11] = [
+    /// Every kind a pack can hold: the KIT's filter chips.
+    pub const ALL: [ItemKind; 12] = [
         ItemKind::Weapon,
         ItemKind::Armor,
         ItemKind::Cyberware,
@@ -249,6 +248,7 @@ impl ItemKind {
         ItemKind::Hardware,
         ItemKind::Sticker,
         ItemKind::Bot,
+        ItemKind::Frame,
     ];
 
     pub fn label(self) -> &'static str {

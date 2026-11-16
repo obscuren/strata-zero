@@ -63,6 +63,14 @@ pub fn of(st: &AppState) -> RigSpec {
     spec(&st.character, &st.content)
 }
 
+/// A new rack of `id` into the pack and fitted as the rig, as the tests and shots set
+/// one up; the old rack goes to the pack.
+#[cfg(test)]
+pub(crate) fn fit_new_rack(ch: &mut Character, c: &Content, id: &str) {
+    ch.give_item(c, game::ItemId::new(id), 1);
+    ch.set_frame(c, &game::ItemId::new(id)).expect("a rack");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,7 +98,7 @@ mod tests {
     fn two_cores_add_their_seats() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        ch.set_frame(&c, &ItemId::new("rack_lotus"));
+        crate::rig::fit_new_rack(&mut ch, &c, "rack_lotus");
         fit(&mut ch, &c, 0, "sled_tinman");
         fit(&mut ch, &c, 1, "sled_qstack");
         let s = spec(&ch, &c);
@@ -111,7 +119,7 @@ mod tests {
     fn the_best_firewall_counts() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        ch.set_frame(&c, &ItemId::new("rack_civitas"));
+        crate::rig::fit_new_rack(&mut ch, &c, "rack_civitas");
         fit(&mut ch, &c, 3, "sled_tripwire");
         assert_eq!(spec(&ch, &c).firewall, 2);
     }

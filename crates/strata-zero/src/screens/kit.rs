@@ -444,20 +444,37 @@ impl Kit {
     }
 
     /// The pack: the filter's chips on its first row, ALL then a kind's glyph each, the
-    /// active one bracketed and named; under them the list.
+    /// active one bracketed and named, the glyphs closer together when the row is
+    /// narrow; under them the list.
     fn draw_pack(&self, st: &AppState, pack: Rect, buf: &mut Buffer) {
         let focused = self.state.pane == Pane::Pack;
+        let chips = |tight: bool| -> Vec<(Option<ItemKind>, bool, String)> {
+            std::iter::once(None)
+                .chain(ItemKind::ALL.into_iter().map(Some))
+                .map(|chip| {
+                    let on = chip == self.state.filter;
+                    let text = match (chip, on) {
+                        (None, true) => "▌ALL▐".to_string(),
+                        (None, false) => " ALL ".to_string(),
+                        (Some(kind), true) => {
+                            format!("▌{} {}▐", kind_icon(kind), kind.label().to_uppercase())
+                        }
+                        (Some(kind), false) if tight => format!(" {}", kind_icon(kind)),
+                        (Some(kind), false) => format!(" {} ", kind_icon(kind)),
+                    };
+                    (chip, on, text)
+                })
+                .collect()
+        };
+        let wide = chips(false);
+        let width: usize = wide.iter().map(|(_, _, t)| t.chars().count()).sum();
+        let row = if width < usize::from(pack.width) {
+            wide
+        } else {
+            chips(true)
+        };
         let mut x = pack.x + 1;
-        for chip in std::iter::once(None).chain(ItemKind::ALL.into_iter().map(Some)) {
-            let on = chip == self.state.filter;
-            let text = match (chip, on) {
-                (None, true) => "▌ALL▐".to_string(),
-                (None, false) => " ALL ".to_string(),
-                (Some(kind), true) => {
-                    format!("▌{} {}▐", kind_icon(kind), kind.label().to_uppercase())
-                }
-                (Some(kind), false) => format!(" {} ", kind_icon(kind)),
-            };
+        for (chip, on, text) in row {
             let style = if on && focused {
                 lit_bold(st.tick)
             } else if on || chip.is_none_or(|kind| carried(st, kind)) {

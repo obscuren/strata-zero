@@ -394,6 +394,8 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
     // The street's `dark` is the city's, skipped by the save: made again from the
     // districts `net.lights_out` still holds.
     crate::holds::relight(st);
+    // The first rig saves kept spare racks "in the flat": into the pack with them.
+    st.character.unpack_old_racks(&st.content);
     lost.extend(st.character.forget_unknown(&st.content));
     lost.extend(st.ground.forget_unknown(&st.content));
     lost.extend(st.missions.forget_unknown(&st.content));

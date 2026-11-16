@@ -76,7 +76,7 @@ Fitting or pulling takes ten minutes. A swap puts the old sled in your pack. Pul
 | Lotus tower | core, core, relay, line |
 | Halcyon server frame | core, core, relay, line, firewall |
 
-`space` on FRAME shows the racks standing in your flat. Change racks and your sleds move to the new bays of their kind; any left over go to your pack. Your terminal wears its rack's look from then on, but the rig is still called `zenbo`.
+Racks are items: spare ones ride in your pack and weigh nothing. `space` on FRAME shows the racks in your pack. Change racks and your sleds move to the new bays of their kind; the old rack goes to your pack, with any sleds left over. Your terminal wears its rack's look from then on, but the rig is still called `zenbo`.
 
 ### Firewalls
 
@@ -88,7 +88,7 @@ Each tier does what the one below does.
 
 ### Where parts come from
 
-- Fixers. The first time a fixer comes to know you, they pay a tier-two sled with the hand-in, once each: a Tinman 2X core, a Switchback relay, a Longwire, a Sandbag. The first fixer to trust you sends a Civitas cabinet, the second a Lotus tower, and the first to take you into the inner circle a Halcyon server frame. A rack waits in your flat, and a mail says so.
+- Fixers. The first time a fixer comes to know you, they pay a tier-two sled with the hand-in, once each: a Tinman 2X core, a Switchback relay, a Longwire, a Sandbag. The first fixer to trust you hands over a Civitas cabinet, the second a Lotus tower, and the first to take you into the inner circle a Halcyon server frame. The rack goes in your pack with the hand-in, and a mail from the fixer follows it.
 - The workbench. Tier-two sleds and the rest are built from parts with the `electronics` skill. The top tier eats a data vault's dump, so a netrunner's haul becomes hardware.
 
 ## Jobs

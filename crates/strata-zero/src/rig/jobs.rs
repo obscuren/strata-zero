@@ -894,7 +894,7 @@ mod tests {
     /// The Lotus tower with a Tinman and a Q-Stack: five seats at ×1.5.
     fn lotus(st: &mut AppState) {
         let c = st.content.clone();
-        st.character.set_frame(&c, &ItemId::new("rack_lotus"));
+        crate::rig::fit_new_rack(&mut st.character, &c, "rack_lotus");
         fit(st, 0, "sled_tinman");
         fit(st, 1, "sled_qstack");
         assert_eq!(crate::rig::of(st).seats, 5);
