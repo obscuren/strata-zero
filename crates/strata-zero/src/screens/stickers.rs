@@ -695,7 +695,7 @@ mod tests {
     use crate::screens::testutil::{buffer_text, key};
     use crate::ui::stickers::size;
     use citygen::{GenParams, Generator, SizePreset};
-    use game::{Character, ItemKind, Slot, Stuck};
+    use game::{BodyPart, Character, ItemKind, Stuck};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
@@ -723,8 +723,8 @@ mod tests {
         st
     }
 
-    /// The blueprint on what a slot wears, opened from GEAR.
-    fn worn(st: &AppState, item: &str, slot: Slot) -> Blueprint {
+    /// The blueprint on what a part wears, opened from GEAR.
+    fn worn(st: &AppState, item: &str, slot: BodyPart) -> Blueprint {
         let copy = st.character.worn_copy(slot).map(|k| k.id);
         Blueprint::open(st, id(item), true, copy)
     }
@@ -796,7 +796,7 @@ mod tests {
         }
     }
 
-    fn stuck(st: &AppState, slot: Slot) -> Vec<Stuck> {
+    fn stuck(st: &AppState, slot: BodyPart) -> Vec<Stuck> {
         st.character.worn_copy(slot).unwrap().stickers.clone()
     }
 
@@ -807,7 +807,7 @@ mod tests {
     #[test]
     fn s_opens_the_mode_on_a_drawn_worn_item() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         let buf = screen(&bp, &st, 100, 30);
         assert!(
             hint(&buf).ends_with("space act · m mod · s stickers · esc close"),
@@ -836,7 +836,7 @@ mod tests {
         assert_eq!(bp.mode, Mode::Stickers);
 
         // The Ratchet has it too.
-        let mut gun = worn(&st, "ratchet_smg", Slot::Primary);
+        let mut gun = worn(&st, "ratchet_smg", BodyPart::RightHand);
         press(&mut gun, &mut st, &[KeyCode::Char('s')]);
         assert_eq!(gun.mode, Mode::Stickers);
 
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn the_tray_rises_with_the_stickers_drawn_as_they_are() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         press(&mut bp, &mut st, &[KeyCode::Char('s')]);
         let buf = screen(&bp, &st, 100, 30);
         // The body is rows 2..26 and the deck's origin (8, 3) at 100×30. The tallest
@@ -916,7 +916,7 @@ mod tests {
     fn the_tray_scrolls_to_the_pointed_sticker() {
         let mut st = dshawn();
         for (w, h) in [(100, 30), (120, 40)] {
-            let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+            let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
             press(&mut bp, &mut st, &[KeyCode::Char('s')]);
             times(&mut bp, &mut st, KeyCode::Right, 28);
             assert_eq!(bp.stickers.tile, 28);
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn picking_places_the_sticker_where_it_fits_nearest_the_centre() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         press(&mut bp, &mut st, &[KeyCode::Char('s'), KeyCode::Char(' ')]);
         let (area, (w, h)) = area_of(&bp, &st);
         let art = art_of(&st, "sticker_no_future");
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn arrows_slide_over_spots_where_it_does_not_fit() {
         let mut st = dshawn();
-        let mut gun = worn(&st, "ratchet_smg", Slot::Primary);
+        let mut gun = worn(&st, "ratchet_smg", BodyPart::RightHand);
         press(&mut gun, &mut st, &[KeyCode::Char('s')]);
         // FLATLINE, his sixth stack: ten cells, one row.
         times(&mut gun, &mut st, KeyCode::Right, 5);
@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn r_turns_about_the_centre_and_skips_turns_that_fit_nowhere() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         press(
             &mut bp,
             &mut st,
@@ -1037,7 +1037,7 @@ mod tests {
         assert!(readout(&screen(&bp, &st, 100, 30)).contains("▸ turned 90°"));
 
         // Stood up, CHROME > FLESH is sixteen rows: the gun has no room, so r skips to 180°.
-        let mut gun = worn(&st, "ratchet_smg", Slot::Primary);
+        let mut gun = worn(&st, "ratchet_smg", BodyPart::RightHand);
         press(&mut gun, &mut st, &[KeyCode::Char('s')]);
         times(&mut gun, &mut st, KeyCode::Right, 7);
         press(&mut gun, &mut st, &[KeyCode::Char(' '), KeyCode::Char('r')]);
@@ -1069,9 +1069,9 @@ mod tests {
     #[test]
     fn space_sticks_it_and_esc_puts_it_back() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         let before = (
-            stuck(&st, Slot::Deck),
+            stuck(&st, BodyPart::Waist),
             st.character.count(&id("sticker_orodyne")),
         );
         press(
@@ -1089,7 +1089,7 @@ mod tests {
         assert_eq!(bp.stickers.tile, 2);
         assert_eq!(
             (
-                stuck(&st, Slot::Deck),
+                stuck(&st, BodyPart::Waist),
                 st.character.count(&id("sticker_orodyne"))
             ),
             before
@@ -1097,7 +1097,7 @@ mod tests {
         press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
         let held = holding(&bp);
         press(&mut bp, &mut st, &[KeyCode::Char(' ')]);
-        let now = stuck(&st, Slot::Deck);
+        let now = stuck(&st, BodyPart::Waist);
         assert_eq!(now.len(), before.0.len() + 1);
         assert_eq!(
             now.last(),
@@ -1124,7 +1124,7 @@ mod tests {
                 .is_none_or(|i| i.kind != ItemKind::Sticker)
         });
         st.character.give(id("sticker_neko"), 1);
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         press(
             &mut bp,
             &mut st,
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn a_sticker_that_fits_nowhere_is_not_picked() {
         let mut st = dshawn();
-        let mut gun = worn(&st, "ratchet_smg", Slot::Primary);
+        let mut gun = worn(&st, "ratchet_smg", BodyPart::RightHand);
         press(&mut gun, &mut st, &[KeyCode::Char('s')]);
         times(&mut gun, &mut st, KeyCode::Right, 27);
         press(&mut gun, &mut st, &[KeyCode::Char(' ')]);
@@ -1182,7 +1182,7 @@ mod tests {
     #[test]
     fn up_from_the_tray_points_at_the_stuck_stickers() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         press(&mut bp, &mut st, &[KeyCode::Char('s'), KeyCode::Up]);
         // From the first tile, the nearer factory sticker is x‿x at (45, 13).
         assert_eq!(at(&bp), on(1));
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn peeling_takes_two_spaces_and_tears_it() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         let faces = st.character.count(&id("sticker_dead_face"));
         press(
             &mut bp,
@@ -1233,7 +1233,7 @@ mod tests {
                 armed: true
             }
         );
-        assert_eq!(stuck(&st, Slot::Deck).len(), 2, "armed is not peeled");
+        assert_eq!(stuck(&st, BodyPart::Waist).len(), 2, "armed is not peeled");
         assert_eq!(
             readout(&screen(&bp, &st, 100, 30)),
             "DEAD FACE ▸ space again peels it · it tears · any other key keeps it"
@@ -1252,14 +1252,14 @@ mod tests {
             ScreenCmd::Stay
         ));
         assert_eq!(at(&bp), on(0));
-        assert_eq!(stuck(&st, Slot::Deck).len(), 2);
+        assert_eq!(stuck(&st, BodyPart::Waist).len(), 2);
         // Two spaces on x‿x: it is gone, and not back in the pack.
         press(
             &mut bp,
             &mut st,
             &[KeyCode::Down, KeyCode::Char(' '), KeyCode::Char(' ')],
         );
-        let left: Vec<ItemId> = stuck(&st, Slot::Deck)
+        let left: Vec<ItemId> = stuck(&st, BodyPart::Waist)
             .into_iter()
             .map(|s| s.sticker)
             .collect();
@@ -1273,7 +1273,7 @@ mod tests {
     #[test]
     fn jacked_in_browses_but_never_changes() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         jack_in(&mut st);
         let before = st.character.clone();
         press(&mut bp, &mut st, &[KeyCode::Char('s'), KeyCode::Char(' ')]);
@@ -1296,7 +1296,7 @@ mod tests {
     #[test]
     fn a_stuck_sticker_off_the_area_still_draws_and_peels() {
         let mut st = dshawn();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         let plain = screen(&bp, &st, 100, 30);
         // Over the glass, where the mode would never put it.
         let over = Stuck {
@@ -1305,7 +1305,7 @@ mod tests {
             y: 8,
             turn: Turn::Level,
         };
-        let copy = st.character.worn.get_mut(&Slot::Deck).unwrap();
+        let copy = st.character.worn.get_mut(&BodyPart::Waist).unwrap();
         copy.stickers.push(over);
         let buf = screen(&bp, &st, 100, 30);
         let (ox, oy) = (8, 3);
@@ -1331,9 +1331,9 @@ mod tests {
             "NEKO ▸ stuck · picture"
         );
         press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Char(' ')]);
-        assert_eq!(stuck(&st, Slot::Deck).len(), 2);
+        assert_eq!(stuck(&st, BodyPart::Waist).len(), 2);
         assert!(
-            stuck(&st, Slot::Deck)
+            stuck(&st, BodyPart::Waist)
                 .iter()
                 .all(|s| s.sticker != id("sticker_neko"))
         );
@@ -1342,12 +1342,16 @@ mod tests {
     /// and stuck: both land on the same start spot, ORODYNE on top.
     fn stacked(first: &[Stuck]) -> (AppState, Blueprint) {
         let mut st = dshawn();
-        st.character.worn.get_mut(&Slot::Deck).unwrap().stickers = first.to_vec();
-        let mut bp = worn(&st, "rebuilt_deck", Slot::Deck);
+        st.character
+            .worn
+            .get_mut(&BodyPart::Waist)
+            .unwrap()
+            .stickers = first.to_vec();
+        let mut bp = worn(&st, "rebuilt_deck", BodyPart::Waist);
         let (space, right) = (KeyCode::Char(' '), KeyCode::Right);
         press(&mut bp, &mut st, &[KeyCode::Char('s'), space, space]);
         press(&mut bp, &mut st, &[right, right, space, space]);
-        let now = stuck(&st, Slot::Deck);
+        let now = stuck(&st, BodyPart::Waist);
         let n = first.len();
         assert_eq!(now[n].sticker, id("sticker_no_future"));
         assert_eq!(now[n + 1].sticker, id("sticker_orodyne"));
@@ -1370,7 +1374,7 @@ mod tests {
         );
         // Peeled from the top down, as vinyl comes off.
         press(&mut bp, &mut st, &[KeyCode::Char(' '), KeyCode::Char(' ')]);
-        let left: Vec<ItemId> = stuck(&st, Slot::Deck)
+        let left: Vec<ItemId> = stuck(&st, BodyPart::Waist)
             .into_iter()
             .map(|s| s.sticker)
             .collect();

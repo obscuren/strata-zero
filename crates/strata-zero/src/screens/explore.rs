@@ -9681,7 +9681,7 @@ mod tests {
         let (lock, lock_pos) = node_of(&st, b, NodeKind::DoorLock);
         let here = beside(&st, b, lock_pos);
         stand(&mut st, &mut s, Place::Construct(b), here);
-        st.character.equipment.remove(&game::Slot::Deck);
+        st.character.equipment.remove(&game::BodyPart::Waist);
         assert_eq!(st.character.loaded.len(), 2, "the list is kept");
         assert_eq!(
             crate::net::start_run(&mut st, ItemId::new("crack"), game::HackTarget::Node(lock))

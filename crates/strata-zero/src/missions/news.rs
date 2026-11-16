@@ -10,7 +10,7 @@ use crate::runs::ids::StepRef;
 use crate::ui::chrome::{DIM, MAGENTA};
 use crate::walker::Visibility;
 use citygen::{BuildingId, BuildingKind, Feature, Place, Pos, Rect, StratumKind};
-use game::{Attribute, ItemId, Slot};
+use game::{Attribute, BodyPart, ItemId};
 use sim::{MoverKind, PersonId};
 use std::collections::BTreeSet;
 
@@ -425,7 +425,7 @@ fn walk_away(st: &mut AppState) {
         return;
     };
     let at = st.clock();
-    let worn = st.character.equipped(Slot::Torso).cloned();
+    let worn = st.character.equipped(BodyPart::Torso).cloned();
     for b in st
         .missions
         .bodies
@@ -472,7 +472,7 @@ pub fn sought(st: &AppState) -> Option<[String; 2]> {
     let left = walked_away(st, &n.about);
     let worn = match &left {
         Some(l) => l.worn.as_ref(),
-        None => st.character.equipped(Slot::Torso),
+        None => st.character.equipped(BodyPart::Torso),
     };
     let clothes = worn
         .and_then(|id| st.content.item(id))
@@ -581,7 +581,7 @@ pub(crate) mod tests {
     use crate::ui::chrome::{DIM, MAGENTA};
     use crate::walker::{Player, Visibility};
     use citygen::{BuildingKind, Feature, Place, Pos, StratumKind};
-    use game::{ItemId, Slot};
+    use game::{BodyPart, ItemId};
     use sim::{MoverKind, PersonId};
 
     /// Seed 8 with its home, the story begun.
@@ -1047,7 +1047,7 @@ pub(crate) mod tests {
         let left = Some(Left {
             at: (22, 41),
             heading: "north".to_string(),
-            worn: st.character.equipped(Slot::Torso).cloned(),
+            worn: st.character.equipped(BodyPart::Torso).cloned(),
         });
         assert_eq!(st.missions.bodies[0].left, left);
         // Walk on, come back and leave the other way later: unchanged.
@@ -1080,7 +1080,7 @@ pub(crate) mod tests {
         put_out(&mut st, "marlo", None);
         st.character.attributes.body = 5;
         st.character
-            .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
+            .wear(BodyPart::Torso, ItemId::new("salvage_jacket"), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
             heading: "north".to_string(),
@@ -1094,7 +1094,7 @@ pub(crate) mod tests {
             ]
         );
         // Nothing worn, never walked away: dark clothes, late last night.
-        st.character.take_off(Slot::Torso);
+        st.character.take_off(BodyPart::Torso);
         st.missions.bodies[0].left = None;
         assert_eq!(
             sought(&st).unwrap(),
@@ -1116,11 +1116,11 @@ pub(crate) mod tests {
         put_out(&mut st, "marlo", None);
         st.character.attributes.body = 5;
         let jacket = ItemId::new("salvage_jacket");
-        st.character.wear(Slot::Torso, jacket.clone(), None);
+        st.character.wear(BodyPart::Torso, jacket.clone(), None);
         let (place, at) = (st.missions.bodies[0].place, st.missions.bodies[0].pos);
         stand(&mut st, place, at.offset(3, -3));
         stand(&mut st, place, at.offset(0, -13));
-        st.character.take_off(Slot::Torso);
+        st.character.take_off(BodyPart::Torso);
         let left = st.missions.bodies[0].left.clone().expect("walked away");
         assert_eq!(left.worn, Some(jacket.clone()));
         assert_eq!(jacket_seen(&st), Some(jacket));
@@ -1128,7 +1128,7 @@ pub(crate) mod tests {
         assert_eq!(sought(&st).unwrap()[0], seen);
         // What you wear now changes nothing the camera saw.
         st.character
-            .wear(Slot::Torso, ItemId::new("ballistic_weave"), None);
+            .wear(BodyPart::Torso, ItemId::new("ballistic_weave"), None);
         assert_eq!(sought(&st).unwrap()[0], seen);
     }
 
@@ -1137,14 +1137,14 @@ pub(crate) mod tests {
         let mut st = begun();
         crate::missions::end(&mut st, 0, 0);
         put_out(&mut st, "marlo", None);
-        st.character.take_off(Slot::Torso);
+        st.character.take_off(BodyPart::Torso);
         let (place, at) = (st.missions.bodies[0].place, st.missions.bodies[0].pos);
         stand(&mut st, place, at.offset(3, -3));
         stand(&mut st, place, at.offset(0, -13));
         assert!(st.missions.bodies[0].left.is_some());
         assert_eq!(jacket_seen(&st), None);
         st.character
-            .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
+            .wear(BodyPart::Torso, ItemId::new("salvage_jacket"), None);
         assert!(sought(&st).unwrap()[0].ends_with("· dark clothes"));
     }
 

@@ -37,8 +37,8 @@ Your origin makes two attributes cheap to raise and two dear.
 Your profession sets the money and the kit you start with, and makes one attribute cheap and one dear.
 
 - **NETRUNNER**: `¤320`, a pawnshop deck with the Crack, Copy and Attack programs, and a few odds and ends.
-- **FIXER**: `¤600`, an SMG, mirrorshades, the Spoof program and things to trade.
-- **SOLO**: `¤250`, an SMG, body armour, a monowire shiv and two stim patches.
+- **FIXER**: `¤600`, an SMG, mirrorshades, a courier sling, the Spoof program and things to trade.
+- **SOLO**: `¤250`, an SMG, body armour, a monowire shiv, tread boots and two stim patches.
 - **TECHIE**: `¤300`, a tool roll, spare servos and coils, and a schematic.
 
 Whichever you pick, you also carry a **Keyjack**, a lock cracker that clips onto a door's keypad, with a stock fuse in it and two spares. With the WRENCH category you can build more of both at the workbench.

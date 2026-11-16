@@ -7,11 +7,11 @@ use crate::ground::Ground;
 use crate::model::*;
 use citygen::{Place, Pos};
 
-/// What a piece is fitted into: what a slot wears, the chrome a site holds, or a
-/// copy in the pack.
+/// What a piece is fitted into: what a part of the body wears, the chrome a site
+/// holds, or a copy in the pack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Host {
-    Worn(Slot),
+    Worn(BodyPart),
     Site(Site),
     Pack(CopyId),
     /// The rig's rack on the desk: the bays take sleds.
@@ -21,11 +21,16 @@ pub enum Host {
 /// Everything a menu can ask for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    /// Wears the first of an item in pack order, a copy when it is one.
+    /// Wears the first of an item in pack order, a copy when it is one, on the part
+    /// `Character::part_for` picks.
     Equip(ItemId),
-    /// Wears one copy from the pack.
+    /// Wears one copy from the pack, on the part `Character::part_for` picks.
     EquipCopy(CopyId),
-    Unequip(Slot),
+    /// Wears the first of an item in pack order on a particular part.
+    EquipAt(ItemId, BodyPart),
+    /// Wears one copy from the pack on a particular part.
+    EquipCopyAt(CopyId, BodyPart),
+    Unequip(BodyPart),
     /// Installs the first of a piece of chrome in pack order at a site.
     Install {
         item: ItemId,
@@ -193,9 +198,85 @@ pub fn remove_from_pack(ch: &mut Character, item: &ItemId, qty: u32) -> u32 {
     take_from_pack(ch, item, qty).iter().map(|s| s.qty).sum()
 }
 
-/// Wears a stack of one taken from the pack; what the slot wore comes back to it.
-fn equip_stack(ch: &mut Character, c: &Content, item: &Item, slot: Slot, s: Stack) -> String {
-    let old = ch.wear(slot, s.item, s.copy);
+/// A part's name in a line: its name on the body, in lower case.
+pub fn part_name(c: &Content, part: BodyPart) -> String {
+    c.node(part).map_or_else(
+        || format!("{part:?}").to_lowercase(),
+        |n| n.name.to_lowercase(),
+    )
+}
+
+/// Where an item goes: `at` when it names a part of the item's kind, else the part
+/// `Character::part_for` picks.
+fn wear_at(
+    ch: &Character,
+    c: &Content,
+    item: &Item,
+    at: Option<BodyPart>,
+) -> Result<BodyPart, String> {
+    match at {
+        Some(part) => {
+            let fits = item
+                .slot
+                .is_some_and(|k| c.node(part).is_some_and(|n| n.kind == k));
+            if !fits {
+                return Err(format!(
+                    "{} doesn't go on the {}",
+                    item.name,
+                    part_name(c, part)
+                ));
+            }
+            Ok(part)
+        }
+        None => ch
+            .part_for(c, item)
+            .ok_or_else(|| format!("nothing on you takes {}", item.name)),
+    }
+}
+
+/// Wears one of an item from the pack, the first in pack order, on `at` or where it
+/// goes.
+fn equip(
+    ch: &mut Character,
+    c: &Content,
+    id: &ItemId,
+    at: Option<BodyPart>,
+) -> Result<String, String> {
+    let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+    if item.implant.is_some() {
+        return Err(CHROME_FROM_ATTRIBUTES.to_string());
+    }
+    if ch.count(id) == 0 {
+        return Err(format!("{} is not in your pack", item.name));
+    }
+    let part = wear_at(ch, c, item, at)?;
+    let Some(s) = take_from_pack(ch, id, 1).pop() else {
+        return Err(format!("{} is not in your pack", item.name));
+    };
+    Ok(equip_stack(ch, c, item, part, s))
+}
+
+/// Wears one copy from the pack, on `at` or where it goes.
+fn equip_copy(
+    ch: &mut Character,
+    c: &Content,
+    copy: CopyId,
+    at: Option<BodyPart>,
+) -> Result<String, String> {
+    let i = pack_copy(ch, copy)?;
+    let id = &ch.inventory[i].item;
+    let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
+    if item.implant.is_some() {
+        return Err(CHROME_FROM_ATTRIBUTES.to_string());
+    }
+    let part = wear_at(ch, c, item, at)?;
+    let s = ch.inventory.remove(i);
+    Ok(equip_stack(ch, c, item, part, s))
+}
+
+/// Wears a stack of one taken from the pack; what the part wore comes back to it.
+fn equip_stack(ch: &mut Character, c: &Content, item: &Item, part: BodyPart, s: Stack) -> String {
+    let old = ch.wear(part, s.item, s.copy);
     clamp_hp(ch, c);
     let mut message = match old {
         Some(old) => {
@@ -271,39 +352,14 @@ pub fn apply(
     action: Action,
 ) -> Result<Outcome, String> {
     match action {
-        Action::Equip(id) => {
-            let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
-            if item.implant.is_some() {
-                return Err(CHROME_FROM_ATTRIBUTES.to_string());
-            }
-            if ch.count(&id) == 0 {
-                return Err(format!("{} is not in your pack", item.name));
-            }
-            let slot = item
-                .slot
-                .ok_or_else(|| format!("{} has no slot", item.name))?;
-            let Some(s) = take_from_pack(ch, &id, 1).pop() else {
-                return Err(format!("{} is not in your pack", item.name));
-            };
-            done(equip_stack(ch, c, item, slot, s))
-        }
-        Action::EquipCopy(copy) => {
-            let i = pack_copy(ch, copy)?;
-            let id = &ch.inventory[i].item;
-            let item = c.item(id).ok_or_else(|| format!("unknown item {id}"))?;
-            if item.implant.is_some() {
-                return Err(CHROME_FROM_ATTRIBUTES.to_string());
-            }
-            let slot = item
-                .slot
-                .ok_or_else(|| format!("{} has no slot", item.name))?;
-            let s = ch.inventory.remove(i);
-            done(equip_stack(ch, c, item, slot, s))
-        }
-        Action::Unequip(slot) => {
+        Action::Equip(id) => equip(ch, c, &id, None).and_then(done),
+        Action::EquipAt(id, part) => equip(ch, c, &id, Some(part)).and_then(done),
+        Action::EquipCopy(copy) => equip_copy(ch, c, copy, None).and_then(done),
+        Action::EquipCopyAt(copy, part) => equip_copy(ch, c, copy, Some(part)).and_then(done),
+        Action::Unequip(part) => {
             let s = ch
-                .take_off(slot)
-                .ok_or_else(|| format!("nothing in the {} slot", slot.label()))?;
+                .take_off(part)
+                .ok_or_else(|| format!("nothing on the {}", part_name(c, part)))?;
             let message = format!("unequipped `{}`", name(c, &s.item));
             ch.stow_item(c, s);
             clamp_hp(ch, c);
@@ -929,7 +985,7 @@ mod tests {
         ch.inventory.push(Stack::new(id("hardhat"), 1));
         let out = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("hardhat"))).unwrap();
         assert_eq!(out.message, "equipped `Hardhat with visor`");
-        assert_eq!(ch.equipped(Slot::Head), Some(&id("hardhat")));
+        assert_eq!(ch.equipped(BodyPart::Head), Some(&id("hardhat")));
         assert_eq!(ch.count(&id("hardhat")), 0);
         assert!(!ch.inventory.iter().any(|s| s.qty == 0));
         ch.inventory.push(Stack::new(id("mirrorshades"), 1));
@@ -943,14 +999,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.message, "equipped `Mirrorshades`");
-        assert_eq!(ch.equipped(Slot::Eyes), Some(&id("mirrorshades")));
+        assert_eq!(ch.equipped(BodyPart::Face), Some(&id("mirrorshades")));
         assert_eq!(ch.sight_bonus(&c), 4, "the optics are installed, not worn");
         assert!(
-            apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Legs)).is_err(),
+            apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(BodyPart::Legs)).is_err(),
             "empty slot"
         );
         ch.hp = 47;
-        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Torso)).unwrap();
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(BodyPart::Torso)).unwrap();
         assert_eq!(out.message, "unequipped `Salvage jacket`");
         assert_eq!(ch.count(&id("salvage_jacket")), 1);
         assert_eq!((ch.hp, ch.hp_max(&c)), (42, 42), "hp clamps to the new max");
@@ -1430,7 +1486,7 @@ mod tests {
             out.message,
             "swapped `Pawnshop deck` for `Rebuilt pawn deck`"
         );
-        let worn = ch.worn_copy(Slot::Deck).unwrap();
+        let worn = ch.worn_copy(BodyPart::Waist).unwrap();
         assert_eq!(worn.id, deck);
         assert_eq!(
             worn.fitted[0].as_ref().and_then(|s| s.copy_id()),
@@ -1446,9 +1502,9 @@ mod tests {
             ch.weight(&c)
         );
         assert_eq!(ch.value(&c), value + 6000 + 1600);
-        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(BodyPart::Waist)).unwrap();
         assert_eq!(out.message, "unequipped `Rebuilt pawn deck`");
-        assert!(ch.worn_copy(Slot::Deck).is_none() && !ch.is_worn_copy(deck));
+        assert!(ch.worn_copy(BodyPart::Waist).is_none() && !ch.is_worn_copy(deck));
         assert_eq!(ch.copy_in_pack(deck), Some(&held), "back with its piece");
         assert!(near(ch.weight(&c), weight + 1.8 + 0.6));
     }
@@ -1466,7 +1522,7 @@ mod tests {
         assert_eq!(ids.len(), 2);
         let equip = || Action::Equip(id("rebuilt_deck"));
         apply(&mut ch, &mut g, &c, at, 0, equip()).unwrap();
-        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(ids[0]));
+        assert_eq!(ch.worn_copy(BodyPart::Waist).map(|k| k.id), Some(ids[0]));
         assert!(ch.copy_in_pack(ids[0]).is_none() && ch.copy_in_pack(ids[1]).is_some());
         assert_eq!(ch.count(&id("pawnshop_deck")), 1);
         let out = apply(&mut ch, &mut g, &c, at, 0, equip()).unwrap();
@@ -1474,7 +1530,7 @@ mod tests {
             out.message,
             "swapped `Rebuilt pawn deck` for `Rebuilt pawn deck`"
         );
-        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(ids[1]));
+        assert_eq!(ch.worn_copy(BodyPart::Waist).map(|k| k.id), Some(ids[1]));
         let back = ch.copy_in_pack(ids[0]).expect("the old worn deck returns");
         assert_eq!((back.qty, back.item.clone()), (1, id("rebuilt_deck")));
         assert_eq!(ch.count(&id("rebuilt_deck")), 1);
@@ -1488,10 +1544,10 @@ mod tests {
             Action::Equip(id("pawnshop_deck")),
         )
         .unwrap();
-        let worn = ch.worn_copy(Slot::Deck).map(|k| k.id);
+        let worn = ch.worn_copy(BodyPart::Waist).map(|k| k.id);
         assert!(worn.is_some() && worn != Some(ids[0]) && worn != Some(ids[1]));
         assert!(ch.copy_in_pack(ids[1]).is_some());
-        // A copy without a slot is refused before anything moves.
+        // A copy no part takes is refused before anything moves.
         let piece = ch.new_copy(&c, &id("sidecar"));
         ch.inventory.push(Stack {
             item: id("sidecar"),
@@ -1501,7 +1557,7 @@ mod tests {
         let before = ch.clone();
         assert_eq!(
             apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(piece.id)).unwrap_err(),
-            "Sidecar co-processor has no slot"
+            "nothing on you takes Sidecar co-processor"
         );
         assert_eq!(
             apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(CopyId(999))).unwrap_err(),
@@ -1605,7 +1661,7 @@ mod tests {
 
     fn fit(socket: usize, piece: CopyId) -> Action {
         Action::Fit {
-            host: Host::Worn(Slot::Deck),
+            host: Host::Worn(BodyPart::Waist),
             socket,
             piece,
         }
@@ -1617,7 +1673,7 @@ mod tests {
         let piece = pack_id(&ch, "coldfin_2");
         let out = apply(&mut ch, &mut g, &c, at, 0, fit(0, piece)).unwrap();
         assert_eq!(out.message, "`Coldfin vII` fitted · socket L");
-        let held = ch.worn_copy(Slot::Deck).unwrap().fitted[0]
+        let held = ch.worn_copy(BodyPart::Waist).unwrap().fitted[0]
             .as_ref()
             .unwrap();
         assert_eq!(held.copy_id(), Some(piece));
@@ -1644,12 +1700,12 @@ mod tests {
         let one = pack_id(&ch, "coldfin_1");
         apply(&mut ch, &mut g, &c, at, 0, fit(0, one)).unwrap();
         let unfit = Action::Unfit {
-            host: Host::Worn(Slot::Deck),
+            host: Host::Worn(BodyPart::Waist),
             socket: 0,
         };
         let out = apply(&mut ch, &mut g, &c, at, 0, unfit.clone()).unwrap();
         assert_eq!(out.message, "`Coldfin vI` out · to the pack");
-        assert!(ch.worn_copy(Slot::Deck).unwrap().fitted[0].is_none());
+        assert!(ch.worn_copy(BodyPart::Waist).unwrap().fitted[0].is_none());
         assert_eq!(pack_id(&ch, "coldfin_1"), one);
         assert_eq!(
             apply(&mut ch, &mut g, &c, at, 0, unfit).unwrap_err(),
@@ -1733,9 +1789,9 @@ mod tests {
         let one = pack_id(&ch, "coldfin_1");
         ch.give_item(&c, id("rebuilt_deck"), 1);
         let deck = pack_id(&ch, "rebuilt_deck");
-        ch.wear(Slot::Torso, id("salvage_jacket"), None);
+        ch.wear(BodyPart::Torso, id("salvage_jacket"), None);
         let jacket = Action::Fit {
-            host: Host::Worn(Slot::Torso),
+            host: Host::Worn(BodyPart::Torso),
             socket: 0,
             piece: one,
         };
@@ -1745,7 +1801,7 @@ mod tests {
             fit(0, deck),
             jacket,
             Action::Fit {
-                host: Host::Worn(Slot::Legs),
+                host: Host::Worn(BodyPart::Legs),
                 socket: 0,
                 piece: one,
             },
@@ -1755,7 +1811,7 @@ mod tests {
                 piece: one,
             },
             Action::Unfit {
-                host: Host::Worn(Slot::Torso),
+                host: Host::Worn(BodyPart::Torso),
                 socket: 0,
             },
         ] {
@@ -1803,6 +1859,66 @@ mod tests {
     }
 
     #[test]
+    fn a_gun_from_the_pack_takes_the_free_hand_then_swaps_the_main() {
+        let (c, mut ch, mut g, at) = setup();
+        assert_eq!(ch.equipped(BodyPart::RightHand), Some(&id("ratchet_smg")));
+        assert_eq!(ch.equipped(BodyPart::LeftHand), None);
+        ch.give_item(&c, id("hushcan"), 1);
+        let hushcan = pack_id(&ch, "hushcan");
+        let fit = Action::Fit {
+            host: Host::Worn(BodyPart::RightHand),
+            socket: 0,
+            piece: hushcan,
+        };
+        apply(&mut ch, &mut g, &c, at, 0, fit).unwrap();
+        let ratchet = ch.worn_copy(BodyPart::RightHand).unwrap().id;
+
+        ch.give_item(&c, id("scrap_nine"), 1);
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("scrap_nine"))).unwrap();
+        assert_eq!(out.message, "equipped `Scrap nine`");
+        assert_eq!(ch.equipped(BodyPart::LeftHand), Some(&id("scrap_nine")));
+        assert_eq!(ch.equipped(BodyPart::RightHand), Some(&id("ratchet_smg")));
+
+        ch.give_item(&c, id("whisper_smg"), 1);
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("whisper_smg"))).unwrap();
+        assert_eq!(out.message, "swapped `Ratchet SMG` for `Whisper SMG`");
+        assert_eq!(ch.equipped(BodyPart::RightHand), Some(&id("whisper_smg")));
+        assert_eq!(ch.equipped(BodyPart::LeftHand), Some(&id("scrap_nine")));
+        let packed = ch.copy_in_pack(ratchet).expect("the Ratchet in the pack");
+        let fitted = packed.copy.as_ref().unwrap().fitted[0].as_ref();
+        assert_eq!(fitted.and_then(Stack::copy_id), Some(hushcan));
+    }
+
+    #[test]
+    fn equip_at_wears_in_the_named_hand_and_refuses_the_wrong_part() {
+        let (c, mut ch, mut g, at) = setup();
+        ch.give_item(&c, id("scrap_nine"), 1);
+        let before = ch.clone();
+        let wrong = Action::EquipAt(id("scrap_nine"), BodyPart::Torso);
+        let err = apply(&mut ch, &mut g, &c, at, 0, wrong).unwrap_err();
+        assert!(err.contains("doesn't go on the torso"), "{err}");
+        assert_eq!(ch, before);
+        let at_left = Action::EquipAt(id("scrap_nine"), BodyPart::LeftHand);
+        apply(&mut ch, &mut g, &c, at, 0, at_left).unwrap();
+        assert_eq!(ch.equipped(BodyPart::LeftHand), Some(&id("scrap_nine")));
+        assert_eq!(ch.equipped(BodyPart::RightHand), Some(&id("ratchet_smg")));
+        // A copy too, on the hand named even with the left one free.
+        let (c, mut ch, mut g, at) = setup();
+        let ratchet = ch.take_off(BodyPart::RightHand).unwrap();
+        ch.stow_item(&c, ratchet);
+        let gun = pack_id(&ch, "ratchet_smg");
+        let at_left = Action::EquipCopyAt(gun, BodyPart::LeftHand);
+        apply(&mut ch, &mut g, &c, at, 0, at_left).unwrap();
+        assert_eq!(ch.equipped(BodyPart::LeftHand), Some(&id("ratchet_smg")));
+        assert_eq!(ch.worn_copy(BodyPart::LeftHand).map(|k| k.id), Some(gun));
+        assert_eq!(ch.equipped(BodyPart::RightHand), None);
+        // Nothing on the body takes an item with no part.
+        ch.give_item(&c, id("copper_coil"), 1);
+        let err = apply(&mut ch, &mut g, &c, at, 0, Action::Equip(id("copper_coil"))).unwrap_err();
+        assert_eq!(err, "nothing on you takes Copper coil");
+    }
+
+    #[test]
     fn fitting_the_gun_checks_the_socket_kind() {
         let (c, mut ch, mut g, at) = setup();
         ch.give_item(&c, id("hushcan"), 1);
@@ -1810,7 +1926,7 @@ mod tests {
         let hushcan = pack_id(&ch, "hushcan");
         let redeye = pack_id(&ch, "redeye");
         let on_gun = |socket, piece| Action::Fit {
-            host: Host::Worn(Slot::Primary),
+            host: Host::Worn(BodyPart::RightHand),
             socket,
             piece,
         };
@@ -1849,9 +1965,9 @@ mod tests {
     #[test]
     fn a_deck_worn_without_a_copy_comes_back_as_one() {
         let (c, mut ch, mut g, at) = setup();
-        ch.equipment.insert(Slot::Deck, id("rebuilt_deck"));
+        ch.equipment.insert(BodyPart::Waist, id("rebuilt_deck"));
         ch.worn.clear();
-        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(BodyPart::Waist)).unwrap();
         let back = pack_id(&ch, "rebuilt_deck");
         let held = ch.copy_in_pack(back).unwrap().copy.as_ref().unwrap();
         assert_eq!(held.fitted, vec![None, None]);
@@ -1860,12 +1976,12 @@ mod tests {
     #[test]
     fn a_deck_worn_without_a_copy_takes_hardware() {
         let (c, mut ch, mut g, at) = setup();
-        ch.equipment.insert(Slot::Deck, id("rebuilt_deck"));
+        ch.equipment.insert(BodyPart::Waist, id("rebuilt_deck"));
         ch.worn.clear();
         ch.give_item(&c, id("coldfin_1"), 1);
         let piece = pack_id(&ch, "coldfin_1");
         apply(&mut ch, &mut g, &c, at, 0, fit(1, piece)).unwrap();
-        let worn = ch.worn_copy(Slot::Deck).unwrap();
+        let worn = ch.worn_copy(BodyPart::Waist).unwrap();
         assert_eq!(worn.fitted.len(), 2);
         assert_eq!(
             worn.fitted[1].as_ref().and_then(Stack::copy_id),
@@ -1876,10 +1992,10 @@ mod tests {
     #[test]
     fn a_stale_worn_entry_is_no_worn_copy() {
         let (_, mut ch, _, _) = runner();
-        let worn = ch.worn_copy(Slot::Deck).unwrap().id;
+        let worn = ch.worn_copy(BodyPart::Waist).unwrap().id;
         assert!(ch.is_worn_copy(worn));
-        ch.equipment.remove(&Slot::Deck);
-        assert!(ch.worn_copy(Slot::Deck).is_none());
+        ch.equipment.remove(&BodyPart::Waist);
+        assert!(ch.worn_copy(BodyPart::Waist).is_none());
         assert!(!ch.is_worn_copy(worn));
     }
 
@@ -1923,7 +2039,7 @@ mod tests {
         let (c, mut ch, mut g, at) = runner();
         let before = ch.count(&id("sticker_neko"));
         let action = stick(
-            Host::Worn(Slot::Deck),
+            Host::Worn(BodyPart::Waist),
             "sticker_neko",
             54,
             12,
@@ -1932,7 +2048,12 @@ mod tests {
         let out = apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
         assert_eq!(out.message, "`Neko` stuck");
         assert_eq!(ch.count(&id("sticker_neko")), before - 1);
-        let last = ch.worn_copy(Slot::Deck).unwrap().stickers.last().cloned();
+        let last = ch
+            .worn_copy(BodyPart::Waist)
+            .unwrap()
+            .stickers
+            .last()
+            .cloned();
         assert_eq!(
             last,
             Some(Stuck {
@@ -1949,7 +2070,7 @@ mod tests {
         let (c, mut ch, mut g, at) = runner();
         let hushcan = pack_id(&ch, "hushcan");
         remove_from_pack(&mut ch, &id("sticker_flatline"), 99);
-        let deck = Host::Worn(Slot::Deck);
+        let deck = Host::Worn(BodyPart::Waist);
         for (action, why) in [
             (
                 stick(Host::Pack(hushcan), "sticker_neko", 0, 0, Turn::Level),
@@ -1981,12 +2102,12 @@ mod tests {
     fn peel_destroys_the_sticker() {
         let (c, mut ch, mut g, at) = runner();
         let n = ch.count(&id("sticker_no_future"));
-        let deck = Host::Worn(Slot::Deck);
+        let deck = Host::Worn(BodyPart::Waist);
         let peel = |index| Action::Peel { host: deck, index };
         let out = apply(&mut ch, &mut g, &c, at, 0, peel(0)).unwrap();
         assert_eq!(out.message, "`No Future` peeled · it tore");
         let left: Vec<ItemId> = ch
-            .worn_copy(Slot::Deck)
+            .worn_copy(BodyPart::Waist)
             .unwrap()
             .stickers
             .iter()
@@ -2012,12 +2133,12 @@ mod tests {
         apply(&mut ch, &mut g, &c, at, 0, action).unwrap();
         let oni = |k: &ItemCopy| k.stickers.last().map(|s| s.sticker.clone());
         apply(&mut ch, &mut g, &c, at, 0, Action::EquipCopy(pawn)).unwrap();
-        assert_eq!(ch.worn_copy(Slot::Deck).map(|k| k.id), Some(pawn));
+        assert_eq!(ch.worn_copy(BodyPart::Waist).map(|k| k.id), Some(pawn));
         assert_eq!(
-            ch.worn_copy(Slot::Deck).and_then(oni),
+            ch.worn_copy(BodyPart::Waist).and_then(oni),
             Some(id("sticker_oni"))
         );
-        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(Slot::Deck)).unwrap();
+        apply(&mut ch, &mut g, &c, at, 0, Action::Unequip(BodyPart::Waist)).unwrap();
         let back = ch.copy_in_pack(pawn).and_then(|s| s.copy.as_ref());
         assert_eq!(back.and_then(oni), Some(id("sticker_oni")));
     }

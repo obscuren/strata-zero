@@ -1081,7 +1081,7 @@ mod tests {
         let mut st = state_home();
         let fx = a_fixer(&st);
         st.jobs.fixer_mut(fx).standing = crate::jobs::VAULT_AT;
-        st.character.equipment.remove(&game::Slot::Deck);
+        st.character.equipment.remove(&game::BodyPart::Waist);
         assert!(!crate::jobs::has_deck(&st));
         assert_eq!(
             Jobs::allowed_for(crate::jobs::VAULT_AT, false),
@@ -1100,7 +1100,7 @@ mod tests {
         }
         st.character
             .equipment
-            .insert(game::Slot::Deck, ItemId::new("pawnshop_deck"));
+            .insert(game::BodyPart::Waist, ItemId::new("pawnshop_deck"));
         assert!(crate::jobs::has_deck(&st));
         assert_eq!(
             Jobs::allowed_for(crate::jobs::VAULT_AT, true),

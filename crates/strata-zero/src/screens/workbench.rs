@@ -567,7 +567,7 @@ fn title_block(
                     bits.push(i.fits.label().to_string());
                     bits.push(format!("load {}", i.load));
                 }
-                None => bits.extend(item.slot.map(|s| s.label().to_string())),
+                None => bits.extend(item.slot.map(|s| s.lower().to_string())),
             }
             bits.push(format!("{:.1} kg", item.weight));
             bits.join(" · ")
@@ -1833,7 +1833,7 @@ mod tests {
         assert_eq!(cells(&b, 85, 21, 9), "◂ 22/22 ▸", "{title}");
         assert_eq!(
             cells(&b, 63, 22, 34).trim_end(),
-            "weapon · primary · 3.2 kg",
+            "weapon · hand · 3.2 kg",
             "{title}"
         );
         assert_eq!(

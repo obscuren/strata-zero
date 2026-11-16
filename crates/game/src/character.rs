@@ -321,9 +321,10 @@ pub struct Character {
     pub talents: BTreeMap<TalentId, u8>,
     /// Innate abilities; categories and equipment add more (see `abilities`).
     pub abilities: Vec<AbilityId>,
-    pub equipment: BTreeMap<Slot, ItemId>,
+    /// What each part of the body wears.
+    pub equipment: BTreeMap<BodyPart, ItemId>,
     /// The copy of each worn item held per copy; a stateless worn item has none.
-    pub worn: BTreeMap<Slot, ItemCopy>,
+    pub worn: BTreeMap<BodyPart, ItemCopy>,
     /// The chrome installed at each site.
     pub chrome: BTreeMap<Site, ItemId>,
     /// The copy of each installed piece held per copy (a limb with sockets).
@@ -462,7 +463,7 @@ impl Character {
             kit.extend(p.kit.iter().cloned());
         }
         kit.extend(b.kit.iter().cloned());
-        // The first item that fits a free slot is worn, and chrome goes in at each free
+        // The first item that fits a free part is worn, and chrome goes in at each free
         // site of its kind while the load allows, as a new copy when it is held per
         // copy; everything else is packed. Hardware waits for the rest, then goes in
         // the first kit item with a free socket of its kind.
@@ -475,13 +476,13 @@ impl Character {
                 continue;
             }
             let mut qty = qty;
-            if let Some(slot) = item.slot
-                && qty > 0
-                && !ch.equipment.contains_key(&slot)
+            if qty > 0
+                && let Some(part) = ch.part_for(c, item)
+                && !ch.equipment.contains_key(&part)
             {
                 let copy = item.per_copy().then(|| ch.new_copy(c, &id));
-                ch.wear(slot, id.clone(), copy);
-                hosts.push(Host::Worn(slot));
+                ch.wear(part, id.clone(), copy);
+                hosts.push(Host::Worn(part));
                 qty -= 1;
             }
             while qty > 0
@@ -534,7 +535,7 @@ impl Character {
 
     /// The jacked deck and its slots.
     pub fn deck<'a>(&self, c: &'a Content) -> Option<(&'a Item, DeckSpec)> {
-        let item = c.item(self.equipment.get(&Slot::Deck)?)?;
+        let item = c.item(self.equipment.get(&BodyPart::Waist)?)?;
         Some((item, item.deck?))
     }
 
@@ -705,10 +706,10 @@ impl Character {
         ] {
             d.give_item(c, ItemId::new(id), n);
         }
-        // The pawnshop deck goes back to the pack; the rebuilt one takes its slot.
+        // The pawnshop deck goes back to the pack; the rebuilt one takes the waist.
         let deck = ItemId::new("rebuilt_deck");
         let copy = d.new_copy(c, &deck);
-        if let Some(old) = d.wear(Slot::Deck, deck, Some(copy)) {
+        if let Some(old) = d.wear(BodyPart::Waist, deck, Some(copy)) {
             d.stow(old);
         }
         for id in ["coldfin_1", "coldfin_2", "sidecar", "hushcan", "redeye"] {
@@ -840,12 +841,10 @@ impl Character {
             .any(|cat| cat.unlocks.contains(&Unlock::Workbench))
     }
 
-    /// Perks of everything equipped, in slot order, then of installed chrome (see
+    /// Perks of everything worn, in body order, then of installed chrome (see
     /// `chrome_ids`), then those of every talent rank.
     pub fn perks<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a Perk> + 'a {
-        Slot::ALL
-            .iter()
-            .filter_map(move |s| self.equipment.get(s))
+        self.worn_ids(c)
             .chain(self.chrome_ids())
             .filter_map(move |id| c.item(id))
             .flat_map(|i| i.perks.iter())
@@ -987,7 +986,7 @@ impl Character {
         perks - chrome
     }
 
-    /// Every non-zero part of a number that is not its own: what is worn in slot
+    /// Every non-zero part of a number that is not its own: what is worn in body
     /// order, the chrome in `installed` order, the hardware fitted in what is worn
     /// then in what is installed, the talents summed into one, and for EMP the pieces
     /// installed at 2 each.
@@ -997,7 +996,7 @@ impl Character {
                 .map_or(0, |i| i.perks.iter().map(|p| n.of_perk(p)).sum())
         };
         let mut out = Vec::new();
-        for id in Slot::ALL.iter().filter_map(|s| self.equipment.get(s)) {
+        for id in self.worn_ids(c) {
             out.push((Contrib::Gear(id.clone()), adds(id)));
         }
         for (_, _, id) in self.installed() {
@@ -1009,7 +1008,10 @@ impl Character {
             }
         }
         if let Num::Attribute(attribute) = n {
-            let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
+            let worn = self
+                .body(c)
+                .into_iter()
+                .filter_map(|n| self.worn_copy(n.part));
             let installed = Site::ALL.iter().filter_map(|site| self.chrome_copy(*site));
             for s in worn
                 .chain(installed)
@@ -1065,7 +1067,7 @@ impl Character {
 
     /// Innate abilities first, then those granted by owned categories in content order,
     /// then by owned skills in content order, then by carried items with a cell in pack
-    /// order, then by equipment in slot order, then by installed chrome (see
+    /// order, then by equipment in body order, then by installed chrome (see
     /// `chrome_ids`), then by talents; deduplicated, the first source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
         let mut out: Vec<(AbilityId, Source)> = Vec::new();
@@ -1097,8 +1099,11 @@ impl Character {
                 push(id, Source::Item(item.id.clone()));
             }
         }
-        let worn = Slot::ALL.iter().filter_map(|s| self.equipment.get(s));
-        for item in worn.chain(self.chrome_ids()).filter_map(|id| c.item(id)) {
+        for item in self
+            .worn_ids(c)
+            .chain(self.chrome_ids())
+            .filter_map(|id| c.item(id))
+        {
             for id in &item.grants {
                 push(id, Source::Item(item.id.clone()));
             }
@@ -1296,17 +1301,17 @@ impl Character {
             .into_iter()
             .filter_map(|s| s.sift(c, &mut lost, &mut out))
             .collect();
-        let worn: Vec<Slot> = self
+        let worn: Vec<BodyPart> = self
             .equipment
             .iter()
             .filter(|(_, id)| c.item(id).is_none())
-            .map(|(slot, _)| *slot)
+            .map(|(part, _)| *part)
             .collect();
-        for slot in worn {
-            if let Some(id) = self.equipment.remove(&slot) {
+        for part in worn {
+            if let Some(id) = self.equipment.remove(&part) {
                 lost.push(item_lost(&id));
             }
-            if let Some(k) = self.worn.remove(&slot) {
+            if let Some(k) = self.worn.remove(&part) {
                 k.salvage(c, &mut lost, &mut out);
             }
         }
@@ -1405,13 +1410,13 @@ impl Character {
         }
     }
 
-    /// Wears an item in its slot, with its copy when it has one; returns what the
-    /// slot wore, with that one's copy.
-    pub fn wear(&mut self, slot: Slot, item: ItemId, copy: Option<ItemCopy>) -> Option<Stack> {
-        let old = self.equipment.insert(slot, item);
+    /// Wears an item on a part, with its copy when it has one; returns what the
+    /// part wore, with that one's copy.
+    pub fn wear(&mut self, part: BodyPart, item: ItemId, copy: Option<ItemCopy>) -> Option<Stack> {
+        let old = self.equipment.insert(part, item);
         let old_copy = match copy {
-            Some(k) => self.worn.insert(slot, k),
-            None => self.worn.remove(&slot),
+            Some(k) => self.worn.insert(part, k),
+            None => self.worn.remove(&part),
         };
         old.map(|item| Stack {
             item,
@@ -1420,13 +1425,13 @@ impl Character {
         })
     }
 
-    /// Takes off what a slot wears, with its copy.
-    pub fn take_off(&mut self, slot: Slot) -> Option<Stack> {
-        let item = self.equipment.remove(&slot)?;
+    /// Takes off what a part wears, with its copy.
+    pub fn take_off(&mut self, part: BodyPart) -> Option<Stack> {
+        let item = self.equipment.remove(&part)?;
         Some(Stack {
             item,
             qty: 1,
-            copy: self.worn.remove(&slot),
+            copy: self.worn.remove(&part),
         })
     }
 
@@ -1591,18 +1596,21 @@ impl Character {
         self.inventory.iter().find(|s| s.copy_id() == Some(id))
     }
 
-    /// The copy a slot wears. It counts only while the slot still wears something:
+    /// The copy a part wears. It counts only while the part still wears something:
     /// `equipment` is the truth, and `worn` can be left behind.
-    pub fn worn_copy(&self, slot: Slot) -> Option<&ItemCopy> {
-        self.equipment.get(&slot)?;
-        self.worn.get(&slot)
+    pub fn worn_copy(&self, part: BodyPart) -> Option<&ItemCopy> {
+        self.equipment.get(&part)?;
+        self.worn.get(&part)
     }
 
-    /// The mods of the hardware fitted in anything worn or installed: slots in
+    /// The mods of the hardware fitted in anything worn or installed: parts in
     /// order, then sites in order, sockets in order. Hardware in the pack, or in an
     /// item taken off, counts for nothing.
     pub fn worn_mods(&self, c: &Content) -> Vec<Mod> {
-        let worn = Slot::ALL.iter().filter_map(|slot| self.worn_copy(*slot));
+        let worn = self
+            .body(c)
+            .into_iter()
+            .filter_map(|n| self.worn_copy(n.part));
         let installed = Site::ALL.iter().filter_map(|site| self.chrome_copy(*site));
         worn.chain(installed)
             .flat_map(|copy| copy.fitted.iter().flatten())
@@ -1638,14 +1646,14 @@ impl Character {
     pub fn is_worn_copy(&self, id: CopyId) -> bool {
         self.worn
             .iter()
-            .any(|(slot, k)| k.id == id && self.equipment.contains_key(slot))
+            .any(|(part, k)| k.id == id && self.equipment.contains_key(part))
     }
 
-    /// The item a host is: what the slot wears, the chrome the site holds, or the
+    /// The item a host is: what the part wears, the chrome the site holds, or the
     /// copy's item in the pack.
     pub fn host_item(&self, host: Host) -> Option<&ItemId> {
         match host {
-            Host::Worn(slot) => self.equipped(slot),
+            Host::Worn(part) => self.equipped(part),
             Host::Site(site) => self.chrome_at(site),
             Host::Pack(id) => self.copy_in_pack(id).map(|s| &s.item),
             Host::Rig => Some(self.rig_frame_ref()),
@@ -1655,7 +1663,7 @@ impl Character {
     /// The host's copy, when it has one.
     pub fn host_copy(&self, host: Host) -> Option<&ItemCopy> {
         match host {
-            Host::Worn(slot) => self.worn_copy(slot),
+            Host::Worn(part) => self.worn_copy(part),
             Host::Site(site) => self.chrome_copy(site),
             Host::Pack(id) => self.copy_in_pack(id)?.copy.as_ref(),
             Host::Rig => self.rig.as_ref(),
@@ -1666,16 +1674,16 @@ impl Character {
     /// gets it now.
     pub fn host_copy_mut(&mut self, c: &Content, host: Host) -> Option<&mut ItemCopy> {
         match host {
-            Host::Worn(slot) => {
-                let item = self.equipment.get(&slot)?.clone();
+            Host::Worn(part) => {
+                let item = self.equipment.get(&part)?.clone();
                 if !c.item(&item).is_some_and(Item::per_copy) {
                     return None;
                 }
-                if !self.worn.contains_key(&slot) {
+                if !self.worn.contains_key(&part) {
                     let copy = self.new_copy(c, &item);
-                    self.worn.insert(slot, copy);
+                    self.worn.insert(part, copy);
                 }
-                self.worn.get_mut(&slot)
+                self.worn.get_mut(&part)
             }
             Host::Site(site) => {
                 let item = self.chrome.get(&site)?.clone();
@@ -1855,9 +1863,9 @@ impl Character {
         let worn: f32 = self
             .equipment
             .iter()
-            .map(|(slot, id)| {
+            .map(|(part, id)| {
                 let own = c.item(id).map_or(0.0, |i| i.weight);
-                own + self.worn.get(slot).map_or(0.0, |k| k.fitted_weight(c))
+                own + self.worn.get(part).map_or(0.0, |k| k.fitted_weight(c))
             })
             .sum();
         carried + worn
@@ -1869,9 +1877,9 @@ impl Character {
         let worn: u32 = self
             .equipment
             .iter()
-            .map(|(slot, id)| {
+            .map(|(part, id)| {
                 let own = c.item(id).map_or(0, |i| i.value);
-                own + self.worn.get(slot).map_or(0, |k| k.fitted_value(c))
+                own + self.worn.get(part).map_or(0, |k| k.fitted_value(c))
             })
             .sum();
         let installed: u32 = self
@@ -1897,12 +1905,65 @@ impl Character {
         self.talent_rank(id) >= 1
     }
 
-    pub fn equipped(&self, slot: Slot) -> Option<&ItemId> {
-        self.equipment.get(&slot)
+    pub fn equipped(&self, part: BodyPart) -> Option<&ItemId> {
+        self.equipment.get(&part)
+    }
+
+    /// The body's parts in body order: the content's body today (chrome adds parts
+    /// later).
+    pub fn body<'a>(&self, c: &'a Content) -> Vec<&'a BodyNode> {
+        c.body.iter().collect()
+    }
+
+    /// What each part wears, in body order.
+    fn worn_ids<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a ItemId> + 'a {
+        self.body(c)
+            .into_iter()
+            .filter_map(move |n| self.equipment.get(&n.part))
+    }
+
+    /// The hand a weapon fires from first.
+    pub fn main_hand(&self, c: &Content) -> Option<BodyPart> {
+        self.body(c).into_iter().find(|n| n.main).map(|n| n.part)
+    }
+
+    /// Every hand, the main one first, then the rest in body order.
+    pub fn hands(&self, c: &Content) -> Vec<BodyPart> {
+        let main = self.main_hand(c);
+        let rest = self
+            .body(c)
+            .into_iter()
+            .filter(|n| n.kind == PartKind::Hand && Some(n.part) != main)
+            .map(|n| n.part);
+        main.into_iter().chain(rest).collect()
+    }
+
+    /// Where an item is worn: the first empty part of its kind (hands main first);
+    /// with none empty, the main hand for a hand item, else the first part of the
+    /// kind. `None` when the body has no part of the kind.
+    pub fn part_for(&self, c: &Content, item: &Item) -> Option<BodyPart> {
+        let kind = item.slot?;
+        let parts: Vec<BodyPart> = if kind == PartKind::Hand {
+            self.hands(c)
+        } else {
+            let body = self.body(c).into_iter();
+            body.filter(|n| n.kind == kind).map(|n| n.part).collect()
+        };
+        let empty = parts.iter().find(|p| !self.equipment.contains_key(p));
+        empty.or(parts.first()).copied()
     }
 
     pub fn is_equipped(&self, id: &ItemId) -> bool {
         self.equipment.values().any(|i| i == id)
+    }
+
+    /// The part that wears the copy `copy`, if one does. An item without copies is
+    /// told apart only by the part it is on, so it has no such question.
+    pub fn part_wearing(&self, copy: CopyId) -> Option<BodyPart> {
+        self.worn
+            .iter()
+            .find(|(part, w)| w.id == copy && self.equipment.contains_key(part))
+            .map(|(part, _)| *part)
     }
 }
 
@@ -1936,18 +1997,21 @@ mod tests {
             (4, 6, 5, 5, 6)
         );
         assert_eq!(
-            ch.equipped(Slot::Primary),
+            ch.equipped(BodyPart::RightHand),
             Some(&ItemId::new("ratchet_smg"))
         );
         assert_eq!(
-            ch.equipped(Slot::Torso),
+            ch.equipped(BodyPart::Torso),
             Some(&ItemId::new("salvage_jacket"))
         );
         assert_eq!(
             ch.chrome_at(Site::Eyes),
             Some(&ItemId::new("nightglass_optics"))
         );
-        assert_eq!(ch.equipped(Slot::Deck), Some(&ItemId::new("pawnshop_deck")));
+        assert_eq!(
+            ch.equipped(BodyPart::Waist),
+            Some(&ItemId::new("pawnshop_deck"))
+        );
         for (id, n) in [
             ("copper_coil", 3),
             ("scrap_servo", 2),
@@ -1991,7 +2055,7 @@ mod tests {
         b.kit.push((ItemId::new("salvage_jacket"), 1)); // torso is taken by the weave
         let ch = Character::from_build(&c, &b);
         assert_eq!(
-            ch.equipped(Slot::Torso),
+            ch.equipped(BodyPart::Torso),
             Some(&ItemId::new("ballistic_weave"))
         );
         assert_eq!(
@@ -1999,6 +2063,11 @@ mod tests {
             1,
             "second torso item is packed"
         );
+        // Hands fill main first; the solo's boots go on the feet.
+        let worn = |p| ch.equipped(p).map(|id| id.0.as_str());
+        assert_eq!(worn(BodyPart::RightHand), Some("ratchet_smg"));
+        assert_eq!(worn(BodyPart::LeftHand), Some("shiv_blade"));
+        assert_eq!(worn(BodyPart::Feet), Some("tread_boots"));
         assert!(!ch.has_workbench(&c));
         assert_eq!((ch.attribute_points, ch.sp), (0, 0));
         let mut spare = Build::blank(&c);
@@ -2013,6 +2082,13 @@ mod tests {
         );
         assert_eq!(ch.credits, 300);
         assert_eq!(ch.handle, "Nix");
+        // The fixer wears the sling on the back.
+        spare.profession = Some(ProfessionId::new("fixer"));
+        let ch = Character::from_build(&c, &spare);
+        assert_eq!(
+            ch.equipped(BodyPart::Back),
+            Some(&ItemId::new("courier_sling"))
+        );
     }
 
     /// What each socket of a copy holds, by item id.
@@ -2030,7 +2106,7 @@ mod tests {
         let (can, sight) = (ItemId::new("hushcan"), ItemId::new("redeye"));
         b.kit.extend([(can.clone(), 2), (sight.clone(), 1)]);
         let ch = Character::from_build(&c, &b);
-        let gun = ch.worn_copy(Slot::Primary).unwrap();
+        let gun = ch.worn_copy(BodyPart::RightHand).unwrap();
         assert_eq!(held(gun), [Some("hushcan"), Some("redeye")]);
         assert!(
             gun.fitted
@@ -2048,7 +2124,7 @@ mod tests {
         let ch = Character::from_build(&c, &bare);
         assert_eq!(ch.count(&can), 2);
         assert_eq!(
-            ch.equipped(Slot::Torso),
+            ch.equipped(BodyPart::Torso),
             Some(&ItemId::new("salvage_jacket"))
         );
     }
@@ -2122,7 +2198,7 @@ mod tests {
         assert_eq!(ch.sight_bonus(&c), 4);
         ch.chrome.remove(&Site::Eyes);
         assert_eq!(ch.sight_bonus(&c), 0);
-        ch.equipment.remove(&Slot::Deck);
+        ch.equipment.remove(&BodyPart::Waist);
         assert_eq!(ch.attribute(&c, Attribute::Net), 6);
         assert!(ch.weight(&c) > 0.0 && ch.carry_cap(&c) > ch.weight(&c));
         assert_eq!(
@@ -2547,7 +2623,7 @@ mod tests {
         let c = Content::load().unwrap();
         let mut ch = Character::debug_runner(&c);
         ch.give(ItemId::new("copper_coil"), 3);
-        let worn = ch.worn_copy(Slot::Deck).expect("a worn deck");
+        let worn = ch.worn_copy(BodyPart::Waist).expect("a worn deck");
         assert!(!worn.stickers.is_empty());
         let bytes = rmp_serde::to_vec_named(&ch).unwrap();
         let back: Character = rmp_serde::from_slice(&bytes).unwrap();
@@ -2589,7 +2665,7 @@ mod tests {
         for i in c.items.iter().filter(|i| i.kind == ItemKind::Sticker) {
             assert_eq!(d.count(&i.id), 2, "{}", i.id);
         }
-        assert_eq!(d.worn_copy(Slot::Deck).unwrap().stickers.len(), 2);
+        assert_eq!(d.worn_copy(BodyPart::Waist).unwrap().stickers.len(), 2);
         let pawn = d
             .inventory
             .iter()
@@ -2602,7 +2678,10 @@ mod tests {
     fn debug_runner_jacks_the_rebuilt_deck() {
         let c = Content::load().unwrap();
         let d = Character::debug_runner(&c);
-        assert_eq!(d.equipped(Slot::Deck), Some(&ItemId::new("rebuilt_deck")));
+        assert_eq!(
+            d.equipped(BodyPart::Waist),
+            Some(&ItemId::new("rebuilt_deck"))
+        );
         assert_eq!(d.count(&ItemId::new("pawnshop_deck")), 1);
         assert_eq!(d.count(&ItemId::new("rebuilt_deck")), 0);
         let ids = ["crack", "copy", "attack", "backdoor"].map(ItemId::new);
@@ -2731,7 +2810,8 @@ mod tests {
         deck.deck.as_mut().unwrap().slots = 3;
         c.items.push(deck);
         let mut ch = vex(&c);
-        ch.equipment.insert(Slot::Deck, ItemId::new("test_deck"));
+        ch.equipment
+            .insert(BodyPart::Waist, ItemId::new("test_deck"));
         ch.give(ItemId::new("backdoor"), 1);
         ch.loaded = ids(&["crack", "copy", "attack"]);
         let plan = ch.plan_slot(&c, &ItemId::new("backdoor"), 1).unwrap();
@@ -2766,7 +2846,7 @@ mod tests {
             0,
             "too big for this deck: needs 3 of 2 slots",
         );
-        ch.equipment.remove(&Slot::Deck);
+        ch.equipment.remove(&BodyPart::Waist);
         refuse(&mut ch, "spoof", 0, "no deck jacked");
     }
 
@@ -2795,7 +2875,10 @@ mod tests {
             4,
             "Vex's one and three more"
         );
-        assert_eq!(d.equipped(Slot::Primary), Some(&ItemId::new("ratchet_smg")));
+        assert_eq!(
+            d.equipped(BodyPart::RightHand),
+            Some(&ItemId::new("ratchet_smg"))
+        );
         assert_eq!(
             d.count(&ItemId::new("whisper_smg")),
             1,
@@ -2883,9 +2966,12 @@ mod tests {
     fn debug_runner_carries_hardware() {
         let c = Content::load().unwrap();
         let d = Character::debug_runner(&c);
-        assert_eq!(d.equipped(Slot::Deck), Some(&ItemId::new("rebuilt_deck")));
+        assert_eq!(
+            d.equipped(BodyPart::Waist),
+            Some(&ItemId::new("rebuilt_deck"))
+        );
         let worn = d
-            .worn_copy(Slot::Deck)
+            .worn_copy(BodyPart::Waist)
             .expect("the rebuilt deck is worn as a copy");
         assert_eq!(worn.fitted, vec![None, None]);
         assert!(d.is_worn_copy(worn.id));
@@ -2911,11 +2997,11 @@ mod tests {
     }
 
     fn fit_direct(ch: &mut Character, item: &str, socket: usize) {
-        fit_worn(ch, Slot::Deck, item, socket);
+        fit_worn(ch, BodyPart::Waist, item, socket);
     }
 
-    /// Puts a pack piece straight into a socket of what the slot wears.
-    fn fit_worn(ch: &mut Character, slot: Slot, item: &str, socket: usize) {
+    /// Puts a pack piece straight into a socket of what the part wears.
+    fn fit_worn(ch: &mut Character, slot: BodyPart, item: &str, socket: usize) {
         let at = ch
             .inventory
             .iter()
@@ -2930,11 +3016,11 @@ mod tests {
         let c = Content::load().unwrap();
         let mut vex = Character::from_template(&c, &TemplateId::new("vex")).unwrap();
         assert_eq!(
-            vex.equipped(Slot::Primary),
+            vex.equipped(BodyPart::RightHand),
             Some(&ItemId::new("ratchet_smg"))
         );
         let gun = vex
-            .worn_copy(Slot::Primary)
+            .worn_copy(BodyPart::RightHand)
             .expect("the Ratchet, worn as a copy");
         assert_eq!(gun.fitted, vec![None, None]);
         let (cool, reflex) = (
@@ -2948,14 +3034,14 @@ mod tests {
             cool,
             "in the pack it does nothing"
         );
-        fit_worn(&mut vex, Slot::Primary, "hushcan", 0);
+        fit_worn(&mut vex, BodyPart::RightHand, "hushcan", 0);
         assert_eq!(vex.attribute(&c, Attribute::Cool), cool + 1);
-        fit_worn(&mut vex, Slot::Primary, "redeye", 1);
+        fit_worn(&mut vex, BodyPart::RightHand, "redeye", 1);
         assert_eq!(vex.attribute(&c, Attribute::Reflex), reflex + 1);
         assert_eq!((vex.trace_cut(&c), vex.deck_power(&c)), (0, 0));
         // The gun off the body: its pieces count for nothing.
         let mut off = vex.clone();
-        off.equipment.remove(&Slot::Primary);
+        off.equipment.remove(&BodyPart::RightHand);
         assert_eq!(off.attribute(&c, Attribute::Cool), cool);
     }
 
@@ -2963,9 +3049,12 @@ mod tests {
     fn dshawn_carries_the_weapon_pieces_and_stays_capped() {
         let c = Content::load().unwrap();
         let mut d = Character::debug_runner(&c);
-        assert_eq!(d.equipped(Slot::Primary), Some(&ItemId::new("ratchet_smg")));
+        assert_eq!(
+            d.equipped(BodyPart::RightHand),
+            Some(&ItemId::new("ratchet_smg"))
+        );
         let gun = d
-            .worn_copy(Slot::Primary)
+            .worn_copy(BodyPart::RightHand)
             .expect("the Ratchet, worn as a copy");
         assert_eq!(gun.fitted, vec![None, None]);
         assert_eq!(
@@ -2976,7 +3065,7 @@ mod tests {
             (1, 1)
         );
         assert_eq!(d.attribute(&c, Attribute::Cool), 10);
-        fit_worn(&mut d, Slot::Primary, "hushcan", 0);
+        fit_worn(&mut d, BodyPart::RightHand, "hushcan", 0);
         assert_eq!(d.attribute(&c, Attribute::Cool), 10, "the clamp holds");
     }
 
@@ -3001,9 +3090,9 @@ mod tests {
         assert_eq!(car.deck_power(&c), 1);
         // The deck off the body: nothing counts; back on, it all does.
         let mut off = ch.clone();
-        let deck = off.equipment.remove(&Slot::Deck).unwrap();
+        let deck = off.equipment.remove(&BodyPart::Waist).unwrap();
         assert_eq!((off.trace_cut(&c), off.deck_power(&c)), (0, 0));
-        off.equipment.insert(Slot::Deck, deck);
+        off.equipment.insert(BodyPart::Waist, deck);
         assert_eq!(off.trace_cut(&c), 30);
         // Past half it caps.
         let cold = c
@@ -3076,7 +3165,7 @@ mod tests {
         let v = vex(&c);
         let optics = ItemId::new("nightglass_optics");
         assert_eq!(v.chrome_at(Site::Eyes), Some(&optics));
-        assert_eq!((v.count(&optics), v.equipped(Slot::Eyes)), (0, None));
+        assert_eq!((v.count(&optics), v.equipped(BodyPart::Face)), (0, None));
         // Two arms take L ARM, then R ARM, each its own copy; a lens finds the eyes
         // taken and a hand finds no site, so both are packed.
         let mut b = Build::from_template(&c, c.template(&TemplateId::new("vex")).unwrap());
@@ -3293,7 +3382,7 @@ mod tests {
         let mut ch = Character::from_template(&c, &TemplateId::new("kessler")).unwrap();
         let (arm, shades) = (ItemId::new("piston_arm"), ItemId::new("mirrorshades"));
         ch.install(Site::LeftArm, arm.clone(), None);
-        ch.wear(Slot::Eyes, shades.clone(), None);
+        ch.wear(BodyPart::Face, shades.clone(), None);
         assert_eq!(
             ch.sources(&c, Num::Attribute(Attribute::Body)),
             vec![(Contrib::Chrome(arm.clone()), 1)]
@@ -3306,7 +3395,10 @@ mod tests {
             ch.sources(&c, Num::Resist(Harm::Emp)),
             vec![(Contrib::Pieces(1), -2)]
         );
-        assert_eq!(ch.sources(&c, Num::Armor), vec![], "nothing moves it");
+        assert_eq!(
+            ch.sources(&c, Num::Armor),
+            vec![(Contrib::Gear(ItemId::new("tread_boots")), 1)]
+        );
         // Talents sum into one; carry rounds to whole kilograms.
         ch.talents.insert(TalentId::new("thick_skin"), 2);
         assert_eq!(
@@ -3392,7 +3484,7 @@ mod tests {
     fn a_runner_forgets_what_the_content_lacks() {
         let c = Content::load().unwrap();
         let mut d = Character::combat_runner(&c);
-        let deck = d.equipped(Slot::Deck).cloned().unwrap();
+        let deck = d.equipped(BodyPart::Waist).cloned().unwrap();
         // A sticker on the pawnshop deck in the pack, which stays.
         let pawn = ItemId::new("pawnshop_deck");
         let held = |d: &Character| {
@@ -3449,8 +3541,11 @@ mod tests {
         ] {
             assert!(lost.contains(&line), "{line} in {lost:?}");
         }
-        assert_eq!(d.equipped(Slot::Deck), None);
-        assert!(d.worn_copy(Slot::Deck).is_none(), "its copy goes with it");
+        assert_eq!(d.equipped(BodyPart::Waist), None);
+        assert!(
+            d.worn_copy(BodyPart::Waist).is_none(),
+            "its copy goes with it"
+        );
         assert!(!d.chrome.contains_key(&Site::Neural));
         assert!(!d.chrome_copies.contains_key(&Site::Neural));
         let cradle = d.chrome_copies.get(&Site::Back).expect("the cradle stays");
@@ -3476,10 +3571,10 @@ mod tests {
         let c = Content::load().unwrap();
         let mut d = Character::combat_runner(&c);
         let (deck, cradle) = (ItemId::new("rebuilt_deck"), ItemId::new("drone_cradle"));
-        assert_eq!(d.equipped(Slot::Deck), Some(&deck));
+        assert_eq!(d.equipped(BodyPart::Waist), Some(&deck));
         assert_eq!(d.chrome.get(&Site::Back), Some(&cradle));
         let stuck: Vec<ItemId> = d
-            .worn_copy(Slot::Deck)
+            .worn_copy(BodyPart::Waist)
             .unwrap()
             .stickers
             .iter()
@@ -3880,7 +3975,7 @@ mod tests {
         let i = c.items.iter().position(|i| i.id == jacket).unwrap();
         c.items[i].grants = vec![AbilityId::new("scramble")];
         let mut ch = vex(&c);
-        ch.wear(Slot::Torso, jacket.clone(), None);
+        ch.wear(BodyPart::Torso, jacket.clone(), None);
         let scramble = |ch: &Character| -> Vec<Source> {
             (ch.abilities(&c).into_iter())
                 .filter(|(id, _)| id.0 == "scramble")

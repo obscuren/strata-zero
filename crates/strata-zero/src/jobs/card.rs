@@ -951,7 +951,7 @@ fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
     ];
     if !deck {
         out.push(plain(
-            "  copy, plant and vault: needs a deck in the slot",
+            "  copy, plant and vault: needs a deck on your waist",
             AMBER,
             width,
         ));
@@ -1587,7 +1587,7 @@ mod tests {
         }
         let mut st = state_home();
         let id = offered(&mut st, KindTag::Copy);
-        st.character.equipment.remove(&game::Slot::Deck);
+        st.character.equipment.remove(&game::BodyPart::Waist);
         assert!(has(&card(&st, id, 68), "needs a deck"));
     }
 }

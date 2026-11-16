@@ -451,7 +451,10 @@ mod tests {
             .position(|s| s.item == ItemId::new("sidecar"))
             .unwrap();
         let piece = ch.inventory.remove(at);
-        ch.worn.get_mut(&crate::model::Slot::Deck).unwrap().fitted[0] = Some(piece);
+        ch.worn
+            .get_mut(&crate::model::BodyPart::Waist)
+            .unwrap()
+            .fitted[0] = Some(piece);
         assert_eq!(power(&ch, &c, &p, target), bare + 1);
         // Five over the bare power: mid-range, so the extra point shows.
         let hard = bare + 5;

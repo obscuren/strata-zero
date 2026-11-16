@@ -8,7 +8,7 @@ use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::bresenham;
 use citygen::rng::hash64;
 use citygen::{Place, Pos};
-use game::{AbilityId, AbilityKind, Action, Active, Attribute, Fx, ItemId, Slot, Weapon};
+use game::{AbilityId, AbilityKind, Action, Active, Attribute, BodyPart, Fx, ItemId, Weapon};
 
 /// Ticks between the rounds of one burst.
 pub const ROUND_GAP: u64 = 4;
@@ -54,16 +54,22 @@ pub fn miss_impact(map: &MapRef, from: Pos, target: Pos, range: i32) -> Pos {
     last
 }
 
-/// The worn gun: the Primary slot's item with a weapon on it.
-pub fn your_weapon(st: &AppState) -> Result<(ItemId, Weapon), String> {
+/// The chance, in percent, that each other hand's gun joins in on a shot.
+pub const OFF_HAND_CHANCE: u8 = 25;
+
+/// The gun in a hand, if it holds one.
+fn gun_in(st: &AppState, hand: BodyPart) -> Option<(ItemId, Weapon)> {
+    let id = st.character.equipped(hand)?;
+    let w = st.content.item(id)?.weapon.clone()?;
+    Some((id.clone(), w))
+}
+
+/// The gun that fires: the main hand's, else the first other hand's that holds one.
+pub fn your_weapon(st: &AppState) -> Result<(BodyPart, ItemId, Weapon), String> {
     st.character
-        .equipped(Slot::Primary)
-        .and_then(|id| {
-            st.content
-                .item(id)
-                .and_then(|i| i.weapon.clone())
-                .map(|w| (id.clone(), w))
-        })
+        .hands(&st.content)
+        .into_iter()
+        .find_map(|hand| gun_in(st, hand).map(|(id, w)| (hand, id, w)))
         .ok_or_else(|| "nothing to shoot with".to_string())
 }
 
@@ -97,7 +103,12 @@ pub(crate) fn reach(st: &AppState, foe: usize, range: i32) -> Result<i32, String
 
 /// Your chance per round at a foe with the worn gun, in percent.
 pub fn your_chance(st: &AppState, foe: usize) -> Result<u8, String> {
-    let (_, w) = your_weapon(st)?;
+    let (_, _, w) = your_weapon(st)?;
+    chance_with(st, foe, &w)
+}
+
+/// Your chance per round at a foe with the gun `w`, in percent.
+pub fn chance_with(st: &AppState, foe: usize, w: &Weapon) -> Result<u8, String> {
     let dist = reach(st, foe, w.range)?;
     let bonus = if st.foes[foe].marked {
         mark_bonus(st)
@@ -354,7 +365,8 @@ pub(crate) fn wound_you(st: &mut AppState, cause: &str, damage: u8) {
 }
 
 /// Rolls `rounds` at a foe from `from`, each landing or stopping past them; the
-/// damage lands at once, the pictures follow. Returns each round's outcome.
+/// damage lands at once, the pictures follow, the first `first` gaps in (after the
+/// rounds already drawn this shot). Returns each round's outcome.
 fn volley(
     st: &mut AppState,
     from: Pos,
@@ -362,6 +374,7 @@ fn volley(
     w: &Weapon,
     chance: u8,
     fx: &[Fx],
+    first: usize,
 ) -> Vec<Option<u8>> {
     let Some((place, target)) = st.foes.get(foe).map(|f| (f.place, f.pos)) else {
         return Vec::new();
@@ -384,7 +397,7 @@ fn volley(
         w.damage
     };
     let mut out = Vec::new();
-    for k in 0..w.rounds as usize {
+    for k in first..first + w.rounds as usize {
         let hit = ambush || game::round_hits(roll(st), chance);
         let impact = if hit {
             target
@@ -423,9 +436,11 @@ fn outcomes(rounds: &[Option<u8>]) -> String {
         .join(" · ")
 }
 
-/// You fire the worn gun at a foe: one action point, every round rolled.
+/// You fire the main hand's gun at a foe: one action point, every round rolled. Then
+/// each other hand's gun joins in on a 1 in 4 roll, free, if the foe still stands in
+/// its reach. The cloak's ambush went with the first volley, so it is that gun's alone.
 pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
-    let (_, w) = your_weapon(st)?;
+    let (fired, _, w) = your_weapon(st)?;
     let chance = your_chance(st, foe)?;
     crate::net::spend_ap(st)?;
     let from = st.player.as_ref().map(|p| p.pos).unwrap_or_default();
@@ -435,8 +450,34 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
     if let Some(place) = st.player.as_ref().map(|p| p.place) {
         crate::guards::hear(st, place, from, from);
     }
-    let rounds = volley(st, from, foe, &w, chance, &w.fx.clone());
+    let rounds = volley(st, from, foe, &w, chance, &w.fx.clone(), 0);
     st.say(format!("you fire · {name} {}", outcomes(&rounds)));
+    // A follow-up's rounds are drawn after the rounds before it.
+    let mut drawn = rounds.len();
+    for hand in st.character.hands(&st.content) {
+        if hand == fired {
+            continue;
+        }
+        let Some((id, w)) = gun_in(st, hand) else {
+            continue;
+        };
+        if !st.foes.get(foe).is_some_and(|f| f.standing()) {
+            break;
+        }
+        if roll(st) > OFF_HAND_CHANCE {
+            continue;
+        }
+        let Ok(chance) = chance_with(st, foe, &w) else {
+            continue;
+        };
+        let rounds = volley(st, from, foe, &w, chance, &w.fx.clone(), drawn);
+        drawn += rounds.len();
+        let gun = st
+            .content
+            .item(&id)
+            .map_or_else(String::new, |i| i.name.clone());
+        st.say(format!("off hand · {gun} {}", outcomes(&rounds)));
+    }
     Ok(())
 }
 
@@ -768,7 +809,7 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     let from = at.pos;
     let name = st.foes[foe].name.clone();
     let impact = st.tick + flight_ticks(&ability.fx, from, st.foes[foe].pos);
-    let rounds = volley(st, from, foe, &w, chance, &ability.fx);
+    let rounds = volley(st, from, foe, &w, chance, &ability.fx, 0);
     let hit = rounds.iter().any(Option::is_some);
     let mut line = format!(
         "{} · {name} {}",
@@ -1091,7 +1132,7 @@ mod tests {
         let mut st = engaged(Pos::new(20, 8));
         assert_eq!(fire(&mut st, 0).unwrap_err(), "out of range");
         st.character
-            .wear(Slot::Primary, ItemId::new("shiv_blade"), None);
+            .wear(BodyPart::RightHand, ItemId::new("shiv_blade"), None);
         assert_eq!(fire(&mut st, 0).unwrap_err(), "nothing to shoot with");
         let mut st = engaged(Pos::new(14, 8));
         st.foes[0].down = true;
@@ -1302,7 +1343,7 @@ mod tests {
         settle(&mut st);
         crate::net::stay(&mut st);
         st.force_hit = Some(false); // every roll would miss
-        let (_, w) = your_weapon(&st).unwrap();
+        let (_, _, w) = your_weapon(&st).unwrap();
         fire(&mut st, i).unwrap();
         let dealt = 2 * u32::from(w.damage) * u32::from(w.rounds);
         assert_eq!(
@@ -1356,7 +1397,7 @@ mod tests {
         let mut st = crate::guards::testutil::ward();
         crate::cloak::testutil::armed(&mut st);
         let i = cloaked_on_turns(&mut st);
-        let (_, w) = your_weapon(&st).unwrap();
+        let (_, _, w) = your_weapon(&st).unwrap();
         st.force_hit = Some(false);
         fire(&mut st, i).unwrap();
         let after_ambush = st.foes[i].hp;
@@ -1381,5 +1422,153 @@ mod tests {
         );
         let ambushes = (st.log.iter()).filter(|e| e.text == "AMBUSH").count();
         assert_eq!(ambushes, 1);
+    }
+
+    /// Sets the tick so that `ok` holds of the rolls the next volleys take: `ok(n)`
+    /// reads the nth roll from now (1-based), in percent.
+    fn seed(st: &mut AppState, ok: impl Fn(&dyn Fn(u64) -> u32) -> bool) {
+        let shots = st.shots;
+        st.tick = (500..)
+            .find(|t| ok(&|n| (hash64(*t, shots + n) % 100 + 1) as u32))
+            .unwrap();
+    }
+
+    /// Puts an item from the content in a hand.
+    fn put_in(st: &mut AppState, hand: BodyPart, item: &str) {
+        let id = ItemId::new(item);
+        let copy = st.character.new_copy(&st.content, &id);
+        st.character.wear(hand, id, Some(copy));
+    }
+
+    fn off_hand_logged(st: &AppState) -> bool {
+        logged(st, "off hand")
+    }
+
+    #[test]
+    fn with_no_gun_in_the_main_hand_the_other_hands_gun_fires() {
+        let mut st = engaged(Pos::new(14, 8));
+        st.character.take_off(BodyPart::RightHand);
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        let (hand, id, _) = your_weapon(&st).unwrap();
+        assert_eq!((hand, id), (BodyPart::LeftHand, ItemId::new("scrap_nine")));
+        // Every roll would call the off hand in, yet nothing else is held.
+        st.force_hit = Some(true);
+        fire(&mut st, 0).unwrap();
+        assert!(logged(&st, "you fire · goon 5"), "{:?}", st.log.latest());
+        assert!(!off_hand_logged(&st), "the gun that fired never follows up");
+        assert_eq!(st.foes[0].hp, foes::GOON_HP - 5);
+    }
+
+    #[test]
+    fn the_off_hand_joins_in_about_one_shot_in_four() {
+        let mut st = engaged(Pos::new(14, 8));
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        // Three rounds of the ratchet, then the follow-up's roll under 25.
+        seed(&mut st, |r| r(4) == u32::from(OFF_HAND_CHANCE));
+        fire(&mut st, 0).unwrap();
+        assert!(
+            logged(&st, "off hand · Scrap nine"),
+            "{:?}",
+            st.log.latest()
+        );
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1, "free: one AP spent");
+
+        let mut st = engaged(Pos::new(14, 8));
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        seed(&mut st, |r| r(4) == u32::from(OFF_HAND_CHANCE) + 1);
+        fire(&mut st, 0).unwrap();
+        assert!(!off_hand_logged(&st));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+    }
+
+    #[test]
+    fn the_follow_up_is_drawn_after_the_main_burst() {
+        let mut st = engaged(Pos::new(14, 8));
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        let (_, _, main) = your_weapon(&st).unwrap();
+        st.force_hit = Some(true); // every roll wins, the follow-up's too
+        fire(&mut st, 0).unwrap();
+        assert!(off_hand_logged(&st));
+        // One flash a round, in the order fired.
+        let flashes: Vec<u64> = (st.fx.iter())
+            .filter(|i| matches!(i.fx, Fx::Flash { .. }))
+            .map(|i| i.started)
+            .collect();
+        let main = usize::from(main.rounds);
+        assert_eq!(flashes.len(), main + 1, "{flashes:?}");
+        assert!(
+            flashes[main] > flashes[main - 1],
+            "the follow-up starts after the main burst's last round: {flashes:?}"
+        );
+        // Its number stands past the main burst's numbers, not on the first.
+        let numbers: Vec<Pos> = (st.fx.iter())
+            .filter(|i| matches!(i.fx, Fx::Number { .. }))
+            .map(|i| i.targets[0])
+            .collect();
+        let last = numbers.last().unwrap();
+        assert!(!numbers[..main].contains(last), "{numbers:?}");
+    }
+
+    #[test]
+    fn the_off_hand_stays_quiet_out_of_its_range_or_when_the_target_is_down() {
+        // The scrap nine reaches 8, the foe stands 10 off, within the ratchet's 12.
+        let mut st = engaged(Pos::new(16, 8));
+        st.player
+            .as_mut()
+            .unwrap()
+            .set_vis(Pos::new(16, 8), crate::render::Visibility::Visible);
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        st.force_hit = Some(true); // every roll wins, the follow-up's too
+        fire(&mut st, 0).unwrap();
+        assert!(logged(&st, "you fire"));
+        assert!(!off_hand_logged(&st), "out of its range");
+
+        // The main volley downs the foe: nothing left to shoot at.
+        let mut st = engaged(Pos::new(14, 8));
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        st.foes[0].hp = 1;
+        st.force_hit = Some(true);
+        fire(&mut st, 0).unwrap();
+        assert!(!st.foes[0].standing());
+        assert!(!off_hand_logged(&st), "the target is down");
+    }
+
+    #[test]
+    fn the_ambush_is_the_main_hands_alone() {
+        let mut st = crate::guards::testutil::ward();
+        crate::cloak::testutil::armed(&mut st);
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        let i = cloaked_on_turns(&mut st);
+        let (_, _, main) = your_weapon(&st).unwrap();
+        // The ambush rolls nothing: the follow-up's roll is the first, its one round
+        // the second, at the scrap nine's own chance.
+        let chance = chance_with(&st, i, &gun_in(&st, BodyPart::LeftHand).unwrap().1).unwrap();
+        seed(&mut st, |r| {
+            r(1) == u32::from(OFF_HAND_CHANCE) && r(2) <= u32::from(chance)
+        });
+        fire(&mut st, i).unwrap();
+        assert!(logged(&st, "AMBUSH"));
+        assert!(off_hand_logged(&st));
+        let main = 2 * u32::from(main.damage) * u32::from(main.rounds);
+        assert_eq!(
+            u32::from(st.foes[i].hp),
+            200 - main - 5,
+            "the main rounds land x2, the follow-up's round plain"
+        );
+    }
+
+    #[test]
+    fn the_shiv_in_the_off_hand_never_fires() {
+        let mut st = engaged(Pos::new(14, 8));
+        let bare = st.character.attribute(&st.content, Attribute::Reflex);
+        put_in(&mut st, BodyPart::LeftHand, "shiv_blade");
+        st.force_hit = Some(true);
+        fire(&mut st, 0).unwrap();
+        assert!(!off_hand_logged(&st), "no weapon spec, no follow-up");
+        assert_eq!(
+            st.character.attribute(&st.content, Attribute::Reflex),
+            bare + 1,
+            "its perk still counts"
+        );
     }
 }

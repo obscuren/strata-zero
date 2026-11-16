@@ -99,7 +99,7 @@ pub fn ambush_ready(st: &AppState) -> bool {
     if !hidden(st) {
         return false;
     }
-    let gun = crate::combat::your_weapon(st).ok().map(|(_, w)| w.range);
+    let gun = crate::combat::your_weapon(st).ok().map(|(_, _, w)| w.range);
     let strikes =
         (st.character.abilities(&st.content).into_iter()).filter_map(|(id, _)| {
             match st.character.ability(&st.content, &id)?.kind {
@@ -277,7 +277,7 @@ mod tests {
         stealthy(&mut st);
         st.character.focus = 10;
         fire(&mut st, "cloak").unwrap();
-        st.character.take_off(game::Slot::Primary);
+        st.character.take_off(game::BodyPart::RightHand);
         assert!(!ambush_ready(&st), "no gun and no strike");
         st.character.give(ItemId::new("neural_port"), 1);
         st.character

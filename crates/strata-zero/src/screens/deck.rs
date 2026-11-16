@@ -28,8 +28,8 @@ use citygen::rng::hash64;
 use citygen::{FloorPlan, NodeKind, Place, Pos, StratumKind};
 use crossterm::event::{KeyCode, KeyEvent};
 use game::{
-    AbilityId, AbilityKind, Action, Active, Attribute, Build, CategoryId, CopyId, Hardware, Item,
-    ItemCopy, ItemId, Perk, SkillId, Slot, Source,
+    AbilityId, AbilityKind, Action, Active, Attribute, BodyPart, Build, CategoryId, CopyId,
+    Hardware, Item, ItemCopy, ItemId, Perk, SkillId, Source,
 };
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -123,7 +123,7 @@ pub(crate) enum Tone {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Detail {
-    Slot(Slot),
+    Part(BodyPart),
     Item(ItemId),
     /// One copy in the pack, for an item held per copy.
     Copy(CopyId),
@@ -234,6 +234,25 @@ pub(crate) fn marks(
     out
 }
 
+/// A part in words, as a card says where an item is worn.
+fn part_words(part: BodyPart) -> &'static str {
+    match part {
+        BodyPart::Head => "head",
+        BodyPart::Face => "face",
+        BodyPart::Back => "back",
+        BodyPart::Torso => "torso",
+        BodyPart::LeftArm => "left arm",
+        BodyPart::LeftHand => "left hand",
+        BodyPart::RightArm => "right arm",
+        BodyPart::RightHand => "right hand",
+        BodyPart::Waist => "waist",
+        BodyPart::Legs => "legs",
+        BodyPart::Feet => "feet",
+        BodyPart::ThirdArm => "third arm",
+        BodyPart::ThirdHand => "third hand",
+    }
+}
+
 fn tone_style(tone: Tone) -> Style {
     match tone {
         Tone::Normal => Style::default().fg(TEXT),
@@ -279,23 +298,26 @@ fn keeps(st: &AppState, item: &ItemId, choices: &mut [Choice]) -> Option<String>
     Some(capitalised(crate::actions::KEPT))
 }
 
-/// The popup for a gear slot: a picker for what fits it, then Unequip and Inspect for
-/// what is worn. Nothing fits and nothing is worn says so in the strip.
-pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> Option<Popup> {
+/// The popup for a part of the body: a picker for what fits it, worn on that part,
+/// then Unequip and Inspect for what is worn. Nothing fits and nothing is worn says so
+/// in the strip.
+pub(crate) fn part_popup(st: &mut AppState, part: BodyPart, anchor: (u16, u16)) -> Option<Popup> {
     let mut choices = Vec::new();
     let mut letters = LETTERS.chars();
+    let kind = st.content.node(part).map(|n| n.kind);
+    let name = game::part_name(&st.content, part);
     for s in &st.character.inventory {
         let Some(item) = st.content.item(&s.item) else {
             continue;
         };
-        if item.slot != Some(slot) {
+        if kind.is_none() || item.slot != kind {
             continue;
         }
         let Some(k) = letters.next() else { break };
         // A copy is worn as itself, with what is fitted in it.
         let equip = match s.copy_id() {
-            Some(copy) => Action::EquipCopy(copy),
-            None => Action::Equip(s.item.clone()),
+            Some(copy) => Action::EquipCopyAt(copy, part),
+            None => Action::EquipAt(s.item.clone(), part),
         };
         // The marks tell two copies of one item apart.
         let marks: String = marks(st, item, s.copy.as_ref(), false, false)
@@ -309,26 +331,26 @@ pub(crate) fn slot_popup(st: &mut AppState, slot: Slot, anchor: (u16, u16)) -> O
         };
         choices.push(Choice::new(k, label, Pick::Act(equip)));
     }
-    if let Some(id) = st.character.equipped(slot) {
+    if let Some(id) = st.character.equipped(part) {
         choices.push(Choice::new(
             'u',
             "Unequip",
-            Pick::Act(Action::Unequip(slot)),
+            Pick::Act(Action::Unequip(part)),
         ));
         let worn = Pick::Blueprint {
             item: id.clone(),
             equipped: true,
-            copy: st.character.worn_copy(slot).map(|k| k.id),
+            copy: st.character.worn_copy(part).map(|k| k.id),
         };
         choices.push(Choice::new('i', "Inspect / Mod", worn));
     }
     if choices.is_empty() {
-        st.warn(format!("nothing in the pack fits {}", slot.label()));
+        st.warn(format!("nothing in the pack fits the {name}"));
         return None;
     }
     let body = hands_off(st, &mut choices);
     Some(
-        Popup::verbs(&capitalised(slot.label()), choices, st.tick)
+        Popup::verbs(&capitalised(&name), choices, st.tick)
             .with_body(body)
             .anchored(anchor.0, anchor.1),
     )
@@ -480,16 +502,19 @@ fn held(st: &AppState) -> Held<'_> {
 /// The detail pane's card for a row.
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
-        Detail::Slot(slot) => match st.character.equipped(*slot) {
-            Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*slot)),
+        Detail::Part(part) => match st.character.equipped(*part) {
+            Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*part), Some(*part)),
             None => vec![
                 head("— empty —"),
-                dim(format!("nothing in the {} slot", slot.label())),
+                dim(format!(
+                    "nothing on the {}",
+                    game::part_name(&st.content, *part)
+                )),
             ],
         },
         Detail::Item(id) => Deck::item_card(st, id),
         Detail::Copy(copy) => match st.character.copy_in_pack(*copy) {
-            Some(s) => Deck::item_card_of(st, &s.item, s.copy.as_ref()),
+            Some(s) => Deck::item_card_of(st, &s.item, s.copy.as_ref(), None),
             None => vec![dim("nothing here")],
         },
         Detail::Journal(i) => Deck::journal_card(st, *i),
@@ -547,7 +572,7 @@ pub(crate) fn draw_rows(
     }
 }
 
-/// An item's row: `lead` (the slot, or the glyph and count), its name, and the
+/// An item's row: `lead` (the part, or the glyph and count), its name, and the
 /// marks after it. The name is cut so the marks always fit the pane.
 pub(crate) fn item_row(
     st: &AppState,
@@ -624,7 +649,7 @@ impl Deck {
             list.y + self.row.saturating_sub(first) as u16,
         );
         match &row.detail {
-            Some(Detail::Slot(slot)) => slot_popup(st, *slot, anchor),
+            Some(Detail::Part(part)) => part_popup(st, *part, anchor),
             Some(Detail::Item(id)) => item_popup(st, id, anchor),
             Some(Detail::Copy(copy)) => copy_popup(st, *copy, anchor),
             Some(Detail::Category(id)) if !st.character.has_category(id) => {
@@ -1049,27 +1074,42 @@ impl Deck {
 
     /// Everything about one item: the detail pane and the inspect card.
     pub(crate) fn item_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
-        Self::item_card_of(st, id, None)
+        Self::item_card_of(st, id, None, None)
     }
 
-    /// The card of one copy: its sockets read what is fitted in it, and it is
-    /// equipped only when that copy is the one worn. Without a copy, every socket the
-    /// item is made with reads empty.
+    /// The card of one copy: its sockets read what is fitted in it. Without a copy,
+    /// every socket the item is made with reads empty. It is equipped, on that part,
+    /// when `on` names the part it is the card of, or when the copy is the one a part
+    /// wears; an item in the pack or on the ground is never the one worn, whatever
+    /// else wears the same item.
     pub(crate) fn item_card_of(
         st: &AppState,
         id: &ItemId,
         copy: Option<&ItemCopy>,
+        on: Option<BodyPart>,
     ) -> Vec<Line<'static>> {
         let Some(item) = st.content.item(id) else {
             return vec![warn(format!("unknown item {id}"))];
         };
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
         let mut out = vec![head(&item.name)];
-        // Where it goes: a slot, or for hardware the socket it fits.
+        // Where it goes: a kind of part, or for hardware the socket it fits.
+        // Worn, the part it is on; a hand's main one says so.
+        let on = on.or_else(|| copy.and_then(|k| st.character.part_wearing(k.id)));
         let place = match (&item.hardware, &item.implant, item.slot) {
             (Some(h), _, _) => format!(" · {}", h.fits.fits()),
             (None, Some(i), _) => format!(" · {} · load {}", i.fits.label(), i.load),
-            (None, None, Some(s)) => format!(" · {}", s.label()),
+            (None, None, Some(s)) => match on {
+                Some(part) => {
+                    let main = st.character.main_hand(&st.content) == Some(part);
+                    format!(
+                        " · {}{}",
+                        part_words(part),
+                        if main { " · main" } else { "" }
+                    )
+                }
+                None => format!(" · {}", s.lower()),
+            },
             (None, None, None) => String::new(),
         };
         // A copy weighs and costs what is fitted in it too.
@@ -1083,6 +1123,24 @@ impl Deck {
             item.kind.label()
         )));
         out.extend(Self::perk_lines(st, item));
+        if let Some(w) = &item.weapon {
+            out.push(cyan(format!(
+                "{} damage × {} rounds · range {}",
+                w.damage, w.rounds, w.range
+            )));
+            // Held in a hand that is not the one that fires, whichever hand that is.
+            let fires = crate::combat::your_weapon(st).ok().map(|(hand, ..)| hand);
+            let hands = st.character.hands(&st.content);
+            if let Some(part) = on
+                && hands.contains(&part)
+                && fires != Some(part)
+            {
+                out.push(cyan(format!(
+                    "off hand · 1 in {} to follow up",
+                    100 / u32::from(crate::combat::OFF_HAND_CHANCE)
+                )));
+            }
+        }
         if let Some(h) = &item.hardware {
             out.extend(h.lines().into_iter().map(cyan));
         }
@@ -1099,11 +1157,7 @@ impl Deck {
                 cyan(format!("cell {pct}%"))
             });
         }
-        let worn = match copy {
-            Some(k) => st.character.is_worn_copy(k.id),
-            None => st.character.is_equipped(id),
-        };
-        if worn {
+        if on.is_some() {
             out.push(Line::from(Span::styled(
                 "equipped",
                 Style::default().fg(CYAN),
@@ -2088,14 +2142,18 @@ mod tests {
         let text = draw(&d, &st, 120, 35);
         assert!(
             text.contains("▌GEAR & INVENTORY▐")
-                && text.contains("PRIMARY")
-                && text.contains("Ratchet SMG"),
+                && text.contains("R HAND")
+                && text.contains("Ratchet"),
             "{text}"
         );
-        assert!(text.contains("— empty —"), "{text}");
+        assert!(text.contains("— EMPTY —"), "the bare head's card: {text}");
         assert!(text.contains(d.kit.hints()), "the kit's hints: {text}");
-        d.update(&mut st, &[key(KeyCode::Right); 2]);
-        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 2), "torso");
+        d.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(
+            (d.tab, d.kit.state.part),
+            (Tab::Kit, BodyPart::Torso),
+            "torso"
+        );
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
         assert!(
@@ -2103,7 +2161,8 @@ mod tests {
             "{text}"
         );
 
-        // Over the rack's right edge to the pack; right on the pack does nothing.
+        // Right off FACE crosses to the pack; right on the pack does nothing.
+        d.update(&mut st, &[key(KeyCode::Up)]);
         d.update(&mut st, &[key(KeyCode::Right); 3]);
         assert_eq!((d.tab, d.kit.state.pane), (Tab::Kit, Pane::Pack));
         st.tick += 30;
@@ -2127,8 +2186,8 @@ mod tests {
 
         d.update(&mut st, &[key(KeyCode::Left); 4]);
         assert_eq!(
-            (d.tab, d.kit.state.pane, d.kit.state.tile),
-            (Tab::Kit, Pane::Rack, 0),
+            (d.tab, d.kit.state.pane),
+            (Tab::Kit, Pane::Body),
             "left never leaves the tab"
         );
         d.update(&mut st, &[key(KeyCode::Char('e'))]);
@@ -2553,7 +2612,7 @@ mod tests {
         // The pack's rows above the rule: the chips, then the list.
         let rule = lines
             .iter()
-            .position(|l| l.contains('╩'))
+            .position(|l| l.contains('╠'))
             .expect("the rule");
         let list: Vec<&str> = lines[..rule]
             .iter()
@@ -2752,7 +2811,7 @@ mod tests {
             text.contains("6 · 7 with gear") && text.contains("gear +1 Pawnshop deck"),
             "the deck's +1 net: {text}"
         );
-        on_tile(&mut d, &mut st, Slot::Deck);
+        on_tile(&mut d, &mut st, BodyPart::Waist);
         d.kit.changed = 0;
         let text = draw(&d, &st, 120, 35);
         assert!(
@@ -2772,7 +2831,7 @@ mod tests {
             .inventory
             .push(game::Stack::new(ItemId::new("hardhat"), 1));
         let mut d = Deck::new(0);
-        on_tile(&mut d, &mut st, Slot::Torso);
+        on_tile(&mut d, &mut st, BodyPart::Torso);
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
             panic!("space opens the picker")
@@ -2799,19 +2858,19 @@ mod tests {
         );
         p.update(&mut st, &[key(KeyCode::Char('a'))]);
         assert_eq!(
-            st.character.equipped(Slot::Torso),
+            st.character.equipped(BodyPart::Torso),
             Some(&ItemId::new("ballistic_weave"))
         );
         assert_eq!(
             last(&st),
             Some("swapped Salvage jacket for Ballistic weave")
         );
-        on_tile(&mut d, &mut st, Slot::Legs);
+        on_tile(&mut d, &mut st, BodyPart::Legs);
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Enter)]),
             ScreenCmd::Stay
         ));
-        assert_eq!(last(&st), Some("nothing in the pack fits legs"));
+        assert_eq!(last(&st), Some("nothing in the pack fits the legs"));
     }
 
     #[test]
@@ -2955,7 +3014,7 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('3'))]);
         d.kit.state = KitState {
             pane: Pane::Pack,
-            tile: 4,
+            part: BodyPart::Torso,
             row: 0,
             filter: Some(ItemKind::Program),
         };
@@ -3703,11 +3762,11 @@ mod tests {
     fn inspect_opens_the_blueprint_window() {
         let mut st = state();
         let mut d = Deck::new(0);
-        // The rack: the DECK slot's popup, then Inspect.
-        on_tile(&mut d, &mut st, Slot::Deck);
+        // The rack: the waist's popup, then Inspect.
+        on_tile(&mut d, &mut st, BodyPart::Waist);
         let ScreenCmd::Push { to: mut p, .. } = d.update(&mut st, &[key(KeyCode::Char(' '))])
         else {
-            panic!("space opens the slot popup")
+            panic!("space opens the waist's popup")
         };
         let ScreenCmd::Replace { to: bp, .. } = p.update(&mut st, &[key(KeyCode::Char('i'))])
         else {
@@ -3739,11 +3798,11 @@ mod tests {
         );
     }
 
-    /// Opens GEAR & INVENTORY with the rack's cursor on `slot`'s tile.
-    fn on_tile(d: &mut Deck, st: &mut AppState, slot: Slot) {
+    /// Opens GEAR & INVENTORY with the body's cursor on `part`'s tile.
+    fn on_tile(d: &mut Deck, st: &mut AppState, part: BodyPart) {
         d.update(st, &[key(KeyCode::Char('3'))]);
-        d.kit.state.pane = Pane::Rack;
-        d.kit.state.tile = Slot::ALL.iter().position(|s| *s == slot).unwrap();
+        d.kit.state.pane = Pane::Body;
+        d.kit.state.part = part;
     }
 
     /// Opens GEAR & INVENTORY with the pack's cursor on the first row `pick` takes.
@@ -3797,8 +3856,8 @@ mod tests {
                 assert_eq!(c.enabled, c.label == "Inspect / Mod", "{}", c.label);
             }
         };
-        // The rack: the DECK slot offers the spare deck and Unequip, dimmed; Inspect works.
-        on_tile(&mut d, &mut st, Slot::Deck);
+        // The rack: the waist offers the spare deck and Unequip, dimmed; Inspect works.
+        on_tile(&mut d, &mut st, BodyPart::Waist);
         let p = d.interact(&mut st).unwrap();
         only_inspect(&p);
         st.tick += 40;
@@ -3852,7 +3911,7 @@ mod tests {
             assert_eq!(st.character.loaded, loaded);
         }
         // From the rack's DECK tile it is the jacked deck, and works.
-        let mut bp = inspect(&mut d, &mut st, |d, st| on_tile(d, st, Slot::Deck));
+        let mut bp = inspect(&mut d, &mut st, |d, st| on_tile(d, st, BodyPart::Waist));
         st.tick += 40;
         let text = draw(&*bp, &st, 100, 30);
         assert!(
@@ -4107,7 +4166,7 @@ mod tests {
         let (first, second) = (decks[0], decks[1]);
         fit(&mut st, game::Host::Pack(second), 0, "sidecar");
         let mut d = Deck::new(0);
-        on_tile(&mut d, &mut st, Slot::Deck);
+        on_tile(&mut d, &mut st, BodyPart::Waist);
         let p = d.interact(&mut st).unwrap();
         let rows: Vec<(&str, &Pick)> = p
             .choices()
@@ -4118,18 +4177,23 @@ mod tests {
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert_eq!(rows[0].0, "Rebuilt pawn deck □□□□□ · □□");
         assert_eq!(rows[1].0, "Rebuilt pawn deck □□□□□ · ■□");
-        assert!(matches!(rows[0].1, Pick::Act(Action::EquipCopy(k)) if *k == first));
-        assert!(matches!(rows[1].1, Pick::Act(Action::EquipCopy(k)) if *k == second));
+        let waist = BodyPart::Waist;
+        assert!(
+            matches!(rows[0].1, Pick::Act(Action::EquipCopyAt(k, p)) if *k == first && *p == waist)
+        );
+        assert!(
+            matches!(rows[1].1, Pick::Act(Action::EquipCopyAt(k, p)) if *k == second && *p == waist)
+        );
     }
 
     #[test]
     fn cards_list_sockets_and_mods() {
         let mut st = dshawn();
-        fit(&mut st, game::Host::Worn(Slot::Deck), 0, "coldfin_2");
+        fit(&mut st, game::Host::Worn(BodyPart::Waist), 0, "coldfin_2");
         st.character
             .give_item(&st.content, ItemId::new("rebuilt_deck"), 1);
         // The worn deck: its sockets after its grants, then that it is worn.
-        let worn = card(&st, &Detail::Slot(Slot::Deck));
+        let worn = card(&st, &Detail::Part(BodyPart::Waist));
         let text = texts(&worn);
         let at = |t: &str| {
             text.iter()
@@ -4171,13 +4235,12 @@ mod tests {
     #[test]
     fn the_card_shares_its_lines() {
         let st = dshawn();
-        let card = |slot: Slot| {
-            let id = st.character.equipped(slot).cloned().unwrap();
-            let copy = st.character.worn_copy(slot);
-            texts(&Deck::item_card_of(&st, &id, copy))
-        };
-        assert_eq!(card(Slot::Primary)[1], "weapon · primary · 3.2 kg · ¤ 900");
-        let deck = card(Slot::Deck);
+        let card = |part: BodyPart| texts(&card(&st, &Detail::Part(part)));
+        assert_eq!(
+            card(BodyPart::RightHand)[1],
+            "weapon · right hand · main · 3.2 kg · ¤ 900"
+        );
+        let deck = card(BodyPart::Waist);
         let grants: Vec<&String> = deck.iter().filter(|l| l.starts_with("grants ")).collect();
         assert_eq!(grants, ["grants Netscan · Arc Trace"], "{deck:?}");
         let cold = pack_copy(&st, "coldfin_1");
@@ -4186,10 +4249,96 @@ mod tests {
             &st,
             &ItemId::new("coldfin_1"),
             copy.as_ref(),
+            None,
         ));
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
-        let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
+        let arm = texts(&Deck::item_card(&st, &ItemId::new("grip_arm")));
         assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
+    }
+
+    #[test]
+    fn a_worn_guns_card_says_its_rounds_and_its_hand() {
+        let mut st = dshawn();
+        let part = |st: &AppState, part| texts(&card(st, &Detail::Part(part)));
+        let main = part(&st, BodyPart::RightHand);
+        assert!(
+            main.contains(&"4 damage × 3 rounds · range 12".to_string()),
+            "{main:?}"
+        );
+        assert!(!main.iter().any(|l| l.starts_with("off hand")), "{main:?}");
+        let nine = ItemId::new("scrap_nine");
+        let copy = st.character.new_copy(&st.content, &nine);
+        st.character
+            .wear(BodyPart::LeftHand, nine.clone(), Some(copy));
+        let off = part(&st, BodyPart::LeftHand);
+        assert!(off[1].starts_with("weapon · left hand · 0.9 kg"), "{off:?}");
+        assert!(
+            off.contains(&"off hand · 1 in 4 to follow up".to_string()),
+            "{off:?}"
+        );
+        // With the right hand empty the left's gun is the one that fires.
+        st.character.take_off(BodyPart::RightHand);
+        let off = part(&st, BodyPart::LeftHand);
+        assert!(!off.iter().any(|l| l.starts_with("off hand")), "{off:?}");
+        // In the pack it names no hand.
+        let card = texts(&Deck::item_card(&st, &ItemId::new("shiv_blade")));
+        assert_eq!(card[1].split(" · ").nth(1), Some("hand"), "{card:?}");
+    }
+
+    #[test]
+    fn a_tiles_card_names_its_own_hand() {
+        let mut st = dshawn();
+        let shiv = ItemId::new("shiv_blade");
+        for hand in [BodyPart::RightHand, BodyPart::LeftHand] {
+            st.character.wear(hand, shiv.clone(), None);
+        }
+        let meta = |part| texts(&card(&st, &Detail::Part(part)))[1].clone();
+        let (right, left) = (meta(BodyPart::RightHand), meta(BodyPart::LeftHand));
+        assert!(
+            right.starts_with("weapon · right hand · main · "),
+            "{right:?}"
+        );
+        assert!(left.starts_with("weapon · left hand · "), "{left:?}");
+    }
+
+    #[test]
+    fn only_the_hand_that_does_not_fire_follows_up() {
+        let mut st = dshawn();
+        let nine = ItemId::new("scrap_nine");
+        for hand in [BodyPart::RightHand, BodyPart::LeftHand] {
+            st.character.wear(hand, nine.clone(), None);
+        }
+        let (fires, ..) = crate::combat::your_weapon(&st).unwrap();
+        assert_eq!(fires, BodyPart::RightHand);
+        let follows = |part| {
+            texts(&card(&st, &Detail::Part(part)))
+                .iter()
+                .any(|l| l == "off hand · 1 in 4 to follow up")
+        };
+        assert!(!follows(BodyPart::RightHand), "the gun that fires");
+        assert!(follows(BodyPart::LeftHand));
+    }
+
+    #[test]
+    fn a_spare_in_the_pack_is_not_the_one_worn() {
+        let mut st = dshawn();
+        let nine = ItemId::new("scrap_nine");
+        st.character.wear(BodyPart::LeftHand, nine.clone(), None);
+        st.character.give_item(&st.content, nine.clone(), 1);
+        let spare = card(&st, &pack_detail(&st, |r| r.text.contains("Scrap nine")));
+        let spare = texts(&spare);
+        assert_eq!(spare[1].split(" · ").nth(1), Some("hand"), "{spare:?}");
+        assert!(!spare.iter().any(|l| l.contains("left hand")), "{spare:?}");
+        assert!(!spare.iter().any(|l| l == "equipped"), "{spare:?}");
+        // A gun's numbers show wherever it is; the off-hand line only on a hand.
+        assert!(
+            spare.contains(&"5 damage × 1 rounds · range 8".to_string()),
+            "{spare:?}"
+        );
+        assert!(
+            !spare.iter().any(|l| l.starts_with("off hand")),
+            "{spare:?}"
+        );
     }
 
     #[test]
@@ -4198,7 +4347,7 @@ mod tests {
         let k = crate::cloak::testutil::scrambler(&mut st);
         let card = |st: &AppState| {
             let copy = st.character.copy_in_pack(k).and_then(|s| s.copy.as_ref());
-            Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy)
+            Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy, None)
         };
         let charge = |left, burned| game::Charge { left, burned };
         crate::cloak::testutil::set_charge(&mut st, k, charge(game::FULL_CELL * 62 / 100, false));
@@ -4234,27 +4383,27 @@ mod tests {
     fn the_gear_row_and_card_show_the_guns_sockets() {
         let mut st = dshawn();
         let mut d = Deck::new(0);
-        on_tile(&mut d, &mut st, Slot::Primary);
+        on_tile(&mut d, &mut st, BodyPart::RightHand);
         st.tick = 60;
-        // The PRIMARY tile's bottom edge, up to its corner.
+        // What the R HAND tile says it gives, inside its borders.
         let edge = |d: &Deck, st: &AppState| {
             let text = buffer_text(&screen(d, st, 100, 30));
             let lines: Vec<&str> = text.lines().collect();
-            let y = lines.iter().position(|l| l.contains("┌ PRIMARY")).unwrap();
-            let at = lines[y].find("┌ PRIMARY").unwrap();
+            let y = lines.iter().position(|l| l.contains("┌ R HAND")).unwrap();
+            let at = lines[y].find("┌ R HAND").unwrap();
             let x = lines[y][..at].chars().count();
-            let bottom: String = lines[y + 2].chars().skip(x).collect();
-            bottom.split('┘').next().unwrap().to_string()
+            let gives = lines[y + 2].chars().skip(x + 1);
+            gives.take_while(|c| *c != '│').collect::<String>()
         };
         let row = edge(&d, &st);
-        assert!(row.contains(" □□ ") && !row.contains(" · "), "{row:?}");
-        let card_of = |st: &AppState| texts(&card(st, &Detail::Slot(Slot::Primary)));
+        assert!(row.starts_with("● 4×3 □□ "), "{row:?}");
+        let card_of = |st: &AppState| texts(&card(st, &Detail::Part(BodyPart::RightHand)));
         let text = card_of(&st);
         assert!(text.contains(&"□ empty socket · muzzle hardware".to_string()));
         assert!(text.contains(&"□ empty socket · rail hardware".to_string()));
-        fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
+        fit(&mut st, game::Host::Worn(BodyPart::RightHand), 0, "hushcan");
         let row = edge(&d, &st);
-        assert!(row.contains(" ■□ "), "{row:?}");
+        assert!(row.starts_with("● 4×3 ■□ "), "{row:?}");
         let text = card_of(&st);
         assert!(
             text.contains(&"■ Hushcan · cool +1".to_string()),
@@ -4283,7 +4432,7 @@ mod tests {
         let mut st = state();
         st.character
             .give_item(&st.content, ItemId::new("hushcan"), 1);
-        fit(&mut st, game::Host::Worn(Slot::Primary), 0, "hushcan");
+        fit(&mut st, game::Host::Worn(BodyPart::RightHand), 0, "hushcan");
         let mut d = Deck::new(0);
         on_attribute(&mut d, &mut st, Num::Attribute(Attribute::Cool));
         let text = draw(&d, &st, 120, 35);

@@ -35,39 +35,83 @@ id_type!(ProfessionId);
 id_type!(CategoryId);
 id_type!(TemplateId);
 
+/// A part of the body that wears one item. Saves name the part; the names of the old
+/// slots read as the parts they became.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Slot {
+pub enum BodyPart {
     Head,
-    Eyes,
+    #[serde(alias = "Eyes")]
+    Face,
+    Back,
     Torso,
+    LeftArm,
+    #[serde(alias = "Secondary")]
+    LeftHand,
+    RightArm,
+    #[serde(alias = "Primary")]
+    RightHand,
+    #[serde(alias = "Deck")]
+    Waist,
     Legs,
-    Primary,
-    Secondary,
-    Deck,
+    Feet,
+    /// A third arm and its hand: in no default body, there for chrome to add.
+    ThirdArm,
+    ThirdHand,
 }
 
-impl Slot {
-    pub const ALL: [Slot; 7] = [
-        Slot::Head,
-        Slot::Eyes,
-        Slot::Torso,
-        Slot::Legs,
-        Slot::Primary,
-        Slot::Secondary,
-        Slot::Deck,
+/// What kind of part an item fits: an item names a kind, and goes on any part of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum PartKind {
+    Head,
+    Face,
+    Back,
+    Torso,
+    Arm,
+    Hand,
+    Waist,
+    Legs,
+    Feet,
+}
+
+impl PartKind {
+    pub const ALL: [PartKind; 9] = [
+        PartKind::Head,
+        PartKind::Face,
+        PartKind::Back,
+        PartKind::Torso,
+        PartKind::Arm,
+        PartKind::Hand,
+        PartKind::Waist,
+        PartKind::Legs,
+        PartKind::Feet,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn lower(self) -> &'static str {
         match self {
-            Slot::Head => "head",
-            Slot::Eyes => "eyes",
-            Slot::Torso => "torso",
-            Slot::Legs => "legs",
-            Slot::Primary => "primary",
-            Slot::Secondary => "secondary",
-            Slot::Deck => "deck",
+            PartKind::Head => "head",
+            PartKind::Face => "face",
+            PartKind::Back => "back",
+            PartKind::Torso => "torso",
+            PartKind::Arm => "arm",
+            PartKind::Hand => "hand",
+            PartKind::Waist => "waist",
+            PartKind::Legs => "legs",
+            PartKind::Feet => "feet",
         }
     }
+}
+
+/// One part of the body as content lists it: its kind, its name on screen, the part
+/// it hangs off, and whether it is the main hand.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BodyNode {
+    pub part: BodyPart,
+    pub kind: PartKind,
+    pub name: String,
+    #[serde(default)]
+    pub joins: Option<BodyPart>,
+    #[serde(default)]
+    pub main: bool,
 }
 
 /// A place on the body that holds one piece of chrome.
@@ -956,7 +1000,7 @@ pub struct Item {
     pub name: String,
     pub kind: ItemKind,
     #[serde(default)]
-    pub slot: Option<Slot>,
+    pub slot: Option<PartKind>,
     pub weight: f32,
     pub value: u32,
     pub desc: String,
@@ -1589,6 +1633,5 @@ mod tests {
         assert_eq!(Fits::Socket(SocketKind::Forearm).label(), "forearm socket");
         assert_eq!(SocketKind::Hand.takes(), "hand chrome");
         assert_eq!(SocketKind::Forearm.label(), "forearm");
-        assert_eq!(Slot::ALL.len(), 7);
     }
 }
