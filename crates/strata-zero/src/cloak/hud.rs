@@ -7,7 +7,7 @@ use crate::app::AppState;
 use crate::ui::chrome::{CYAN, DIM, MAGENTA};
 pub use crate::ui::hud::CloakTag;
 use game::{AbilityId, AbilityKind, Active, CopyId, FULL_CELL, ItemId, Source};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 /// The item whose cell the tag reads while idle.
@@ -52,12 +52,9 @@ pub fn tag(st: &AppState) -> Vec<Span<'static>> {
     let styled = |s: String, fg: Color| Span::styled(s, Style::default().fg(fg));
     if let Some(id) = running_cell(st) {
         let left = cell::charge(st, id).map_or(0, |c| c.left);
-        let bold = |s: String, fg: Color| {
-            Span::styled(s, Style::default().fg(fg).add_modifier(Modifier::BOLD))
-        };
         return vec![
-            bold(format!("◌ {} ", name.to_uppercase()), CYAN),
-            bold(format!("{:>3}%", pct(left)), charge_colour(left)),
+            styled(format!("◌ {} ", name.to_uppercase()), CYAN),
+            styled(format!("{:>3}%", pct(left)), charge_colour(left)),
         ];
     }
     if let Some(on_cell) = burning_out(st) {
@@ -67,10 +64,7 @@ pub fn tag(st: &AppState) -> Vec<Span<'static>> {
             "CLOAK".into()
         };
         let fg = if blink(st) { MAGENTA } else { CYAN };
-        return vec![Span::styled(
-            format!("◌ {what} ▓▓ FAILING"),
-            Style::default().fg(fg).add_modifier(Modifier::BOLD),
-        )];
+        return vec![styled(format!("◌ {what} ▓▓ FAILING"), fg)];
     }
     let Some((_, c)) = cell::best(st, &ItemId::new(SCRAMBLER)) else {
         return Vec::new();
@@ -107,16 +101,23 @@ pub fn footer_tag(st: &AppState) -> Option<CloakTag> {
     burning_out(st).map(|_| CloakTag::SignalLost { blink: blink(st) })
 }
 
-/// Hidden with a standing foe in your sight that your weapon reaches: the first hit is
-/// an ambush.
+/// Hidden with a standing foe in your sight that your gun or one of your strike
+/// abilities reaches: the first hit is an ambush.
 pub fn ambush_ready(st: &AppState) -> bool {
     if !hidden(st) {
         return false;
     }
-    let Ok((_, w)) = crate::combat::your_weapon(st) else {
-        return false;
-    };
-    (crate::foes::in_sight(st).into_iter()).any(|i| crate::combat::reach(st, i, w.range).is_ok())
+    let gun = crate::combat::your_weapon(st).ok().map(|(_, w)| w.range);
+    let strikes =
+        (st.character.abilities(&st.content).into_iter()).filter_map(|(id, _)| {
+            match st.character.ability(&st.content, &id)?.kind {
+                AbilityKind::Active(Active::Strike { range, .. }) => Some(range),
+                _ => None,
+            }
+        });
+    let ranges: Vec<i32> = gun.into_iter().chain(strikes).collect();
+    (crate::foes::in_sight(st).into_iter())
+        .any(|i| (ranges.iter()).any(|&r| crate::combat::reach(st, i, r).is_ok()))
 }
 
 /// Whether `id` is the cloak ability running: on a cell, the one its item grants; on
@@ -294,5 +295,54 @@ mod tests {
         assert!(ambush_ready(&st));
         st.foes[0].down = true;
         assert!(!ambush_ready(&st), "nobody standing in reach");
+    }
+
+    #[test]
+    fn ambush_reads_with_a_foe_in_a_strikes_reach() {
+        let mut st = crate::foes::testutil::lot(Pos::new(10, 8));
+        stealthy(&mut st);
+        st.character.focus = 10;
+        fire(&mut st, "cloak").unwrap();
+        st.character.take_off(game::Slot::Primary);
+        assert!(!ambush_ready(&st), "no gun and no strike");
+        st.character.give(ItemId::new("neural_port"), 1);
+        st.character
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
+        assert!(
+            crate::combat::your_weapon(&st).is_err(),
+            "the strike alone, no gun"
+        );
+        assert!(
+            ambush_ready(&st),
+            "Static reaches 8 tiles, the goon stands 4 off"
+        );
+    }
+
+    #[test]
+    fn the_tag_is_never_bold() {
+        let mut st = street();
+        let k = scrambler(&mut st);
+        let bold = |st: &AppState| {
+            (tag(st).iter()).any(|s| {
+                s.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+            })
+        };
+        assert!(!tag(&st).is_empty() && !bold(&st), "idle");
+        fire(&mut st, "scramble").unwrap();
+        assert!(!bold(&st), "cloaked");
+        set_charge(
+            &mut st,
+            k,
+            Charge {
+                left: 1,
+                burned: false,
+            },
+        );
+        frames(&mut st, 1);
+        assert_eq!(text(&tag(&st)), "◌ FIELD SCRAMBLER ▓▓ FAILING");
+        assert!(!bold(&st), "failing");
     }
 }

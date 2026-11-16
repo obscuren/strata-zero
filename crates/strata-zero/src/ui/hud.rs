@@ -273,14 +273,14 @@ pub fn bar_row(label: &str, cur: u32, max: u32, colour: Color, width: u16) -> Li
     padded(spans, width as usize)
 }
 
-/// The XP row while a scrambler cloaks you: ` CELL  ` then the seconds left, then the
-/// cell's bar to the column's edge but one.
+/// The XP row while a scrambler cloaks you: ` CELL ` then the seconds left, then the
+/// cell's bar to the column's edge but one, starting where `bar_row`'s does.
 pub fn cell_row(left: u32, full: u32, secs: u64, colour: Color, width: u16) -> Line<'static> {
+    let cells = (width as usize).saturating_sub(16);
     let mut spans = vec![
-        dim(" CELL  "),
+        dim(" CELL "),
         text(format!("{:>8} ", format!("{secs}s left"))),
     ];
-    let cells = (width as usize).saturating_sub(width_of(&spans) + 1);
     spans.extend(bar_spans(bar_cells_for(left, full, cells), cells, colour));
     padded(spans, width as usize)
 }
@@ -766,7 +766,7 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
                 "AMBUSH",
                 Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · your first hit lands, ×2 ", Style::default().fg(AMBER)),
+            dim(" · your first hit lands, ×2"),
         ]
     } else {
         Vec::new()
@@ -1628,5 +1628,47 @@ mod tests {
                 .to_string()
                 .contains("10s left")
         );
+    }
+
+    #[test]
+    fn the_cell_bar_lines_up_with_hp_and_focus() {
+        let first_bar = |l: Line<'static>| {
+            l.to_string()
+                .chars()
+                .position(|c| c == '█' || c == '░')
+                .unwrap()
+        };
+        for width in [40, 59, 79] {
+            let hp = first_bar(bar_row("HP", 38, 45, GREEN, width));
+            let cell = first_bar(cell_row(
+                game::FULL_CELL / 2,
+                game::FULL_CELL,
+                10,
+                CYAN,
+                width,
+            ));
+            assert_eq!(cell, hp, "at {width}");
+            let row = cell_row(game::FULL_CELL / 2, game::FULL_CELL, 10, CYAN, width).to_string();
+            assert_eq!(row.chars().count(), width as usize, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn the_ambush_line_reads_dim_after_an_amber_word() {
+        let mut f = footer_fixture();
+        f.ambush = true;
+        let rows = footer_rows(&f, 120);
+        let row2 = rows[1].to_string();
+        assert!(
+            row2.ends_with("AMBUSH · your first hit lands, ×2"),
+            "{row2:?}"
+        );
+        let fg_of = |word: &str| {
+            (rows[1].spans.iter())
+                .find(|s| s.content.contains(word))
+                .map(|s| s.style.fg)
+        };
+        assert_eq!(fg_of("AMBUSH"), Some(Some(AMBER)));
+        assert_eq!(fg_of("first hit"), Some(Some(DIM)));
     }
 }

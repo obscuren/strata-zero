@@ -4722,6 +4722,15 @@ impl Screen for MapScreen {
             let label = st.track.as_ref().map_or("", |t| t.label.as_str());
             let text =
                 crate::track::overlay::tag_text(label, crate::track::next_now(st), leg.through, m);
+            // Your `@` and your body stay over the tag.
+            let mine: Vec<_> = (st.player.as_ref().into_iter())
+                .flat_map(|p| {
+                    let at = (p.place == self.place).then_some(p.pos);
+                    let body = p.body.filter(|(k, _)| *k == self.place).map(|(_, b)| b);
+                    at.into_iter().chain(body)
+                })
+                .filter_map(|pos| tile_to_screen(map_area, origin, pos))
+                .collect();
             crate::track::overlay::draw_edge_tag(
                 f.buffer_mut(),
                 map_area,
@@ -4729,6 +4738,7 @@ impl Screen for MapScreen {
                 leg,
                 &text,
                 st.tick,
+                &mine,
             );
         }
 

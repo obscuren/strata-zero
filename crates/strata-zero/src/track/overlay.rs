@@ -166,8 +166,17 @@ fn edge_of(area: Rect, origin: Pos, p: Pos) -> Edge {
 
 /// When the goal is out of view, ` ▴ text ` one row (or column) inside the edge the
 /// walk leaves by, the arrow pulsing magenta, clamped inside `area`. `text` is the
-/// words and the distance, without the arrow.
-pub fn draw_edge_tag(buf: &mut Buffer, area: Rect, origin: Pos, leg: &Leg, text: &str, t: u64) {
+/// words and the distance, without the arrow. The cells in `keep` (your `@`, your body)
+/// stay over it.
+pub fn draw_edge_tag(
+    buf: &mut Buffer,
+    area: Rect,
+    origin: Pos,
+    leg: &Leg,
+    text: &str,
+    t: u64,
+    keep: &[(u16, u16)],
+) {
     if area.width < 8 || area.height < 4 || tile_to_screen(area, origin, leg.goal).is_some() {
         return;
     }
@@ -209,7 +218,11 @@ pub fn draw_edge_tag(buf: &mut Buffer, area: Rect, origin: Pos, leg: &Leg, text:
     let y = y.clamp(top, bottom);
     let pulse = 0.65 + 0.35 * (TAU * t as f32 / 30.0).sin();
     for (k, ch) in chars.iter().enumerate() {
-        let cell = &mut buf[((x + k as i32) as u16, y as u16)];
+        let at = ((x + k as i32) as u16, y as u16);
+        if keep.contains(&at) {
+            continue;
+        }
+        let cell = &mut buf[at];
         let (fg, mods) = if k == 1 {
             (TAG_BG.mix(MAGENTA_RGB, pulse), Modifier::BOLD)
         } else {
@@ -426,5 +439,35 @@ mod tests {
         let (y, row) = found.expect("a tag");
         assert!(row.contains('▴'), "{row}");
         assert_eq!(y, area.y + 1, "one row inside the top edge");
+    }
+
+    #[test]
+    fn the_edge_tag_leaves_your_at_on_top() {
+        // A walk north off a 40 × 12 map: the tag lands on row 1 from the left edge.
+        let area = Rect::new(0, 0, 40, 12);
+        let leg = Leg {
+            place: STREET,
+            path: (-1..=5).rev().map(|y| Pos::new(5, y)).collect(),
+            goal: Pos::new(5, -5),
+            through: Through::Arrive,
+        };
+        let mut buf = Buffer::empty(area);
+        buf[(3, 1)].set_char('@');
+        draw_edge_tag(
+            &mut buf,
+            area,
+            Pos::new(0, 0),
+            &leg,
+            "the spot · 12 m",
+            0,
+            &[(3, 1)],
+        );
+        let row: String = (0..20).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(row, " ▴ @he spot · 12 m  ", "the tag round your `@`");
+        assert_eq!(
+            buf[(3, 1)].bg,
+            ratatui::style::Color::Reset,
+            "the `@` untouched"
+        );
     }
 }
