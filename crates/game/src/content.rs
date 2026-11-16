@@ -38,7 +38,7 @@ pub enum ContentError {
     UnknownAbility { where_: String, id: String },
     #[error("item `{item}` has a use but is not a consumable")]
     UseOnNonConsumable { item: String },
-    #[error("item `{item}` has perks or grants but no slot, implant or bot")]
+    #[error("item `{item}` has perks or grants but no slot, implant, bot or cell")]
     PerkWithoutSlot { item: String },
     #[error("item `{item}` cannot sit in slot {slot:?}")]
     SlotMismatch { item: String, slot: Slot },
@@ -736,18 +736,28 @@ impl Content {
                     return Err(bad("a throw plays no Lock or Upload"));
                 }
             }
-            // Perks and grants count while worn, installed or docked.
-            if (!i.perks.is_empty() || !i.grants.is_empty())
-                && i.slot.is_none()
-                && i.implant.is_none()
-                && i.bot.is_none()
-            {
+            // Perks and grants count while worn, installed or docked; a cell's grant
+            // counts while carried.
+            let fitted = i.slot.is_some() || i.implant.is_some() || i.bot.is_some();
+            if (!i.perks.is_empty() || (!i.grants.is_empty() && !i.cell)) && !fitted {
                 return Err(ContentError::PerkWithoutSlot {
                     item: i.id.0.clone(),
                 });
             }
             for id in &i.grants {
                 need_ability(format!("item {}", i.id), id)?;
+            }
+            if i.cell {
+                let cloak = |id: &AbilityId| {
+                    self.ability(id)
+                        .is_some_and(|a| a.kind == AbilityKind::Active(Active::Cloak))
+                };
+                if !matches!(i.grants.as_slice(), [id] if cloak(id)) {
+                    return Err(ContentError::ItemInvalid {
+                        id: i.id.0.clone(),
+                        why: "a cell grants exactly one cloak".into(),
+                    });
+                }
             }
         }
         for tree in &self.trees {
@@ -1164,6 +1174,9 @@ impl Content {
             if !owner.contains_key(&s.id) {
                 return Err(ContentError::SkillInNoCategory { id: s.id.0.clone() });
             }
+            for id in &s.grants {
+                need_ability(format!("skill {}", s.id), id)?;
+            }
         }
         for t in &self.templates {
             let where_ = format!("template {}", t.id);
@@ -1328,6 +1341,8 @@ pub fn flag_words(flag: &str) -> Option<&'static str> {
         "deep_end" => {
             "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         }
+        "ghost" => "cameras that see you warm the trace at half rate",
+        "blind_spot" => "standing still, a cloak drains at half rate",
         _ => return None,
     })
 }
@@ -1942,6 +1957,7 @@ mod tests {
             desc: "paper".into(),
             needs: Vec::new(),
             after: Vec::new(),
+            grants: vec![],
         });
         assert!(matches!(
             none.validate(),
@@ -4120,5 +4136,58 @@ mod tests {
                 assert!(!it.desc.contains(w), "{}: {w}", it.id.0);
             }
         }
+    }
+
+    #[test]
+    fn the_street_flags_say_what_they_do() {
+        let c = Content::load().unwrap();
+        assert_eq!(
+            Boon::Flag("ghost".into()).words(&c),
+            "cameras that see you warm the trace at half rate"
+        );
+        assert_eq!(
+            Boon::Flag("blind_spot".into()).words(&c),
+            "standing still, a cloak drains at half rate"
+        );
+    }
+
+    #[test]
+    fn a_cell_item_grants_one_cloak_and_only_a_cell_grants_carried() {
+        let c = Content::load().unwrap();
+        let i = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "field_scrambler")
+            .unwrap();
+        let mut bad = c.clone();
+        bad.items[i].grants = vec![AbilityId::new("ping")];
+        assert!(
+            matches!(bad.validate(), Err(ContentError::ItemInvalid { .. })),
+            "a cell grants a cloak"
+        );
+        let mut bad = c.clone();
+        bad.items[i].grants = vec![AbilityId::new("scramble"), AbilityId::new("cloak")];
+        assert!(
+            matches!(bad.validate(), Err(ContentError::ItemInvalid { .. })),
+            "a cell grants one cloak, not two"
+        );
+        let mut bad = c.clone();
+        bad.items[i].cell = false;
+        assert!(
+            matches!(bad.validate(), Err(ContentError::PerkWithoutSlot { .. })),
+            "no slot, no cell, no grants"
+        );
+        let mut bad = c.clone();
+        let s = bad.skills.iter().position(|s| s.id.0 == "stealth").unwrap();
+        bad.skills[s].grants.push(AbilityId::new("no_such"));
+        assert!(matches!(
+            bad.validate(),
+            Err(ContentError::UnknownAbility { .. })
+        ));
+        assert!(
+            c.recipes
+                .iter()
+                .any(|r| r.id.0 == "field_scrambler_build" && r.output.0.0 == "field_scrambler")
+        );
     }
 }

@@ -1087,6 +1087,18 @@ impl Deck {
             out.extend(h.lines().into_iter().map(cyan));
         }
         out.extend(Self::socket_lines(st, item, copy));
+        if let Some(k) = copy.filter(|_| item.cell) {
+            let c = k.cell();
+            let pct = crate::cloak::pct(c.left);
+            out.push(if c.burned {
+                Line::from(Span::styled(
+                    format!("cell {pct}% · burned out"),
+                    Style::default().fg(MAGENTA),
+                ))
+            } else {
+                cyan(format!("cell {pct}%"))
+            });
+        }
         let worn = match copy {
             Some(k) => st.character.is_worn_copy(k.id),
             None => st.character.is_equipped(id),
@@ -1230,6 +1242,13 @@ impl Deck {
                     .map(|t| t.name.clone())
                     .unwrap_or_else(|| t.to_string())
             ),
+            Source::Skill(s) => format!(
+                "from {}",
+                st.content
+                    .skill(s)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| s.to_string())
+            ),
         };
         out.push(dim(format!("{kind} · {from}")));
         if a.cooldown > 0 {
@@ -1262,6 +1281,8 @@ impl Deck {
                 Active::Mark { range, bonus, ap } => {
                     format!("mark: one foe within {range} tiles · +{bonus}% · {ap} AP")
                 }
+                Active::Cloak => "cloak: nobody on foot sees you · the first hit lands ×2".into(),
+                Active::Vanish => "vanish: ends the fight · 4s cloaked".into(),
             };
             out.push(Line::from(Span::styled(effect, Style::default().fg(CYAN))));
         }
@@ -4169,6 +4190,29 @@ mod tests {
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
         let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
         assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
+    }
+
+    #[test]
+    fn the_scrambler_card_says_its_charge() {
+        let mut st = AppState::new();
+        let k = crate::cloak::testutil::scrambler(&mut st);
+        let card = |st: &AppState| {
+            let copy = st.character.copy_in_pack(k).and_then(|s| s.copy.as_ref());
+            Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy)
+        };
+        let charge = |left, burned| game::Charge { left, burned };
+        crate::cloak::testutil::set_charge(&mut st, k, charge(game::FULL_CELL * 62 / 100, false));
+        let lines = card(&st);
+        let at = texts(&lines).iter().position(|l| l == "cell 62%");
+        let at = at.unwrap_or_else(|| panic!("{:?}", texts(&lines)));
+        assert_eq!(lines[at].spans[0].style.fg, Some(CYAN));
+        crate::cloak::testutil::set_charge(&mut st, k, charge(0, true));
+        let lines = card(&st);
+        let at = texts(&lines)
+            .iter()
+            .position(|l| l == "cell 0% · burned out");
+        let at = at.unwrap_or_else(|| panic!("{:?}", texts(&lines)));
+        assert_eq!(lines[at].spans[0].style.fg, Some(MAGENTA));
     }
 
     #[test]

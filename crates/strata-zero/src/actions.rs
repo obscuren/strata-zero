@@ -193,6 +193,20 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         // A boost or a mark is cast from the map, where the cursor and the turn are.
         return Err("use it from the map".to_string());
     }
+    // A cloak key switches its cloak, and Vanish breaks a fight from the map: neither
+    // takes an action point or stamps a cooldown here.
+    if let Some(id) = &fired
+        && let Some(kind) = st.character.ability(&st.content, id).map(|a| a.kind)
+    {
+        match kind {
+            AbilityKind::Active(Active::Cloak) => return crate::cloak::toggle(st, id),
+            AbilityKind::Active(Active::Vanish) if st.net.engaged.is_some() => {
+                return Err("use it from the map".to_string());
+            }
+            AbilityKind::Active(Active::Vanish) => return Err("only in a fight".to_string()),
+            _ => {}
+        }
+    }
     if let Action::Use(id) = &action
         && st.content.item(id).is_some_and(|i| i.throw().is_some())
     {
@@ -269,7 +283,11 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
             AbilityKind::Active(
-                Active::Strike { .. } | Active::Boost { .. } | Active::Mark { .. },
+                Active::Strike { .. }
+                | Active::Boost { .. }
+                | Active::Mark { .. }
+                | Active::Cloak
+                | Active::Vanish,
             )
             | AbilityKind::Passive => 0,
         };
@@ -869,6 +887,26 @@ mod tests {
         perform(&mut st, Action::Fire(AbilityId::new("ping"))).unwrap();
         let radii: Vec<i32> = st.fx.iter().map(|i| i.radius).collect();
         assert!(radii.iter().all(|r| *r == base + 4), "{radii:?}");
+    }
+
+    #[test]
+    fn vanish_from_the_slot_is_refused_in_calm() {
+        let mut st = crate::cloak::testutil::street();
+        st.character
+            .talents
+            .insert(game::TalentId::new("shadow_step"), 1);
+        let vanish = || Action::Fire(AbilityId::new("vanish_out"));
+        assert_eq!(
+            perform(&mut st, vanish()),
+            Err("only in a fight".to_string())
+        );
+        let here = st.player.as_ref().unwrap().place;
+        crate::net::engage(&mut st, here, true);
+        assert_eq!(
+            perform(&mut st, vanish()),
+            Err("use it from the map".to_string())
+        );
+        assert!(st.character.fired.is_empty(), "no cooldown stamped");
     }
 
     #[test]

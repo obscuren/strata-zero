@@ -138,6 +138,7 @@ mod tests {
             id: CopyId(7),
             fitted: vec![Some(Stack::new(ItemId::new("gone_chip"), 1)), None],
             stickers: vec![],
+            charge: None,
         };
         assert!(c.item(&deck).is_some());
         g.put(
@@ -188,6 +189,7 @@ mod tests {
                     id: CopyId(8),
                     fitted: vec![Some(Stack::new(ItemId::new("copper_coil"), 1))],
                     stickers: vec![],
+                    charge: None,
                 }),
             },
         );
@@ -275,6 +277,7 @@ mod tests {
                 id: CopyId(n),
                 fitted: vec![None, None],
                 stickers: Vec::new(),
+                charge: None,
             }),
         };
         g.put(k, p, copy(0));

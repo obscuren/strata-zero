@@ -9,7 +9,11 @@ use citygen::{BuildingId, Place};
 
 /// You took link `link` off level `level` of building `b` to level `to`: every standing
 /// guard of that floor that hunts you follows (`post.follow`), setting off at once.
+/// Cloaked, nobody saw you go: they walk to where they last had you instead.
 pub(crate) fn you_left(st: &mut AppState, b: BuildingId, level: i32, link: usize, to: i32) {
+    if crate::cloak::hidden(st) {
+        return;
+    }
     let now = st.clock_tick();
     let floor = Place::Floor { building: b, level };
     for i in crate::foes::hunting_on(st, floor) {
@@ -188,7 +192,7 @@ pub(crate) fn drop_card(st: &mut AppState, i: usize) {
 
 /// Guard `i` loses you: calm, its trail and the lift it waited on to follow you let go,
 /// it walks back into its round a step on from `now`.
-pub(super) fn lose_you(st: &mut AppState, i: usize, now: u64) {
+pub(crate) fn lose_you(st: &mut AppState, i: usize, now: u64) {
     let foe = &mut st.foes[i];
     foe.mode = FoeMode::Idle;
     if let Some(post) = foe.post.as_mut() {
@@ -220,6 +224,20 @@ mod tests {
         assert!(
             matches!(st.foes[i].mode, crate::foes::FoeMode::Hunting { seen, .. } if seen == st.foes[i].pos)
         );
+        assert_eq!(st.foes[i].post.as_ref().unwrap().follow, None);
+    }
+
+    #[test]
+    fn a_cloaked_runner_isnt_seen_leaving_a_floor() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 1));
+        let i = guard(&mut st, 0, 0, &[Pos::new(6, 3)]);
+        assert!(crate::foes::look_all(&mut st), "it has you");
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        crate::interiors::climb(&mut st, true).unwrap();
+        assert!(st.foes[i].hunting());
         assert_eq!(st.foes[i].post.as_ref().unwrap().follow, None);
     }
 

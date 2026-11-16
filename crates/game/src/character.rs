@@ -21,6 +21,18 @@ pub const EMP_PER_PIECE: i32 = 2;
 )]
 pub struct CopyId(pub u32);
 
+/// What a full cell holds, in charge units: divisible by every rate that drains or
+/// fills one.
+pub const FULL_CELL: u32 = 10_800;
+
+/// A cell's charge: what is left of `FULL_CELL`, and whether it burned out and is
+/// still too low to run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Charge {
+    pub left: u32,
+    pub burned: bool,
+}
+
 /// One copy of an item that carries state of its own.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ItemCopy {
@@ -29,9 +41,20 @@ pub struct ItemCopy {
     pub fitted: Vec<Option<Stack>>,
     /// The stickers on its drawing, oldest first; each newer one goes on top.
     pub stickers: Vec<Stuck>,
+    /// Its cell's charge (an item with a `cell`); none reads as full.
+    #[serde(default)]
+    pub charge: Option<Charge>,
 }
 
 impl ItemCopy {
+    /// Its cell's charge, full when it has none recorded.
+    pub fn cell(&self) -> Charge {
+        self.charge.unwrap_or(Charge {
+            left: FULL_CELL,
+            burned: false,
+        })
+    }
+
     /// What its fitted pieces weigh.
     fn fitted_weight(&self, c: &Content) -> f32 {
         self.fitted.iter().flatten().map(|s| s.weight(c)).sum()
@@ -164,6 +187,7 @@ pub enum Source {
     Category(CategoryId),
     Item(ItemId),
     Talent(TalentId),
+    Skill(SkillId),
 }
 
 /// A number the character sheet shows: an attribute, a secondary number, or a resistance.
@@ -1034,40 +1058,50 @@ impl Character {
     }
 
     /// Innate abilities first, then those granted by owned categories in content order,
-    /// then those granted by equipment in slot order, then by installed chrome (see
+    /// then by owned skills in content order, then by carried items with a cell in pack
+    /// order, then by equipment in slot order, then by installed chrome (see
     /// `chrome_ids`), then by talents; deduplicated, the first source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
-        let mut out: Vec<(AbilityId, Source)> = self
-            .abilities
-            .iter()
-            .map(|id| (id.clone(), Source::Innate))
-            .collect();
+        let mut out: Vec<(AbilityId, Source)> = Vec::new();
+        let mut push = |id: &AbilityId, source: Source| {
+            if !out.iter().any(|(have, _)| have == id) {
+                out.push((id.clone(), source));
+            }
+        };
+        for id in &self.abilities {
+            push(id, Source::Innate);
+        }
         for cat in c
             .categories
             .iter()
             .filter(|cat| self.categories.contains(&cat.id))
         {
             for id in &cat.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Category(cat.id.clone())));
-                }
+                push(id, Source::Category(cat.id.clone()));
+            }
+        }
+        for skill in c.skills.iter().filter(|s| self.skills.contains(&s.id)) {
+            for id in &skill.grants {
+                push(id, Source::Skill(skill.id.clone()));
+            }
+        }
+        let carried = self.inventory.iter().map(|s| &s.item);
+        for item in carried.filter_map(|id| c.item(id)).filter(|i| i.cell) {
+            for id in &item.grants {
+                push(id, Source::Item(item.id.clone()));
             }
         }
         let worn = Slot::ALL.iter().filter_map(|s| self.equipment.get(s));
         for item in worn.chain(self.chrome_ids()).filter_map(|id| c.item(id)) {
             for id in &item.grants {
-                if !out.iter().any(|(have, _)| have == id) {
-                    out.push((id.clone(), Source::Item(item.id.clone())));
-                }
+                push(id, Source::Item(item.id.clone()));
             }
         }
         for t in &c.talents {
             let rank = self.talent_rank(&t.id) as usize;
             for b in t.effects.iter().take(rank).flatten() {
-                if let Boon::Grant(id) = b
-                    && !out.iter().any(|(have, _)| have == id)
-                {
-                    out.push((id.clone(), Source::Talent(t.id.clone())));
+                if let Boon::Grant(id) = b {
+                    push(id, Source::Talent(t.id.clone()));
                 }
             }
         }
@@ -1350,7 +1384,8 @@ impl Character {
         lost
     }
 
-    /// A new copy of an item, every socket empty, with the stickers it is made with.
+    /// A new copy of an item, every socket empty, with the stickers it is made with
+    /// and, for an item with a cell, a full one.
     pub fn new_copy(&mut self, c: &Content, item: &ItemId) -> ItemCopy {
         let id = CopyId(self.next_copy);
         self.next_copy += 1;
@@ -1359,6 +1394,10 @@ impl Character {
             id,
             fitted: vec![None; item.map_or(0, |i| i.sockets.len())],
             stickers: item.map(|i| i.stickers.clone()).unwrap_or_default(),
+            charge: item.filter(|i| i.cell).map(|_| Charge {
+                left: FULL_CELL,
+                burned: false,
+            }),
         }
     }
 
@@ -2274,7 +2313,8 @@ mod tests {
                 Active::Scan { radius } | Active::Ping { radius } | Active::Trace { radius },
             ) => radius,
             AbilityKind::Active(Active::Strike { range, .. } | Active::Mark { range, .. }) => range,
-            AbilityKind::Active(Active::Boost { .. }) | AbilityKind::Passive => 0,
+            AbilityKind::Active(Active::Boost { .. } | Active::Cloak | Active::Vanish)
+            | AbilityKind::Passive => 0,
         };
         if radius != 0 {
             assert_ne!(reach(&eff), reach(base));
@@ -3631,5 +3671,101 @@ mod tests {
         assert_eq!(ch.count(&ItemId::new("sled_tinman")), 1);
         assert_eq!(rig_ids(&ch, &c).len(), 3);
         assert_eq!(rig_ids(&ch, &c)[0].as_deref(), Some("sled_zb8"));
+    }
+
+    #[test]
+    fn stealth_grants_the_cloak() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        assert!(!ch.has_ability(&c, &AbilityId::new("cloak")));
+        ch.skills.insert(SkillId::new("stealth"));
+        assert!(ch.abilities(&c).contains(&(
+            AbilityId::new("cloak"),
+            Source::Skill(SkillId::new("stealth"))
+        )));
+        assert_eq!(
+            c.ability(&AbilityId::new("cloak")).unwrap().kind,
+            AbilityKind::Active(Active::Cloak)
+        );
+    }
+
+    #[test]
+    fn a_carried_scrambler_grants_scramble_with_a_full_cell() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let id = ItemId::new("field_scrambler");
+        ch.give_item(&c, id.clone(), 1);
+        assert!(
+            ch.abilities(&c)
+                .contains(&(AbilityId::new("scramble"), Source::Item(id.clone())))
+        );
+        let copy = ch
+            .inventory
+            .iter()
+            .find(|s| s.item == id)
+            .and_then(|s| s.copy.clone())
+            .unwrap();
+        assert_eq!(
+            copy.charge,
+            Some(Charge {
+                left: FULL_CELL,
+                burned: false
+            })
+        );
+        assert_eq!(
+            ItemCopy {
+                charge: None,
+                ..copy
+            }
+            .cell()
+            .left,
+            FULL_CELL,
+            "none reads full"
+        );
+    }
+
+    #[test]
+    fn a_carried_cell_grant_wins_over_worn_gear() {
+        let mut c = Content::load().unwrap();
+        let jacket = ItemId::new("salvage_jacket");
+        let i = c.items.iter().position(|i| i.id == jacket).unwrap();
+        c.items[i].grants = vec![AbilityId::new("scramble")];
+        let mut ch = vex(&c);
+        ch.wear(Slot::Torso, jacket.clone(), None);
+        let scramble = |ch: &Character| -> Vec<Source> {
+            (ch.abilities(&c).into_iter())
+                .filter(|(id, _)| id.0 == "scramble")
+                .map(|(_, s)| s)
+                .collect()
+        };
+        assert_eq!(scramble(&ch), vec![Source::Item(jacket)]);
+        let scrambler = ItemId::new("field_scrambler");
+        ch.give_item(&c, scrambler.clone(), 1);
+        assert_eq!(
+            scramble(&ch),
+            vec![Source::Item(scrambler)],
+            "first source wins"
+        );
+    }
+
+    #[test]
+    fn shadow_step_grants_vanish_and_sharpens_it() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        ch.talents.insert(TalentId::new("shadow_step"), 1);
+        assert!(ch.has_ability(&c, &AbilityId::new("vanish_out")));
+        assert_eq!(
+            ch.ability(&c, &AbilityId::new("vanish_out"))
+                .unwrap()
+                .cooldown,
+            3600
+        );
+        ch.talents.insert(TalentId::new("shadow_step"), 2);
+        assert_eq!(
+            ch.ability(&c, &AbilityId::new("vanish_out"))
+                .unwrap()
+                .cooldown,
+            2700
+        );
     }
 }

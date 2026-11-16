@@ -461,6 +461,7 @@ fn card(id: ItemId, name: String, desc: String) -> Item {
         bot: None,
         frame: None,
         stands_for: None,
+        cell: false,
     }
 }
 

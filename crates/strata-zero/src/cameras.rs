@@ -23,6 +23,8 @@ pub const CONE_DEPTH: i32 = 8;
 pub const DARK_REACH: i32 = 3;
 /// Heat a camera that sees you puts on its building's trace each game minute.
 pub const EYE_HEAT: u8 = 2;
+/// What it puts on with the Ghost talent: half.
+pub const GHOST_EYE_HEAT: u8 = 1;
 
 /// A camera: its node, its building, where it watches (the street, or a site's floor),
 /// its tile there and which way it faces.
@@ -200,12 +202,15 @@ pub fn sees(map: &MapRef, cam: &Camera, p: Pos) -> bool {
 }
 
 /// The live cameras that see you on foot now: on the street its cameras, on a site's
-/// floor its copy's, each by the light where you stand; none jacked in (your body at a
-/// port is not watched) or anywhere else.
+/// floor its copy's, each by the light where you stand; none cloaked, jacked in (your
+/// body at a port is not watched) or anywhere else.
 pub fn seeing(st: &AppState) -> Vec<Camera> {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Vec::new();
     };
+    if crate::cloak::hidden(st) {
+        return Vec::new();
+    }
     let map = match p.place {
         Place::Stratum(StratumKind::Street) => {
             MapRef::stratum_at(city, StratumKind::Street, st.minute_of_day())
@@ -228,8 +233,8 @@ pub fn seeing(st: &AppState) -> Vec<Camera> {
 }
 
 /// A game minute on the street or a site's floor: each camera that sees you warms its
-/// building's trace, never past the alarm line (a camera can lock a building down, not
-/// dump you).
+/// building's trace, by half with the Ghost talent, never past the alarm line (a camera
+/// can lock a building down, not dump you).
 pub fn tick(st: &mut AppState) {
     let now = st.net.now(st);
     if st.net.eyes_minute.is_some_and(|m| now <= m) {
@@ -239,11 +244,16 @@ pub fn tick(st: &mut AppState) {
     let mut buildings: Vec<BuildingId> = seeing(st).iter().map(|c| c.building).collect();
     buildings.sort();
     buildings.dedup();
+    let eye = if st.character.flags(&st.content).contains("ghost") {
+        GHOST_EYE_HEAT
+    } else {
+        EYE_HEAT
+    };
     for b in buildings {
         let heat = st.net.traces.get(&b).map_or(0, |t| t.heat);
         let room = game::ALARM_HEAT.saturating_sub(heat);
         if room > 0 {
-            crate::owners::heat_on(st, crate::owners::Owner::Building(b), EYE_HEAT.min(room));
+            crate::owners::heat_on(st, crate::owners::Owner::Building(b), eye.min(room));
         }
     }
 }
@@ -436,6 +446,8 @@ mod tests {
     #[test]
     fn a_floor_camera_that_sees_you_warms_the_trace() {
         let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        // The debug runner holds every talent: without Ghost, the full heat.
+        st.character.talents.remove(&game::TalentId::new("ghost"));
         let cam = in_a_floor_cameras_cone(&mut st, b); // on its floor, lit, in its cone with a clear line
         assert!(seeing(&st).contains(&cam));
         let before = st.net.traces.get(&b).map_or(0, |t| t.heat);
@@ -536,5 +548,33 @@ mod tests {
             "{drawn:?}"
         );
         assert!(cones(&st, Place::Stratum(StratumKind::Street)).is_empty());
+    }
+
+    #[test]
+    fn a_cloaked_runner_isnt_on_camera() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        in_a_floor_cameras_cone(&mut st, b);
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        assert!(seeing(&st).is_empty());
+        let before = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        next_minute(&mut st);
+        tick(&mut st);
+        assert_eq!(st.net.traces.get(&b).map_or(0, |t| t.heat), before);
+    }
+
+    #[test]
+    fn ghost_halves_what_a_camera_warms() {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        in_a_floor_cameras_cone(&mut st, b);
+        st.character.talents.insert(game::TalentId::new("ghost"), 1);
+        let before = st.net.traces.get(&b).map_or(0, |t| t.heat);
+        next_minute(&mut st);
+        tick(&mut st);
+        assert_eq!(
+            st.net.traces.get(&b).map_or(0, |t| t.heat),
+            before + GHOST_EYE_HEAT
+        );
     }
 }

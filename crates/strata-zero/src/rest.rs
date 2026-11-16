@@ -97,7 +97,10 @@ pub fn start(st: &mut AppState, kind: Kind, until: u64) {
             Kind::Sleep => "You can't sleep now.",
             Kind::Wait => "You can't wait now.",
         });
+        return;
     }
+    // Nothing holds a cloak through a rest.
+    crate::cloak::end(st, crate::cloak::End::Off);
 }
 
 /// One explore frame of resting.
@@ -161,6 +164,10 @@ pub fn wake(st: &mut AppState, why: Why) {
         let focus_max = st.character.focus_max(&st.content);
         st.character.hp = (st.character.hp + rise(hp_max)).min(hp_max);
         st.character.focus = (st.character.focus + rise(focus_max)).min(focus_max);
+        // A night's sleep fills a scrambler's cell; a nap leaves it to the clock.
+        if slept >= NIGHT {
+            crate::cloak::cell::fill_cells(st);
+        }
     }
     let (h, m) = st.clock();
     let at = format!("{h:02}:{m:02}");

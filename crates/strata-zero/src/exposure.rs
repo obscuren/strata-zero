@@ -18,7 +18,8 @@ pub struct Exposure {
 }
 
 /// The exposure right now: on a stratum, the light where you stand (whoever's cell it
-/// is) and the walkers around you; dark and unseen anywhere else.
+/// is) and the walkers around you, none while you're cloaked; dark and unseen anywhere
+/// else.
 pub fn of(st: &AppState) -> Exposure {
     let (Some(city), Some(player)) = (st.city.as_ref(), st.player.as_ref()) else {
         return Exposure::default();
@@ -36,6 +37,13 @@ pub fn of(st: &AppState) -> Exposure {
         Some(b) => map.beyond(&b).light(player.pos),
         None => map.light(player.pos),
     };
+    // Cloaked, nobody sees you, though the light on you is what it is.
+    if crate::cloak::hidden(st) {
+        return Exposure {
+            light,
+            ..Exposure::default()
+        };
+    }
     // The city's walkers are on the Street; above and below it nobody looks.
     let Some(world) = st.world.as_ref().filter(|_| k == StratumKind::Street) else {
         return Exposure {
@@ -233,5 +241,25 @@ mod tests {
         };
         let inside = of(&st);
         assert_eq!((inside.light, inside.eyes.len()), (0, 0));
+    }
+
+    #[test]
+    fn cloaked_no_walker_sees_you() {
+        let mut st = city_state();
+        // You on a walker's own tile: it sees you.
+        let walker = (st.world.as_ref().unwrap())
+            .visible(citygen::Rect::new(0, 0, 1000, 1000))
+            .into_iter()
+            .find(|m| matches!(m.kind, sim::MoverKind::Walker { .. }))
+            .expect("someone is out");
+        st.player.as_mut().unwrap().pos = walker.pos;
+        let open = of(&st);
+        assert!(!open.eyes.is_empty(), "seen in the open");
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        let cloaked = of(&st);
+        assert!(cloaked.eyes.is_empty() && cloaked.cameras.is_empty());
+        assert_eq!(cloaked.light, open.light);
     }
 }

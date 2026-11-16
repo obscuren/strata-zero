@@ -331,7 +331,8 @@ pub fn any_hunting(st: &AppState, place: Place) -> bool {
 }
 
 /// A foe looks: idle and seeing you, it hunts; hunting and seeing you, it marks
-/// where. Returns whether it hunts after looking. A stunned or down foe sees nothing.
+/// where. Returns whether it hunts after looking. A stunned or down foe sees nothing,
+/// and nobody on foot sees you cloaked (`cloak::hidden`): no hunt, no spotting.
 pub fn look(st: &mut AppState, i: usize) -> bool {
     let Some(me) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
@@ -340,6 +341,10 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         return false;
     };
     if foe.down || foe.inert || foe.stunned > 0 || foe.place != me.0 {
+        return foe.hunting();
+    }
+    // Cloaked, nobody on foot sees you: no hunt, no spotting.
+    if foe.ice.is_none() && crate::cloak::hidden(st) {
         return foe.hunting();
     }
     // A tracer always knows where you are: it follows the trail.
@@ -382,7 +387,8 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
     foe.hunting()
 }
 
-/// Every standing foe on the player's map looks; true when any hunts.
+/// Every standing foe on the player's map looks; true when any hunts. Never true
+/// while you're cloaked (`cloak::hidden`): no fight starts from the cloak.
 pub fn look_all(st: &mut AppState) -> bool {
     let Some((place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
@@ -397,7 +403,8 @@ pub fn look_all(st: &mut AppState) -> bool {
         }
         any |= look(st, i);
     }
-    any
+    // No fight starts from the cloak: a foe already hunting walks to where it saw you.
+    any && !crate::cloak::hidden(st)
 }
 
 /// One step along the shortest path from `from` to `goal` that a foe with `post` may
@@ -535,7 +542,9 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         }
         return Step::Nothing;
     }
+    // Cloaked, you're never in reach: it walks to where it saw you and loses you.
     let in_reach = foe.ice.is_none()
+        && !crate::cloak::hidden(st)
         && foe.pos.chebyshev(me) <= weapon_range(st, &foe)
         && map
             .as_ref()
@@ -1169,5 +1178,71 @@ mod tests {
             st.log.latest()
         );
         assert_eq!(st.foes[0].hp, GOON_HP);
+    }
+
+    #[test]
+    fn a_cloaked_runner_isnt_seen_and_starts_no_fight() {
+        let mut st = testutil::lot(Pos::new(10, 8));
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        assert!(!look_all(&mut st));
+        assert!(!st.foes[0].hunting());
+    }
+
+    #[test]
+    fn a_cloaked_runner_isnt_spotted_by_a_guard() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(8, 3)]);
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        assert!(!look(&mut st, i));
+        assert!(!st.foes[i].post.as_ref().unwrap().spotted);
+        assert!(!logged(&st, "guard spots you"));
+    }
+
+    #[test]
+    fn a_hunting_guard_loses_you_while_cloaked() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 50;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        st.foes[i].mode = FoeMode::Hunting {
+            seen: Pos::new(8, 3),
+            lost: 0,
+        };
+        // The calm look each tick, as the map's frame takes it: never a fight.
+        for _ in 0..600 {
+            assert!(!look_all(&mut st), "no fight from the cloak");
+            if !st.foes[i].hunting() {
+                break;
+            }
+            run(&mut st, 1);
+        }
+        assert!(!st.foes[i].hunting(), "it lost you");
+        assert!(st.net.engaged.is_none());
+        assert_eq!(
+            st.character.hp,
+            st.character.hp_max(&st.content),
+            "nobody shot you"
+        );
+    }
+
+    #[test]
+    fn a_hunting_foe_on_turns_doesnt_shoot_a_cloaked_runner() {
+        let mut st = testutil::lot(Pos::new(10, 8));
+        st.foes[0].mode = FoeMode::Hunting {
+            seen: Pos::new(6, 8),
+            lost: 0,
+        };
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        st.force_hit = Some(true);
+        assert_ne!(step(&mut st, 0, true, true), crate::net::Step::Hit);
     }
 }

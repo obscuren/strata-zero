@@ -473,6 +473,9 @@ impl Screen for OutsideScreen {
             prompt: None,
             act: None,
             flash_pools: false,
+            // leaving the city ends the cloak
+            cloak: None,
+            ambush: false,
         };
         let recent = st.log.recent(st.tick);
         for (i, row) in hud::footer_rows(&footer, area.width)

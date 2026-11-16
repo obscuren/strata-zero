@@ -219,6 +219,21 @@ mod tests {
     }
 
     #[test]
+    fn a_cloaked_run_comes_back_cloaked() {
+        let mut a = crate::cloak::testutil::street();
+        crate::cloak::testutil::stealthy(&mut a);
+        a.character.focus = 10;
+        crate::cloak::testutil::fire(&mut a, "cloak").unwrap();
+        crate::cloak::testutil::frames(&mut a, 40);
+        let dir = Dir::new("cloaked");
+        let a = running(a);
+        assert!(a.cloak.is_some());
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        assert_eq!(st.cloak, a.cloak);
+        assert!(st.veil.fade.is_none(), "holding, no going in");
+    }
+
+    #[test]
     fn old_guards_wake_after_a_reopen() {
         use citygen::Place;
         let (mut a, b) = crate::sitenet::testutil::office_copy(190);

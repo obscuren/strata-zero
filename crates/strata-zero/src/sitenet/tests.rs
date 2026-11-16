@@ -516,6 +516,8 @@ fn what_done_looks_like() {
     assert!(!st.net.alert(b, st.net.now(&st)), "and no alarm");
     // 5. On a floor, a camera that sees you warms the trace; looped, it doesn't.
     crate::net::jack_out(&mut st).unwrap();
+    // The debug runner holds every talent: Ghost's half would only match the cooling.
+    st.character.talents.remove(&game::TalentId::new("ghost"));
     let cam = in_a_floor_cameras_cone(&mut st, b);
     let before = heat(&st, b);
     pass_minutes(&mut st, 1);

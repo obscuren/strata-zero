@@ -376,16 +376,23 @@ fn volley(
             lost: 0,
         };
     }
+    // From the cloak: every round lands, for double, and the cloak is gone.
+    let ambush = crate::cloak::ambush(st);
+    let damage = if ambush {
+        w.damage.saturating_mul(2)
+    } else {
+        w.damage
+    };
     let mut out = Vec::new();
     for k in 0..w.rounds as usize {
-        let hit = game::round_hits(roll(st), chance);
+        let hit = ambush || game::round_hits(roll(st), chance);
         let impact = if hit {
             target
         } else {
             foes::map_of(st, place).map_or(target, |m| miss_impact(&m, from, target, w.range))
         };
         if hit {
-            wound_foe(st, foe, w.damage);
+            wound_foe(st, foe, damage);
         }
         play_round(
             st,
@@ -395,12 +402,12 @@ fn volley(
                 from,
                 impact,
                 hit,
-                damage: w.damage,
+                damage,
                 k,
                 tint: None,
             },
         );
-        out.push(hit.then_some(w.damage));
+        out.push(hit.then_some(damage));
     }
     out
 }
@@ -1277,5 +1284,102 @@ mod tests {
             strike(&mut st, &id, 0).unwrap_err(),
             "move first · space to stay"
         );
+    }
+
+    #[test]
+    fn the_first_shot_from_the_cloak_is_an_ambush() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        st.foes[i].hp = 200;
+        st.foes[i].hp_max = 200;
+        crate::cloak::testutil::armed(&mut st);
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        crate::cloak::engage_by_hand(&mut st, on(0));
+        assert!(crate::cloak::hidden(&st), "turns by hand keep it");
+        settle(&mut st);
+        crate::net::stay(&mut st);
+        st.force_hit = Some(false); // every roll would miss
+        let (_, w) = your_weapon(&st).unwrap();
+        fire(&mut st, i).unwrap();
+        let dealt = 2 * u32::from(w.damage) * u32::from(w.rounds);
+        assert_eq!(
+            u32::from(st.foes[i].hp),
+            200u32.saturating_sub(dealt),
+            "every round lands, ×2"
+        );
+        assert!(logged(&st, "AMBUSH"));
+        assert!(!crate::cloak::hidden(&st));
+        assert!(st.foes[i].hunting(), "the fight is on");
+        assert_eq!(
+            st.veil.fade.unwrap().phase,
+            crate::cloak::Phase::SwitchingOff
+        );
+    }
+
+    /// The ward with a guard of 200 HP at (10,3), you cloaked on FOCUS and on turns by
+    /// hand from it, on your act half: the guard's index.
+    fn cloaked_on_turns(st: &mut AppState) -> usize {
+        use crate::guards::testutil::*;
+        let i = guard(st, 0, 0, &[Pos::new(10, 3)]);
+        st.foes[i].hp = 200;
+        st.foes[i].hp_max = 200;
+        crate::cloak::testutil::stealthy(st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(st, "cloak").unwrap();
+        crate::cloak::engage_by_hand(st, on(0));
+        settle(st);
+        crate::net::stay(st);
+        i
+    }
+
+    #[test]
+    fn a_strike_from_the_cloak_is_an_ambush() {
+        let mut st = crate::guards::testutil::ward();
+        st.character.give(ItemId::new("neural_port"), 1);
+        st.character
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
+        let i = cloaked_on_turns(&mut st);
+        st.force_hit = Some(false); // every roll would miss
+        strike(&mut st, &AbilityId::new("static"), i).unwrap();
+        assert_eq!(st.foes[i].hp, 200 - 2 * 6, "it lands, ×2");
+        assert!(logged(&st, "AMBUSH"));
+        assert!(logged(&st, "static · guard 12"));
+        assert!(!crate::cloak::hidden(&st));
+    }
+
+    #[test]
+    fn the_second_shot_is_a_plain_one() {
+        let mut st = crate::guards::testutil::ward();
+        crate::cloak::testutil::armed(&mut st);
+        let i = cloaked_on_turns(&mut st);
+        let (_, w) = your_weapon(&st).unwrap();
+        st.force_hit = Some(false);
+        fire(&mut st, i).unwrap();
+        let after_ambush = st.foes[i].hp;
+        assert_eq!(
+            u32::from(after_ambush),
+            200 - 2 * u32::from(w.damage) * u32::from(w.rounds)
+        );
+        // The rolls rule again: every one missing, the second shot lands nothing.
+        st.force_hit = Some(false);
+        fire(&mut st, i).unwrap();
+        assert_eq!(
+            st.foes[i].hp, after_ambush,
+            "a missed volley does no damage"
+        );
+        // Every one landing, a third (an AP more this turn) does plain damage, not ×2.
+        st.net.engaged.as_mut().unwrap().ap = 1;
+        st.force_hit = Some(true);
+        fire(&mut st, i).unwrap();
+        assert_eq!(
+            u32::from(after_ambush - st.foes[i].hp),
+            u32::from(w.damage) * u32::from(w.rounds)
+        );
+        let ambushes = (st.log.iter()).filter(|e| e.text == "AMBUSH").count();
+        assert_eq!(ambushes, 1);
     }
 }

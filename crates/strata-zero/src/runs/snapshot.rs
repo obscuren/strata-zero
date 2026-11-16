@@ -26,6 +26,7 @@ pub struct SnapshotRef<'a> {
     pub bots: &'a Vec<crate::bots::BotOut>,
     pub live: &'a Vec<crate::blast::Live>,
     pub shots: &'a u64,
+    pub cloak: &'a Option<crate::cloak::Cloak>,
     pub perma_death: &'a bool,
     pub tutorial_off: &'a bool,
     pub log: &'a crate::messages::MessageLog,
@@ -62,6 +63,9 @@ pub struct Snapshot {
     pub bots: Vec<crate::bots::BotOut>,
     pub live: Vec<crate::blast::Live>,
     pub shots: u64,
+    /// The cloak that's on; the first saves have none.
+    #[serde(default)]
+    pub cloak: Option<crate::cloak::Cloak>,
     pub perma_death: bool,
     pub tutorial_off: bool,
     pub log: crate::messages::MessageLog,
@@ -122,6 +126,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         bots,
         live,
         shots,
+        cloak,
         #[cfg(test)]
             force_hit: _, // a test switch
         repaint: _,        // UI: a frame's repaint
@@ -135,6 +140,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         deck_talents: _,   // UI
         deck_part: _,      // UI
         build: _,          // UI: the sheet being made before JACK IN
+        veil: _,           // UI: the veil's fade, played again from holding
         perma_death,
         tutorial_off,
         log,
@@ -179,6 +185,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         bots,
         live,
         shots,
+        cloak,
         perma_death,
         tutorial_off,
         log,
@@ -236,6 +243,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         bots,
         live,
         shots,
+        cloak,
         #[cfg(test)]
             force_hit: _, // a test switch
         repaint: _,        // UI
@@ -249,6 +257,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         deck_talents: _,   // UI: `clear_screens` below
         deck_part: _,      // UI: `clear_screens` below
         build: _,          // UI: the sheet being made before JACK IN
+        veil,              // UI: the veil's fade, played again from holding; below
         perma_death,
         tutorial_off,
         log,
@@ -294,6 +303,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         bots: s_bots,
         live: s_live,
         shots: s_shots,
+        cloak: s_cloak,
         perma_death: s_perma_death,
         tutorial_off: s_tutorial_off,
         log: s_log,
@@ -325,6 +335,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     *bots = s_bots;
     *live = s_live;
     *shots = s_shots;
+    *cloak = s_cloak;
     *perma_death = s_perma_death;
     *tutorial_off = s_tutorial_off;
     *log = s_log;
@@ -343,6 +354,8 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
     // is opens anew, and you are up (as closing it gets you up, so `Chromed` can fire).
     *rest = None;
     *chair = None;
+    // A cloak comes back holding, with no going in.
+    veil.fade = None;
     st.clear_screens();
 }
 

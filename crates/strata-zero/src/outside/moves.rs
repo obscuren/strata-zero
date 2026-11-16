@@ -233,6 +233,8 @@ pub fn up(st: &mut AppState) {
     if let Some(o) = st.outside.as_mut() {
         o.at = At::Overworld(tile);
     }
+    // A cloak is the city's: none goes up onto the overworld with you.
+    crate::cloak::end(st, crate::cloak::End::Off);
 }
 
 /// Onto the city's street at `cell` of its frame: in the city, or past its edge on the
@@ -526,6 +528,22 @@ pub(crate) mod tests {
         up(&mut st);
         let o = st.outside.as_ref().unwrap();
         assert_eq!(o.at, At::Overworld(o.tile_of(&city, cell)));
+    }
+
+    #[test]
+    fn a_cloak_stays_on_the_city_map() {
+        let mut st = crate::outside::tests::home_run();
+        crate::cloak::testutil::stealthy(&mut st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(&mut st, "cloak").unwrap();
+        let cell = st.player.as_ref().unwrap().pos;
+        up(&mut st);
+        assert!(matches!(st.outside.as_ref().unwrap().at, At::Overworld(_)));
+        assert!(st.cloak.is_none(), "not up on the overworld");
+        into_city(&mut st, cell);
+        assert_eq!(st.outside.as_ref().unwrap().at, At::City);
+        assert!(st.cloak.is_none(), "nor back down in the same city");
+        assert_eq!(st.character.focus, 10, "the cloak took nothing");
     }
 
     /// The overworld tile `t`'s owner and you landing there by ↵: where you stand.
