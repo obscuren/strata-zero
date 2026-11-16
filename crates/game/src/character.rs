@@ -349,9 +349,14 @@ pub struct Character {
     /// `rig_copy_mut`).
     #[serde(default)]
     pub rig: Option<ItemCopy>,
-    /// The racks standing in the flat. Once the rig exists the first is the fitted one.
+    /// The fitted rack, set once the rig exists; spare racks are in the pack.
     #[serde(default)]
-    pub frames: Vec<ItemId>,
+    pub frame: Option<ItemId>,
+    /// The first saves' racks "in the flat", the fitted one first: read, never written,
+    /// and emptied on load by `unpack_old_racks` (the fitted one to `frame`, the rest
+    /// into the pack).
+    #[serde(default, rename = "frames", skip_serializing)]
+    old_frames: Vec<ItemId>,
     /// Rig rewards earned so far, counted across the run.
     #[serde(default)]
     pub rig_rewards: RigRewards,
@@ -447,7 +452,8 @@ impl Character {
             next_copy: 0,
             dev: false,
             rig: None,
-            frames: Vec::new(),
+            frame: None,
+            old_frames: Vec::new(),
             rig_rewards: RigRewards::default(),
         };
         let mut kit: Vec<(ItemId, u32)> = Vec::new();
@@ -1327,20 +1333,18 @@ impl Character {
         // The rig: a sled `c` lacks empties its bay; a fitted rack it lacks gives up its
         // sleds to the pack and leaves the stock rig.
         if let Some(mut rig) = self.rig.take() {
-            if self.frames.first().is_none_or(|f| c.item(f).is_some()) {
-                rig.forget_unknown(c, &mut lost, &mut out);
-                self.rig = Some(rig);
-            } else {
-                rig.salvage(c, &mut lost, &mut out);
+            match self.frame.take() {
+                Some(f) if c.item(&f).is_none() => {
+                    lost.push(item_lost(&f));
+                    rig.salvage(c, &mut lost, &mut out);
+                }
+                frame => {
+                    rig.forget_unknown(c, &mut lost, &mut out);
+                    self.rig = Some(rig);
+                    self.frame = frame;
+                }
             }
         }
-        self.frames.retain(|f| {
-            let known = c.item(f).is_some();
-            if !known {
-                lost.push(item_lost(f));
-            }
-            known
-        });
         for s in out {
             self.stow(s);
         }
@@ -1694,7 +1698,7 @@ impl Character {
 
     fn rig_frame_ref(&self) -> &ItemId {
         static STOCK: std::sync::OnceLock<ItemId> = std::sync::OnceLock::new();
-        match (&self.rig, self.frames.first()) {
+        match (&self.rig, &self.frame) {
             (Some(_), Some(f)) => f,
             _ => STOCK.get_or_init(|| ItemId::new(STOCK_FRAME)),
         }
@@ -1706,7 +1710,7 @@ impl Character {
     }
 
     /// The rig's copy to change. The first time it is needed it is the stock rig: the
-    /// Zenbo half-rack with ZB-8, R-3 and CU-1 fitted, and `frames` holds it.
+    /// Zenbo half-rack with ZB-8, R-3 and CU-1 fitted, and `frame` names it.
     pub fn rig_copy_mut(&mut self, c: &Content) -> &mut ItemCopy {
         if self.rig.is_none() {
             let frame = ItemId::new(STOCK_FRAME);
@@ -1724,8 +1728,7 @@ impl Character {
                     copy: Some(k),
                 });
             }
-            self.frames.retain(|f| f != &frame);
-            self.frames.insert(0, frame);
+            self.frame = Some(frame);
             self.rig = Some(copy);
         }
         self.rig.as_mut().expect("the rig was just made")
@@ -1755,31 +1758,79 @@ impl Character {
             .collect()
     }
 
-    /// Fits another rack as the rig: its sleds move into the new bays of their kind, in
-    /// order, and those with no bay go to the pack. Returns the ids sent there.
-    pub fn set_frame(&mut self, c: &Content, frame: &ItemId) -> Vec<ItemId> {
-        let Some(kinds) = c.item(frame).map(|i| i.sockets.clone()) else {
-            return Vec::new();
+    /// Fits the first rack of `frame` in the pack as the rig (`fit_frame`).
+    pub fn set_frame(&mut self, c: &Content, frame: &ItemId) -> Result<Vec<ItemId>, String> {
+        let copy = self
+            .inventory
+            .iter()
+            .find(|s| &s.item == frame)
+            .and_then(Stack::copy_id)
+            .ok_or_else(|| format!("no {} in your pack", item_name(c, frame)))?;
+        self.fit_frame(c, copy)
+    }
+
+    /// Fits the rack copy `copy` from the pack as the rig: the sleds move into the new
+    /// bays of their kind, in order, and the old rack goes to the pack with those that
+    /// have no bay. Returns the ids sent there, the old rack first.
+    pub fn fit_frame(&mut self, c: &Content, copy: CopyId) -> Result<Vec<ItemId>, String> {
+        let at = self
+            .inventory
+            .iter()
+            .position(|s| s.copy_id() == Some(copy))
+            .ok_or("that rack is not in your pack")?;
+        let frame = self.inventory[at].item.clone();
+        let Some(kinds) = c
+            .item(&frame)
+            .filter(|i| i.kind == ItemKind::Frame)
+            .map(|i| i.sockets.clone())
+        else {
+            return Err(format!("`{frame}` is no rack"));
         };
-        let old = std::mem::take(&mut self.rig_copy_mut(c).fitted);
-        let mut bays: Vec<Option<Stack>> = vec![None; kinds.len()];
-        let mut out = Vec::new();
-        for stack in old.into_iter().flatten() {
+        self.rig_copy_mut(c);
+        let old_frame = self.rig_frame();
+        let mut old = self.rig.take().expect("the rig was just made");
+        let stack = self.inventory.remove(at);
+        let mut new = match stack.copy {
+            Some(k) => k,
+            None => self.new_copy(c, &frame),
+        };
+        new.fitted.resize(kinds.len(), None);
+        let mut out = vec![Stack {
+            item: old_frame,
+            qty: 1,
+            copy: None,
+        }];
+        for stack in std::mem::take(&mut old.fitted).into_iter().flatten() {
             let kind = c.item(&stack.item).and_then(Item::fits_socket);
-            let at = (0..kinds.len()).find(|&b| bays[b].is_none() && Some(kinds[b]) == kind);
-            match at {
-                Some(b) => bays[b] = Some(stack),
+            let free =
+                (0..kinds.len()).find(|&b| new.fitted[b].is_none() && Some(kinds[b]) == kind);
+            match free {
+                Some(b) => new.fitted[b] = Some(stack),
                 None => out.push(stack),
             }
         }
-        self.rig_copy_mut(c).fitted = bays;
-        self.frames.retain(|f| f != frame);
-        self.frames.insert(0, frame.clone());
+        old.fitted = vec![None; c.item(&out[0].item).map_or(0, |i| i.sockets.len())];
+        out[0].copy = Some(old);
+        self.rig = Some(new);
+        self.frame = Some(frame);
         let ids = out.iter().map(|s| s.item.clone()).collect();
         for s in out {
             self.stow(s);
         }
-        ids
+        Ok(ids)
+    }
+
+    /// A save from before racks were carried listed them as standing in the flat, the
+    /// fitted one first once the rig existed: that one is the rig's rack again and the
+    /// rest go into the pack. Nothing to do for a later save.
+    pub fn unpack_old_racks(&mut self, c: &Content) {
+        let mut old = std::mem::take(&mut self.old_frames).into_iter();
+        if self.rig.is_some() && self.frame.is_none() {
+            self.frame = old.next();
+        }
+        for frame in old {
+            self.give_item(c, frame, 1);
+        }
     }
 
     /// How many of an item the workbench can use: those in the pack, and the items
@@ -3496,6 +3547,93 @@ mod tests {
             .unwrap()
     }
 
+    /// A new rack of `id` into the pack and fitted as the rig: what went to the pack.
+    fn fit_new_frame(ch: &mut Character, c: &Content, id: &str) -> Vec<ItemId> {
+        ch.give_item(c, ItemId::new(id), 1);
+        ch.set_frame(c, &ItemId::new(id)).unwrap()
+    }
+
+    #[test]
+    fn a_rack_not_in_the_pack_is_not_fitted() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        assert!(ch.set_frame(&c, &ItemId::new("rack_lotus")).is_err());
+        assert_eq!(ch.rig_frame(), ItemId::new(STOCK_FRAME));
+        ch.give_item(&c, ItemId::new("sled_tinman"), 1);
+        assert!(
+            ch.set_frame(&c, &ItemId::new("sled_tinman")).is_err(),
+            "a sled is no rack"
+        );
+        assert_eq!(ch.count(&ItemId::new("sled_tinman")), 1);
+    }
+
+    #[test]
+    fn a_rack_keeps_its_copy_through_the_pack() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        fit_new_frame(&mut ch, &c, "rack_lotus");
+        let lotus = ch.rig.as_ref().unwrap().id;
+        fit_new_frame(&mut ch, &c, "rack_civitas");
+        let back = ch
+            .inventory
+            .iter()
+            .find(|s| s.item == ItemId::new("rack_lotus"))
+            .unwrap();
+        let k = back.copy.as_ref().unwrap();
+        assert_eq!(k.id, lotus, "the same Lotus");
+        assert!(k.fitted.iter().all(Option::is_none), "its bays empty");
+        assert_eq!(k.fitted.len(), 4);
+        ch.fit_frame(&c, lotus).unwrap();
+        assert_eq!(ch.rig.as_ref().unwrap().id, lotus);
+        assert_eq!(ch.rig_frame(), ItemId::new("rack_lotus"));
+        assert_eq!(ch.count(&ItemId::new("rack_civitas")), 1);
+    }
+
+    #[test]
+    fn an_old_saves_racks_in_the_flat_go_to_the_pack() {
+        let c = Content::load().unwrap();
+        // A rig on the Lotus, the stock Zenbo and a Civitas standing in the flat, as the
+        // first saves held them: `frames`, the fitted one first.
+        let mut ch = vex(&c);
+        fit_new_frame(&mut ch, &c, "rack_lotus");
+        drop_from_pack(&mut ch, "rack_zenbo");
+        let mut text = ron::to_string(&ch).unwrap();
+        let fitted = text.find(",frame:Some(").expect("frame is saved");
+        let end = fitted + text[fitted..].find(')').unwrap() + 1;
+        text.replace_range(
+            fitted..end,
+            r#",frames:["rack_lotus","rack_zenbo","rack_civitas"]"#,
+        );
+        let mut old: Character = ron::from_str(&text).unwrap();
+        assert_eq!(old.frame, None);
+        old.unpack_old_racks(&c);
+        assert_eq!(old.rig_frame(), ItemId::new("rack_lotus"), "still the rig");
+        for rack in ["rack_zenbo", "rack_civitas"] {
+            assert_eq!(old.count(&ItemId::new(rack)), 1, "{rack} in the pack");
+            let s = old.inventory.iter().find(|s| s.item.0 == rack).unwrap();
+            assert!(s.copy.is_some(), "{rack} can be fitted");
+        }
+        assert_eq!(old.count(&ItemId::new("rack_lotus")), 0);
+        old.unpack_old_racks(&c);
+        assert_eq!(old.count(&ItemId::new("rack_civitas")), 1, "once");
+        // Written again, the racks are where they are now.
+        let again: Character =
+            rmp_serde::from_slice(&rmp_serde::to_vec_named(&old).unwrap()).unwrap();
+        assert_eq!(again, old);
+        // With no rig yet, every rack in the flat is a spare.
+        let mut text = ron::to_string(&vex(&c)).unwrap();
+        let at = text.find(",frame:None").expect("frame is saved");
+        text.replace_range(at..at + ",frame:None".len(), r#",frames:["rack_civitas"]"#);
+        let mut old: Character = ron::from_str(&text).unwrap();
+        old.unpack_old_racks(&c);
+        assert!(old.rig.is_none(), "the stock rig");
+        assert_eq!(old.count(&ItemId::new("rack_civitas")), 1);
+    }
+
+    fn drop_from_pack(ch: &mut Character, id: &str) {
+        ch.inventory.retain(|s| s.item.0 != id);
+    }
+
     fn rig_ids(ch: &Character, c: &Content) -> Vec<Option<String>> {
         ch.rig_fitted(c)
             .into_iter()
@@ -3507,7 +3645,7 @@ mod tests {
     fn a_rig_forgets_the_sleds_and_racks_a_build_lacks() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        ch.set_frame(&c, &ItemId::new("rack_lotus"));
+        fit_new_frame(&mut ch, &c, "rack_lotus");
         let piece = pack_copy_of(&mut ch, &c, "sled_tinman");
         ap(
             &mut ch,
@@ -3519,7 +3657,7 @@ mod tests {
             },
         )
         .unwrap();
-        ch.frames.push(ItemId::new("rack_halcyon"));
+        ch.give_item(&c, ItemId::new("rack_halcyon"), 1);
         let mut less = c.clone();
         less.items
             .retain(|i| i.id.0 != "sled_tinman" && i.id.0 != "rack_halcyon");
@@ -3539,7 +3677,7 @@ mod tests {
             "the unknown sled's bay is empty"
         );
         assert!(rig_ids(&ch, &less).contains(&Some("sled_zb8".into())));
-        assert!(!ch.frames.contains(&ItemId::new("rack_halcyon")));
+        assert_eq!(ch.count(&ItemId::new("rack_halcyon")), 0);
         assert!(ch.forget_unknown(&less).is_empty(), "once");
     }
 
@@ -3547,13 +3685,13 @@ mod tests {
     fn a_rig_on_an_unknown_rack_is_the_stock_one_its_sleds_in_the_pack() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        ch.set_frame(&c, &ItemId::new("rack_civitas"));
+        fit_new_frame(&mut ch, &c, "rack_civitas");
         let mut less = c.clone();
         less.items.retain(|i| i.id.0 != "rack_civitas");
         let lost = ch.forget_unknown(&less);
         assert_eq!(lost, ["an item (rack_civitas)".to_string()]);
         assert!(ch.rig.is_none(), "the stock rig");
-        assert!(!ch.frames.contains(&ItemId::new("rack_civitas")));
+        assert_eq!(ch.frame, None);
         assert_eq!(ch.rig_frame(), ItemId::new(STOCK_FRAME));
         for sled in STOCK_SLEDS {
             assert_eq!(ch.count(&ItemId::new(sled)), 1, "{sled} in the pack");
@@ -3568,7 +3706,7 @@ mod tests {
         let at = text.find(",rig:").expect("rig is saved");
         let old: Character = ron::from_str(&format!("{})", &text[..at])).unwrap();
         assert_eq!(old.rig, None);
-        assert!(old.frames.is_empty());
+        assert_eq!(old.frame, None);
         assert_eq!(old.rig_rewards, RigRewards::default());
         let stock: Vec<(SocketKind, Option<ItemId>)> = vec![
             (SocketKind::Core, Some(ItemId::new("sled_zb8"))),
@@ -3579,7 +3717,7 @@ mod tests {
         assert_eq!(old.rig_frame(), ItemId::new(STOCK_FRAME));
         let mut old = old;
         old.rig_copy_mut(&c);
-        assert_eq!(old.frames, vec![ItemId::new("rack_zenbo")]);
+        assert_eq!(old.frame, Some(ItemId::new("rack_zenbo")));
         assert_eq!(old.rig_fitted(&c), stock);
     }
 
@@ -3635,9 +3773,15 @@ mod tests {
     fn set_frame_moves_sleds() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        let out = ch.set_frame(&c, &ItemId::new("rack_civitas"));
-        assert!(out.is_empty());
+        let out = fit_new_frame(&mut ch, &c, "rack_civitas");
+        assert_eq!(
+            out,
+            vec![ItemId::new("rack_zenbo")],
+            "the old rack, nothing else"
+        );
         assert_eq!(ch.rig_frame(), ItemId::new("rack_civitas"));
+        assert_eq!(ch.count(&ItemId::new("rack_civitas")), 0, "off the pack");
+        assert_eq!(ch.count(&ItemId::new("rack_zenbo")), 1, "into the pack");
         assert_eq!(
             rig_ids(&ch, &c),
             vec![
@@ -3653,7 +3797,7 @@ mod tests {
     fn a_smaller_frame_sends_extras_to_the_pack() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
-        ch.set_frame(&c, &ItemId::new("rack_lotus"));
+        fit_new_frame(&mut ch, &c, "rack_lotus");
         let piece = pack_copy_of(&mut ch, &c, "sled_tinman");
         ap(
             &mut ch,
@@ -3666,8 +3810,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rig_ids(&ch, &c)[1].as_deref(), Some("sled_tinman"));
-        let out = ch.set_frame(&c, &ItemId::new("rack_zenbo"));
-        assert_eq!(out, vec![ItemId::new("sled_tinman")]);
+        let out = ch.set_frame(&c, &ItemId::new("rack_zenbo")).unwrap();
+        assert_eq!(
+            out,
+            vec![ItemId::new("rack_lotus"), ItemId::new("sled_tinman")]
+        );
+        assert_eq!(ch.count(&ItemId::new("rack_lotus")), 1);
+        assert_eq!(ch.count(&ItemId::new("rack_zenbo")), 0);
         assert_eq!(ch.count(&ItemId::new("sled_tinman")), 1);
         assert_eq!(rig_ids(&ch, &c).len(), 3);
         assert_eq!(rig_ids(&ch, &c)[0].as_deref(), Some("sled_zb8"));

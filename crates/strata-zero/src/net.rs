@@ -4319,8 +4319,7 @@ pub(crate) mod tests {
     /// The rig on a Civitas cabinet with `sled` in its firewall bay.
     fn fit_firewall(st: &mut AppState, sled: &str) {
         let c = st.content.clone();
-        st.character
-            .set_frame(&c, &game::ItemId::new("rack_civitas"));
+        crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
         st.character.rig_copy_mut(&c).fitted[3] = Some(game::Stack {
             item: game::ItemId::new(sled),
             qty: 1,

@@ -43,6 +43,6 @@ Jobs(
     late:     ["You had a window. It closed.", "Late is the same as never."],
     refused:  ["Lose this number.", "I don't know you."],
     nothing:  ["Nothing right now. Come back.", "Dry. Try me tomorrow."],
-    rack:     ["Sent you something. Don't ask, it's at your door.", "You earned a box. Go look, it's at your door.", "Not a word about where from. It's there, it's at your door."],
+    rack:     ["Put something extra in your bag. Don't ask.", "You earned a box. It's yours, I never had it.", "Not a word about where from. Just take it."],
     receiver: ["About time.", "Took you long enough.", "Not a word. Thanks."],
 )

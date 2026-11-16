@@ -521,7 +521,7 @@ fn rig_racks() {
     pulled.bays[1].1 = None;
     draw(&st, &pulled, "rack_zenbo_pulled", (78, 28));
     for frame in ["rack_zenbo", "rack_civitas", "rack_lotus", "rack_halcyon"] {
-        st.character.set_frame(&st.content, &ItemId::new(frame));
+        crate::rig::fit_new_rack(&mut st.character, &st.content, frame);
         let art = RackArt::rig(&st, None);
         for size in [(78, 28), (58, 22), (58, 14), (58, 10)] {
             draw(&st, &art, &format!("{frame}_{}x{}", size.0, size.1), size);
@@ -887,8 +887,7 @@ fn desk_stock() {
 fn desk_civitas_firewall_list() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
-    st.character
-        .set_frame(&st.content, &ItemId::new("rack_civitas"));
+    crate::rig::fit_new_rack(&mut st.character, &st.content, "rack_civitas");
     for sled in ["sled_sandbag", "sled_tripwire"] {
         st.character.give_item(&st.content, ItemId::new(sled), 1);
     }
@@ -907,8 +906,7 @@ fn desk_civitas_firewall_list() {
 fn desk_halcyon_full() {
     let mut st = state_home();
     let map = MapScreen::walking(&mut st);
-    st.character
-        .set_frame(&st.content, &ItemId::new("rack_halcyon"));
+    crate::rig::fit_new_rack(&mut st.character, &st.content, "rack_halcyon");
     let c = st.content.clone();
     for (bay, sled) in [
         (0, "sled_qstack"),

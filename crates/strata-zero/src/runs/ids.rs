@@ -638,6 +638,64 @@ mod tests {
     }
 
     #[test]
+    fn an_old_saves_racks_in_the_flat_come_back_in_the_pack() {
+        let dir = Dir::new("old-racks");
+        let mut st = running(seren_has_written());
+        crate::rig::fit_new_rack(&mut st.character, &st.content, "rack_lotus");
+        st.character.inventory.retain(|s| s.item.0 != "rack_zenbo");
+        let path = write(&dir.0, &st).unwrap();
+        // The body as the first rig saves wrote it: no `frame`, and `frames` listing the
+        // racks in the flat, the fitted one first.
+        let mut body = body_of(&path);
+        let Value::Map(top) = &mut body else {
+            panic!("a map body")
+        };
+        let Some((_, Value::Map(ch))) = top
+            .iter_mut()
+            .find(|(k, _)| k.as_str() == Some("character"))
+        else {
+            panic!("a character")
+        };
+        let had = ch.len();
+        ch.retain(|(k, _)| k.as_str() != Some("frame"));
+        assert_eq!(ch.len(), had - 1, "a save writes `frame`");
+        assert!(!ch.iter().any(|(k, _)| k.as_str() == Some("frames")));
+        let racks = ["rack_lotus", "rack_zenbo", "rack_civitas"];
+        ch.push((
+            Value::from("frames"),
+            Value::Array(racks.iter().map(|r| Value::from(*r)).collect()),
+        ));
+        let mut raw = Vec::new();
+        rmpv::encode::write_value(&mut raw, &body).unwrap();
+        let (s, lost) = read_snapshot(&st.book, &raw).expect("the old shape reads");
+        let mut b = AppState::new();
+        b.book = st.book.clone();
+        restore(&mut b, s);
+        after_restore(&mut b, lost);
+        let ch = &b.character;
+        assert_eq!(ch.rig_frame(), ItemId::new("rack_lotus"), "still the rig");
+        for rack in ["rack_zenbo", "rack_civitas"] {
+            assert_eq!(ch.count(&ItemId::new(rack)), 1, "{rack} in the pack");
+        }
+        assert_eq!(ch.count(&ItemId::new("rack_lotus")), 0);
+        assert!(
+            !b.log.iter().any(|e| e.text.contains("lost in the update")),
+            "nothing lost"
+        );
+        // Saved again, it is the new shape and stays put.
+        let again = write(&dir.0, &b).unwrap();
+        let body = body_of(&again);
+        let ch = field(&body, "character");
+        assert_eq!(field(ch, "frame").as_str(), Some("rack_lotus"));
+        assert!(
+            !ch.as_map()
+                .unwrap()
+                .iter()
+                .any(|(k, _)| k.as_str() == Some("frames"))
+        );
+    }
+
+    #[test]
     fn a_mission_gone_from_the_book_is_dropped_and_said() {
         let dir = Dir::new("gone");
         let st = running(seren_has_written());

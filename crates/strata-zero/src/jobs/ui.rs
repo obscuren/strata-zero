@@ -332,9 +332,10 @@ const KNOW_SLEDS: [&str; 4] = [
 const TRUST_RACKS: [&str; 2] = ["rack_civitas", "rack_lotus"];
 
 /// What a hand-in that moved a fixer's standing from `before` to `after` brings in rig
-/// parts: a sled for each fixer who comes to know you, a rack at your door for the first
-/// two who trust you, the Halcyon for the first inner circle, and the program shards
-/// from the first Plant and the first Copy. Each item with the words the line adds.
+/// parts, into the pack: a sled for each fixer who comes to know you, a rack (and a mail
+/// about it) for the first two who trust you, the Halcyon for the first inner circle,
+/// and the program shards from the first Plant and the first Copy. Each item with the
+/// words the line adds.
 pub fn rig_rewards(
     st: &mut AppState,
     fixer: PersonId,
@@ -394,7 +395,7 @@ pub fn rig_rewards(
         out.push((item, words));
     }
     for rack in racks {
-        st.character.frames.push(rack.clone());
+        st.character.give_item(&st.content, rack.clone(), 1);
         let roll = st.character.rig_rewards.paid.len() as u64;
         let said = st.flavor.line(Say::Rack, roll).to_string();
         let words = named(st, &rack);
@@ -408,12 +409,7 @@ pub fn rig_rewards(
             job: None,
             story: None,
         };
-        // The rack is at your door at home: the mail lands in the home city's journal,
-        // set aside while you're in another.
-        match st.away.as_deref_mut() {
-            Some(home) => home.journal.mails.push(mail),
-            None => st.journal.mails.push(mail),
-        }
+        st.journal.mails.push(mail);
         out.push((rack, words));
     }
     out
@@ -638,6 +634,16 @@ mod tests {
         st.character.count(&ItemId::new(id))
     }
 
+    /// The racks in the pack, in pack order.
+    fn racks_in_pack(st: &AppState) -> Vec<String> {
+        st.character
+            .inventory
+            .iter()
+            .filter(|s| st.content.item(&s.item).unwrap().kind == game::ItemKind::Frame)
+            .map(|s| s.item.0.clone())
+            .collect()
+    }
+
     #[test]
     fn knowing_you_pays_a_sled_once() {
         use crate::jobs::COPY_AT;
@@ -662,30 +668,35 @@ mod tests {
         let (a, b) = two_fixers(&st);
         let got = rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
         assert!(got.iter().any(|(i, _)| *i == ItemId::new("rack_civitas")));
-        assert_eq!(st.character.frames, vec![ItemId::new("rack_civitas")]);
-        assert_eq!(sleds_in_pack(&st, "rack_civitas"), 0, "never carried");
+        assert_eq!(racks_in_pack(&st), vec!["rack_civitas"]);
+        assert!(
+            st.character.inventory.iter().all(|s| s.copy.is_some()
+                || st.content.item(&s.item).unwrap().kind != game::ItemKind::Frame),
+            "a rack in the pack can be fitted"
+        );
         let mail = st.journal.mails.last().unwrap();
         assert_eq!(mail.from, fixer_name(&st, a));
+        assert_eq!(mail.subject, "a Civitas cabinet");
         assert!(
-            mail.body.iter().any(|l| l.contains("it's at your door")),
+            !mail
+                .body
+                .iter()
+                .any(|l| l.contains("door") || l.contains("flat")),
             "{:?}",
             mail.body
         );
         assert!(!mail.read);
         rig_rewards(&mut st, b, PLANT_AT - 1, PLANT_AT, &fetch());
-        assert_eq!(
-            st.character.frames,
-            vec![ItemId::new("rack_civitas"), ItemId::new("rack_lotus")]
-        );
+        assert_eq!(racks_in_pack(&st), vec!["rack_civitas", "rack_lotus"]);
         // A third fixer, or the same one again, sends nothing more.
         let mails = st.journal.mails.len();
         rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
-        assert_eq!(st.character.frames.len(), 2);
+        assert_eq!(racks_in_pack(&st).len(), 2);
         assert_eq!(st.journal.mails.len(), mails);
     }
 
     #[test]
-    fn a_rack_sent_while_away_is_mailed_home() {
+    fn a_rack_earned_while_away_comes_with_you() {
         use crate::jobs::PLANT_AT;
         let mut st = state_home();
         let (a, _) = two_fixers(&st);
@@ -695,16 +706,10 @@ mod tests {
         let mails = st.journal.mails.len();
         let home_mails = st.away.as_ref().unwrap().journal.mails.len();
         rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
-        assert_eq!(st.character.frames, vec![ItemId::new("rack_civitas")]);
-        assert_eq!(st.journal.mails.len(), mails, "not in this city's journal");
+        assert_eq!(racks_in_pack(&st), vec!["rack_civitas"], "in the pack");
+        assert_eq!(st.journal.mails.len(), mails + 1, "the mail here");
         let journal = &st.away.as_ref().unwrap().journal;
-        assert_eq!(journal.mails.len(), home_mails + 1);
-        let mail = journal.mails.last().unwrap();
-        assert!(
-            mail.body.iter().any(|l| l.contains("it's at your door")),
-            "{:?}",
-            mail.body
-        );
+        assert_eq!(journal.mails.len(), home_mails, "none waiting at home");
     }
 
     #[test]
@@ -713,19 +718,12 @@ mod tests {
         let mut st = state_home();
         let (a, b) = two_fixers(&st);
         rig_rewards(&mut st, a, VAULT_AT - 1, VAULT_AT, &fetch());
-        assert!(st.character.frames.contains(&ItemId::new("rack_halcyon")));
+        assert!(racks_in_pack(&st).contains(&"rack_halcyon".to_string()));
         assert!(st.character.rig_rewards.halcyon);
-        let n = st.character.frames.len();
+        let n = racks_in_pack(&st).len();
         rig_rewards(&mut st, b, VAULT_AT - 1, VAULT_AT, &fetch());
-        assert_eq!(
-            st.character
-                .frames
-                .iter()
-                .filter(|f| **f == ItemId::new("rack_halcyon"))
-                .count(),
-            1
-        );
-        assert!(st.character.frames.len() <= n + 1);
+        assert_eq!(sleds_in_pack(&st, "rack_halcyon"), 1);
+        assert!(racks_in_pack(&st).len() <= n + 1);
     }
 
     #[test]

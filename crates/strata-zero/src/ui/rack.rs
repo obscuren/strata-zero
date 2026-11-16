@@ -485,7 +485,7 @@ mod tests {
     fn a_halcyon_has_five_bays() {
         let mut st = AppState::new();
         let halcyon = ItemId::new("rack_halcyon");
-        st.character.set_frame(&st.content, &halcyon);
+        crate::rig::fit_new_rack(&mut st.character, &st.content, &halcyon.0);
         let art = RackArt::rig(&st, Some(0));
         assert_eq!(art.frame, halcyon);
         let (b, rects) = drawn(&st, &art, 78, 28);
@@ -507,7 +507,7 @@ mod tests {
     fn it_fits_100x30() {
         let mut st = AppState::new();
         for frame in ["rack_zenbo", "rack_halcyon"] {
-            st.character.set_frame(&st.content, &ItemId::new(frame));
+            crate::rig::fit_new_rack(&mut st.character, &st.content, frame);
             let art = RackArt::rig(&st, None);
             let bays = art.bays.len();
             for (w, h) in [(78, 28), (58, 24), (58, 18), (58, 12)] {

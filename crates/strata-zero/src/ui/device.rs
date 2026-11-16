@@ -636,7 +636,7 @@ mod tests {
             ("street", "ZENBO")
         );
         let halcyon = game::ItemId::new("rack_halcyon");
-        st.character.set_frame(&st.content, &halcyon);
+        crate::rig::fit_new_rack(&mut st.character, &st.content, &halcyon.0);
         let rig = Look::pick(&st, Device::Rig);
         assert_eq!(rig.name, "megacorp");
         assert_eq!(rig.style.maker, "HALCYON");

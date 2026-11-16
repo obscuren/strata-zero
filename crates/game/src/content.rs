@@ -341,10 +341,10 @@ fn chrome_ok(i: &Item) -> Result<(), String> {
     Ok(())
 }
 
-/// A frame is a rack: an item of the frame kind with its head unit, no slot and no
-/// weight (it stands in the flat, never carried), and bays that are only the rig's
-/// four kinds with at least one core, relay and line. The rig's bays are on frames
-/// alone, and nothing else is a frame.
+/// A frame is a rack: an item of the frame kind with its head unit, no slot (it is
+/// fitted as the rig, never worn), no weight (a spare in the pack costs nothing to
+/// carry), and bays that are only the rig's four kinds with at least one core, relay
+/// and line. The rig's bays are on frames alone, and nothing else is a frame.
 fn frame_ok(i: &Item) -> Result<(), ContentError> {
     let id = || i.id.0.clone();
     let shape = |why: &str| ContentError::FrameInvalid {
@@ -365,7 +365,7 @@ fn frame_ok(i: &Item) -> Result<(), ContentError> {
         return Err(shape("no frame head"));
     }
     if i.slot.is_some() {
-        return Err(shape("a frame has no slot; it is never carried"));
+        return Err(shape("a frame has no slot; it is never worn"));
     }
     if i.weight != 0.0 {
         return Err(shape("a frame weighs nothing"));

@@ -57,7 +57,7 @@ pub enum Say {
     Refused,
     Nothing,
     Receiver,
-    /// The mail that says a rack is at your door.
+    /// The mail a fixer sends with a rack.
     Rack,
 }
 
