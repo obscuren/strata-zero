@@ -6321,22 +6321,38 @@ fn site_street(st: &mut AppState, b: citygen::BuildingId) -> MapScreen {
 #[test]
 #[ignore]
 fn armor_on_its_blueprints() {
-    const ARMOR: [&str; 5] = [
-        "salvage_jacket",
-        "ballistic_weave",
-        "cargo_pants",
-        "hardhat",
-        "mirrorshades",
-    ];
+    pictured_on_blueprints(
+        "armor",
+        &[
+            "salvage_jacket",
+            "ballistic_weave",
+            "cargo_pants",
+            "hardhat",
+            "mirrorshades",
+        ],
+    );
+}
+
+/// The field scrambler, carried, on its blueprint and in GEAR & INVENTORY's viewer:
+/// the drawing the scrambler art mock made.
+#[test]
+#[ignore]
+fn scrambler_on_its_blueprint() {
+    pictured_on_blueprints("item", &["field_scrambler"]);
+}
+
+/// Each item, carried, on its blueprint (`blueprint_<prefix>_<id>`) and in GEAR &
+/// INVENTORY's viewer with the pack's cursor on it (`kit_<prefix>_<id>`).
+fn pictured_on_blueprints(prefix: &str, ids: &[&str]) {
     let mut st = state_home();
     let c = st.content.clone();
-    for id in ARMOR {
+    for id in ids {
         st.character.give_item(&c, ItemId::new(id), 1);
     }
-    for id in ARMOR {
-        let name = format!("blueprint_armor_{id}");
+    for &id in ids {
+        let name = format!("blueprint_{prefix}_{id}");
         blueprint_shots(&mut st, false, id, &name, &[(100, 30), (120, 40)]);
-        // The pack's cursor on the piece's own row, headers counted.
+        // The pack's cursor on the item's own row, headers counted.
         let (map, mut deck, _) = blueprint_stack(&mut st, false, id);
         let rows = deck.kit.pack_rows(&st);
         let shown = |d: &crate::screens::deck::Detail| {
@@ -6345,10 +6361,10 @@ fn armor_on_its_blueprints() {
         deck.kit.state.row = rows
             .iter()
             .position(|r| r.detail.as_ref().is_some_and(shown))
-            .expect("the piece is in the pack");
+            .expect("the item is in the pack");
         for (w, h) in [(100, 30), (120, 40)] {
             shot_stack(
-                &format!("kit_armor_{id}_{w}x{h}"),
+                &format!("kit_{prefix}_{id}_{w}x{h}"),
                 &st,
                 &[&map, &deck],
                 (w, h),
