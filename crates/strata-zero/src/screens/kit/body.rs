@@ -32,19 +32,19 @@ pub(crate) struct Line {
 
 /// Where the body draws in the tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BodyLayout {
+pub(crate) struct BodyLayout<K = BodyPart> {
     /// The full body; else the compact one, in the left half.
     pub full: bool,
     /// The columns the body takes; the divider stands just right of them.
     pub left: Rect,
     /// The parts drawn, in body order, and their tiles.
-    pub tiles: Vec<(BodyPart, Rect)>,
+    pub tiles: Vec<(K, Rect)>,
     pub lines: Vec<Line>,
 }
 
-impl BodyLayout {
-    pub(crate) fn tile(&self, part: BodyPart) -> Option<Rect> {
-        self.tiles.iter().find(|(p, _)| *p == part).map(|(_, r)| *r)
+impl<K: Copy + Eq> BodyLayout<K> {
+    pub(crate) fn tile(&self, key: K) -> Option<Rect> {
+        self.tiles.iter().find(|(k, _)| *k == key).map(|(_, r)| *r)
     }
 }
 
@@ -56,19 +56,19 @@ const FULL_W: u16 = 62;
 
 /// Where a part's tile sits from the graph's origin, its size, the column from its left
 /// edge where a line from above or below meets it, and the part its line runs to.
-struct Place {
-    part: BodyPart,
+pub(crate) struct Place<K> {
+    key: K,
     x: u16,
     y: u16,
     w: u16,
     h: u16,
     joint: u16,
-    joins: Option<BodyPart>,
+    joins: Option<K>,
 }
 
-const fn at(part: BodyPart, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) -> Place {
+pub(crate) const fn at<K>(key: K, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) -> Place<K> {
     Place {
-        part,
+        key,
         x,
         y,
         w,
@@ -78,10 +78,10 @@ const fn at(part: BodyPart, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) 
     }
 }
 
-impl Place {
-    const fn to(self, part: BodyPart) -> Place {
+impl<K: Copy> Place<K> {
+    pub(crate) const fn to(self, key: K) -> Place<K> {
         Place {
-            joins: Some(part),
+            joins: Some(key),
             ..self
         }
     }
@@ -92,7 +92,7 @@ const BIG: (u16, u16) = (12, 7);
 
 /// The full body, as the mock places it, with free places for a third arm and its hand
 /// under R ARM and R HAND.
-const FULL: [Place; 13] = {
+const FULL: [Place<BodyPart>; 13] = {
     use BodyPart::*;
     [
         at(Head, (24, 0), SMALL, 9),
@@ -116,7 +116,7 @@ const TRUNK: (u16, u16) = (14, 6);
 
 /// The compact body: the same shape without arms, the hands on the torso, tiles 4 tall
 /// for a name on one line.
-const COMPACT: [Place; 10] = {
+const COMPACT: [Place<BodyPart>; 10] = {
     use BodyPart::*;
     [
         at(Head, (15, 0), TILE, 10),
@@ -137,32 +137,44 @@ const COMPACT: [Place; 10] = {
 /// columns and rows. A tab too small for the deck (under 100×30) leaves out the tiles
 /// that would hang outside it.
 pub(crate) fn layout(area: Rect, parts: &[BodyPart]) -> BodyLayout {
-    let full = area.width >= FULL_MIN.0 && area.height >= FULL_MIN.1;
-    let (table, width, header): (&[Place], u16, u16) = if full {
-        (&FULL, FULL_W, 2)
+    place(area, &FULL, &COMPACT, parts, FULL_W)
+}
+
+/// `layout` for any table: the full places when the tab has room for them (its columns
+/// `full_w`), else the compact ones in the left half, for the `keys` to draw.
+pub(crate) fn place<K: Copy + Eq>(
+    area: Rect,
+    full: &[Place<K>],
+    compact: &[Place<K>],
+    keys: &[K],
+    full_w: u16,
+) -> BodyLayout<K> {
+    let is_full = area.width >= FULL_MIN.0 && area.height >= FULL_MIN.1;
+    let (table, width, header) = if is_full {
+        (full, full_w, 2)
     } else {
-        (&COMPACT, area.width.saturating_sub(1) / 2, 1)
+        (compact, area.width.saturating_sub(1) / 2, 1)
     };
     let left = Rect::new(area.x, area.y, width.min(area.width), area.height);
     let graph_w = table.iter().map(|p| p.x + p.w).max().unwrap_or(0);
     let graph_h = table.iter().map(|p| p.y + p.h).max().unwrap_or(0);
     let ox = left.x + left.width.saturating_sub(graph_w) / 2;
     let oy = left.y + header + left.height.saturating_sub(header + graph_h) / 2;
-    let rect = |p: &Place| Rect::new(ox + p.x, oy + p.y, p.w, p.h);
-    let placed = |part: BodyPart| {
+    let rect = |p: &Place<K>| Rect::new(ox + p.x, oy + p.y, p.w, p.h);
+    let placed = |key: K| {
         table
             .iter()
-            .find(|p| p.part == part)
-            .filter(|p| parts.contains(&part) && left.intersection(rect(p)) == rect(p))
+            .find(|p| p.key == key)
+            .filter(|p| keys.contains(&key) && left.intersection(rect(p)) == rect(p))
     };
-    let tiles = parts
+    let tiles = keys
         .iter()
-        .filter_map(|&part| placed(part).map(|p| (part, rect(p))))
+        .filter_map(|&key| placed(key).map(|p| (key, rect(p))))
         .collect();
-    let lines = parts
+    let lines = keys
         .iter()
-        .filter_map(|&part| {
-            let child = placed(part)?;
+        .filter_map(|&key| {
+            let child = placed(key)?;
             let parent = placed(child.joins?)?;
             Some(line(
                 (rect(parent), parent.joint),
@@ -171,7 +183,7 @@ pub(crate) fn layout(area: Rect, parts: &[BodyPart]) -> BodyLayout {
         })
         .collect();
     BodyLayout {
-        full,
+        full: is_full,
         left,
         tiles,
         lines,
@@ -210,7 +222,7 @@ const RIGHT: u8 = 8;
 
 /// The cells the lines draw, with the glyph each takes: where a line meets a tile's
 /// border, or lines meet each other, the junction of all of them.
-fn joints(l: &BodyLayout) -> Vec<((u16, u16), char)> {
+fn joints<K>(l: &BodyLayout<K>) -> Vec<((u16, u16), char)> {
     let mut ways: std::collections::BTreeMap<(u16, u16), u8> = Default::default();
     for line in &l.lines {
         for pair in line.path.windows(2) {
@@ -269,7 +281,7 @@ fn glyph(way: u8) -> char {
 /// The part an arrow goes to from `from`: among the drawn tiles whose centre lies that
 /// way (no more than half as far across it as along it), the nearest along it, then the
 /// nearest across. `None` when there is none.
-pub(crate) fn step(layout: &BodyLayout, from: BodyPart, dir: Dir) -> Option<BodyPart> {
+pub(crate) fn step<K: Copy + Eq>(layout: &BodyLayout<K>, from: K, dir: Dir) -> Option<K> {
     // In half cells, so a centre is a whole number.
     let centre = |r: Rect| {
         (
