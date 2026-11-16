@@ -365,7 +365,8 @@ pub(crate) fn wound_you(st: &mut AppState, cause: &str, damage: u8) {
 }
 
 /// Rolls `rounds` at a foe from `from`, each landing or stopping past them; the
-/// damage lands at once, the pictures follow. Returns each round's outcome.
+/// damage lands at once, the pictures follow, the first `first` gaps in (after the
+/// rounds already drawn this shot). Returns each round's outcome.
 fn volley(
     st: &mut AppState,
     from: Pos,
@@ -373,6 +374,7 @@ fn volley(
     w: &Weapon,
     chance: u8,
     fx: &[Fx],
+    first: usize,
 ) -> Vec<Option<u8>> {
     let Some((place, target)) = st.foes.get(foe).map(|f| (f.place, f.pos)) else {
         return Vec::new();
@@ -395,7 +397,7 @@ fn volley(
         w.damage
     };
     let mut out = Vec::new();
-    for k in 0..w.rounds as usize {
+    for k in first..first + w.rounds as usize {
         let hit = ambush || game::round_hits(roll(st), chance);
         let impact = if hit {
             target
@@ -448,8 +450,10 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
     if let Some(place) = st.player.as_ref().map(|p| p.place) {
         crate::guards::hear(st, place, from, from);
     }
-    let rounds = volley(st, from, foe, &w, chance, &w.fx.clone());
+    let rounds = volley(st, from, foe, &w, chance, &w.fx.clone(), 0);
     st.say(format!("you fire · {name} {}", outcomes(&rounds)));
+    // A follow-up's rounds are drawn after the rounds before it.
+    let mut drawn = rounds.len();
     for hand in st.character.hands(&st.content) {
         if hand == fired {
             continue;
@@ -466,7 +470,8 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
         let Ok(chance) = chance_with(st, foe, &w) else {
             continue;
         };
-        let rounds = volley(st, from, foe, &w, chance, &w.fx.clone());
+        let rounds = volley(st, from, foe, &w, chance, &w.fx.clone(), drawn);
+        drawn += rounds.len();
         let gun = st
             .content
             .item(&id)
@@ -804,7 +809,7 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     let from = at.pos;
     let name = st.foes[foe].name.clone();
     let impact = st.tick + flight_ticks(&ability.fx, from, st.foes[foe].pos);
-    let rounds = volley(st, from, foe, &w, chance, &ability.fx);
+    let rounds = volley(st, from, foe, &w, chance, &ability.fx, 0);
     let hit = rounds.iter().any(Option::is_some);
     let mut line = format!(
         "{} · {name} {}",
@@ -1474,6 +1479,34 @@ mod tests {
         fire(&mut st, 0).unwrap();
         assert!(!off_hand_logged(&st));
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
+    }
+
+    #[test]
+    fn the_follow_up_is_drawn_after_the_main_burst() {
+        let mut st = engaged(Pos::new(14, 8));
+        put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
+        let (_, _, main) = your_weapon(&st).unwrap();
+        st.force_hit = Some(true); // every roll wins, the follow-up's too
+        fire(&mut st, 0).unwrap();
+        assert!(off_hand_logged(&st));
+        // One flash a round, in the order fired.
+        let flashes: Vec<u64> = (st.fx.iter())
+            .filter(|i| matches!(i.fx, Fx::Flash { .. }))
+            .map(|i| i.started)
+            .collect();
+        let main = usize::from(main.rounds);
+        assert_eq!(flashes.len(), main + 1, "{flashes:?}");
+        assert!(
+            flashes[main] > flashes[main - 1],
+            "the follow-up starts after the main burst's last round: {flashes:?}"
+        );
+        // Its number stands past the main burst's numbers, not on the first.
+        let numbers: Vec<Pos> = (st.fx.iter())
+            .filter(|i| matches!(i.fx, Fx::Number { .. }))
+            .map(|i| i.targets[0])
+            .collect();
+        let last = numbers.last().unwrap();
+        assert!(!numbers[..main].contains(last), "{numbers:?}");
     }
 
     #[test]

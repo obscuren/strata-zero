@@ -621,6 +621,24 @@ fn the_card_sits_under_the_pack_with_the_drawing_under_it() {
     assert!(card.contains("Stamped-receiver"), "{card}");
     assert_eq!(cells(&buf, 84, 26, 13), "space inspect");
     assert_ne!(buf[(97, 26)].symbol(), "┘", "no viewer");
+
+    // Beside the compact body the drawing waits for Inspect, however tall the window.
+    let body = tab(112, 45);
+    let l = layout(body, &parts(&st));
+    assert!(!l.body.full);
+    assert!(l.card.height >= VIEW_ROWS + 10, "room for the drawing");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 112, 45));
+    k.draw(&st, body, &mut buf);
+    let card: String = (l.card.y..l.card.bottom())
+        .map(|y| cells(&buf, l.card.x, y, l.card.width))
+        .collect();
+    assert!(card.contains("RATCHET SMG"), "{card}");
+    assert!(
+        !card.contains('┌') && !card.contains('┘'),
+        "no viewer: {card}"
+    );
+    let caption = from(&buf, l.card.x, body.bottom() - 1);
+    assert!(caption.trim_end().ends_with("space inspect"), "{caption:?}");
 }
 
 #[test]
@@ -735,13 +753,19 @@ fn an_empty_part_shows_no_drawing() {
 fn nothing_spills_outside_the_body() {
     let mut st = state();
     third_arm(&mut st);
-    let area = Rect::new(0, 0, 160, 50);
+    let area = Rect::new(0, 0, 204, 72);
     let last = *ItemKind::ALL.last().unwrap();
+    // Compact and full at their common sizes, both sides of the full body's least
+    // size, and very large.
     for body in [
         Rect::new(1, 5, 98, 22),
         Rect::new(1, 5, 99, 23),
+        Rect::new(1, 5, 112, 27),
+        Rect::new(1, 5, 113, 26),
+        Rect::new(1, 5, 113, 27),
         Rect::new(1, 10, 118, 27),
         Rect::new(1, 10, 158, 37),
+        Rect::new(1, 10, 200, 60),
     ] {
         for pane in [Pane::Body, Pane::Pack] {
             let mut k = Kit::new(0);

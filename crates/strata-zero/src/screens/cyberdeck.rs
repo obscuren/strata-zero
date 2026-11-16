@@ -513,7 +513,7 @@ pub(crate) fn glass(st: &AppState, tab: &DeckTab) -> (Glass, (String, GlassTone)
         Part::Plate => {
             // The card reads the copy drawn, what is fitted in it included.
             (
-                lines(&Deck::item_card_of(st, &deck.id, copy(st, tab))),
+                lines(&Deck::item_card_of(st, &deck.id, copy(st, tab), None)),
                 (
                     format!("{used}/{} slots · rating {}", spec.slots, spec.rating),
                     GlassTone::Dim,

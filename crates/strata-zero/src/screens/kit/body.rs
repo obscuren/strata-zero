@@ -607,6 +607,23 @@ mod tests {
             (200, 60),
         ];
         for parts in [DEFAULT.to_vec(), third()] {
+            // A state whose body has these parts, for the cursor.
+            let mut st = AppState::new();
+            st.content.body.retain(|n| parts.contains(&n.part));
+            for (part, kind, joins) in [
+                (ThirdArm, PartKind::Arm, Torso),
+                (ThirdHand, PartKind::Hand, ThirdArm),
+            ] {
+                if parts.contains(&part) {
+                    st.content.body.push(game::BodyNode {
+                        part,
+                        kind,
+                        name: format!("{kind:?} 3").to_uppercase(),
+                        joins: Some(joins),
+                        main: false,
+                    });
+                }
+            }
             for (w, h) in sizes {
                 let l = layout(tab(w, h), &parts);
                 for (i, (a, ra)) in l.tiles.iter().enumerate() {
@@ -627,12 +644,28 @@ mod tests {
                         assert!(l.left.contains((x, y).into()), "{line:?} at {w}x{h}");
                     }
                 }
-                for (part, _) in &l.tiles {
+                // The arrows reach every tile drawn from TORSO.
+                let mut reached = vec![Torso];
+                let mut i = 0;
+                while let Some(&from) = reached.get(i) {
                     for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
-                        if let Some(to) = step(&l, *part, dir) {
-                            assert!(l.tile(to).is_some() && to != *part, "{part:?} {dir:?}");
+                        if let Some(to) = step(&l, from, dir)
+                            && !reached.contains(&to)
+                        {
+                            reached.push(to);
                         }
                     }
+                    i += 1;
+                }
+                for (part, _) in &l.tiles {
+                    assert!(reached.contains(part), "{part:?} unreached at {w}x{h}");
+                }
+                // Wherever the cursor was kept, it lands on a tile drawn.
+                for &part in &parts {
+                    let mut kit = super::super::Kit::new(0);
+                    kit.state.part = part;
+                    let on = kit.cursor(&st, &l);
+                    assert!(l.tile(on).is_some(), "{part:?} → {on:?} at {w}x{h}");
                 }
             }
         }

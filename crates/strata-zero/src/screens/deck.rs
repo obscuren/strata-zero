@@ -503,7 +503,7 @@ fn held(st: &AppState) -> Held<'_> {
 pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
     match detail {
         Detail::Part(part) => match st.character.equipped(*part) {
-            Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*part)),
+            Some(id) => Deck::item_card_of(st, id, st.character.worn_copy(*part), Some(*part)),
             None => vec![
                 head("— empty —"),
                 dim(format!(
@@ -514,7 +514,7 @@ pub(crate) fn card(st: &AppState, detail: &Detail) -> Vec<Line<'static>> {
         },
         Detail::Item(id) => Deck::item_card(st, id),
         Detail::Copy(copy) => match st.character.copy_in_pack(*copy) {
-            Some(s) => Deck::item_card_of(st, &s.item, s.copy.as_ref()),
+            Some(s) => Deck::item_card_of(st, &s.item, s.copy.as_ref(), None),
             None => vec![dim("nothing here")],
         },
         Detail::Journal(i) => Deck::journal_card(st, *i),
@@ -1074,16 +1074,19 @@ impl Deck {
 
     /// Everything about one item: the detail pane and the inspect card.
     pub(crate) fn item_card(st: &AppState, id: &ItemId) -> Vec<Line<'static>> {
-        Self::item_card_of(st, id, None)
+        Self::item_card_of(st, id, None, None)
     }
 
-    /// The card of one copy: its sockets read what is fitted in it, and it is
-    /// equipped only when that copy is the one worn. Without a copy, every socket the
-    /// item is made with reads empty.
+    /// The card of one copy: its sockets read what is fitted in it. Without a copy,
+    /// every socket the item is made with reads empty. It is equipped, on that part,
+    /// when `on` names the part it is the card of, or when the copy is the one a part
+    /// wears; an item in the pack or on the ground is never the one worn, whatever
+    /// else wears the same item.
     pub(crate) fn item_card_of(
         st: &AppState,
         id: &ItemId,
         copy: Option<&ItemCopy>,
+        on: Option<BodyPart>,
     ) -> Vec<Line<'static>> {
         let Some(item) = st.content.item(id) else {
             return vec![warn(format!("unknown item {id}"))];
@@ -1092,7 +1095,7 @@ impl Deck {
         let mut out = vec![head(&item.name)];
         // Where it goes: a kind of part, or for hardware the socket it fits.
         // Worn, the part it is on; a hand's main one says so.
-        let on = st.character.part_wearing(id, copy);
+        let on = on.or_else(|| copy.and_then(|k| st.character.part_wearing(k.id)));
         let place = match (&item.hardware, &item.implant, item.slot) {
             (Some(h), _, _) => format!(" · {}", h.fits.fits()),
             (None, Some(i), _) => format!(" · {} · load {}", i.fits.label(), i.load),
@@ -1120,14 +1123,18 @@ impl Deck {
             item.kind.label()
         )));
         out.extend(Self::perk_lines(st, item));
-        if let (Some(w), Some(_)) = (&item.weapon, on) {
+        if let Some(w) = &item.weapon {
             out.push(cyan(format!(
                 "{} damage × {} rounds · range {}",
                 w.damage, w.rounds, w.range
             )));
-            // The hand that fires is no off hand, whichever hand that is.
+            // Held in a hand that is not the one that fires, whichever hand that is.
             let fires = crate::combat::your_weapon(st).ok().map(|(hand, ..)| hand);
-            if on.is_some_and(|part| fires != Some(part)) {
+            let hands = st.character.hands(&st.content);
+            if let Some(part) = on
+                && hands.contains(&part)
+                && fires != Some(part)
+            {
                 out.push(cyan(format!(
                     "off hand · 1 in {} to follow up",
                     100 / u32::from(crate::combat::OFF_HAND_CHANCE)
@@ -1150,11 +1157,7 @@ impl Deck {
                 cyan(format!("cell {pct}%"))
             });
         }
-        let worn = match copy {
-            Some(k) => st.character.is_worn_copy(k.id),
-            None => st.character.is_equipped(id),
-        };
-        if worn {
+        if on.is_some() {
             out.push(Line::from(Span::styled(
                 "equipped",
                 Style::default().fg(CYAN),
@@ -4232,11 +4235,7 @@ mod tests {
     #[test]
     fn the_card_shares_its_lines() {
         let st = dshawn();
-        let card = |slot: BodyPart| {
-            let id = st.character.equipped(slot).cloned().unwrap();
-            let copy = st.character.worn_copy(slot);
-            texts(&Deck::item_card_of(&st, &id, copy))
-        };
+        let card = |part: BodyPart| texts(&card(&st, &Detail::Part(part)));
         assert_eq!(
             card(BodyPart::RightHand)[1],
             "weapon · right hand · main · 3.2 kg · ¤ 900"
@@ -4250,54 +4249,96 @@ mod tests {
             &st,
             &ItemId::new("coldfin_1"),
             copy.as_ref(),
+            None,
         ));
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
-        let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
+        let arm = texts(&Deck::item_card(&st, &ItemId::new("grip_arm")));
         assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
     }
 
     #[test]
     fn a_worn_guns_card_says_its_rounds_and_its_hand() {
         let mut st = dshawn();
-        let main = st.character.equipped(BodyPart::RightHand).cloned().unwrap();
-        let card = texts(&Deck::item_card_of(
-            &st,
-            &main,
-            st.character.worn_copy(BodyPart::RightHand),
-        ));
+        let part = |st: &AppState, part| texts(&card(st, &Detail::Part(part)));
+        let main = part(&st, BodyPart::RightHand);
         assert!(
-            card.contains(&"4 damage × 3 rounds · range 12".to_string()),
-            "{card:?}"
+            main.contains(&"4 damage × 3 rounds · range 12".to_string()),
+            "{main:?}"
         );
-        assert!(!card.iter().any(|l| l.starts_with("off hand")), "{card:?}");
+        assert!(!main.iter().any(|l| l.starts_with("off hand")), "{main:?}");
         let nine = ItemId::new("scrap_nine");
         let copy = st.character.new_copy(&st.content, &nine);
         st.character
             .wear(BodyPart::LeftHand, nine.clone(), Some(copy));
-        let card = texts(&Deck::item_card_of(
-            &st,
-            &nine,
-            st.character.worn_copy(BodyPart::LeftHand),
-        ));
+        let off = part(&st, BodyPart::LeftHand);
+        assert!(off[1].starts_with("weapon · left hand · 0.9 kg"), "{off:?}");
         assert!(
-            card[1].starts_with("weapon · left hand · 0.9 kg"),
-            "{card:?}"
-        );
-        assert!(
-            card.contains(&"off hand · 1 in 4 to follow up".to_string()),
-            "{card:?}"
+            off.contains(&"off hand · 1 in 4 to follow up".to_string()),
+            "{off:?}"
         );
         // With the right hand empty the left's gun is the one that fires.
         st.character.take_off(BodyPart::RightHand);
-        let card = texts(&Deck::item_card_of(
-            &st,
-            &nine,
-            st.character.worn_copy(BodyPart::LeftHand),
-        ));
-        assert!(!card.iter().any(|l| l.starts_with("off hand")), "{card:?}");
-        // In the pack it says neither.
-        let card = texts(&Deck::item_card_of(&st, &ItemId::new("shiv_blade"), None));
+        let off = part(&st, BodyPart::LeftHand);
+        assert!(!off.iter().any(|l| l.starts_with("off hand")), "{off:?}");
+        // In the pack it names no hand.
+        let card = texts(&Deck::item_card(&st, &ItemId::new("shiv_blade")));
         assert_eq!(card[1].split(" · ").nth(1), Some("hand"), "{card:?}");
+    }
+
+    #[test]
+    fn a_tiles_card_names_its_own_hand() {
+        let mut st = dshawn();
+        let shiv = ItemId::new("shiv_blade");
+        for hand in [BodyPart::RightHand, BodyPart::LeftHand] {
+            st.character.wear(hand, shiv.clone(), None);
+        }
+        let meta = |part| texts(&card(&st, &Detail::Part(part)))[1].clone();
+        let (right, left) = (meta(BodyPart::RightHand), meta(BodyPart::LeftHand));
+        assert!(
+            right.starts_with("weapon · right hand · main · "),
+            "{right:?}"
+        );
+        assert!(left.starts_with("weapon · left hand · "), "{left:?}");
+    }
+
+    #[test]
+    fn only_the_hand_that_does_not_fire_follows_up() {
+        let mut st = dshawn();
+        let nine = ItemId::new("scrap_nine");
+        for hand in [BodyPart::RightHand, BodyPart::LeftHand] {
+            st.character.wear(hand, nine.clone(), None);
+        }
+        let (fires, ..) = crate::combat::your_weapon(&st).unwrap();
+        assert_eq!(fires, BodyPart::RightHand);
+        let follows = |part| {
+            texts(&card(&st, &Detail::Part(part)))
+                .iter()
+                .any(|l| l == "off hand · 1 in 4 to follow up")
+        };
+        assert!(!follows(BodyPart::RightHand), "the gun that fires");
+        assert!(follows(BodyPart::LeftHand));
+    }
+
+    #[test]
+    fn a_spare_in_the_pack_is_not_the_one_worn() {
+        let mut st = dshawn();
+        let nine = ItemId::new("scrap_nine");
+        st.character.wear(BodyPart::LeftHand, nine.clone(), None);
+        st.character.give_item(&st.content, nine.clone(), 1);
+        let spare = card(&st, &pack_detail(&st, |r| r.text.contains("Scrap nine")));
+        let spare = texts(&spare);
+        assert_eq!(spare[1].split(" · ").nth(1), Some("hand"), "{spare:?}");
+        assert!(!spare.iter().any(|l| l.contains("left hand")), "{spare:?}");
+        assert!(!spare.iter().any(|l| l == "equipped"), "{spare:?}");
+        // A gun's numbers show wherever it is; the off-hand line only on a hand.
+        assert!(
+            spare.contains(&"5 damage × 1 rounds · range 8".to_string()),
+            "{spare:?}"
+        );
+        assert!(
+            !spare.iter().any(|l| l.starts_with("off hand")),
+            "{spare:?}"
+        );
     }
 
     #[test]
@@ -4306,7 +4347,7 @@ mod tests {
         let k = crate::cloak::testutil::scrambler(&mut st);
         let card = |st: &AppState| {
             let copy = st.character.copy_in_pack(k).and_then(|s| s.copy.as_ref());
-            Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy)
+            Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy, None)
         };
         let charge = |left, burned| game::Charge { left, burned };
         crate::cloak::testutil::set_charge(&mut st, k, charge(game::FULL_CELL * 62 / 100, false));

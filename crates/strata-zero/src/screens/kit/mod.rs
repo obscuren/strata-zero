@@ -495,8 +495,8 @@ impl Kit {
 
     /// The selection's card under the rule, typing out, and under its text the drawing
     /// at half size when 8 rows are left for it; an item's description gives way to
-    /// the drawing when both don't fit. With no room for the drawing, `space inspect`
-    /// alone, in the card's corner.
+    /// the drawing when both don't fit. Beside the compact body, or with no room for
+    /// the drawing, `space inspect` alone, in the card's corner.
     fn draw_card(&self, st: &AppState, area: Rect, l: &Layout, buf: &mut Buffer) {
         let selected = self.selected(st);
         let lines = match &selected {
@@ -508,6 +508,7 @@ impl Kit {
             |lines: &[Line<'static>]| rows_of(lines, l.card.width) + 1 + VIEW_ROWS <= l.card.height;
         let (lines, view) = match &shown {
             None => (lines, false),
+            Some(_) if !l.body.full => (lines, false),
             Some(_) if fits(&lines) => (lines, true),
             Some(_) if fits(without_blurb(&lines)) => (without_blurb(&lines).to_vec(), true),
             Some(_) => (lines, false),

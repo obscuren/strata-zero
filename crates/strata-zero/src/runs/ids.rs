@@ -1080,10 +1080,8 @@ mod tests {
         );
     }
 
-    /// The runs the first format wrote, calm, busy and out on the open Net, read by this
-    /// build, put in place and played: back on the map as a load puts you
-    /// (`MapScreen::resumed`), a few frames of the game's own loop, drawn. No fixture is
-    /// ever rewritten.
+    /// The slots a save wrote before the body, read as the parts they became; a part
+    /// written by its own name.
     #[test]
     fn old_slot_names_read_as_parts() {
         use game::{BodyPart, ItemId};
@@ -1119,6 +1117,10 @@ mod tests {
         assert!(names.contains_key("RightHand") && names.contains_key("Waist"));
     }
 
+    /// The runs the first format wrote, calm, busy and out on the open Net, read by this
+    /// build, put in place and played: back on the map as a load puts you
+    /// (`MapScreen::resumed`), a few frames of the game's own loop, drawn. No fixture is
+    /// ever rewritten.
     #[test]
     fn the_first_saved_run_still_opens() {
         use crate::app::Runner;

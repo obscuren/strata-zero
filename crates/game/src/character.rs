@@ -986,7 +986,7 @@ impl Character {
         perks - chrome
     }
 
-    /// Every non-zero part of a number that is not its own: what is worn in slot
+    /// Every non-zero part of a number that is not its own: what is worn in body
     /// order, the chrome in `installed` order, the hardware fitted in what is worn
     /// then in what is installed, the talents summed into one, and for EMP the pieces
     /// installed at 2 each.
@@ -1957,21 +1957,13 @@ impl Character {
         self.equipment.values().any(|i| i == id)
     }
 
-    /// The part that wears `item`: the one wearing that very copy when `copy` is given,
-    /// else the first part wearing the item.
-    pub fn part_wearing(&self, item: &ItemId, copy: Option<&ItemCopy>) -> Option<BodyPart> {
-        match copy {
-            Some(k) => self
-                .worn
-                .iter()
-                .find(|(part, w)| w.id == k.id && self.equipment.contains_key(part))
-                .map(|(part, _)| *part),
-            None => self
-                .equipment
-                .iter()
-                .find(|(_, i)| *i == item)
-                .map(|(part, _)| *part),
-        }
+    /// The part that wears the copy `copy`, if one does. An item without copies is
+    /// told apart only by the part it is on, so it has no such question.
+    pub fn part_wearing(&self, copy: CopyId) -> Option<BodyPart> {
+        self.worn
+            .iter()
+            .find(|(part, w)| w.id == copy && self.equipment.contains_key(part))
+            .map(|(part, _)| *part)
     }
 }
 

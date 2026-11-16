@@ -43,7 +43,7 @@ The arrows move from tile to tile along the body. `→` from a tile with nothing
 - In the pack: `e` equip it on the first free part it fits (a hand item tries the main hand first); with none free, it goes on in place of what's there (for a hand item, the main hand's), which comes off. `u` use it, `i` inspect it, `d` drop one, `D` drop the lot.
 - On a part: a letter puts on something from your pack that fits, on that very part, so a gun goes in the hand you picked. `u` takes off what is there, `i` inspects it.
 
-The main hand's gun fires; a gun in the other hand follows up about one shot in four (Turns and fights). Throwables are thrown from the map, not from here.
+The main hand's gun fires; a gun in the other hand follows up about 1 shot in 4 (Turns and fights). Throwables are thrown from the map, not from here.
 
 ### Inspecting
 
