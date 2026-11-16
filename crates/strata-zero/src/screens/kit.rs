@@ -1045,7 +1045,7 @@ mod tests {
         assert!(from(&buf, 3, 15).starts_with("RATCHET SMG"));
         let meta = from(&buf, 3, 16);
         assert!(
-            meta.starts_with("weapon · hand · 3.9 kg · ¤ 2150"),
+            meta.starts_with("weapon · right hand · main · 3.9 kg"),
             "{meta:?}"
         );
         corners_in(&buf, Rect::new(46, 15, 52, 12), RULE);

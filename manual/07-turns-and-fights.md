@@ -65,7 +65,7 @@ Vanish cools for 120 seconds, 90 with Shadow step at its best. Out of a fight it
 
 ## Your gun
 
-Only the weapon in your right hand fires. On the act half the cursor comes up on your target: `t` jumps to the next one, and `space` fires the whole burst for one AP. The footer shows your target, the range and your chance to hit.
+The gun in your right hand fires; if that hand holds none, the gun in your other hand does. A gun in the other hand fires too, about one shot in four, free: it follows your shot at the same target if it can reach. If your first shot downs the target, it stays quiet. A shot from the cloak is an ambush for the first gun alone. On the act half the cursor comes up on your target: `t` jumps to the next one, and `space` fires the whole burst for one AP. The footer shows your target, the range and your chance to hit.
 
 Your chance starts at 50%, gains 4% for every point of REFLEX and 10% if you have the weapon's skill, and drops the further past half its range the target stands. A target too far off, or with something in the way, can't be shot.
 

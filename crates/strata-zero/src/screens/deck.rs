@@ -234,6 +234,25 @@ pub(crate) fn marks(
     out
 }
 
+/// A part in words, as a card says where an item is worn.
+fn part_words(part: BodyPart) -> &'static str {
+    match part {
+        BodyPart::Head => "head",
+        BodyPart::Face => "face",
+        BodyPart::Back => "back",
+        BodyPart::Torso => "torso",
+        BodyPart::LeftArm => "left arm",
+        BodyPart::LeftHand => "left hand",
+        BodyPart::RightArm => "right arm",
+        BodyPart::RightHand => "right hand",
+        BodyPart::Waist => "waist",
+        BodyPart::Legs => "legs",
+        BodyPart::Feet => "feet",
+        BodyPart::ThirdArm => "third arm",
+        BodyPart::ThirdHand => "third hand",
+    }
+}
+
 fn tone_style(tone: Tone) -> Style {
     match tone {
         Tone::Normal => Style::default().fg(TEXT),
@@ -1072,10 +1091,22 @@ impl Deck {
         let cyan = |t: String| Line::from(Span::styled(t, Style::default().fg(CYAN)));
         let mut out = vec![head(&item.name)];
         // Where it goes: a kind of part, or for hardware the socket it fits.
+        // Worn, the part it is on; a hand's main one says so.
+        let on = st.character.part_wearing(id, copy);
         let place = match (&item.hardware, &item.implant, item.slot) {
             (Some(h), _, _) => format!(" · {}", h.fits.fits()),
             (None, Some(i), _) => format!(" · {} · load {}", i.fits.label(), i.load),
-            (None, None, Some(s)) => format!(" · {}", s.lower()),
+            (None, None, Some(s)) => match on {
+                Some(part) => {
+                    let main = st.character.main_hand(&st.content) == Some(part);
+                    format!(
+                        " · {}{}",
+                        part_words(part),
+                        if main { " · main" } else { "" }
+                    )
+                }
+                None => format!(" · {}", s.lower()),
+            },
             (None, None, None) => String::new(),
         };
         // A copy weighs and costs what is fitted in it too.
@@ -1089,6 +1120,18 @@ impl Deck {
             item.kind.label()
         )));
         out.extend(Self::perk_lines(st, item));
+        if let (Some(w), Some(_)) = (&item.weapon, on) {
+            out.push(cyan(format!(
+                "{} damage × {} rounds · range {}",
+                w.damage, w.rounds, w.range
+            )));
+            if on.is_some_and(|part| st.character.main_hand(&st.content) != Some(part)) {
+                out.push(cyan(format!(
+                    "off hand · 1 in {} to follow up",
+                    100 / u32::from(crate::combat::OFF_HAND_CHANCE)
+                )));
+            }
+        }
         if let Some(h) = &item.hardware {
             out.extend(h.lines().into_iter().map(cyan));
         }
@@ -4191,7 +4234,7 @@ mod tests {
         };
         assert_eq!(
             card(BodyPart::RightHand)[1],
-            "weapon · hand · 3.2 kg · ¤ 900"
+            "weapon · right hand · main · 3.2 kg · ¤ 900"
         );
         let deck = card(BodyPart::Waist);
         let grants: Vec<&String> = deck.iter().filter(|l| l.starts_with("grants ")).collect();
@@ -4206,6 +4249,42 @@ mod tests {
         assert_eq!(text[1], "hardware · deck socket · 0.4 kg · ¤ 800");
         let arm = texts(&Deck::item_card_of(&st, &ItemId::new("grip_arm"), None));
         assert!(arm[1].starts_with("cyberware · arm · load 3 · "), "{arm:?}");
+    }
+
+    #[test]
+    fn a_worn_guns_card_says_its_rounds_and_its_hand() {
+        let mut st = dshawn();
+        let main = st.character.equipped(BodyPart::RightHand).cloned().unwrap();
+        let card = texts(&Deck::item_card_of(
+            &st,
+            &main,
+            st.character.worn_copy(BodyPart::RightHand),
+        ));
+        assert!(
+            card.contains(&"4 damage × 3 rounds · range 12".to_string()),
+            "{card:?}"
+        );
+        assert!(!card.iter().any(|l| l.starts_with("off hand")), "{card:?}");
+        let nine = ItemId::new("scrap_nine");
+        let copy = st.character.new_copy(&st.content, &nine);
+        st.character
+            .wear(BodyPart::LeftHand, nine.clone(), Some(copy));
+        let card = texts(&Deck::item_card_of(
+            &st,
+            &nine,
+            st.character.worn_copy(BodyPart::LeftHand),
+        ));
+        assert!(
+            card[1].starts_with("weapon · left hand · 0.9 kg"),
+            "{card:?}"
+        );
+        assert!(
+            card.contains(&"off hand · 1 in 4 to follow up".to_string()),
+            "{card:?}"
+        );
+        // In the pack it says neither.
+        let card = texts(&Deck::item_card_of(&st, &ItemId::new("shiv_blade"), None));
+        assert_eq!(card[1].split(" · ").nth(1), Some("hand"), "{card:?}");
     }
 
     #[test]
