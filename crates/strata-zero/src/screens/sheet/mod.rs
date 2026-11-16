@@ -16,7 +16,6 @@ use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT, put, put_paragraph, reveal, solid,
 };
 // A bonus reads green, what a choice would cost amber: the HUD's own.
-use crate::clinic::Operating;
 use crate::ui::hud::{AMBER, GREEN};
 use citygen::{Place, StratumKind};
 use crossterm::event::KeyCode;
@@ -848,9 +847,10 @@ impl Sheet {
 
         // Amber while chrome can change: in the doc's chair, or free.
         let rule_x = body.x + RULE_X;
-        let rule = match crate::clinic::operating(st) {
-            Operating::Chair { .. } | Operating::Free => AMBER,
-            Operating::Locked | Operating::Gone { .. } => RULE,
+        let rule = if crate::screens::kit::chrome::rules::changing(st) {
+            AMBER
+        } else {
+            RULE
         };
         if rule_x < body.right() {
             for y in body.y..body.bottom() {

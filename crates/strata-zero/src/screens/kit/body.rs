@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 /// A deck's slots and an item's sockets on a tile, unlit.
-const PIPS: Color = Color::Rgb(0x3f, 0x7c, 0x87);
+pub(crate) const PIPS: Color = Color::Rgb(0x3f, 0x7c, 0x87);
 
 /// An arrow's way across the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,7 +311,7 @@ pub(crate) fn step<K: Copy + Eq>(layout: &BodyLayout<K>, from: K, dir: Dir) -> O
 
 /// How a tile's last line inks a run of what the worn item gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ink {
+pub(crate) enum Ink {
     Label,
     /// The main hand's `●`.
     Main,
@@ -321,7 +321,7 @@ enum Ink {
 
 /// The worn item's name in at most `rows` lines of `room` columns: wrapped at spaces,
 /// a word too long for its line cut with `…`, the last line taking the rest, cut.
-fn name_lines(name: &str, room: usize, rows: usize) -> Vec<String> {
+pub(crate) fn name_lines(name: &str, room: usize, rows: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut words = name.split_whitespace().peekable();
     while let Some(word) = words.next() {
@@ -405,7 +405,7 @@ fn gives(st: &AppState, part: BodyPart, room: usize) -> Vec<(String, Ink)> {
 
 /// A perk in a tile's few columns: `+5 HP`, `+4 kg`, `COOL +1` (`REF +1` when the
 /// attribute's name has no room).
-fn perk_short(perk: &Perk, room: usize) -> String {
+pub(crate) fn perk_short(perk: &Perk, room: usize) -> String {
     match *perk {
         Perk::Attribute(a, n) => {
             let long = format!("{} {n:+}", a.name());
@@ -428,12 +428,49 @@ fn perk_short(perk: &Perk, room: usize) -> String {
 
 /// How the cursor lights a tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Lit {
+pub(crate) enum Lit {
     Off,
     /// The cursor's tile while the body has the focus.
     On,
     /// The cursor's tile while the pack has it.
     Dim,
+}
+
+/// The header row of either view: `▌MEAT▐ CHROME` or `MEAT ▌CHROME▐`, the view shown
+/// lit while it has the focus, then `mark` and `c switch`; in the full body a rule
+/// under it.
+pub(crate) fn header(
+    st: &AppState,
+    l: &BodyLayout<impl Copy>,
+    chrome: bool,
+    focused: bool,
+    mark: &[(String, Style)],
+    buf: &mut Buffer,
+) {
+    let on = if focused {
+        lit_bold(st.tick)
+    } else {
+        Style::default().fg(DIM)
+    };
+    let off = Style::default().fg(DIM);
+    let mut runs: Vec<(String, Style)> = if chrome {
+        vec![("MEAT ".into(), off), ("▌CHROME▐".into(), on)]
+    } else {
+        vec![("▌MEAT▐".into(), on), (" CHROME".into(), off)]
+    };
+    runs.extend(mark.iter().cloned());
+    runs.push(("  c".into(), Style::default().fg(CYAN)));
+    runs.push((" switch".into(), Style::default().fg(FAINTER)));
+    let mut x = l.left.x + 1;
+    for (text, style) in runs {
+        put(buf, x, l.left.y, &text, style, l.left.right());
+        x = x.saturating_add(text.chars().count() as u16);
+    }
+    if l.full {
+        for x in l.left.x..l.left.right() {
+            buf[(x, l.left.y + 1)].set_char('─').set_fg(RULE);
+        }
+    }
 }
 
 /// The body: the header (`▌MEAT▐`, lit while the body has the focus) and in the full
@@ -445,24 +482,7 @@ pub(crate) fn draw(
     focused: bool,
     buf: &mut Buffer,
 ) {
-    let header = if focused {
-        lit_bold(st.tick)
-    } else {
-        Style::default().fg(DIM)
-    };
-    put(
-        buf,
-        l.left.x + 1,
-        l.left.y,
-        "▌MEAT▐",
-        header,
-        l.left.right(),
-    );
-    if l.full {
-        for x in l.left.x..l.left.right() {
-            buf[(x, l.left.y + 1)].set_char('─').set_fg(RULE);
-        }
-    }
+    header(st, l, false, focused, &[], buf);
     let rows = if l.full { 2 } else { 1 };
     for &(part, r) in &l.tiles {
         let light = match (part == cursor, focused) {
@@ -470,16 +490,58 @@ pub(crate) fn draw(
             (true, true) => Lit::On,
             (true, false) => Lit::Dim,
         };
-        draw_tile(st, part, r, light, rows, buf);
+        let label = st.content.node(part).map_or("", |n| n.name.as_str());
+        let worn = st
+            .character
+            .equipped(part)
+            .and_then(|id| st.content.item(id))
+            .map(|item| {
+                (
+                    item.name.as_str(),
+                    gives(st, part, usize::from(r.width - 2)),
+                )
+            });
+        draw_tile(st, r, label, worn, light, rows, buf);
     }
+    draw_joints(l, buf);
+}
+
+/// The lines between the tiles.
+pub(crate) fn draw_joints<K>(l: &BodyLayout<K>, buf: &mut Buffer) {
     for ((x, y), ch) in joints(l) {
         buf[(x, y)].set_char(ch).set_fg(RULE);
     }
 }
 
-/// One part's tile: its name in the top border; inside, the worn item's name on `rows`
-/// lines and, dim under it, what it gives, or a dim `·` when nothing is worn.
-fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf: &mut Buffer) {
+/// A tile's `label` in its top border: ` NAME ` after the corner, without its spaces
+/// where the border is short, cut where even that won't fit.
+pub(crate) fn draw_label(st: &AppState, r: Rect, label: &str, light: Lit, buf: &mut Buffer) {
+    let style = if light == Lit::On {
+        lit_bold(st.tick)
+    } else {
+        Style::default().fg(DIM)
+    };
+    let border = usize::from(r.width.saturating_sub(2));
+    let label = if label.chars().count() + 2 <= border {
+        format!(" {label} ")
+    } else {
+        cut(label, border)
+    };
+    put(buf, r.x + 1, r.y, &label, style, r.right() - 1);
+}
+
+/// A tile: `label` in the top border (without its spaces where the border is short,
+/// cut where even that won't fit); inside, what it holds, its name on `rows` lines and,
+/// dim under it, what it gives, or a dim `·` when it holds nothing.
+pub(crate) fn draw_tile(
+    st: &AppState,
+    r: Rect,
+    label: &str,
+    holds: Option<(&str, Vec<(String, Ink)>)>,
+    light: Lit,
+    rows: u16,
+    buf: &mut Buffer,
+) {
     let (x, y, w, h) = (r.x, r.y, r.width, r.height);
     let (right, inner) = (r.right(), r.right() - 1);
     let on = light == Lit::On;
@@ -491,13 +553,7 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     });
     let run = "─".repeat(usize::from(w - 2));
     put(buf, x, y, &format!("┌{run}┐"), edge, right);
-    let label = st.content.node(part).map_or("", |n| n.name.as_str());
-    let label_style = if on {
-        lit_bold(st.tick)
-    } else {
-        Style::default().fg(DIM)
-    };
-    put(buf, x + 1, y, &format!(" {label} "), label_style, inner);
+    draw_label(st, r, label, light, buf);
     for cy in y + 1..y + h - 1 {
         put(buf, x, cy, "│", edge, right);
         put(buf, inner, cy, "│", edge, right);
@@ -508,11 +564,7 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     }
     put(buf, x, y + h - 1, &format!("└{run}┘"), edge, right);
 
-    let Some(item) = st
-        .character
-        .equipped(part)
-        .and_then(|id| st.content.item(id))
-    else {
+    let Some((item, gives)) = holds else {
         let dot = Style::default().fg(FAINTER).bg(bg);
         put(buf, x + w / 2, y + h / 2, "·", dot, inner);
         return;
@@ -523,14 +575,11 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     if on {
         name = name.fg(lit(st.tick)).add_modifier(Modifier::BOLD);
     }
-    for (i, line) in name_lines(&item.name, room, usize::from(rows))
-        .iter()
-        .enumerate()
-    {
+    for (i, line) in name_lines(item, room, usize::from(rows)).iter().enumerate() {
         put(buf, x + 1, top + i as u16, line, name, inner);
     }
     let mut cx = x + 1;
-    for (text, ink) in gives(st, part, room) {
+    for (text, ink) in gives {
         let fg = match ink {
             Ink::Label => DIM,
             Ink::Main => CYAN,

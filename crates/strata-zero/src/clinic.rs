@@ -466,7 +466,7 @@ mod tests {
         press(&mut run, KeyCode::Char(way));
         let text = press(&mut run, KeyCode::Char('i'));
         assert_eq!(run.st.chair.map(|c| c.building), Some(b));
-        assert!(text.contains("CHROME · CHROMING UP"), "{text}");
+        assert!(text.contains("MEAT ▌CHROME▐ · CHROMING UP"), "{text}");
         assert!(text.contains("esc get out of the chair"), "{text}");
         // The neural port in, for ¤180.
         press(&mut run, KeyCode::Char(' '));

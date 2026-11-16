@@ -2,8 +2,12 @@
 //! and one per socket of the piece installed there, placed by a table and joined the
 //! way the sites join.
 
-// GEAR draws CHROME from these; until then only the tests and the ledger read them.
-#![cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod card;
+pub(crate) mod rules;
+mod view;
+
+#[cfg(test)]
+mod deck_tests;
 
 use super::body::{BodyLayout, FULL_W, Place, at, place};
 use crate::app::AppState;

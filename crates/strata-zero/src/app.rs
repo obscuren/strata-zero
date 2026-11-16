@@ -1248,6 +1248,7 @@ mod tests {
             part: game::BodyPart::Torso,
             row: 2,
             filter: Some(game::ItemKind::Program),
+            ..Default::default()
         };
         st.deck_sheet.tile = 9;
         st.deck_sheet.pane = crate::screens::sheet::SheetPane::Ledger;

@@ -45,6 +45,16 @@ The arrows move from tile to tile along the body. `→` from a tile with nothing
 
 The main hand's gun fires; a gun in the other hand follows up about 1 shot in 4 (Turns and fights). Throwables are thrown from the map, not from here.
 
+### CHROME
+
+`c` switches the body between MEAT, what you wear and hold, and CHROME, the chrome in you, from anywhere on the tab; `c` again comes back. The header says which one you're on.
+
+On CHROME there is a tile for each site in your body, joined the way they join: EYES, NEURAL, EARS and JAW across the top; L ARM, ORGANS and R ARM through the middle; the SPINE under them, branching to BACK, LEGS and SKIN. A piece with sockets brings a tile for each of them: a chrome arm's HAND and FOREARM, a drone cradle's BAY. A tile shows the piece's name and, under it, what it gives (`NET +1`, or an ability like `Bite`), with a `■` for each fitted socket and a `□` for each empty one. A cradle shows how many bays it has, and a drone in its bay says `docked`. An empty site shows a `·`.
+
+On the right, LOAD shows how much chrome your body carries against what it can take, with what's left and how many pieces are in you. Under it is the card of the tile the cursor is on: the piece's drawing, where it sits, its load and what it does, and what is in each of its sockets.
+
+The arrows move from tile to tile. Chrome goes in and comes out only in a ripperdoc's chair (Chrome and drones): there `space` on a tile lists what in your pack fits it, and `x` takes a piece out. A drone docks in its bay, or goes back to your pack, anywhere.
+
 ### Inspecting
 
 `i` (Inspect / Mod in the item's menu) opens the item's blueprint. On a piece with sockets, `m` switches to modding: pick a socket and fit hardware into it. Hardware only works while it's fitted to something you wear; the Keyjack is the exception, and works from your pack on the fuse in its socket (The city and the world covers it). `s` lets you put stickers on a drawing that takes them; the Keyjack's doesn't.

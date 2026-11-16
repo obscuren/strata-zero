@@ -1847,14 +1847,14 @@ fn broadcast_and_perma_death() {
     }
 }
 
-/// A ripperdoc's: the shut door by day, the chair's window by night, and the ledger in
-/// the chair on a piece, in FITS paying and short, on a swap, asking before a pull, and
-/// with free chrome, at both sizes.
+/// A ripperdoc's: the shut door by day, the chair's window by night, and CHROME in the
+/// chair on a piece, in FITS paying and short, on a swap, asking before a pull, and with
+/// free chrome, at both sizes.
 #[test]
 #[ignore]
 fn ripperdoc_clinic() {
     use crate::clinic::testutil::{DAY, inside, outside, seated};
-    use crate::screens::sheet::LedgerRow;
+    use crate::screens::kit::chrome::Stop;
     use game::{Site, Stack};
     let sizes = [(100, 30), (120, 40)];
 
@@ -1920,7 +1920,7 @@ fn ripperdoc_clinic() {
             st.character.install(site, id, copy);
         }
     };
-    let chair_shots = |name: &str, credits: u32, free: bool, row: LedgerRow, keys: &[KeyCode]| {
+    let chair_shots = |name: &str, credits: u32, free: bool, stop: Stop, keys: &[KeyCode]| {
         let mut st = seated();
         loadout(&mut st);
         st.character.credits = credits;
@@ -1929,12 +1929,11 @@ fn ripperdoc_clinic() {
             .give_item(&st.content, ItemId::new("grip_arm"), 1);
         let map = MapScreen::walking(&mut st);
         let mut deck = Deck::chair(&st);
-        deck.sheet.state.row = row;
+        deck.kit.state.stop = stop;
         for k in keys {
             deck.update(&mut st, &[key(*k)]);
         }
-        deck.sheet.changed = st.tick;
-        deck.sheet.card = st.tick;
+        deck.kit.changed = st.tick;
         st.tick += 200;
         if st.tick % 90 < 3 {
             st.tick += 3;
@@ -1943,8 +1942,8 @@ fn ripperdoc_clinic() {
             shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
         }
     };
-    let arm = LedgerRow::Site(Site::LeftArm);
-    let right = LedgerRow::Site(Site::RightArm);
+    let arm = Stop::Site(Site::LeftArm);
+    let right = Stop::Site(Site::RightArm);
     chair_shots("clinic_ledger_piece", 1200, false, arm, &[]);
     chair_shots(
         "clinic_fits_paying",
@@ -3041,7 +3040,7 @@ fn at_the_doctor(st: &mut AppState) {
 fn doctor_shots() {
     use crate::missions::ReadAt;
     use crate::missions::reading::ReadCard;
-    use crate::screens::sheet::LedgerRow;
+    use crate::screens::kit::chrome::Stop;
     let shard = ItemId::new("ledger_shard");
     for (w, h) in [(120u16, 40u16), (100, 30)] {
         let size = (w, h);
@@ -3135,10 +3134,9 @@ fn doctor_shots() {
         st.missions.tab = Some(tab);
         let map = MapScreen::walking(&mut st);
         let mut deck = Deck::chair(&st);
-        deck.sheet.state.row = LedgerRow::Site(site);
+        deck.kit.state.stop = Stop::Site(site);
         deck.update(&mut st, &[key(KeyCode::Char(' '))]);
-        deck.sheet.changed = st.tick;
-        deck.sheet.card = st.tick;
+        deck.kit.changed = st.tick;
         st.tick += 200;
         if st.tick % 90 < 3 {
             st.tick += 3;

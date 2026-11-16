@@ -691,18 +691,19 @@ impl Deck {
         self
     }
 
-    /// Sat in a ripperdoc's chair: the deck as it was left, opened on ATTRIBUTES with the
-    /// ledger in hand.
+    /// Sat in a ripperdoc's chair: the deck as it was left, opened on GEAR & INVENTORY
+    /// on CHROME, the cursor on NEURAL.
     pub fn chair(st: &AppState) -> Self {
         let mut d = Deck::new(st.tick).restore(st);
         if let Some(p) = st.player.as_ref() {
             d = d.focus(p.place, p.pos);
         }
-        d.set_tab(Tab::Attributes, st);
-        d.sheet.opened(st.tick);
-        d.sheet.state.pane = crate::screens::sheet::SheetPane::Ledger;
-        d.sheet.state.row = crate::screens::sheet::LedgerRow::default();
-        d.sheet.reselect(st);
+        d.set_tab(Tab::Kit, st);
+        d.kit.open_chrome(
+            crate::screens::kit::chrome::Stop::Site(game::Site::Neural),
+            st.tick,
+        );
+        d.kit.reselect(st);
         d
     }
 
@@ -862,8 +863,7 @@ impl Deck {
         // The detail pane types on again, and so does the kit's card.
         self.changed = st.tick;
         if tab == Tab::Kit {
-            self.kit.reselect(st);
-            self.kit.changed = st.tick;
+            self.kit.opened(st);
         }
         if tab == Tab::Attributes {
             self.sheet.opened(st.tick);
@@ -1441,11 +1441,17 @@ impl Deck {
             if self.tab == Tab::Map && atlas::key(st, k.code) {
                 continue;
             }
-            // GEAR & INVENTORY takes the arrows, left and right too, `h j k l` and its
-            // filter keys; space, `q` `e`, tab, the digits and esc go on to the deck's.
+            // GEAR & INVENTORY takes the arrows, left and right too, `h j k l`, `c` and
+            // its filter keys; space, `q` `e`, tab, the digits and esc go on to the
+            // deck's. On CHROME it takes space, `x`, and esc while FITS is open or a
+            // pull is asked about.
             if self.tab == Tab::Kit {
                 self.kit.reselect(st);
-                if self.kit.key(st, k.code, st.tick) {
+                let mine = match self.kit.state.view {
+                    crate::screens::kit::View::Meat => self.kit.key(st, k.code, st.tick),
+                    crate::screens::kit::View::Chrome => self.kit.chrome_key(st, k.code),
+                };
+                if mine {
                     continue;
                 }
             }
@@ -1900,16 +1906,16 @@ impl Screen for Deck {
 
         status_strip(buf, st, inner.x + 1, strip_y, right);
 
-        // Hints. The sheet's come with what the lock refuses dimmer.
+        // Hints. The sheet's and CHROME's come with what the lock refuses dimmer.
         let hint = match self.tab {
             Tab::Attributes => self.sheet.hint_line(st),
+            Tab::Kit => self.kit.hint_line(st),
             tab => Line::from(Span::styled(
                 match tab {
                     Tab::Skills => "Q/E tabs · ↑↓ select · ←→ fold · space fold/buy · tab close",
                     Tab::Talents => {
                         "←→↑↓ move · [ ] trees · space burn a point · Q/E tabs · tab close"
                     }
-                    Tab::Kit => self.kit.hints(),
                     Tab::Map => atlas::hint(st),
                     Tab::Workbench if st.character.has_workbench(&st.content) => {
                         self.workbench.hints(st)
@@ -2067,18 +2073,18 @@ mod tests {
     }
 
     #[test]
-    fn the_chair_opens_on_the_ledger_and_closing_gets_you_up() {
-        use crate::screens::sheet::SheetPane;
+    fn the_chair_opens_on_chrome_and_closing_gets_you_up() {
+        use crate::screens::kit::View;
+        use crate::screens::kit::chrome::Stop;
         let mut st = crate::clinic::testutil::seated();
-        st.deck_tab = Tab::Kit;
-        st.deck_sheet.row = crate::screens::sheet::LedgerRow::Site(game::Site::Legs);
+        st.deck_tab = Tab::Attributes;
+        st.deck_kit.stop = Stop::Site(game::Site::Legs);
         let mut d = Deck::chair(&st);
-        assert_eq!(d.tab, Tab::Attributes);
-        assert_eq!(d.sheet.state.pane, SheetPane::Ledger);
-        // On the first chrome row, whatever row the ledger was left on.
+        assert_eq!(d.tab, Tab::Kit);
+        // On NEURAL, whatever stop CHROME was left on.
         assert_eq!(
-            d.sheet.state.row,
-            crate::screens::sheet::LedgerRow::default()
+            (d.kit.state.view, d.kit.state.stop),
+            (View::Chrome, Stop::Site(game::Site::Neural))
         );
         assert!(matches!(
             d.update(&mut st, &[key(KeyCode::Esc)]),
@@ -3017,6 +3023,7 @@ mod tests {
             part: BodyPart::Torso,
             row: 0,
             filter: Some(ItemKind::Program),
+            ..Default::default()
         };
         d.update(&mut st, &[key(KeyCode::Up)]);
         let kept = d.kit.state;
