@@ -974,7 +974,7 @@ fn blueprint_stack(st: &mut AppState, worn: bool, item: &str) -> (MapScreen, Dec
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
     deck.update(st, &[key(KeyCode::Char('3'))]);
-    deck.kit.state.pane = if worn { Pane::Rack } else { Pane::Pack };
+    deck.kit.state.pane = if worn { Pane::Body } else { Pane::Pack };
     // The copy the deck screen would pass: the one worn, else the first carried.
     let id = ItemId::new(item);
     let copy = if worn {
@@ -1303,25 +1303,68 @@ fn workbench_sheets() {
     shot_stack("workbench_stim_100x30", &st, &[&map, &deck], (100, 30));
 }
 
-/// GEAR & INVENTORY at each size: D'SHAWN with the Hushcan and Redeye fitted on the
-/// Ratchet and the rack on R HAND, then a fresh D'SHAWN with the pack filtered to
-/// hardware and the cursor on the Hushcan.
+/// GEAR & INVENTORY at each size: D'SHAWN dressed as the mock has him, the Hushcan and
+/// Redeye fitted on the Ratchet and the cursor on R HAND; the same at 120×40 with a third
+/// arm off the torso, a Scrap nine in its hand; then a fresh D'SHAWN with the pack
+/// filtered to hardware and the cursor on the Hushcan.
 #[test]
 #[ignore]
 fn gear_and_inventory() {
     let sizes = [(100, 30), (120, 40)];
-    let mut st = state_home();
-    st.character = game::Character::debug_runner(&st.content);
-    fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
-    let body = st.character.body(&st.content);
-    let tile = body
-        .iter()
-        .position(|n| n.part == BodyPart::RightHand)
-        .unwrap();
-    kit_shots(&mut st, "gear_and_inventory_rack", &sizes, |kit, _| {
-        kit.state.pane = Pane::Rack;
-        kit.state.tile = tile;
-    });
+    let dressed = || {
+        let mut st = state_home();
+        st.character = game::Character::debug_runner(&st.content);
+        fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
+        for (part, item) in [
+            (BodyPart::Head, "hardhat"),
+            (BodyPart::Face, "mirrorshades"),
+            (BodyPart::LeftHand, "shiv_blade"),
+            (BodyPart::Torso, "salvage_jacket"),
+            (BodyPart::Legs, "cargo_pants"),
+        ] {
+            st.character.wear(part, ItemId::new(item), None);
+        }
+        st
+    };
+    let on_the_right_hand = |kit: &mut Kit, _: &AppState| {
+        kit.state.pane = Pane::Body;
+        kit.state.part = BodyPart::RightHand;
+    };
+    let mut st = dressed();
+    kit_shots(
+        &mut st,
+        "gear_and_inventory_rack",
+        &sizes,
+        on_the_right_hand,
+    );
+
+    let mut st = dressed();
+    for (part, kind, name, joins) in [
+        (
+            BodyPart::ThirdArm,
+            game::PartKind::Arm,
+            "ARM 3",
+            BodyPart::Torso,
+        ),
+        (
+            BodyPart::ThirdHand,
+            game::PartKind::Hand,
+            "HAND 3",
+            BodyPart::ThirdArm,
+        ),
+    ] {
+        st.content.body.push(game::BodyNode {
+            part,
+            kind,
+            name: name.into(),
+            joins: Some(joins),
+            main: false,
+        });
+    }
+    st.character
+        .wear(BodyPart::ThirdHand, ItemId::new("scrap_nine"), None);
+    let third = "gear_and_inventory_third_arm";
+    kit_shots(&mut st, third, &[(120, 40)], on_the_right_hand);
 
     let mut st = state_home();
     st.character = game::Character::debug_runner(&st.content);

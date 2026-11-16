@@ -2140,13 +2140,17 @@ mod tests {
         assert!(
             text.contains("▌GEAR & INVENTORY▐")
                 && text.contains("R HAND")
-                && text.contains("Ratchet SMG"),
+                && text.contains("Ratchet"),
             "{text}"
         );
-        assert!(text.contains("— empty —"), "{text}");
+        assert!(text.contains("— EMPTY —"), "the bare head's card: {text}");
         assert!(text.contains(d.kit.hints()), "the kit's hints: {text}");
         d.update(&mut st, &[key(KeyCode::Down)]);
-        assert_eq!((d.tab, d.kit.state.tile), (Tab::Kit, 3), "torso");
+        assert_eq!(
+            (d.tab, d.kit.state.part),
+            (Tab::Kit, BodyPart::Torso),
+            "torso"
+        );
         st.tick += 30;
         let text = draw(&d, &st, 120, 35);
         assert!(
@@ -2154,7 +2158,7 @@ mod tests {
             "{text}"
         );
 
-        // Over the rack's right edge to the pack; right on the pack does nothing.
+        // Right off FACE crosses to the pack; right on the pack does nothing.
         d.update(&mut st, &[key(KeyCode::Up)]);
         d.update(&mut st, &[key(KeyCode::Right); 3]);
         assert_eq!((d.tab, d.kit.state.pane), (Tab::Kit, Pane::Pack));
@@ -2179,8 +2183,8 @@ mod tests {
 
         d.update(&mut st, &[key(KeyCode::Left); 4]);
         assert_eq!(
-            (d.tab, d.kit.state.pane, d.kit.state.tile),
-            (Tab::Kit, Pane::Rack, 0),
+            (d.tab, d.kit.state.pane),
+            (Tab::Kit, Pane::Body),
             "left never leaves the tab"
         );
         d.update(&mut st, &[key(KeyCode::Char('e'))]);
@@ -2605,7 +2609,7 @@ mod tests {
         // The pack's rows above the rule: the chips, then the list.
         let rule = lines
             .iter()
-            .position(|l| l.contains('╩'))
+            .position(|l| l.contains('╠'))
             .expect("the rule");
         let list: Vec<&str> = lines[..rule]
             .iter()
@@ -3007,7 +3011,7 @@ mod tests {
         d.update(&mut st, &[key(KeyCode::Char('3'))]);
         d.kit.state = KitState {
             pane: Pane::Pack,
-            tile: 4,
+            part: BodyPart::Torso,
             row: 0,
             filter: Some(ItemKind::Program),
         };
@@ -3791,12 +3795,11 @@ mod tests {
         );
     }
 
-    /// Opens GEAR & INVENTORY with the rack's cursor on `part`'s tile.
+    /// Opens GEAR & INVENTORY with the body's cursor on `part`'s tile.
     fn on_tile(d: &mut Deck, st: &mut AppState, part: BodyPart) {
         d.update(st, &[key(KeyCode::Char('3'))]);
-        d.kit.state.pane = Pane::Rack;
-        let body = st.character.body(&st.content);
-        d.kit.state.tile = body.iter().position(|n| n.part == part).unwrap();
+        d.kit.state.pane = Pane::Body;
+        d.kit.state.part = part;
     }
 
     /// Opens GEAR & INVENTORY with the pack's cursor on the first row `pick` takes.
@@ -4341,25 +4344,25 @@ mod tests {
         let mut d = Deck::new(0);
         on_tile(&mut d, &mut st, BodyPart::RightHand);
         st.tick = 60;
-        // The R HAND tile's bottom edge, up to its corner.
+        // What the R HAND tile says it gives, inside its borders.
         let edge = |d: &Deck, st: &AppState| {
             let text = buffer_text(&screen(d, st, 100, 30));
             let lines: Vec<&str> = text.lines().collect();
             let y = lines.iter().position(|l| l.contains("┌ R HAND")).unwrap();
             let at = lines[y].find("┌ R HAND").unwrap();
             let x = lines[y][..at].chars().count();
-            let bottom: String = lines[y + 2].chars().skip(x).collect();
-            bottom.split('┘').next().unwrap().to_string()
+            let gives = lines[y + 2].chars().skip(x + 1);
+            gives.take_while(|c| *c != '│').collect::<String>()
         };
         let row = edge(&d, &st);
-        assert!(row.contains(" □□ ") && !row.contains(" · "), "{row:?}");
+        assert!(row.starts_with("● 4×3 □□ "), "{row:?}");
         let card_of = |st: &AppState| texts(&card(st, &Detail::Part(BodyPart::RightHand)));
         let text = card_of(&st);
         assert!(text.contains(&"□ empty socket · muzzle hardware".to_string()));
         assert!(text.contains(&"□ empty socket · rail hardware".to_string()));
         fit(&mut st, game::Host::Worn(BodyPart::RightHand), 0, "hushcan");
         let row = edge(&d, &st);
-        assert!(row.contains(" ■□ "), "{row:?}");
+        assert!(row.starts_with("● 4×3 ■□ "), "{row:?}");
         let text = card_of(&st);
         assert!(
             text.contains(&"■ Hushcan · cool +1".to_string()),

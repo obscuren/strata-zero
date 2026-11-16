@@ -30,14 +30,20 @@ Your character sheet. On the left are your five attributes, with any unspent poi
 
 ## GEAR & INVENTORY
 
-On the left is what you wear, part by part: HEAD, FACE, BACK, TORSO, each arm and hand (R ARM, R HAND, L ARM, L HAND), WAIST (your deck), LEGS and FEET. Arms take nothing yet; a weapon goes in a hand. On the right is your pack, grouped by kind, with the item under the cursor drawn and described. `→` off the right edge of the rack crosses to the pack, `←` comes back, and `[ ]` filter the pack to one kind of thing.
+On the left is your body, a tile for each part, joined the way the parts join: HEAD with FACE beside it; TORSO with an arm and a hand on each side (L ARM, L HAND, R ARM, R HAND); BACK and WAIST under it, your deck on the waist; LEGS, and FEET beside them. Arms take nothing yet; a weapon goes in a hand.
+
+A tile shows the name of what that part wears and, under it, what it gives: HP or carry for clothes, an attribute for shades, damage × rounds for a gun with a `■` for each fitted socket and a `□` for each empty one, the program slots and sockets of a deck. A hand starts that line with `●` if it's your main hand, the one that fires first, or `○` for the other. An empty part shows a `·`.
+
+On the right is your pack, grouped by kind, and under it the card of whatever the cursor is on, with its drawing when there is room for it. In a smaller window the body draws without the arms (each hand sits on the torso), and the drawing waits for Inspect.
+
+The arrows move from tile to tile along the body. `→` from a tile with nothing to its right crosses to the pack, and `←` comes back to the part you left. `[ ]` filter the pack to one kind of thing.
 
 `space` opens what you can do with the item:
 
-- `e` equip it on the first free part it fits (a hand item tries the right hand first); with none free, it goes on in place of what's there (for a hand item, the right hand's), which comes off. `u` use it, `i` inspect it, `d` drop one, `D` drop the lot.
-- On a part: a letter puts on something that fits, on that part, `u` takes off what is there.
+- In the pack: `e` equip it on the first free part it fits (a hand item tries the main hand first); with none free, it goes on in place of what's there (for a hand item, the main hand's), which comes off. `u` use it, `i` inspect it, `d` drop one, `D` drop the lot.
+- On a part: a letter puts on something from your pack that fits, on that very part, so a gun goes in the hand you picked. `u` takes off what is there, `i` inspects it.
 
-Only the weapon in your right hand fires. Throwables are thrown from the map, not from here.
+The main hand's gun fires; a gun in the other hand follows up about one shot in four (Turns and fights). Throwables are thrown from the map, not from here.
 
 ### Inspecting
 

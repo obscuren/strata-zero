@@ -1245,7 +1245,7 @@ mod tests {
         st.deck_part = 300;
         st.deck_kit = crate::screens::kit::KitState {
             pane: crate::screens::kit::Pane::Pack,
-            tile: 4,
+            part: game::BodyPart::Torso,
             row: 2,
             filter: Some(game::ItemKind::Program),
         };
