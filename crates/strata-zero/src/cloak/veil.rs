@@ -201,6 +201,17 @@ pub fn roll(tick: u64, seed: u64, k: u64) -> f32 {
     hash64(hash64(tick / VEIL_STEP, k), seed) as f32 / u64::MAX as f32
 }
 
+/// The wave at `tick` and `heat` over a map `rows` high: the row its head is on (it
+/// runs off the bottom and wraps) and how many rows its band covers above it.
+pub fn wave_head(tick: u64, heat: f32, rows: i64) -> (i64, i64) {
+    let t = tick as f64 * 1000.0 / 30.0;
+    let heat = f64::from(heat);
+    let band = (rows - 2).min(1 + (4.0 * heat).round() as i64);
+    let period = (150.0 - 100.0 * heat).max(35.0);
+    let head = ((t / period).floor() as i64).rem_euclid(rows + band + 4);
+    (head, band)
+}
+
 /// `a` to `b` by `t`, clamped.
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0.0, 1.0)
@@ -322,10 +333,7 @@ pub fn draw(
     if look.wave {
         let t = tick as f64 * 1000.0 / 30.0;
         let heat = f64::from(look.heat);
-        let rows = i64::from(map.height);
-        let band = (rows - 2).min(1 + (4.0 * heat).round() as i64);
-        let period = (150.0 - 100.0 * heat).max(35.0);
-        let head = ((t / period).floor() as i64).rem_euclid(rows + band + 4);
+        let (head, band) = wave_head(tick, look.heat, i64::from(map.height));
         let back = (t / 600.0).floor() as i64 % 2 == 1;
         let slip = f64::from(roll(tick, seed, 4)) < (0.12 * heat * heat).min(0.5);
         let shifted = buf.clone();

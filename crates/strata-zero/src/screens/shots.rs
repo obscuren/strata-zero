@@ -6551,7 +6551,7 @@ fn guards_shot(dir: &str, name: &str, st: &mut AppState) {
 #[ignore]
 fn cloak_shots() {
     use crate::cloak::testutil::{a_guard_in_sight, fire, frames, scrambler, set_charge};
-    use crate::cloak::veil::{look, now, roll};
+    use crate::cloak::veil::{look, now, roll, wave_head};
     use crate::cloak::{START_TICKS, hidden};
     use citygen::rng::hash64;
     use game::{Charge, FULL_CELL};
@@ -6646,25 +6646,18 @@ fn cloak_shots() {
                 .map
                 .height,
         );
-        // The wave's head and band as the veil works them out.
-        let head = |tick: u64, heat: f64| {
-            let t = tick as f64 * 1000.0 / 30.0;
-            let band = (rows - 2).min(1 + (4.0 * heat).round() as i64);
-            let period = (150.0 - 100.0 * heat).max(35.0);
-            (
-                ((t / period).floor() as i64).rem_euclid(rows + band + 4),
-                band,
-            )
-        };
+        // Ticks on until the wave's band, as the veil works it out, sits mid-map.
         st.tick = start;
-        loop {
+        let mid_map = (0..600).any(|_| {
             let l = look_now(&st);
-            let (at, band) = head(st.tick, f64::from(l.heat));
+            let (at, band) = wave_head(st.tick, l.heat, rows);
             if l.wave && !l.plain && at - band / 2 == rows / 2 {
-                break;
+                return true;
             }
             st.tick += 1;
-        }
+            false
+        });
+        assert!(mid_map, "no wave across the middle in 600 ticks");
         let buf = shot(&mut st, "holding_low", (w, h));
         assert!(text(&buf).contains("◌ FIELD SCRAMBLER  10%"));
     }
