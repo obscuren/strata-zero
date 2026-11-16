@@ -1983,7 +1983,7 @@ mod tests {
         assert_eq!(c.origins.len(), 4);
         assert_eq!(c.professions.len(), 4);
         assert_eq!(c.categories.len(), 8);
-        assert_eq!(c.templates.len(), 2);
+        assert_eq!(c.templates.len(), 3);
         assert_eq!(c.skills.len(), 24);
         for o in &c.origins {
             assert_eq!(

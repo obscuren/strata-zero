@@ -1095,6 +1095,11 @@ Content(
                  attributes: Attributes(body: 8, reflex: 7, tech: 4, cool: 7, net: 3),
                  categories: ["iron", "edge", "meat"], skills: ["handguns", "blades", "athletics"],
                  kit: [("cargo_pants", 1)]),
+        Template(id: "wren", handle: "WREN", line: "every camera on the block kept a smear, never a face",
+                 origin: "slab_rat", profession: "fixer",
+                 attributes: Attributes(body: 5, reflex: 8, tech: 4, cool: 8, net: 3),
+                 categories: ["ghost", "iron", "street"], skills: ["stealth", "lockpick", "handguns", "streetwise"],
+                 kit: [("field_scrambler", 1), ("whisper_smg", 1)]),
     ],
     // What a ripperdoc charges, in percent of a piece's value: to put it in, to take it out.
     surgery: (install: 12, pull: 4),

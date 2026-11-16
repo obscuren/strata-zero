@@ -31,10 +31,10 @@ to start as.
 ## WREN, the third runner
 
 - Template `wren`, handle **WREN**, line "every camera on the block kept a smear, never a face".
-- Origin SLAB RAT, profession FIXER; BODY 5, REFLEX 7, TECH 4, COOL 8, NET 3.
+- Origin SLAB RAT, profession FIXER; BODY 5, REFLEX 8, TECH 4, COOL 8, NET 3.
 - Categories GHOST, IRON, STREET; skills Stealth, Lockpick, Handguns, Streetwise.
 - Kit on top of the fixer's: a field scrambler and a Whisper SMG. Worn: the scrambler on the back,
-  the Whisper in the left hand beside the fixer's Ratchet (so the off hand joins in); the fixer's
+  the Whisper in the right hand, where it fires, the fixer's Ratchet in the left following up; the fixer's
   Courier sling goes to the pack.
 - For that, a runner's own kit (the build's) is worn before the profession's (my call). VEX and
   KESSLER wear the same as before.

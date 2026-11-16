@@ -457,12 +457,13 @@ impl Character {
             old_frames: Vec::new(),
             rig_rewards: RigRewards::default(),
         };
-        let mut kit: Vec<(ItemId, u32)> = Vec::new();
+        // The build's own kit comes first, so what a runner chose is worn before the
+        // profession's issue takes the same part.
+        let mut kit: Vec<(ItemId, u32)> = b.kit.clone();
         if let Some(p) = b.profession.as_ref().and_then(|id| c.profession(id)) {
             ch.credits = p.credits;
             kit.extend(p.kit.iter().cloned());
         }
-        kit.extend(b.kit.iter().cloned());
         // The first item that fits a free part is worn, and chrome goes in at each free
         // site of its kind while the load allows, as a new copy when it is held per
         // copy; everything else is packed. Hardware waits for the rest, then goes in
@@ -2046,16 +2047,16 @@ mod tests {
     fn kit_equips_first_fit_and_packs_the_rest() {
         let c = Content::load().unwrap();
         let mut b = Build::from_template(&c, c.template(&TemplateId::new("kessler")).unwrap());
-        b.kit.push((ItemId::new("salvage_jacket"), 1)); // torso is taken by the weave
+        b.kit.push((ItemId::new("salvage_jacket"), 1)); // the build's kit is worn first
         let ch = Character::from_build(&c, &b);
         assert_eq!(
             ch.equipped(BodyPart::Torso),
-            Some(&ItemId::new("ballistic_weave"))
+            Some(&ItemId::new("salvage_jacket"))
         );
         assert_eq!(
-            ch.count(&ItemId::new("salvage_jacket")),
+            ch.count(&ItemId::new("ballistic_weave")),
             1,
-            "second torso item is packed"
+            "the profession's torso item is packed"
         );
         // Hands fill main first; the solo's boots go on the feet.
         let worn = |p| ch.equipped(p).map(|id| id.0.as_str());
@@ -2082,6 +2083,64 @@ mod tests {
         assert_eq!(
             ch.equipped(BodyPart::Back),
             Some(&ItemId::new("courier_sling"))
+        );
+    }
+
+    #[test]
+    fn wren_starts_scrambled_on_the_back_with_a_gun_in_each_hand() {
+        let c = Content::load().unwrap();
+        let b = Build::from_template(&c, c.template(&TemplateId::new("wren")).unwrap());
+        let ch = Character::from_build(&c, &b);
+        let worn = |p| ch.equipped(p).map(|id| id.0.as_str());
+        assert_eq!(worn(BodyPart::Back), Some("field_scrambler"));
+        // The build's whisper takes the main hand first; the fixer's ratchet the other.
+        assert_eq!(worn(BodyPart::RightHand), Some("whisper_smg"));
+        assert_eq!(worn(BodyPart::LeftHand), Some("ratchet_smg"));
+        assert_eq!(
+            ch.count(&ItemId::new("courier_sling")),
+            1,
+            "the sling is packed"
+        );
+        for s in ["stealth", "lockpick", "handguns", "streetwise"] {
+            assert!(ch.skills.contains(&SkillId::new(s)), "{s}");
+        }
+        assert!(
+            ch.abilities(&c)
+                .iter()
+                .any(|(id, _)| id == &AbilityId::new("scramble"))
+        );
+        let a = ch.attributes;
+        assert_eq!((a.body, a.reflex, a.tech, a.cool, a.net), (5, 8, 4, 8, 3));
+    }
+
+    #[test]
+    fn vex_and_kessler_wear_what_they_wore() {
+        let c = Content::load().unwrap();
+        let wore = |t: &str| {
+            let b = Build::from_template(&c, c.template(&TemplateId::new(t)).unwrap());
+            let ch = Character::from_build(&c, &b);
+            ch.equipment
+                .iter()
+                .map(|(p, s)| format!("{p:?}={}", s.0))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            wore("vex"),
+            [
+                "Torso=salvage_jacket",
+                "RightHand=ratchet_smg",
+                "Waist=pawnshop_deck"
+            ]
+        );
+        assert_eq!(
+            wore("kessler"),
+            [
+                "Torso=ballistic_weave",
+                "LeftHand=shiv_blade",
+                "RightHand=ratchet_smg",
+                "Legs=cargo_pants",
+                "Feet=tread_boots"
+            ]
         );
     }
 
