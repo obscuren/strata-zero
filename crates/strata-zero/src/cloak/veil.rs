@@ -18,9 +18,9 @@ pub const VEIL_STEP: u64 = 3;
 pub const NEAR_WHITE: (u8, u8, u8) = (244, 248, 255);
 /// The floor's tint toward cyan while the veil is over half on.
 const FLOOR_TINT: f32 = 0.28;
-/// The wash toward cyan over the whole map, and on every third row (the scanline).
-const WASH: f32 = 0.05;
-const SCANLINE: f32 = 0.13;
+/// The wash toward cyan, even over the map: the mock's 5% tint and its 1px lines one row
+/// in three (8% a third), which a cell can't hold.
+const WASH: f32 = 0.077;
 
 /// How the veil looks this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -160,9 +160,11 @@ fn toward(c: Color, to: Rgb, by: f32) -> Color {
 
 /// The veil over the map rect `map`, in the mock's order: each `Solid` cell throws a
 /// pink copy `split` cells left and a cyan one right onto `Empty` floor, the floor takes
-/// a cyan tint, the map a cyan wash, and the wave shifts rows sideways. Your row never
-/// shifts; last, the cells in `keep` (foes really there) and `you` are put back as they
-/// were. Nothing outside `map` and the buffer is touched.
+/// a cyan tint, and the wave shifts rows sideways. Your row never shifts, and a foe
+/// really there (`keep`) shifted along with its row leaves only a channel copy of
+/// itself; the cells in `keep` and `you` are put back as they were. Last, the cyan wash
+/// lies over the whole map, as the mock's sits behind it. Nothing outside `map` and the
+/// buffer is touched.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     buf: &mut Buffer,
@@ -186,6 +188,8 @@ pub fn draw(
 
     // The copies: the last to land gives the symbol; pink and cyan together read white.
     let mut landed = vec![false; usize::from(area.width) * usize::from(area.height)];
+    // A copy's strength over its ground, a shifted foe's too.
+    let by = (0.5 + 0.45 * look.heat).min(1.0);
     if look.split > 0 {
         let mut hits: Vec<Option<((u16, u16), Channel)>> = vec![None; landed.len()];
         for y in area.y..area.bottom() {
@@ -207,7 +211,6 @@ pub fn draw(
                 }
             }
         }
-        let by = (0.5 + 0.45 * look.heat).min(1.0);
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
                 let Some((from, channel)) = hits[at(x, y)] else {
@@ -232,21 +235,6 @@ pub fn draw(
                     let cell = &mut buf[(x, y)];
                     cell.set_fg(toward(cell.fg, CYAN_RGB, FLOOR_TINT));
                 }
-            }
-        }
-    }
-
-    // The wash, stronger on the scanline.
-    if look.veil > 0.0 {
-        for y in area.y..area.bottom() {
-            let by = if (y - map.y).is_multiple_of(3) {
-                SCANLINE
-            } else {
-                WASH
-            } * look.veil;
-            for x in area.x..area.right() {
-                let cell = &mut buf[(x, y)];
-                cell.set_bg(toward(cell.bg, CYAN_RGB, by));
             }
         }
     }
@@ -283,10 +271,21 @@ pub fn draw(
             if shift == 0 {
                 continue;
             }
+            // A foe shifted along is only a copy: pink going left, cyan going right.
+            let channel = if shift < 0 {
+                Channel::Pink
+            } else {
+                Channel::Cyan
+            };
             for x in area.x..area.right() {
                 let from = i32::from(x) - shift;
                 buf[(x, y)] = if cols(from) {
-                    shifted[(from as u16, y)].clone()
+                    let mut cell = shifted[(from as u16, y)].clone();
+                    if keep.contains(&(from as u16, y)) {
+                        let fg = toward(cell.bg, channel.rgb(), by);
+                        cell.set_fg(fg);
+                    }
+                    cell
                 } else {
                     let mut blank = shifted[(x, y)].clone();
                     blank.reset();
@@ -301,6 +300,16 @@ pub fn draw(
     for &(x, y) in keep.iter().chain(you.iter()) {
         if area.contains((x, y).into()) {
             buf[(x, y)] = before[(x, y)].clone();
+        }
+    }
+
+    // The wash, last: under you and the foes too.
+    if look.veil > 0.0 {
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let cell = &mut buf[(x, y)];
+                cell.set_bg(toward(cell.bg, CYAN_RGB, WASH * look.veil));
+            }
         }
     }
 }
@@ -500,7 +509,10 @@ mod tests {
                     "tick {tick} x {x}"
                 );
             }
-            assert_eq!(buf[you], before[you]);
+            assert_eq!(
+                (buf[you].symbol(), buf[you].fg),
+                (before[you].symbol(), before[you].fg)
+            );
         }
     }
 
@@ -520,8 +532,78 @@ mod tests {
                 plain: false,
             };
             draw(&mut buf, map, &hot, tick, 7, &grounds(&[foe]), None, &[foe]);
-            assert_eq!(buf[foe], before[foe], "tick {tick}");
+            assert_eq!(
+                (buf[foe].symbol(), buf[foe].fg),
+                (before[foe].symbol(), before[foe].fg),
+                "tick {tick}"
+            );
         }
+    }
+
+    #[test]
+    fn a_shifted_row_shows_its_foe_once() {
+        let hot = Look {
+            heat: 1.0,
+            split: 0,
+            veil: 1.0,
+            wave: true,
+            plain: false,
+        };
+        let foe = (30, 5);
+        let mut shifted = 0;
+        for tick in 0..120 {
+            let (mut buf, map) = grid();
+            for x in map.x..map.right() {
+                buf[(x, foe.1)].set_char(char::from(b'a' + (x % 26) as u8));
+            }
+            buf[foe].set_char('@').set_fg(crate::render::people::FOE);
+            let before = buf.clone();
+            draw(&mut buf, map, &hot, tick, 7, &grounds(&[foe]), None, &[foe]);
+            let row = |b: &Buffer| {
+                (map.x..map.right())
+                    .map(|x| b[(x, foe.1)].symbol().to_string())
+                    .collect::<Vec<_>>()
+            };
+            if row(&buf) == row(&before) {
+                continue;
+            }
+            shifted += 1;
+            let at = |x: u16| &buf[(x, foe.1)];
+            let foes = (map.x..map.right())
+                .filter(|x| at(*x).symbol() == "@" && at(*x).fg == crate::render::people::FOE)
+                .count();
+            assert_eq!(foes, 1, "one real foe, tick {tick}");
+            let copy = (map.x..map.right())
+                .find(|x| *x != foe.0 && at(*x).symbol() == "@")
+                .unwrap_or_else(|| panic!("the shifted copy, tick {tick}"));
+            assert!(
+                pinkish(at(copy).fg) || cyanish(at(copy).fg),
+                "a channel copy, tick {tick}"
+            );
+        }
+        assert!(shifted > 0, "the foe's row shifted at full heat");
+    }
+
+    #[test]
+    fn the_wash_is_even_and_lies_under_you() {
+        let (mut buf, map) = grid();
+        let you = (22, 9);
+        buf[you].set_char('@');
+        let veiled = Look {
+            heat: 0.0,
+            split: 0,
+            veil: 1.0,
+            wave: false,
+            plain: false,
+        };
+        draw(&mut buf, map, &veiled, 0, 0, &grounds(&[]), Some(you), &[]);
+        let washed = buf[(map.x, map.y)].bg;
+        assert_ne!(washed, PANEL_BG, "the wash is on");
+        for y in map.y..map.bottom() {
+            assert_eq!(buf[(map.x, y)].bg, washed, "row {y}: no stripes");
+        }
+        assert_eq!(buf[you].bg, washed, "no dark box under you");
+        assert_eq!(buf[you].symbol(), "@");
     }
 
     #[test]
