@@ -1319,18 +1319,75 @@ mod tests {
         );
     }
 
+    /// The ward with a guard of 200 HP at (10,3), you cloaked on FOCUS and on turns by
+    /// hand from it, on your act half: the guard's index.
+    fn cloaked_on_turns(st: &mut AppState) -> usize {
+        use crate::guards::testutil::*;
+        let i = guard(st, 0, 0, &[Pos::new(10, 3)]);
+        st.foes[i].hp = 200;
+        st.foes[i].hp_max = 200;
+        crate::cloak::testutil::stealthy(st);
+        st.character.focus = 10;
+        crate::cloak::testutil::fire(st, "cloak").unwrap();
+        crate::cloak::engage_by_hand(st, on(0));
+        settle(st);
+        crate::net::stay(st);
+        i
+    }
+
+    #[test]
+    fn a_strike_from_the_cloak_is_an_ambush() {
+        let mut st = crate::guards::testutil::ward();
+        st.character.give(ItemId::new("neural_port"), 1);
+        st.character
+            .chrome
+            .insert(game::Site::Neural, ItemId::new("neural_port"));
+        let i = cloaked_on_turns(&mut st);
+        st.force_hit = Some(false); // every roll would miss
+        strike(&mut st, &AbilityId::new("static"), i).unwrap();
+        assert_eq!(st.foes[i].hp, 200 - 2 * 6, "it lands, ×2");
+        assert!(logged(&st, "AMBUSH"));
+        assert!(logged(&st, "static · guard 12"));
+        assert!(!crate::cloak::hidden(&st));
+    }
+
     #[test]
     fn the_second_shot_is_a_plain_one() {
-        use crate::guards::testutil::*;
-        let mut st = ward();
-        let i = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
-        st.foes[i].hp = 200;
+        let mut st = crate::guards::testutil::ward();
         crate::cloak::testutil::armed(&mut st);
-        crate::net::engage(&mut st, on(0), true);
-        crate::net::stay(&mut st);
+        let i = cloaked_on_turns(&mut st);
+        let (_, w) = your_weapon(&st).unwrap();
         st.force_hit = Some(false);
         fire(&mut st, i).unwrap();
-        assert_eq!(st.foes[i].hp, 200);
-        assert!(!logged(&st, "AMBUSH"));
+        let after_ambush = st.foes[i].hp;
+        assert_eq!(
+            u32::from(after_ambush),
+            200 - 2 * u32::from(w.damage) * u32::from(w.rounds)
+        );
+        // The rolls are the shot's own again: some rounds land, some miss, at plain damage.
+        st.force_hit = None;
+        fire(&mut st, i).unwrap();
+        let line = (st.log.iter().rev())
+            .find(|e| e.text.starts_with("you fire"))
+            .map(|e| e.text.clone())
+            .unwrap();
+        // "you fire · guard 4 · miss · 4": a round's outcome is its part's last word.
+        let hits: Vec<&str> = (line.split(" · ").skip(1))
+            .filter_map(|r| r.rsplit(' ').next())
+            .filter(|r| *r != "miss")
+            .collect();
+        assert!(
+            !hits.is_empty() && hits.len() < w.rounds as usize,
+            "a mixed volley: {line}"
+        );
+        let plain = w.damage.to_string();
+        assert!(hits.iter().all(|h| *h == plain), "{line}");
+        assert_eq!(
+            after_ambush - st.foes[i].hp,
+            w.damage * hits.len() as u8,
+            "{line}"
+        );
+        let ambushes = (st.log.iter()).filter(|e| e.text == "AMBUSH").count();
+        assert_eq!(ambushes, 1);
     }
 }

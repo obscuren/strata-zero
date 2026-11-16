@@ -336,7 +336,10 @@ pub fn ambush(st: &mut AppState) -> bool {
 /// `e` from the cloak: turns by hand, the cloak kept for your first attack. It ends
 /// with that attack, a throw, or your turn ending without one.
 pub fn engage_by_hand(st: &mut AppState, place: Place) {
-    if let Some(c) = st.cloak.as_mut() {
+    // Already on turns, engage does nothing, so there is no fight starting to wait through.
+    if st.net.engaged.is_none()
+        && let Some(c) = st.cloak.as_mut()
+    {
         c.waiting = true;
     }
     crate::net::engage(st, place, true);
@@ -385,6 +388,20 @@ mod tests {
         st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Net);
         assert_eq!(fire(&mut st, "cloak"), Err("not on the Net".to_string()));
         assert!(st.cloak.is_none());
+    }
+
+    #[test]
+    fn engaging_by_hand_on_turns_already_leaves_the_cloak_be() {
+        let mut st = street();
+        stealthy(&mut st);
+        st.character.focus = 20;
+        fire(&mut st, "cloak").unwrap();
+        let on = st.cloak.clone();
+        let here = st.player.as_ref().unwrap().place;
+        crate::net::engage(&mut st, here, true);
+        st.cloak = on; // a cloak that isn't waiting, on turns
+        engage_by_hand(&mut st, here);
+        assert!(!st.cloak.as_ref().unwrap().waiting);
     }
 
     #[test]
