@@ -1,7 +1,8 @@
 # Chrome on GEAR & INVENTORY (#103)
 
 Status: picked with Jeff, 2026-11-16 (concept C, "a tile per site"). The look is the mock beside this
-file, `2026-11-16-chrome-view-mock/` (round 2; run `gen.py` as its docstring says). Follows the
+file, `2026-11-16-chrome-view-mock/` (round 2 for the body, round 3 for the right pane; run
+`gen.py` as its docstring says). Follows the
 body of parts (`2026-11-16-equipment-design.md`), which recorded which part each chrome site
 belongs to.
 
@@ -110,17 +111,20 @@ on the body's left area (the same area MEAT uses), offsets from its origin:
 
 ### The header and the right
 
-- The header row: `MEAT ▌CHROME▐  c switch` on the left (on MEAT, `▌MEAT▐ CHROME  c switch`),
-  and on CHROME the LOAD gauge at the right of the body's half, as the ledger header draws it
-  (`LOAD ▰▰▰▰▰▰▰▰▰▰▱▱ 19/24`, over budget in magenta).
+- The header row: `MEAT ▌CHROME▐  c switch` on the left (on MEAT, `▌MEAT▐ CHROME  c switch`).
+- The right pane is split by a horizontal divider, as MEAT's is between the pack and the card
+  (`╠═══`, joined to the vertical one). Over it, LOAD (Jeff, round 3 of the mock): `LOAD`, the
+  gauge across the pane's width and `19/24` at its right (over budget in magenta, as the
+  ledger's), and a dim line under it with what's left and how many pieces are in you. Under it,
+  the card, or FITS in its place.
 - The ledger's mark of whether chrome can change comes along unchanged, on CHROME only: the
   header's `· CHROMING UP` in amber in a doc's chair, the ` FREE ` badge with dev free chrome,
-  nothing when locked (beside CHROME, before LOAD), and the divider between the body and the card
+  nothing when locked (on the header row beside CHROME), and the divider between the body and the card
   turning amber in the chair or with free chrome, as the ledger's does. MEAT's divider never
   changes. `the_mark_is_on_the_header_line` moves with its asserts.
-- The right half is the card, full height, no pack: ATTRIBUTES' card of the tile (`piece_card`,
-  `fit_card`), with the implant's drawing on top where there is room, as the ledger shows it
-  now. FITS opens in its place.
+- Under the divider, no pack: ATTRIBUTES' card of the tile (`piece_card`, `fit_card`), with the
+  implant's drawing on top where there is room, as the ledger shows it now. FITS opens in its
+  place; LOAD stays over the divider.
 - The hint row is the ledger's, as today: out of the chair its faint tail `chrome goes in and
   out in a ripperdoc's chair`, in the chair `esc get out of the chair` and the fee in amber.
   Nothing moves to the status strip. (Round 2's chair mock shows a right-aligned chair line and
@@ -186,7 +190,8 @@ on the body's left area (the same area MEAT uses), offsets from its origin:
 1. Concept C, as round 2 of the mock lays it out (Jeff's pick; the layout table is mine).
 2. A socket gets a tile only while what holds it is installed.
 3. `c` is the key, on both views; the view isn't saved.
-4. CHROME's right half is the card alone, no pack.
+4. CHROME's right half is LOAD over a divider (Jeff's) and the card under it, no pack. The dim
+   line under the gauge (what's left, pieces in you) is mine.
 5. The chair opens GEAR & INVENTORY on CHROME.
 6. ATTRIBUTES' readout moves into the right half the ledger leaves.
 7. The chair and free-chrome marks, the amber divider and the hint row come over from the

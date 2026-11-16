@@ -548,8 +548,63 @@ ROUND2 = [
      "body grows as chrome adds sockets (and, later, parts).", round2_meat_arms),
 ]
 
+# ---------------------------------------------------------------- round 3: the right pane
+
+def load_block(g, x, y, w):
+    """LOAD over the divider: the gauge across the pane, the count, then the rule."""
+    g.put(x, y, "LOAD", LABEL, bold=True)
+    seg = w - 14
+    used = seg * 19 // 24
+    g.put(x + 6, y, "▰" * used, CYAN)
+    g.put(x + 6 + used, y, "▱" * (seg - used), BORDER)
+    g.put(x + w - 5, y, "19/24", TEXT, bold=True)
+    g.put(x, y + 1, "5 left · 8 pieces in you", EMPTY)
+    g.put(SEP, y + 2, "╠", BORDER)
+    g.put(SEP + 1, y + 2, "═" * (W - 2 - SEP), BORDER)
+    return y + 3
+
+
+def round3_view():
+    g = frame()
+    header(g, load=False)
+    chrome_body(g)
+    y = load_block(g, SEP + 2, 9, W - 3 - SEP - 2)
+    card(g, SEP + 2, y + 1)
+    footer(g, "←↑↓→ chrome · c meat/chrome · Q/E tabs · tab close")
+    return g
+
+
+def round3_chair():
+    g = frame()
+    header(g, load=False)
+    g.put(17, 9, "· CHROMING UP", "#ffb000")
+    g.put(19 + 13, 9, "", LABEL)
+    chrome_body(g, sel="LFORE")
+    for yy in range(9, 37):
+        g.put(SEP, yy, "║", "#ffb000")
+    y = load_block(g, SEP + 2, 9, W - 3 - SEP - 2)
+    g.put(SEP, 11, "╠", "#ffb000")
+    picker(g, SEP + 2, y + 1)
+    g.put(2, 38, "↑↓ pick · space fit · esc back · c meat/chrome · Q/E tabs · esc get out of "
+          "the chair", LABEL)
+    return g
+
+
+ROUND3 = [
+    ("C1", "On CHROME, out of the chair",
+     "The right pane gets a divider like MEAT's (where the pack meets the card). Over it, "
+     "LOAD: the gauge across the pane, 19/24, and a dim line under it. Under it, the card "
+     "with its drawing. The header row keeps only MEAT / CHROME and the switch.",
+     round3_view),
+    ("C2", "In the chair, space on the empty forearm",
+     "LOAD stays over the divider while FITS takes the card's place under it. The header "
+     "carries the ledger's CHROMING UP mark and the divider turns amber, as the ledger "
+     "does today.", round3_chair),
+]
+
 ROUNDS = {"1": ("#103 · chrome on GEAR &amp; INVENTORY, three ways", CONCEPTS),
-          "2": ("#103 · C, laid out", ROUND2)}
+          "2": ("#103 · C, laid out", ROUND2),
+          "3": ("#103 · C, LOAD over a divider", ROUND3)}
 
 CSS = """
 :root{--bg:#0a0d13;--fg:#cdd4de;--muted:#8a95a5;--rule:#1d2a38;--head:#ffffff;
