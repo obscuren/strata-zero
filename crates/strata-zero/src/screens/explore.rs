@@ -4625,11 +4625,8 @@ impl Screen for MapScreen {
             vis,
             keep,
             overlays: &overlays,
-            cursor: if self.mode == Mode::Explore {
-                Some(cursor)
-            } else {
-                None
-            },
+            // The camera's cursor is drawn over the veil, below.
+            cursor: None,
         }
         .render(map_area, f.buffer_mut());
         // The flat's lights and the story's visitors, under your own `@`.
@@ -4675,20 +4672,6 @@ impl Screen for MapScreen {
             f.buffer_mut()[(sx, sy)].set_fg(crate::ui::chrome::MAGENTA);
         }
 
-        if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
-            let label = st.track.as_ref().map_or("", |t| t.label.as_str());
-            let text =
-                crate::track::overlay::tag_text(label, crate::track::next_now(st), leg.through, m);
-            crate::track::overlay::draw_edge_tag(
-                f.buffer_mut(),
-                map_area,
-                origin,
-                leg,
-                &text,
-                st.tick,
-            );
-        }
-
         if let Some(p) = &st.player {
             if let Some((bk, bp)) = p.body
                 && bk == self.place
@@ -4717,11 +4700,38 @@ impl Screen for MapScreen {
                     .set_style(style.add_modifier(Modifier::BOLD));
             }
         }
+        // The camera's cursor: its tile as the map draws it, before the veil works it.
+        let look_at = (self.mode == Mode::Explore)
+            .then(|| tile_to_screen(map_area, origin, cursor))
+            .flatten();
+        let under = look_at.map(|at| f.buffer_mut()[at].clone());
         // The cloak's veil drifts the map in pink and cyan, the foes you see and your `@`
         // kept where they stand.
         if st.player.as_ref().is_some_and(|p| p.place == self.place) {
             crate::cloak::veil::draw_map(f.buffer_mut(), map_area, origin, st, &map);
         }
+        // Over the veil, so the drift never moves them: the cursor on its tile, inverted,
+        // and the tracked target's tag on the map's edge.
+        if let (Some(at), Some(cell)) = (look_at, under) {
+            let cur = &mut f.buffer_mut()[at];
+            *cur = cell;
+            let (fg, bg) = (cur.fg, cur.bg);
+            cur.set_fg(bg).set_bg(fg);
+        }
+        if let (Some(leg), Some(m)) = (tracked_leg, crate::track::distance(st)) {
+            let label = st.track.as_ref().map_or("", |t| t.label.as_str());
+            let text =
+                crate::track::overlay::tag_text(label, crate::track::next_now(st), leg.through, m);
+            crate::track::overlay::draw_edge_tag(
+                f.buffer_mut(),
+                map_area,
+                origin,
+                leg,
+                &text,
+                st.tick,
+            );
+        }
+
         // The daze swims the whole map picture, `@` and visitors with it; what floats
         // over the map below stays still.
         crate::missions::daze::draw(f.buffer_mut(), map_area, st);
@@ -5348,6 +5358,38 @@ mod tests {
         assert!(st.net.engaged.is_none(), "nothing hunts: back to the beat");
         assert!(crate::cloak::hidden(&st));
         assert!(!st.cloak.as_ref().unwrap().waiting);
+    }
+
+    #[test]
+    fn the_look_cursor_stays_on_its_tile_under_the_veil() {
+        let (mut st, mut s) = cloaked_by_a_goon();
+        st.missions.daze = None;
+        // The camera's cursor by the hall's east wall, off your row: the wall throws its
+        // copies onto the cursor's tile, and the wave shifts its row.
+        s.mode = Mode::Explore;
+        let at = Pos::new(14, 1);
+        s.cursor = at;
+        let mut swept = false;
+        for _ in 0..160 {
+            crate::cloak::testutil::frames(&mut st, 1);
+            st.veil.off = true;
+            let plain = draw_buffer(&s, &st, 100, 30);
+            st.veil.off = false;
+            let veiled = draw_buffer(&s, &st, 100, 30);
+            let tick = st.tick;
+            assert_eq!(
+                cell_at(&s, &st, &veiled, at),
+                cell_at(&s, &st, &plain, at),
+                "tick {tick}"
+            );
+            let row = |b: &ratatui::buffer::Buffer| {
+                (1..14)
+                    .map(|x| cell_of(&s, &st, b, Pos::new(x, 1)))
+                    .collect::<Vec<_>>()
+            };
+            swept |= row(&veiled) != row(&plain);
+        }
+        assert!(swept, "the veil worked the cursor's row");
     }
 
     #[test]

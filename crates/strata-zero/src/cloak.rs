@@ -79,7 +79,8 @@ pub struct Fade {
     pub phase: Phase,
     /// The frame tick it began.
     pub since: u64,
-    /// The heat it plays from.
+    /// The heat the end fades (switching off, burning out) play from; going in reads the
+    /// live heat.
     pub hot: f32,
     /// The cloak that made it ran on a scrambler's cell.
     pub cell: bool,

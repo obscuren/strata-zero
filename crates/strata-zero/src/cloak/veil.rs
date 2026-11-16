@@ -830,6 +830,8 @@ mod tests {
         assert!(on(&st, StratumKind::Street), "the street drifts");
         st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Net);
         assert!(!on(&st, StratumKind::Net), "the Net never does");
+        st.player.as_mut().unwrap().place = Place::Construct(citygen::BuildingId(0));
+        assert!(!on(&st, StratumKind::Street), "nor a construct");
     }
 
     /// You on a lit walkable tile of `b`'s floor 4 to 6 tiles from a standing guard you
