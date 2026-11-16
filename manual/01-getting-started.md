@@ -39,7 +39,7 @@ Move with `↑↓` and choose with `enter`. On the title, `esc` or `q` quits str
 
 ## Your first night
 
-1. Choose `NEW GAME` and pick who you are tonight: one of two ready-made runners, or one you build yourself. Your runner covers this.
+1. Choose `NEW GAME` and pick who you are tonight: one of three ready-made runners, or one you build yourself. Your runner covers this.
 2. Read the city's broadcast, then press `space` to jack in.
 3. You wake beside your bed in your own flat, at ten at night.
 
