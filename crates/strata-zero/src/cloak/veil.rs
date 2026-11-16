@@ -5,8 +5,12 @@
 //! and frame (docs/superpowers/specs/2026-11-15-stealth-mock.html) to frame ticks.
 
 use super::Phase;
-use crate::render::Rgb;
+use crate::app::AppState;
+use crate::render::map::{MapRef, TileMap};
+use crate::render::viewport::{screen_to_tile, tile_to_screen};
+use crate::render::{Rgb, Visibility};
 use crate::ui::chrome::{CYAN_RGB, MAGENTA_RGB, PANEL_BG, PANEL_BG_RGB};
+use citygen::Pos;
 use citygen::rng::hash64;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -16,7 +20,8 @@ use ratatui::style::Color;
 pub const VEIL_STEP: u64 = 3;
 /// Where a pink and a cyan copy land on one cell.
 pub const NEAR_WHITE: (u8, u8, u8) = (244, 248, 255);
-/// The floor's tint toward cyan while the veil is over half on.
+/// The floor's tint while the veil is over half on: its glyph mixed from the ground toward
+/// cyan, the mock's 28% cyan over the background.
 const FLOOR_TINT: f32 = 0.28;
 /// The wash toward cyan, even over the map: the mock's 5% tint and its 1px lines one row
 /// in three (8% a third), which a cell can't hold.
@@ -115,6 +120,80 @@ pub fn look(phase: Phase, p: f32, hot: f32, roll: &dyn Fn(u64) -> f32) -> Look {
             }
         }
     }
+}
+
+/// The veil's phase now, its progress 0..1 and the heat it plays from: a fade while it
+/// runs, else holding at the pool's heat while a cloak is on, else none. Going in eases
+/// toward the pool's heat as it is now, so holding takes over where it ends.
+pub fn now(st: &AppState) -> Option<(Phase, f32, f32)> {
+    let on = super::heat(st);
+    if let Some(f) = st.veil.fade {
+        let len = super::fade_ticks(f.phase).max(1);
+        let p = st.tick.saturating_sub(f.since) as f32 / len as f32;
+        if p < 1.0 {
+            return Some(match on {
+                Some(h) => (Phase::GoingIn, p, h),
+                None => (f.phase, p, f.hot),
+            });
+        }
+    }
+    on.map(|h| (Phase::Holding, 1.0, h))
+}
+
+/// The veil over the explore map `map`, its top-left tile `origin`, while a cloak or its
+/// fade is on: walls, furniture and the foes you see throw copies onto the bare floor you
+/// see, and the foes and your `@` stay where they stand. Off with `st.veil.off`.
+pub fn draw_map(buf: &mut Buffer, map: Rect, origin: Pos, st: &AppState, mref: &MapRef) {
+    if st.veil.off {
+        return;
+    }
+    let Some(((phase, p, hot), you)) = now(st).zip(st.player.as_ref()) else {
+        return;
+    };
+    // On foot only: a fade left as you jack in plays out off the Net's map.
+    if super::on_the_net(you.place) {
+        return;
+    }
+    let seed = hash64(you.pos.x as u64, you.pos.y as u64);
+    let look = look(phase, p, hot, &|k| roll(st.tick, seed, k));
+    let screen = |at: Pos| tile_to_screen(map, origin, at);
+    let foes: Vec<Pos> = (crate::foes::in_sight(st).into_iter())
+        .map(|i| st.foes[i].pos)
+        .collect();
+    let keep: Vec<(u16, u16)> = foes.iter().filter_map(|p| screen(*p)).collect();
+    let vis = you.vis();
+    let ground = |x: u16, y: u16| {
+        let at = screen_to_tile(map, origin, (x, y));
+        let Some(seen) = vis.get(at).copied() else {
+            return Ground::Off;
+        };
+        let walkable = mref.walkable(at);
+        let bare = || matches!(buf[(x, y)].symbol(), " " | "·" | "▫" | ".");
+        match seen {
+            Visibility::Visible if foes.contains(&at) => Ground::Solid,
+            Visibility::Visible | Visibility::Remembered if !walkable => Ground::Solid,
+            Visibility::Visible if bare() => Ground::Empty,
+            _ => Ground::Off,
+        }
+    };
+    let area = map.intersection(buf.area);
+    let grounds: Vec<Ground> = (area.y..area.bottom())
+        .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+        .map(|(x, y)| ground(x, y))
+        .collect();
+    let ground = |x: u16, y: u16| {
+        grounds[usize::from(y - area.y) * usize::from(area.width) + usize::from(x - area.x)]
+    };
+    draw(
+        buf,
+        map,
+        &look,
+        st.tick,
+        seed,
+        &ground,
+        screen(you.pos),
+        &keep,
+    );
 }
 
 /// The k-th roll of the frame at `tick`, in 0..1: the same for a veil step.
@@ -233,7 +312,7 @@ pub fn draw(
             for x in area.x..area.right() {
                 if !landed[at(x, y)] && ground(x, y) == Ground::Empty {
                     let cell = &mut buf[(x, y)];
-                    cell.set_fg(toward(cell.fg, CYAN_RGB, FLOOR_TINT));
+                    cell.set_fg(toward(cell.bg, CYAN_RGB, FLOOR_TINT));
                 }
             }
         }
@@ -317,6 +396,9 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cloak::testutil::{fire, frames, scrambler, street};
+    use crate::cloak::{BREAK_TICKS, START_TICKS};
+    use citygen::{Place, StratumKind};
 
     /// The test map: 40 × 12 at (2, 3) in a 60 × 20 buffer.
     const MAP: Rect = Rect::new(2, 3, 40, 12);
@@ -661,6 +743,203 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(roll(42, 9, 3), roll(44, 9, 3), "one roll a veil step");
         assert_ne!(roll(42, 9, 3), roll(45, 9, 3));
+    }
+
+    #[test]
+    fn bare_floor_takes_its_tint_over_the_ground() {
+        let (mut buf, map) = grid();
+        let veiled = Look {
+            heat: 0.0,
+            split: 0,
+            veil: 1.0,
+            wave: false,
+            plain: false,
+        };
+        draw(&mut buf, map, &veiled, 0, 0, &grounds(&[]), None, &[]);
+        // The mock's 28% cyan over the background, whatever the floor's own colour.
+        let tint = PANEL_BG_RGB.mix(CYAN_RGB, FLOOR_TINT).to_color();
+        assert_eq!(buf[(10, 8)].fg, tint);
+    }
+
+    #[test]
+    fn the_phase_follows_the_cloak() {
+        let mut st = street();
+        let k = scrambler(&mut st);
+        assert_eq!(now(&st), None);
+        fire(&mut st, "scramble").unwrap();
+        assert_eq!(now(&st).map(|n| n.0), Some(Phase::GoingIn));
+        frames(&mut st, START_TICKS);
+        let (phase, p, hot) = now(&st).unwrap();
+        assert_eq!((phase, p), (Phase::Holding, 1.0));
+        assert!(hot > 0.0 && hot < 0.1);
+        crate::cloak::testutil::set_charge(
+            &mut st,
+            k,
+            game::Charge {
+                left: 1,
+                burned: false,
+            },
+        );
+        frames(&mut st, 1);
+        assert_eq!(now(&st).map(|n| n.0), Some(Phase::BurningOut));
+        frames(&mut st, BREAK_TICKS);
+        assert_eq!(now(&st), None);
+    }
+
+    #[test]
+    fn going_in_settles_on_the_heat_holding_starts_from() {
+        let mut st = street();
+        let k = scrambler(&mut st);
+        fire(&mut st, "scramble").unwrap();
+        // Half the cell gone while it goes in: holding takes over at that heat, no step.
+        let half = game::Charge {
+            left: game::FULL_CELL / 2,
+            burned: false,
+        };
+        crate::cloak::testutil::set_charge(&mut st, k, half);
+        frames(&mut st, START_TICKS - 1);
+        let (phase, p, hot) = now(&st).unwrap();
+        assert_eq!(phase, Phase::GoingIn);
+        let last = look(phase, p, hot, &|_| 1.0);
+        frames(&mut st, 1);
+        let (phase, p, hot) = now(&st).unwrap();
+        assert_eq!(phase, Phase::Holding);
+        let first = look(phase, p, hot, &|_| 1.0);
+        assert_eq!(last.split, first.split, "{last:?} then {first:?}");
+        assert!(
+            (last.heat - first.heat).abs() < 0.05,
+            "{last:?} then {first:?}"
+        );
+    }
+
+    #[test]
+    fn the_veil_is_on_foot_only() {
+        let mut st = street();
+        st.veil.off = false;
+        scrambler(&mut st);
+        fire(&mut st, "scramble").unwrap();
+        frames(&mut st, START_TICKS + 1);
+        let city = st.city.clone().unwrap();
+        let on = |st: &AppState, k| {
+            let (mut buf, map) = grid();
+            let before = buf.clone();
+            let mref = MapRef::stratum_of(&city, k);
+            draw_map(&mut buf, map, Pos::new(0, 0), st, &mref);
+            buf != before
+        };
+        assert!(on(&st, StratumKind::Street), "the street drifts");
+        st.player.as_mut().unwrap().place = Place::Stratum(StratumKind::Net);
+        assert!(!on(&st, StratumKind::Net), "the Net never does");
+    }
+
+    /// You on a lit walkable tile of `b`'s floor 4 to 6 tiles from a standing guard you
+    /// see, every other guard of `b` gone: the guard's tile.
+    fn a_guard_in_sight(st: &mut AppState, b: citygen::BuildingId) -> Pos {
+        use crate::sitenet::testutil::stand_on_floor;
+        let posted: Vec<(usize, i32, Pos)> = (st.foes.iter().enumerate())
+            .filter(|(_, f)| f.standing() && f.post.as_ref().is_some_and(|p| p.building == b))
+            .filter_map(|(i, f)| match f.place {
+                Place::Floor { building, level } if building == b => Some((i, level, f.pos)),
+                _ => None,
+            })
+            .collect();
+        for (i, level, at) in posted {
+            let city = st.city.clone().expect("a city");
+            let Some(floor) = st.interiors.ensure(&city, b, level).cloned() else {
+                continue;
+            };
+            let place = Place::Floor { building: b, level };
+            for dy in -6..=6 {
+                for dx in -6..=6 {
+                    let spot = at.offset(dx, dy);
+                    let far = spot.chebyshev(at);
+                    let open = floor.tiles.get(spot).is_some_and(|t| t.is_walkable())
+                        && floor.light.get(spot).is_some_and(|l| *l > 0)
+                        && crate::foes::foe_at(st, place, spot).is_none();
+                    if !(4..=6).contains(&far) || !open {
+                        continue;
+                    }
+                    stand_on_floor(st, b, level, spot);
+                    if crate::foes::in_sight(st).contains(&i) {
+                        let guard = st.foes[i].clone();
+                        crate::guards::testutil::no_guards(st, b);
+                        st.foes.push(guard);
+                        assert_eq!(crate::foes::in_sight(st).len(), 1, "that guard only");
+                        return at;
+                    }
+                }
+            }
+        }
+        panic!("no guard of {b:?}'s copy stands in sight of a lit tile 4 to 6 off");
+    }
+
+    #[test]
+    fn a_cloaked_floor_draws_the_drift_and_keeps_every_guard() {
+        use crate::sitenet::testutil::{drawn, office_copy};
+        let (mut st, b) = office_copy(crate::venues::SITE_NET_SECURITY);
+        // You on a lit floor with a guard in your sight, the daze off.
+        let gat = a_guard_in_sight(&mut st, b); // the guard's tile
+        st.missions.daze = None;
+        scrambler(&mut st);
+        fire(&mut st, "scramble").unwrap();
+        frames(&mut st, START_TICKS + 1);
+        // Two draws at this one tick (`drawn` doesn't move it): the veil off, then on.
+        st.veil.off = true;
+        let plain = drawn(&mut st, (120, 40));
+        st.veil.off = false;
+        let veiled = drawn(&mut st, (120, 40));
+        // `drawn` drops its screen: the guard's cell is worked out from yours.
+        let (yx, yy) = st.drawn_you.get().unwrap();
+        let yat = st.player.as_ref().unwrap().pos;
+        let (gx, gy) = (
+            (yx as i32 + gat.x - yat.x) as u16,
+            (yy as i32 + gat.y - yat.y) as u16,
+        );
+        // The wash lies under them too (it runs last): a cell is where it stands by its
+        // symbol and colour.
+        let seen = |b: &Buffer, at: (u16, u16)| (b[at].symbol().to_string(), b[at].fg);
+        assert_ne!(
+            plain[(gx, gy)].symbol(),
+            " ",
+            "the guard is drawn there without the veil"
+        );
+        assert_eq!(
+            seen(&veiled, (gx, gy)),
+            seen(&plain, (gx, gy)),
+            "the guard on its true cell"
+        );
+        assert_eq!(
+            seen(&veiled, (yx, yy)),
+            seen(&plain, (yx, yy)),
+            "your @ unmoved"
+        );
+        assert_eq!(veiled[(yx, yy)].symbol(), "@");
+        // On the map: the HUD around it has pink of its own.
+        let map = crate::screens::explore::layout(plain.area, false).map;
+        let pink = |b: &Buffer| {
+            (map.y..map.bottom()).any(|y| (map.x..map.right()).any(|x| pinkish(b[(x, y)].fg)))
+        };
+        assert!(pink(&veiled), "pink copies");
+        assert!(!pink(&plain), "none with the veil off");
+        // And so on through a sweep of the wave down the map: nobody moves.
+        for _ in 0..160 {
+            frames(&mut st, 1);
+            st.veil.off = true;
+            let plain = drawn(&mut st, (120, 40));
+            st.veil.off = false;
+            let veiled = drawn(&mut st, (120, 40));
+            let tick = st.tick;
+            assert_eq!(
+                seen(&veiled, (gx, gy)),
+                seen(&plain, (gx, gy)),
+                "tick {tick}"
+            );
+            assert_eq!(
+                seen(&veiled, (yx, yy)),
+                seen(&plain, (yx, yy)),
+                "tick {tick}"
+            );
+        }
     }
 
     #[test]

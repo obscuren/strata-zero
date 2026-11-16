@@ -4713,6 +4713,11 @@ impl Screen for MapScreen {
                     .set_style(style.add_modifier(Modifier::BOLD));
             }
         }
+        // The cloak's veil drifts the map in pink and cyan, the foes you see and your `@`
+        // kept where they stand.
+        if st.player.as_ref().is_some_and(|p| p.place == self.place) {
+            crate::cloak::veil::draw_map(f.buffer_mut(), map_area, origin, st, &map);
+        }
         // The daze swims the whole map picture, `@` and visitors with it; what floats
         // over the map below stays still.
         crate::missions::daze::draw(f.buffer_mut(), map_area, st);

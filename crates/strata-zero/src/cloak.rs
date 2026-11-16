@@ -12,10 +12,6 @@ pub mod cell;
 #[cfg(test)]
 pub(crate) mod testutil;
 mod vanish;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the map draws it once explore calls it")
-)]
 pub mod veil;
 
 pub use vanish::vanish;
@@ -90,13 +86,6 @@ pub struct Fade {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the veil holds between its fades, once it's drawn"
-        )
-    )]
     Holding,
     GoingIn,
     BurningOut,
