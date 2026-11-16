@@ -918,6 +918,10 @@ mod tests {
             .unwrap()
     }
 
+    fn bay_of(st: &AppState, i: usize) -> Option<String> {
+        bay(st, i)
+    }
+
     fn bay(st: &AppState, i: usize) -> Option<String> {
         st.character.rig_fitted(&st.content)[i]
             .1
@@ -979,6 +983,87 @@ mod tests {
         let row = o_row(&st);
         assert!(!row.enabled);
         assert!(row.tail.contains("held as evidence"), "{}", row.tail);
+    }
+
+    /// Every bay of a rack fitted from FRAME takes a sled, as a player does it through
+    /// the real screens: the console's `spawn`s on the map, Space by the rig, `o`, the
+    /// Halcyon from FRAME, then Space twice on each bay.
+    #[test]
+    fn every_bay_of_a_new_rack_takes_a_sled_through_the_screens() {
+        use crate::app::Runner;
+        let mut st = state_home();
+        st.unlock_dev();
+        st.character = game::Character::debug_runner(&st.content);
+        let map = crate::screens::explore::MapScreen::walking(&mut st);
+        let home = st.home.unwrap().home;
+        let floor = st
+            .interiors
+            .floor(home.building, home.level)
+            .map(|(_, f)| f.clone())
+            .unwrap();
+        st.player.as_mut().unwrap().pos = home
+            .rig
+            .neighbors4()
+            .find(|p| {
+                home.rect.contains(*p) && floor.tiles.get(*p).is_some_and(|t| t.is_walkable())
+            })
+            .expect("a floor tile by the rig");
+        let mut run = Runner::new(Box::new(map), st);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut press = |run: &mut Runner, code: KeyCode| {
+            run.frame(&mut term, &[key(code)]).unwrap();
+            for _ in 0..40 {
+                run.frame(&mut term, &[]).unwrap();
+            }
+            buffer_text(term.backend().buffer())
+        };
+        for line in [
+            "spawn rack_halcyon",
+            "spawn sled_qstack",
+            "spawn sled_tinman",
+            "spawn sled_hydra",
+            "spawn sled_darkfibre",
+            "spawn sled_killswitch",
+        ] {
+            press(&mut run, KeyCode::Char(':'));
+            for c in line.chars() {
+                press(&mut run, KeyCode::Char(c));
+            }
+            press(&mut run, KeyCode::Enter);
+            press(&mut run, KeyCode::Esc);
+        }
+        let text = press(&mut run, KeyCode::Char(' '));
+        if text.contains("Open up") {
+            press(&mut run, KeyCode::Char('o'));
+        }
+        assert!(run.st.at_desk);
+        // The Halcyon from FRAME.
+        press(&mut run, KeyCode::Up);
+        press(&mut run, KeyCode::Char(' '));
+        let text = press(&mut run, KeyCode::Char(' '));
+        assert_eq!(
+            run.st.character.rig_frame(),
+            ItemId::new("rack_halcyon"),
+            "{text}"
+        );
+        // Each bay, top to bottom: Space lists what fits, Space fits the first.
+        let want = [
+            "sled_qstack",
+            "sled_tinman",
+            "sled_hydra",
+            "sled_darkfibre",
+            "sled_killswitch",
+        ];
+        for (bay, sled) in want.iter().enumerate() {
+            press(&mut run, KeyCode::Down);
+            press(&mut run, KeyCode::Char(' '));
+            let text = press(&mut run, KeyCode::Char(' '));
+            assert_eq!(
+                bay_of(&run.st, bay).as_deref(),
+                Some(*sled),
+                "bay {bay}:\n{text}"
+            );
+        }
     }
 
     #[test]
