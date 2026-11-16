@@ -44,14 +44,14 @@ fn scrambler_name(st: &AppState) -> String {
         .map_or_else(|| "field scrambler".into(), |i| i.name.clone())
 }
 
-/// The scrambler's charge on the footer, before the help key: the carried one with the
-/// most, dim, or pink and burned out. Nothing without one, in a fight, or while a
-/// cloak's word shows: SCRAMBLED with the CELL row, CLOAKED, or SIGNAL LOST say it then.
+/// The scrambler's charge on the footer, before the help key: the worn one's, dim, or
+/// pink and burned out. Nothing with none worn, in a fight, or while a cloak's word
+/// shows: SCRAMBLED with the CELL row, CLOAKED, or SIGNAL LOST say it then.
 pub fn footer_charge(st: &AppState) -> Vec<Span<'static>> {
     if footer_tag(st).is_some() || crate::net::engaged_on_foot(st) {
         return Vec::new();
     }
-    let Some((_, c)) = cell::best(st, &ItemId::new(SCRAMBLER)) else {
+    let Some((_, _, c)) = cell::worn(st, &ItemId::new(SCRAMBLER)) else {
         return Vec::new();
     };
     let words = format!(
@@ -132,10 +132,8 @@ pub fn slot_on(st: &AppState, id: &AbilityId) -> bool {
     match (&c.pool, source) {
         (Pool::Cell(copy), Some(Source::Item(item))) => {
             from_cell(&item)
-                && st
-                    .character
-                    .copy_in_pack(*copy)
-                    .is_some_and(|s| s.item == item)
+                && (st.character.part_wearing(*copy))
+                    .is_some_and(|part| st.character.equipped(part) == Some(&item))
         }
         (Pool::Cell(_), _) => false,
         (Pool::Focus { .. }, Some(Source::Item(item))) => !from_cell(&item),
@@ -232,30 +230,6 @@ mod tests {
         assert!(footer_charge(&st).is_empty(), "SIGNAL LOST says it");
         frames(&mut st, 72);
         assert_eq!(text(&footer_charge(&st)), "◌ field scrambler 100%");
-    }
-
-    #[test]
-    fn the_charge_reads_the_fullest_carried_copy() {
-        let mut st = street();
-        let low = scrambler(&mut st);
-        let high = scrambler(&mut st);
-        set_charge(
-            &mut st,
-            low,
-            Charge {
-                left: FULL_CELL / 5,
-                burned: false,
-            },
-        );
-        set_charge(
-            &mut st,
-            high,
-            Charge {
-                left: FULL_CELL / 2,
-                burned: false,
-            },
-        );
-        assert_eq!(text(&footer_charge(&st)), "◌ field scrambler  50%");
     }
 
     #[test]

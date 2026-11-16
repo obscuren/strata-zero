@@ -209,7 +209,7 @@ Content(
              look: Some(Keyjack), sockets: [Fuse],
              desc: "A slab on a lead that clips onto a door's keypad and works its four digits out with you, a beat at a time."),
         // The field scrambler: a cloak carried on its own cell.
-        Item(id: "field_scrambler", name: "Field scrambler", kind: Component, weight: 0.4, value: 900,
+        Item(id: "field_scrambler", name: "Field scrambler", kind: Component, slot: Some(Back), weight: 0.4, value: 900,
              cell: true, grants: ["scramble"],
              desc: "A matchbox of noise on a belt clip. It fills the air round you with what cameras and eyes expect to see, until its cell runs out."),
         Item(id: "fuse_stock", name: "Stock fuse", kind: Hardware, weight: 0.05, value: 40,

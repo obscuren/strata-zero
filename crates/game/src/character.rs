@@ -1066,9 +1066,9 @@ impl Character {
     }
 
     /// Innate abilities first, then those granted by owned categories in content order,
-    /// then by owned skills in content order, then by carried items with a cell in pack
-    /// order, then by equipment in body order, then by installed chrome (see
-    /// `chrome_ids`), then by talents; deduplicated, the first source winning.
+    /// then by owned skills in content order, then by equipment in body order, then by
+    /// installed chrome (see `chrome_ids`), then by talents; deduplicated, the first
+    /// source winning.
     pub fn abilities(&self, c: &Content) -> Vec<(AbilityId, Source)> {
         let mut out: Vec<(AbilityId, Source)> = Vec::new();
         let mut push = |id: &AbilityId, source: Source| {
@@ -1091,12 +1091,6 @@ impl Character {
         for skill in c.skills.iter().filter(|s| self.skills.contains(&s.id)) {
             for id in &skill.grants {
                 push(id, Source::Skill(skill.id.clone()));
-            }
-        }
-        let carried = self.inventory.iter().map(|s| &s.item);
-        for item in carried.filter_map(|id| c.item(id)).filter(|i| i.cell) {
-            for id in &item.grants {
-                push(id, Source::Item(item.id.clone()));
             }
         }
         for item in self
@@ -3934,15 +3928,28 @@ mod tests {
     }
 
     #[test]
-    fn a_carried_scrambler_grants_scramble_with_a_full_cell() {
+    fn only_a_worn_scrambler_grants_scramble() {
         let c = Content::load().unwrap();
         let mut ch = vex(&c);
         let id = ItemId::new("field_scrambler");
         ch.give_item(&c, id.clone(), 1);
-        assert!(
-            ch.abilities(&c)
-                .contains(&(AbilityId::new("scramble"), Source::Item(id.clone())))
-        );
+        let scramble = |ch: &Character| -> Vec<Source> {
+            (ch.abilities(&c).into_iter())
+                .filter(|(a, _)| a.0 == "scramble")
+                .map(|(_, s)| s)
+                .collect()
+        };
+        assert_eq!(scramble(&ch), vec![], "in the pack it grants nothing");
+        ap(&mut ch, &c, Action::EquipAt(id.clone(), BodyPart::Back)).unwrap();
+        assert_eq!(scramble(&ch), vec![Source::Item(id)], "worn on the back");
+    }
+
+    #[test]
+    fn a_new_scrambler_has_a_full_cell() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let id = ItemId::new("field_scrambler");
+        ch.give_item(&c, id.clone(), 1);
         let copy = ch
             .inventory
             .iter()
@@ -3965,30 +3972,6 @@ mod tests {
             .left,
             FULL_CELL,
             "none reads full"
-        );
-    }
-
-    #[test]
-    fn a_carried_cell_grant_wins_over_worn_gear() {
-        let mut c = Content::load().unwrap();
-        let jacket = ItemId::new("salvage_jacket");
-        let i = c.items.iter().position(|i| i.id == jacket).unwrap();
-        c.items[i].grants = vec![AbilityId::new("scramble")];
-        let mut ch = vex(&c);
-        ch.wear(BodyPart::Torso, jacket.clone(), None);
-        let scramble = |ch: &Character| -> Vec<Source> {
-            (ch.abilities(&c).into_iter())
-                .filter(|(id, _)| id.0 == "scramble")
-                .map(|(_, s)| s)
-                .collect()
-        };
-        assert_eq!(scramble(&ch), vec![Source::Item(jacket)]);
-        let scrambler = ItemId::new("field_scrambler");
-        ch.give_item(&c, scrambler.clone(), 1);
-        assert_eq!(
-            scramble(&ch),
-            vec![Source::Item(scrambler)],
-            "first source wins"
         );
     }
 

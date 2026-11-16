@@ -405,8 +405,8 @@ pub struct Footer<'a> {
     pub flash_pools: bool,
     /// The cloak's word at the right of row 1, in place of `HUNTED` or `ENGAGED`.
     pub cloak: Option<CloakTag>,
-    /// A carried field scrambler's charge at the right of row 1, before the help key:
-    /// `◌ field scrambler  62%`. Empty without one, and while a cloak's word shows.
+    /// The worn field scrambler's charge at the right of row 1, before the help key:
+    /// `◌ field scrambler  62%`. Empty with none worn, and while a cloak's word shows.
     pub scrambler: Vec<Span<'static>>,
     /// Cloaked with a foe in your weapon's reach: the AMBUSH line at the right of row 2.
     pub ambush: bool,

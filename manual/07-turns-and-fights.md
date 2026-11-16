@@ -37,7 +37,7 @@ On the act half of a turn, `1` to `9` and `0` pick from everything you can do th
 
 ## The cloak
 
-On foot and out of a fight, you can **cloak**. The Cloak ability comes with the Stealth skill (GHOST), and a field scrambler in your pack gives you Scramble on a cell of its own (The city and the world). Press its key on the ability bar and the log says `CLOAKED`, or `SCRAMBLED` for the scrambler; press it again and it switches off. Its slot reads `on` while it runs, and the map drifts in pink and cyan round you. Only one runs at a time: either key switches off the one that's on.
+On foot and out of a fight, you can **cloak**. The Cloak ability comes with the Stealth skill (GHOST), and a field scrambler worn on your back gives you Scramble on a cell of its own (The city and the world). Only the worn one recharges, and the back holds it or the Courier sling, not both. Press its key on the ability bar and the log says `CLOAKED`, or `SCRAMBLED` for the scrambler; press it again and it switches off. Its slot reads `on` while it runs, and the map drifts in pink and cyan round you. Only one runs at a time: either key switches off the one that's on.
 
 It won't go on in a fight (`not in a fight`), while you're jacked in (`not while jacked in`), on the Net (`not on the Net`), or with nothing left to run on (`no FOCUS left`, `the cell is burned out`).
 
@@ -47,7 +47,8 @@ The Cloak drains 1 FOCUS a second, rounded up when it ends, and Scramble drains 
 
 - with your first hit (The ambush, below);
 - when it runs dry. It **burns out**: the map tears, the log says `the cloak burns out · you're in the open` (`the scrambler burns out · you're in the open` on a cell), and you're in the open from that moment, not when the picture settles;
-- when a fight starts any other way, when you jack in, when you sleep or wait, and when you leave the city.
+- when a fight starts any other way, when you jack in, when you sleep or wait, and when you leave the city;
+- on a cell, when you take the scrambler off your back or put something else there.
 
 While it holds, the first bottom line reads `▒▒ CLOAKED ▒▒` or `▒▒ SCRAMBLED ▒▒` where `ENGAGED` would be, and through a burnout it flashes `▓▓ SIGNAL LOST ▓▓`.
 

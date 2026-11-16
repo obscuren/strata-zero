@@ -23,8 +23,20 @@ pub(crate) fn armed(st: &mut AppState) {
     st.character.wear(BodyPart::RightHand, gun, Some(copy));
 }
 
-/// A field scrambler in the pack, its cell full; its copy.
+/// A field scrambler worn on the back, its cell full (what the back wore goes to the
+/// pack); its copy.
 pub(crate) fn scrambler(st: &mut AppState) -> CopyId {
+    let item = ItemId::new("field_scrambler");
+    let copy = st.character.new_copy(&st.content, &item);
+    let id = copy.id;
+    if let Some(old) = st.character.wear(BodyPart::Back, item, Some(copy)) {
+        st.character.stow_item(&st.content, old);
+    }
+    id
+}
+
+/// A spare field scrambler in the pack, its cell full; its copy.
+pub(crate) fn spare_scrambler(st: &mut AppState) -> CopyId {
     let item = ItemId::new("field_scrambler");
     st.character.give_item(&st.content, item.clone(), 1);
     // The pack takes a new copy last: the newest of the item's is this one.
@@ -32,10 +44,21 @@ pub(crate) fn scrambler(st: &mut AppState) -> CopyId {
     new.and_then(|s| s.copy_id()).expect("a copy in the pack")
 }
 
-/// Writes a carried copy's charge.
+/// Writes a worn or carried copy's charge.
 pub(crate) fn set_charge(st: &mut AppState, id: CopyId, charge: Charge) {
-    let s = (st.character.inventory.iter_mut()).find(|s| s.copy_id() == Some(id));
-    s.and_then(|s| s.copy.as_mut()).expect("carried").charge = Some(charge);
+    let ch = &mut st.character;
+    let copy = match ch.worn.values_mut().find(|k| k.id == id) {
+        Some(k) => Some(k),
+        None => (ch.inventory.iter_mut())
+            .find(|s| s.copy_id() == Some(id))
+            .and_then(|s| s.copy.as_mut()),
+    };
+    copy.expect("worn or carried").charge = Some(charge);
+}
+
+/// The charge on a copy in the pack.
+pub(crate) fn packed_charge(st: &AppState, id: CopyId) -> Option<Charge> {
+    Some(st.character.copy_in_pack(id)?.copy.as_ref()?.cell())
 }
 
 /// `n` frames on the map: the tick moves on and the cloak takes its frame.

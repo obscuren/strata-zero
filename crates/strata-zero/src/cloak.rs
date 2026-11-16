@@ -59,7 +59,7 @@ pub struct Cloak {
 pub enum Pool {
     /// FOCUS: what you had when it went on, and the drain owed toward the next point.
     Focus { start: u32, owed: u32 },
-    /// A carried scrambler copy's cell.
+    /// A worn scrambler copy's cell.
     Cell(CopyId),
     /// Vanish's: free until the frame tick.
     Free { until: u64 },
@@ -179,13 +179,13 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
     if st.net.engaged.is_some() {
         return Err("not in a fight".to_string());
     }
-    // A scrambler's key runs on the fullest carried copy of its item, any other on FOCUS.
+    // A scrambler's key runs on the worn copy of its item, any other on FOCUS.
     let pool = if let Source::Item(item) = &source
         && st.content.item(item).is_some_and(|i| i.cell)
     {
-        match cell::best(st, item) {
-            Some((copy, c)) if cell::runs(c) => Pool::Cell(copy),
-            Some((_, c)) if c.burned => return Err("the cell is burned out".to_string()),
+        match cell::worn(st, item) {
+            Some((_, copy, c)) if cell::runs(c) => Pool::Cell(copy),
+            Some((_, _, c)) if c.burned => return Err("the cell is burned out".to_string()),
             _ => return Err("the cell is empty".to_string()),
         }
     } else if st.character.focus == 0 {
@@ -248,7 +248,8 @@ pub fn frame(st: &mut AppState) {
     };
     let body = st.player.as_ref().map(|p| (p.place, p.pos));
     let gone = match c.pool {
-        Pool::Cell(id) => st.character.copy_in_pack(id).is_none(),
+        // Taken off, swapped, or (an old save's) never worn.
+        Pool::Cell(id) => st.character.part_wearing(id).is_none(),
         Pool::Free { until } => st.tick >= until,
         Pool::Focus { .. } => false,
     };
@@ -284,7 +285,7 @@ pub fn frame(st: &mut AppState) {
                 end(st, End::Burnout);
             }
         }
-        // The copy is in the pack: a gone one ended it above.
+        // The copy is worn: one that isn't ended it above.
         Pool::Cell(id) => {
             let id = *id;
             if cell::drain(st, id, units * rate) {

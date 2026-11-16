@@ -1010,8 +1010,7 @@ pub struct Item {
     /// Modifiers while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub perks: Vec<Perk>,
-    /// Abilities conferred while equipped or installed (slot items and chrome only),
-    /// or while carried (an item with a `cell`).
+    /// Abilities conferred while equipped or installed (slot items and chrome only).
     #[serde(default)]
     pub grants: Vec<AbilityId>,
     /// What using it does (consumables only).
@@ -1057,7 +1056,8 @@ pub struct Item {
     /// shard does for the shard it was.
     #[serde(default)]
     pub stands_for: Option<ItemId>,
-    /// It runs on its own cell, held per copy, and grants its ability while carried.
+    /// It runs on its own cell, held per copy; it's worn (it has a slot), and its ability
+    /// runs on the worn copy's cell.
     #[serde(default)]
     pub cell: bool,
 }
@@ -1145,7 +1145,7 @@ pub enum Active {
     /// it costs `ap` action points.
     Mark { range: i32, bonus: u8, ap: u8 },
     /// No target: switches the cloak on or off; it hides you on foot until your first
-    /// hit, drawing on FOCUS or, granted by a carried cell, on that cell.
+    /// hit, drawing on FOCUS or, granted by a worn cell, on that cell.
     Cloak,
     /// In a fight: breaks it and cloaks you a moment to get away.
     Vanish,

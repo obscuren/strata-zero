@@ -4344,7 +4344,7 @@ mod tests {
     #[test]
     fn the_scrambler_card_says_its_charge() {
         let mut st = AppState::new();
-        let k = crate::cloak::testutil::scrambler(&mut st);
+        let k = crate::cloak::testutil::spare_scrambler(&mut st);
         let card = |st: &AppState| {
             let copy = st.character.copy_in_pack(k).and_then(|s| s.copy.as_ref());
             Deck::item_card_of(st, &ItemId::new("field_scrambler"), copy, None)
