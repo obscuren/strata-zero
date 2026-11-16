@@ -309,19 +309,11 @@ pub(crate) fn install(st: &mut AppState, v: &Here, pick: usize) -> bool {
     ok
 }
 
-/// The words a hint row puts for walking and for leaving the place: CHROME's
-/// `←↑↓→ select` and `c meat/chrome`, the ledger's `↑↓ select` and `← attributes`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Keys {
-    pub select: &'static str,
-    pub back: &'static str,
-}
-
 /// The hint row on a place: what space does, and on chrome what `x` does, dimmer while
 /// the lock is on; the picker's keys while it is open; the ask after a first `x`
 /// (`asked`).
-pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool, keys: Keys) -> Line<'static> {
-    let Keys { select, back } = keys;
+pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
+    let (select, back) = ("←↑↓→ select", "c meat/chrome");
     let dim = Style::default().fg(DIM);
     let faint = Style::default().fg(FAINTER);
     let amber = Style::default().fg(AMBER);

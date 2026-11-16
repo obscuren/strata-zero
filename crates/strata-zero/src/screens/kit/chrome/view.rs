@@ -3,8 +3,7 @@
 
 use super::card::{draw_lines, fit_card, piece_card};
 use super::rules::{
-    Here, Keys, Pulled, act, changing, chrome_mark, gauge, held, hint_line, install, load_after,
-    pull,
+    Here, Pulled, act, changing, chrome_mark, gauge, held, hint_line, install, load_after, pull,
 };
 use super::{Stop, chrome_layout, socket_kind, stops};
 use crate::app::AppState;
@@ -22,12 +21,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-
-/// CHROME's words for walking and for leaving, in its hints.
-const KEYS: Keys = Keys {
-    select: "←↑↓→ select",
-    back: "c meat/chrome",
-};
 
 /// Where on the body a stop is: a site (`None`), or a socket of what a site holds.
 fn place(stop: Stop) -> (Site, Option<usize>) {
@@ -244,7 +237,7 @@ impl Kit {
     /// CHROME's hint row: the ledger's, with `c meat/chrome` and the four arrows.
     pub(crate) fn chrome_hints(&self, st: &AppState) -> Line<'static> {
         let asked = self.pulling.is_some() && self.pulling == Some(self.stop(st));
-        hint_line(st, &self.here(st), asked, KEYS)
+        hint_line(st, &self.here(st), asked)
     }
 
     /// Draws CHROME into the tab's `area`: the header with the ledger's mark, the tiles
