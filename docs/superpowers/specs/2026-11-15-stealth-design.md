@@ -179,7 +179,7 @@ spec), drawn as cells after the map's layers and your `@`, before the HUD, where
   map, wide at first, then settles to its resting drift.
 - **Burning out** (about 2.5 s): the drift keeps going past empty (split wider, wave over
   the map, slips often), then sputters, plain frames more and more often, until it's
-  gone. The HUD flashes `FAILING` and the footer `SIGNAL LOST` through it. You're in the
+  gone. The footer flashes `SIGNAL LOST` through it. You're in the
   open from the moment it starts. The FOCUS cloak burns out the same way when FOCUS hits
   0 **(call)**.
 - **Switching off** (half a second): the drift eased out, nothing else. Also how an
@@ -189,9 +189,11 @@ spec), drawn as cells after the map's layers and your `@`, before the HUD, where
 
 ### The HUD
 
-- **Scrambler:** the top-right line reads `◌ FIELD SCRAMBLER 62%` (pink below a quarter);
-  the XP row shows a `CELL` bar and the seconds left while cloaked; after a burnout,
-  `◌ field scrambler 0% · burned out` until it recharges past a tenth.
+- **Scrambler:** the footer's first row reads `◌ field scrambler 62%` at its right end
+  while it's off and you're out of a fight (amended 2026-11-16: it started top right, by
+  the clock, which already held too much); the XP row shows a `CELL` bar and the seconds
+  left while cloaked, with SCRAMBLED, and SIGNAL LOST through a burnout, in its place;
+  after a burnout, `◌ field scrambler 0% · burned out` until it recharges past a tenth.
 - **Ability:** the FOCUS bar drains as you watch; no CELL row.
 - **Footer:** `▒▒ SCRAMBLED ▒▒` (scrambler) or `▒▒ CLOAKED ▒▒` (ability) where
   `ENGAGED` would be; the AMBUSH line when a foe is in reach.

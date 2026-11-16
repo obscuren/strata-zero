@@ -86,7 +86,7 @@ A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and
 
 Switched off, it recharges: empty to full in 30 game minutes, about a minute and a half on foot, and a night's sleep fills it. Put it down, or take it apart, while it runs and the cloak switches off.
 
-The top right shows its charge before the time, dim while it's off: `◌ field scrambler  62%`. Cloaked it reads `◌ FIELD SCRAMBLER  62%`, the number turning pink under a quarter, and `◌ FIELD SCRAMBLER ▓▓ FAILING` as it burns out. A cell that ran dry is **burned out**, `◌ field scrambler   0% · burned out`, and won't run (`the cell is burned out`) until it has more than a tenth back.
+The first bottom line shows its charge at its right end while it's off: `◌ field scrambler  62%`. Out of a fight only: in one it can't go on. While it runs, `▒▒ SCRAMBLED ▒▒` and the `CELL` bar take over, and `▓▓ SIGNAL LOST ▓▓` as it burns out. A cell that ran dry is **burned out**, `◌ field scrambler   0% · burned out`, and won't run (`the cell is burned out`) until it has more than a tenth back.
 
 Carry two and each has its own cell; the key runs the fuller one. With the WRENCH category you build one at the workbench from a dead phone, 3 copper coils and a scrap servo.
 

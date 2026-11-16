@@ -189,35 +189,16 @@ pub fn status_line(s: &Status, width: u16) -> Line<'static> {
 
 /// The location on the left, the clock with its glyph at the right edge.
 pub fn location_line(location: &str, clock: (u8, u8), width: u16) -> Line<'static> {
-    location_tag_line(location, Vec::new(), clock, width)
-}
-
-/// The location on the left, the clock at the right edge, and `tag` right-aligned
-/// before the clock. The location is cut first, then the tag.
-pub fn location_tag_line(
-    location: &str,
-    tag: Vec<Span<'static>>,
-    clock: (u8, u8),
-    width: u16,
-) -> Line<'static> {
     let clock_text = format!("{} {:02}:{:02}", clock_glyph(clock.0), clock.0, clock.1);
-    let clock_w = clock_text.chars().count();
-    let tag = cut_spans(tag, (width as usize).saturating_sub(clock_w + 4));
-    // The tag keeps two cells to the clock.
-    let tag_w = match width_of(&tag) {
-        0 => 0,
-        w => w + 2,
-    };
-    let room = (width as usize).saturating_sub(clock_w + 2 + tag_w);
+    let room = (width as usize).saturating_sub(clock_text.chars().count() + 2);
     let loc = cut(location, room);
-    let gap = (width as usize).saturating_sub(1 + loc.chars().count() + tag_w + clock_w);
-    let mut spans = vec![Span::raw(" "), cyan(loc), Span::raw(" ".repeat(gap))];
-    if tag_w > 0 {
-        spans.extend(tag);
-        spans.push(Span::raw("  "));
-    }
-    spans.push(text(clock_text));
-    Line::from(spans)
+    let gap = (width as usize).saturating_sub(1 + loc.chars().count() + clock_text.chars().count());
+    Line::from(vec![
+        Span::raw(" "),
+        cyan(loc),
+        Span::raw(" ".repeat(gap)),
+        text(clock_text),
+    ])
 }
 
 /// How exposed you are, on its own band row: `dim · 2 eyes`, `bright · unseen`.
@@ -424,6 +405,9 @@ pub struct Footer<'a> {
     pub flash_pools: bool,
     /// The cloak's word at the right of row 1, in place of `HUNTED` or `ENGAGED`.
     pub cloak: Option<CloakTag>,
+    /// A carried field scrambler's charge at the right of row 1, before the help key:
+    /// `◌ field scrambler  62%`. Empty without one, and while a cloak's word shows.
+    pub scrambler: Vec<Span<'static>>,
     /// Cloaked with a foe in your weapon's reach: the AMBUSH line at the right of row 2.
     pub ambush: bool,
 }
@@ -580,6 +564,10 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
     }
     let mut right1 = Vec::new();
+    if !f.scrambler.is_empty() {
+        right1.extend(f.scrambler.iter().cloned());
+        right1.push(Span::raw("    "));
+    }
     if let Some(tag) = f.cloak {
         let (word, colour) = match tag {
             CloakTag::Scrambled => ("▒▒ SCRAMBLED ▒▒", CYAN),
@@ -1166,6 +1154,7 @@ mod tests {
                 flash_pools: false,
                 cloak: None,
                 ambush: false,
+                scrambler: Vec::new(),
             };
             footer_rows(&f, 100)[3].clone()
         };
@@ -1243,6 +1232,7 @@ mod tests {
             flash_pools: false,
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         };
         let rows: Vec<String> = footer_rows(&on_foot, 120)
             .iter()
@@ -1288,6 +1278,7 @@ mod tests {
             flash_pools: false,
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         };
         let rows: Vec<String> = footer_rows(&calm, 130)
             .iter()
@@ -1473,6 +1464,7 @@ mod tests {
             flash_pools: false,
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         };
         let rows = footer_rows(&f, 140);
         let row = rows[3].to_string();
@@ -1525,6 +1517,7 @@ mod tests {
             flash_pools: false,
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         };
         let row = footer_rows(&f, 150)[3].to_string();
         assert!(row.starts_with(" PROGRAMS   [1] CRACK ●"), "{row:?}");
@@ -1556,6 +1549,7 @@ mod tests {
             flash_pools: false,
             cloak: None,
             ambush: false,
+            scrambler: Vec::new(),
         }
     }
 
@@ -1582,17 +1576,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tag_sits_before_the_clock_and_the_location_gives_way() {
-        let line = location_tag_line(
-            "Night Market · Crown Circle",
-            vec![Span::raw("◌ FIELD SCRAMBLER  62%")],
-            (23, 10),
-            50,
+    fn the_scramblers_charge_sits_on_the_footer_before_the_help_key() {
+        let mut f = footer_fixture();
+        f.scrambler = vec![Span::raw("◌ field scrambler   0% · burned out")];
+        let row1 = footer_rows(&f, 100)[0].to_string();
+        assert_eq!(unicode_width::UnicodeWidthStr::width(row1.as_str()), 100);
+        assert!(
+            row1.contains("◌ field scrambler   0% · burned out    [?]"),
+            "{row1:?}"
         );
-        let s = line.to_string();
-        assert_eq!(s.chars().count(), 50);
-        assert!(s.contains("◌ FIELD SCRAMBLER  62%") && s.ends_with("23:10"));
-        assert!(s.starts_with(" Night"));
+        assert!(row1.starts_with(" on foot"));
     }
 
     #[test]

@@ -6546,7 +6546,8 @@ fn guards_shot(dir: &str, name: &str, st: &mut AppState) {
 /// `cloak_{name}_{w}x{h}` at 120 x 40 and 100 x 30: `holding_full` a full scrambler's
 /// rest; `holding_low` its cell at a tenth, the wave across the map's middle;
 /// `going_in` 20 frames into the drift; `burning_out` 30 frames into the cell's
-/// burnout, `FAILING` top right and `SIGNAL LOST` in the footer.
+/// burnout, `SIGNAL LOST` in the footer; `burned_out` once it's over, the charge on the
+/// footer. The top right keeps to the place and the time.
 #[test]
 #[ignore]
 fn cloak_shots() {
@@ -6624,7 +6625,7 @@ fn cloak_shots() {
     );
     for size in sizes {
         let buf = shot(&mut st, "holding_full", size);
-        assert!(text(&buf).contains("◌ FIELD SCRAMBLER 100%"));
+        assert!(!text(&buf).contains("FIELD SCRAMBLER"));
         assert!(text(&buf).contains("▒▒ SCRAMBLED ▒▒"));
     }
 
@@ -6659,7 +6660,8 @@ fn cloak_shots() {
         });
         assert!(mid_map, "no wave across the middle in 600 ticks");
         let buf = shot(&mut st, "holding_low", (w, h));
-        assert!(text(&buf).contains("◌ FIELD SCRAMBLER  10%"));
+        assert!(!text(&buf).contains("FIELD SCRAMBLER"));
+        assert!(text(&buf).contains("▒▒ SCRAMBLED ▒▒"));
     }
 
     // Going in: 20 frames on, a drifting frame.
@@ -6687,7 +6689,14 @@ fn cloak_shots() {
     drifting(&mut st);
     for size in sizes {
         let buf = shot(&mut st, "burning_out", size);
-        assert!(text(&buf).contains("◌ FIELD SCRAMBLER ▓▓ FAILING"));
+        assert!(!text(&buf).contains("FAILING"));
         assert!(text(&buf).contains("▓▓ SIGNAL LOST ▓▓"));
+    }
+
+    // Burned out: the charge on the footer's first row, where SIGNAL LOST was.
+    frames(&mut st, 72);
+    for size in sizes {
+        let buf = shot(&mut st, "burned_out", size);
+        assert!(text(&buf).contains("◌ field scrambler   0% · burned out    [?]"));
     }
 }
