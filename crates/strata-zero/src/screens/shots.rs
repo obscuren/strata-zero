@@ -6541,3 +6541,160 @@ fn guards_shot(dir: &str, name: &str, st: &mut AppState) {
         write_svg(dir, &format!("guards_{name}_{w}x{h}"), st, &buf, false);
     }
 }
+
+/// The cloak (#36) on an office's lit floor, a guard you see 4 to 6 tiles off, as
+/// `cloak_{name}_{w}x{h}` at 120 x 40 and 100 x 30: `holding_full` a full scrambler's
+/// rest; `holding_low` its cell at a tenth, the wave across the map's middle;
+/// `going_in` 20 frames into the drift; `burning_out` 30 frames into the cell's
+/// burnout, `FAILING` top right and `SIGNAL LOST` in the footer.
+#[test]
+#[ignore]
+fn cloak_shots() {
+    use crate::cloak::testutil::{a_guard_in_sight, fire, frames, scrambler, set_charge};
+    use crate::cloak::veil::{look, now, roll};
+    use crate::cloak::{START_TICKS, hidden};
+    use citygen::rng::hash64;
+    use game::{Charge, FULL_CELL};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let sizes = [(120u16, 40u16), (100, 30)];
+    // This frame's look, as the map draws it.
+    let look_now = |st: &AppState| {
+        let you = st.player.as_ref().expect("you").pos;
+        let seed = hash64(you.x as u64, you.y as u64);
+        let (phase, p, hot) = now(st).expect("a veil");
+        look(phase, p, hot, &|k| roll(st.tick, seed, k))
+    };
+    // Frames on until the look is a drift, not a plain frame.
+    let drifting = |st: &mut AppState| {
+        for _ in 0..30 {
+            if !look_now(st).plain {
+                return;
+            }
+            frames(st, 1);
+        }
+        panic!("no drifting frame");
+    };
+    // The office copy with every floor drawn, you in a guard's sight, scrambled.
+    let scrambled = || {
+        let (mut st, b) = crate::sitenet::testutil::office_copy(crate::venues::SITE_NET_SECURITY);
+        let city = st.city.clone().expect("a city");
+        let plan = crate::interiors::plan_now(&st, b)
+            .expect("a plan")
+            .into_owned();
+        for level in plan.levels {
+            st.interiors.ensure(&city, b, level).expect("its floor");
+        }
+        a_guard_in_sight(&mut st, b);
+        st.missions.daze = None;
+        st.veil.off = false;
+        let k = scrambler(&mut st);
+        fire(&mut st, "scramble").expect("scrambled");
+        assert!(hidden(&st));
+        (st, k)
+    };
+    let shot = |st: &mut AppState, name: &str, (w, h): (u16, u16)| {
+        let buf = crate::sitenet::testutil::drawn(st, (w, h));
+        write_svg(&dir, &format!("cloak_{name}_{w}x{h}"), st, &buf, false);
+        buf
+    };
+    let text = |buf: &Buffer| -> String {
+        let a = buf.area;
+        (a.y..a.bottom())
+            .map(|y| {
+                (a.x..a.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect()
+    };
+
+    // Holding on a full cell.
+    let (mut st, k) = scrambled();
+    frames(&mut st, START_TICKS + 1);
+    set_charge(
+        &mut st,
+        k,
+        Charge {
+            left: FULL_CELL,
+            burned: false,
+        },
+    );
+    for size in sizes {
+        let buf = shot(&mut st, "holding_full", size);
+        assert!(text(&buf).contains("◌ FIELD SCRAMBLER 100%"));
+        assert!(text(&buf).contains("▒▒ SCRAMBLED ▒▒"));
+    }
+
+    // Holding on a tenth: the wave's band across the middle of the map.
+    let (mut st, k) = scrambled();
+    frames(&mut st, START_TICKS + 1);
+    set_charge(
+        &mut st,
+        k,
+        Charge {
+            left: FULL_CELL / 10,
+            burned: false,
+        },
+    );
+    let start = st.tick;
+    for (w, h) in sizes {
+        let rows = i64::from(
+            crate::screens::explore::layout(Rect::new(0, 0, w, h), false)
+                .map
+                .height,
+        );
+        // The wave's head and band as the veil works them out.
+        let head = |tick: u64, heat: f64| {
+            let t = tick as f64 * 1000.0 / 30.0;
+            let band = (rows - 2).min(1 + (4.0 * heat).round() as i64);
+            let period = (150.0 - 100.0 * heat).max(35.0);
+            (
+                ((t / period).floor() as i64).rem_euclid(rows + band + 4),
+                band,
+            )
+        };
+        st.tick = start;
+        loop {
+            let l = look_now(&st);
+            let (at, band) = head(st.tick, f64::from(l.heat));
+            if l.wave && !l.plain && at - band / 2 == rows / 2 {
+                break;
+            }
+            st.tick += 1;
+        }
+        let buf = shot(&mut st, "holding_low", (w, h));
+        assert!(text(&buf).contains("◌ FIELD SCRAMBLER  10%"));
+    }
+
+    // Going in: 20 frames on, a drifting frame.
+    let (mut st, _) = scrambled();
+    frames(&mut st, 20);
+    drifting(&mut st);
+    for size in sizes {
+        shot(&mut st, "going_in", size);
+    }
+
+    // Burning out: the cell at 1, a frame to run it dry, 30 frames into the burnout.
+    let (mut st, k) = scrambled();
+    frames(&mut st, START_TICKS + 1);
+    set_charge(
+        &mut st,
+        k,
+        Charge {
+            left: 1,
+            burned: false,
+        },
+    );
+    frames(&mut st, 1);
+    assert!(!hidden(&st), "burned out");
+    frames(&mut st, 30);
+    drifting(&mut st);
+    for size in sizes {
+        let buf = shot(&mut st, "burning_out", size);
+        assert!(text(&buf).contains("◌ FIELD SCRAMBLER ▓▓ FAILING"));
+        assert!(text(&buf).contains("▓▓ SIGNAL LOST ▓▓"));
+    }
+}

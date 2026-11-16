@@ -8,11 +8,11 @@ On the left: your handle, your level and your money in credits (`¤`). Under the
 
 - **HP**: green while you're well, amber when you're hurt, flashing magenta when you're close to dying.
 - **FOCUS**: what the Net takes out of you.
-- **XP**: how close the next level is.
+- **XP**: how close the next level is. While a field scrambler cloaks you, a `CELL` bar takes its place, with the seconds its cell has left.
 
 When mail is waiting you see `▣ NEW MAIL` beside your money.
 
-On the right: where you are, and the time, with a moon (`☾`) from six in the evening to six in the morning and a sun (`☀`) the rest of the day. Under them:
+On the right: where you are, and the time, with a moon (`☾`) from six in the evening to six in the morning and a sun (`☀`) the rest of the day. A field scrambler you carry shows its charge before the time (The city and the world). Under them:
 
 - **CARRY**, the weight you have on you against what you can take. It turns magenta when you carry too much, and then you can't pick anything else up.
 - How exposed you are: how much light you stand in, and how many cameras see you. Indoors it is blank: a camera on a hotel's or office's floor that sees you shows its cone in red instead. On the Net it says whether you are hunted.

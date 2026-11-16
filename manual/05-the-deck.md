@@ -66,3 +66,5 @@ Jacked in, the map shows two of you. Your self on the Net is the blue `@`, and t
 ## TALENTS
 
 Five trees, one for each attribute: MEAT, EDGE, WRENCH, STREET and ICE. You get a talent point at each level. A tree's later rows open as you put more points into it, and a talent may need the one before it at its best. Move with the arrows, `[ ]` change tree, and `space` puts a point into the talent under the cursor. Points can't be taken back.
+
+In STREET, three talents work with the cloak (Turns and fights): **Ghost** halves the trace a camera warms when it sees you, **Shadow step** grants Vanish, and **Blind spot** halves a cloak's drain while you stand still.

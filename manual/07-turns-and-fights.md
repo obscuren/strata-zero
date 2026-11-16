@@ -33,7 +33,35 @@ While it isn't your turn, other keys wait; the game says `not your turn`. You ca
 
 Abilities come from your skills, your gear, your chrome and your talents. The first five sit on `1` to `5`, and `a` lists them all with whether each is ready or cooling down. Cooldowns run in real time.
 
-On the act half of a turn, `1` to `9` and `0` pick from everything you can do this turn: strikes, boosts and marks first, then anything you can throw. A strike needs a target in range; a boost or a mark you use on yourself or on whoever the cursor is on. Deadeye locks on: brackets close in round the foe, `MARKED` and what it adds to your chance to hit read out beside them, and it keeps a `⌖` over it for the rest of the fight.
+On the act half of a turn, `1` to `9` and `0` pick from everything you can do this turn: strikes, boosts, marks and Vanish first, then anything you can throw. A strike needs a target in range; a boost or a mark you use on yourself or on whoever the cursor is on. Deadeye locks on: brackets close in round the foe, `MARKED` and what it adds to your chance to hit read out beside them, and it keeps a `⌖` over it for the rest of the fight.
+
+## The cloak
+
+On foot and out of a fight, you can **cloak**. The Cloak ability comes with the Stealth skill (GHOST), and a field scrambler in your pack gives you Scramble on a cell of its own (The city and the world). Press its key on the ability bar and the log says `CLOAKED`, or `SCRAMBLED` for the scrambler; press it again and it switches off. Its slot reads `on` while it runs, and the map drifts in pink and cyan round you. Only one runs at a time: either key switches off the one that's on.
+
+It won't go on in a fight (`not in a fight`), while you're jacked in (`not while jacked in`), on the Net (`not on the Net`), or with nothing left to run on (`no FOCUS left`, `the cell is empty`).
+
+While it holds, nobody sees you: no guard, foe, camera or walker. A guard doesn't spot you and nobody radios it in, a foe on the street doesn't start a fight, and a guard already hunting you walks to where it last saw you and gives up. Guards don't follow you up or down the stairs or a lift either. You are still there, though: a guard still stands in your way when you walk into it, and a gunshot is still heard.
+
+The Cloak drains 1 FOCUS a second, and Scramble drains the scrambler's cell; the Blind spot talent halves either while you stand still. Moving, doors, stairs and lifts, and walking into a building leave it on, and time on the deck or in a menu costs it nothing. It ends:
+
+- with your first hit (The ambush, below);
+- when it runs dry. It **burns out**: the map tears, the log says `the cloak burns out · you're in the open` (`the scrambler burns out · you're in the open` on a cell), and you're in the open from that moment, not when the picture settles;
+- when a fight starts any other way, when you jack in, and when you leave the city.
+
+While it holds, the first bottom line reads `▒▒ CLOAKED ▒▒` or `▒▒ SCRAMBLED ▒▒` where `ENGAGED` would be, and through a burnout it flashes `▓▓ SIGNAL LOST ▓▓`.
+
+## The ambush
+
+`e` from the cloak goes to turns and keeps you cloaked until your first turn ends: foes that act before you don't see you. Your first shot or strike is an **ambush**. The log says `AMBUSH`, every round of it lands, and each does double damage. The cloak ends with it, and the fight goes on from there: the one you hit turns on where you stood, and a shot is heard as any shot is. A guard you drop with it never radios. A throw ends the cloak with no bonus, and so does ending that turn without an attack.
+
+While you're cloaked with a foe in reach of your gun or one of your strikes, the second bottom line reads `AMBUSH · your first hit lands, ×2`.
+
+## Vanish
+
+The Shadow step talent (STREET) gives you **Vanish**, a way out of a fight. It's on the act half's list and costs no AP. The fight ends, every foe on your map and every guard of the building you're in, on any floor, loses you, and you're cloaked for 4 seconds for free to get away under. The log says `vanish · they lose you`. A guard that already radioed has radioed: an alarm stays on.
+
+Vanish cools for 120 seconds, 90 with Shadow step at its best. Out of a fight it's refused (`only in a fight`); there the cloak is the tool.
 
 ## Your gun
 

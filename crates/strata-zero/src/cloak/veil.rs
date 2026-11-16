@@ -834,53 +834,12 @@ mod tests {
         assert!(!on(&st, StratumKind::Street), "nor a construct");
     }
 
-    /// You on a lit walkable tile of `b`'s floor 4 to 6 tiles from a standing guard you
-    /// see, every other guard of `b` gone: the guard's tile.
-    fn a_guard_in_sight(st: &mut AppState, b: citygen::BuildingId) -> Pos {
-        use crate::sitenet::testutil::stand_on_floor;
-        let posted: Vec<(usize, i32, Pos)> = (st.foes.iter().enumerate())
-            .filter(|(_, f)| f.standing() && f.post.as_ref().is_some_and(|p| p.building == b))
-            .filter_map(|(i, f)| match f.place {
-                Place::Floor { building, level } if building == b => Some((i, level, f.pos)),
-                _ => None,
-            })
-            .collect();
-        for (i, level, at) in posted {
-            let city = st.city.clone().expect("a city");
-            let Some(floor) = st.interiors.ensure(&city, b, level).cloned() else {
-                continue;
-            };
-            let place = Place::Floor { building: b, level };
-            for dy in -6..=6 {
-                for dx in -6..=6 {
-                    let spot = at.offset(dx, dy);
-                    let far = spot.chebyshev(at);
-                    let open = floor.tiles.get(spot).is_some_and(|t| t.is_walkable())
-                        && floor.light.get(spot).is_some_and(|l| *l > 0)
-                        && crate::foes::foe_at(st, place, spot).is_none();
-                    if !(4..=6).contains(&far) || !open {
-                        continue;
-                    }
-                    stand_on_floor(st, b, level, spot);
-                    if crate::foes::in_sight(st).contains(&i) {
-                        let guard = st.foes[i].clone();
-                        crate::guards::testutil::no_guards(st, b);
-                        st.foes.push(guard);
-                        assert_eq!(crate::foes::in_sight(st).len(), 1, "that guard only");
-                        return at;
-                    }
-                }
-            }
-        }
-        panic!("no guard of {b:?}'s copy stands in sight of a lit tile 4 to 6 off");
-    }
-
     #[test]
     fn a_cloaked_floor_draws_the_drift_and_keeps_every_guard() {
         use crate::sitenet::testutil::{drawn, office_copy};
         let (mut st, b) = office_copy(crate::venues::SITE_NET_SECURITY);
         // You on a lit floor with a guard in your sight, the daze off.
-        let gat = a_guard_in_sight(&mut st, b); // the guard's tile
+        let gat = crate::cloak::testutil::a_guard_in_sight(&mut st, b); // the guard's tile
         st.missions.daze = None;
         scrambler(&mut st);
         fire(&mut st, "scramble").unwrap();

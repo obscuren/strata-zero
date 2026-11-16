@@ -55,6 +55,8 @@ There are five: **BODY**, **REFLEX**, **TECH**, **COOL** and **NET**. Each start
 
 Skills come in categories: NETRUNNER, WRENCH, IRON, EDGE, GHOST, STREET, RIPPER and MEAT. You have 600 SP to spend. Buy a category first; it brings its first skill with it, and opens the rest of the category to buy. `→` unfolds a category, `←` folds it, `space` buys what the cursor is on.
 
+A skill can grant an ability: **Stealth** (GHOST) grants Cloak, which hides you on foot (Turns and fights).
+
 ### Name and perma death
 
 Type a name of up to 16 letters, numbers, spaces and `- _ . '`. Under it is **perma death**, on unless you turn it off. With perma death on, the run ends the first time your runner dies. With it off, dying sends you back to your last save. Saving and dying has more.

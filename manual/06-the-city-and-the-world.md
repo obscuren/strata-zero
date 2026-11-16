@@ -38,6 +38,8 @@ Each has a Net of its own, with a level for each floor, behind a firewall. A ter
 
 On a job, a hotel or office has **guards** (`@`, in red). They walk their rounds, and some go up and down to another floor by the stairs and the lifts their card rides. Each carries its zone's keycard and opens the doors that card opens; a guard of the public rooms carries none. They see by the floor's light: in a dark corner a guard sees you only within three tiles, in a lit room from up to eight, and a wall or a door blocks their sight as it blocks yours. They walk only while you, or your body, are in the building. A guard you drop leaves its card on the floor where it fell, for you to pick up; one still lying there when the job ends goes with it. What guards do once they see you is in Turns and fights.
 
+Cloaked (Turns and fights), you go past them: the cameras and the guards don't see you. A camera that sees you uncloaked warms the building's trace (The Net), and the **Ghost** talent halves what it warms.
+
 There is more than one way between floors. A hotel has a guest lift and a service lift, a grand stair up from the lobby, a service stair and a fire stair. An office has two banks of lifts, a goods lift down to its basement, a stair and a fire stair.
 
 - A lift lists only the floors it stops at. If yours doesn't go where you want, another lift or a stair might.
@@ -77,6 +79,16 @@ The Keyjack runs on the fuse in its socket. When none you carry has a fuse in, t
 A lock's maker sets its rating, shown on the Keyjack's screen beside the beat. Street locks are `R1`, municipal and neon ones `R2`, megacorp ones `R3`. The higher the rating, the narrower the zones.
 
 What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone a cell wider, and the **Skeleton key** talent allows one more fault. Both add to what the fuse does.
+
+### The field scrambler
+
+A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and fights covers the cloak). While it's in your pack you have the Scramble ability on your ability bar. A full cell holds the cloak 20 seconds, 30 with the Stealth skill. While it runs, your XP bar becomes a `CELL` bar that counts its seconds down.
+
+Switched off, it recharges: empty to full in 30 game minutes, about a minute and a half on foot, and a night's sleep fills it. Put it down, or take it apart, while it runs and the cloak switches off.
+
+The top right shows its charge before the time, dim while it's off: `◌ field scrambler  62%`. Cloaked it reads `◌ FIELD SCRAMBLER  62%`, the number turning pink under a quarter, and `◌ FIELD SCRAMBLER ▓▓ FAILING` as it burns out. A cell that ran dry is **burned out**, `◌ field scrambler   0% · burned out`, and won't run (`the cell is burned out`) until it has more than a tenth back.
+
+Carry two and each has its own cell; the key runs the fuller one. With the WRENCH category you build one at the workbench from a dead phone, 3 copper coils and a scrap servo.
 
 ## Reading the map
 
