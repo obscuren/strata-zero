@@ -9,6 +9,7 @@ use game::{AbilityId, CopyId, FULL_CELL, Source};
 use serde::{Deserialize, Serialize};
 
 pub mod cell;
+pub mod hud;
 #[cfg(test)]
 pub(crate) mod testutil;
 mod vanish;

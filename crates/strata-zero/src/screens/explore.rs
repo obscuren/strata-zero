@@ -701,13 +701,15 @@ fn hijacked_beyond(
         .collect()
 }
 
-/// The footer's slots on foot: your abilities, cooling or ready, lit a moment after firing.
+/// The footer's slots on foot: your abilities, cooling, ready or on (the cloak that
+/// runs), lit a moment after firing.
 pub(crate) fn ability_slots(st: &AppState) -> Vec<hud::Slot> {
     MapScreen::actives(st)
         .into_iter()
         .filter_map(|id| {
             let a = st.content.ability(&id)?;
             let state = match st.character.cooling(&st.content, &id, st.tick) {
+                _ if crate::cloak::hud::slot_on(st, &id) => hud::SlotState::On,
                 Some(left) => hud::SlotState::Cooling(left.div_ceil(30)),
                 None => hud::SlotState::Ready,
             };
@@ -1571,6 +1573,8 @@ impl MapScreen {
             prompt: self.turn_prompt(st),
             act: (self.firing(st) && crate::net::your_turn(st)).then(|| Self::act_entries(st)),
             flash_pools: self.flash_pools(st),
+            cloak: crate::cloak::hud::footer_tag(st),
+            ambush: crate::cloak::hud::ambush_ready(st),
             budgets: st.net.engaged.as_ref().map(|e| {
                 let moves = crate::net::you_move(st, e.place);
                 if e.actor() == crate::net::Actor::You {
@@ -4837,13 +4841,19 @@ impl Screen for MapScreen {
                 lw,
             ),
             hud::bar_row("FOCUS", ch.focus, ch.focus_max(&st.content), CYAN, lw),
-            hud::bar_row(
-                "XP",
-                ch.xp,
-                game::Character::xp_to_next(ch.level),
-                hud::DIM_AMBER,
-                lw,
-            ),
+            // While a scrambler cloaks you, its cell in place of XP.
+            match crate::cloak::hud::cell(st) {
+                Some((left, secs, colour)) => {
+                    hud::cell_row(left, game::FULL_CELL, secs, colour, lw)
+                }
+                None => hud::bar_row(
+                    "XP",
+                    ch.xp,
+                    game::Character::xp_to_next(ch.level),
+                    hud::DIM_AMBER,
+                    lw,
+                ),
+            },
         ];
         for (i, row) in rows.into_iter().enumerate() {
             f.render_widget(Paragraph::new(row), r.band_l[i + 1]);
@@ -4866,7 +4876,12 @@ impl Screen for MapScreen {
             location = format!("ALERT · {location}");
         }
         f.render_widget(
-            Paragraph::new(hud::location_line(&location, st.clock(), rw)),
+            Paragraph::new(hud::location_tag_line(
+                &location,
+                crate::cloak::hud::tag(st),
+                st.clock(),
+                rw,
+            )),
             r.band_r[0],
         );
         let exposure =

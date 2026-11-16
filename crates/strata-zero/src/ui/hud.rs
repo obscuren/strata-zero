@@ -189,16 +189,35 @@ pub fn status_line(s: &Status, width: u16) -> Line<'static> {
 
 /// The location on the left, the clock with its glyph at the right edge.
 pub fn location_line(location: &str, clock: (u8, u8), width: u16) -> Line<'static> {
+    location_tag_line(location, Vec::new(), clock, width)
+}
+
+/// The location on the left, the clock at the right edge, and `tag` right-aligned
+/// before the clock. The location is cut first, then the tag.
+pub fn location_tag_line(
+    location: &str,
+    tag: Vec<Span<'static>>,
+    clock: (u8, u8),
+    width: u16,
+) -> Line<'static> {
     let clock_text = format!("{} {:02}:{:02}", clock_glyph(clock.0), clock.0, clock.1);
-    let room = (width as usize).saturating_sub(clock_text.chars().count() + 2);
+    let clock_w = clock_text.chars().count();
+    let tag = cut_spans(tag, (width as usize).saturating_sub(clock_w + 4));
+    // The tag keeps two cells to the clock.
+    let tag_w = match width_of(&tag) {
+        0 => 0,
+        w => w + 2,
+    };
+    let room = (width as usize).saturating_sub(clock_w + 2 + tag_w);
     let loc = cut(location, room);
-    let gap = (width as usize).saturating_sub(1 + loc.chars().count() + clock_text.chars().count());
-    Line::from(vec![
-        Span::raw(" "),
-        cyan(loc),
-        Span::raw(" ".repeat(gap)),
-        text(clock_text),
-    ])
+    let gap = (width as usize).saturating_sub(1 + loc.chars().count() + tag_w + clock_w);
+    let mut spans = vec![Span::raw(" "), cyan(loc), Span::raw(" ".repeat(gap))];
+    if tag_w > 0 {
+        spans.extend(tag);
+        spans.push(Span::raw("  "));
+    }
+    spans.push(text(clock_text));
+    Line::from(spans)
 }
 
 /// How exposed you are, on its own band row: `dim · 2 eyes`, `bright · unseen`.
@@ -251,6 +270,18 @@ pub fn bar_row(label: &str, cur: u32, max: u32, colour: Color, width: u16) -> Li
         text(format!("{:>7} ", format!("{cur}/{max}"))),
     ];
     spans.extend(bar_spans(bar_cells_for(cur, max, cells), cells, colour));
+    padded(spans, width as usize)
+}
+
+/// The XP row while a scrambler cloaks you: ` CELL  ` then the seconds left, then the
+/// cell's bar to the column's edge but one.
+pub fn cell_row(left: u32, full: u32, secs: u64, colour: Color, width: u16) -> Line<'static> {
+    let mut spans = vec![
+        dim(" CELL  "),
+        text(format!("{:>8} ", format!("{secs}s left"))),
+    ];
+    let cells = (width as usize).saturating_sub(width_of(&spans) + 1);
+    spans.extend(bar_spans(bar_cells_for(left, full, cells), cells, colour));
     padded(spans, width as usize)
 }
 
@@ -331,6 +362,19 @@ pub enum SlotState {
     Ready,
     /// Seconds left.
     Cooling(u64),
+    /// Running now: the cloak that's on.
+    On,
+}
+
+/// The cloak's word on the footer, where `HUNTED` or `ENGAGED` would be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloakTag {
+    /// A scrambler's cell cloaks you.
+    Scrambled,
+    /// FOCUS (or Vanish) cloaks you.
+    Cloaked,
+    /// It's burning out: `blink` draws it pink, else cyan.
+    SignalLost { blink: bool },
 }
 
 pub struct Slot {
@@ -378,6 +422,10 @@ pub struct Footer<'a> {
     pub act: Option<Vec<ActEntry>>,
     /// The pools draw lit: a boost just refilled them.
     pub flash_pools: bool,
+    /// The cloak's word at the right of row 1, in place of `HUNTED` or `ENGAGED`.
+    pub cloak: Option<CloakTag>,
+    /// Cloaked with a foe in your weapon's reach: the AMBUSH line at the right of row 2.
+    pub ambush: bool,
 }
 
 /// One entry of the act half's `ACT` row.
@@ -532,7 +580,20 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         row1.push(Span::styled(trace.clone(), Style::default().fg(CYAN)));
     }
     let mut right1 = Vec::new();
-    if f.hunted || f.engaged {
+    if let Some(tag) = f.cloak {
+        let (word, colour) = match tag {
+            CloakTag::Scrambled => ("▒▒ SCRAMBLED ▒▒", CYAN),
+            CloakTag::Cloaked => ("▒▒ CLOAKED ▒▒", CYAN),
+            CloakTag::SignalLost { blink } => {
+                ("▓▓ SIGNAL LOST ▓▓", if blink { MAGENTA } else { CYAN })
+            }
+        };
+        right1.push(Span::styled(
+            word,
+            Style::default().fg(colour).add_modifier(Modifier::BOLD),
+        ));
+        right1.push(Span::raw("    "));
+    } else if f.hunted || f.engaged {
         right1.push(Span::styled(
             if f.hunted { "HUNTED" } else { "ENGAGED" },
             Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
@@ -609,6 +670,10 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
                     (_, true) => dim(" ○"),
                     (SlotState::Ready, false) => Span::styled(" ●", Style::default().fg(CYAN)),
                     (SlotState::Cooling(secs), false) => dim(format!(" {secs}s")),
+                    (SlotState::On, false) => Span::styled(
+                        " on",
+                        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                    ),
                 });
             }
             None => row4.push(dim(format!("[{}] ──", i + 1))),
@@ -695,7 +760,18 @@ pub fn footer_rows(f: &Footer, width: u16) -> [Line<'static>; 4] {
         ],
         None => Vec::new(),
     };
-    [line1, padded(row2, w), line3, line4]
+    let right2 = if f.ambush {
+        vec![
+            Span::styled(
+                "AMBUSH",
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · your first hit lands, ×2 ", Style::default().fg(AMBER)),
+        ]
+    } else {
+        Vec::new()
+    };
+    [line1, right_aligned(row2, right2, w), line3, line4]
 }
 
 /// A heavy rule with `glyph` where the vertical rule crosses it.
@@ -1088,6 +1164,8 @@ mod tests {
                 prompt: None,
                 act: None,
                 flash_pools: false,
+                cloak: None,
+                ambush: false,
             };
             footer_rows(&f, 100)[3].clone()
         };
@@ -1163,6 +1241,8 @@ mod tests {
             prompt: None,
             act: None,
             flash_pools: false,
+            cloak: None,
+            ambush: false,
         };
         let rows: Vec<String> = footer_rows(&on_foot, 120)
             .iter()
@@ -1206,6 +1286,8 @@ mod tests {
             prompt: None,
             act: None,
             flash_pools: false,
+            cloak: None,
+            ambush: false,
         };
         let rows: Vec<String> = footer_rows(&calm, 130)
             .iter()
@@ -1389,6 +1471,8 @@ mod tests {
             prompt: None,
             act: Some(act_entries()),
             flash_pools: false,
+            cloak: None,
+            ambush: false,
         };
         let rows = footer_rows(&f, 140);
         let row = rows[3].to_string();
@@ -1439,10 +1523,110 @@ mod tests {
             prompt: None,
             act: Some(entries),
             flash_pools: false,
+            cloak: None,
+            ambush: false,
         };
         let row = footer_rows(&f, 150)[3].to_string();
         assert!(row.starts_with(" PROGRAMS   [1] CRACK ●"), "{row:?}");
         assert!(row.contains("6 static 7 jolt 8 shove"), "{row:?}");
         assert!(row.find("[2] COPY").unwrap() < row.find("6 static").unwrap());
+    }
+
+    /// The calm footer on foot, with no slots.
+    fn footer_fixture<'a>() -> Footer<'a> {
+        Footer {
+            place: "Night Market".into(),
+            saved: false,
+            jacked: false,
+            camera: false,
+            overburdened: false,
+            trace: None,
+            hunted: false,
+            engaged: false,
+            turn: None,
+            run: None,
+            ice: Vec::new(),
+            slots_label: "ABILITIES",
+            slots: &[],
+            hollow: false,
+            budgets: None,
+            acting: None,
+            prompt: None,
+            act: None,
+            flash_pools: false,
+            cloak: None,
+            ambush: false,
+        }
+    }
+
+    #[test]
+    fn the_footer_reads_the_cloak_where_engaged_would_be() {
+        let mut f = footer_fixture();
+        f.engaged = true;
+        f.cloak = Some(CloakTag::Scrambled);
+        f.ambush = true;
+        let rows = footer_rows(&f, 120);
+        let row1 = rows[0].to_string();
+        assert!(row1.contains("▒▒ SCRAMBLED ▒▒") && !row1.contains("ENGAGED"));
+        assert!(
+            rows[1]
+                .to_string()
+                .contains("AMBUSH · your first hit lands, ×2")
+        );
+        f.cloak = Some(CloakTag::SignalLost { blink: true });
+        assert!(
+            footer_rows(&f, 120)[0]
+                .to_string()
+                .contains("▓▓ SIGNAL LOST ▓▓")
+        );
+    }
+
+    #[test]
+    fn the_tag_sits_before_the_clock_and_the_location_gives_way() {
+        let line = location_tag_line(
+            "Night Market · Crown Circle",
+            vec![Span::raw("◌ FIELD SCRAMBLER  62%")],
+            (23, 10),
+            50,
+        );
+        let s = line.to_string();
+        assert_eq!(s.chars().count(), 50);
+        assert!(s.contains("◌ FIELD SCRAMBLER  62%") && s.ends_with("23:10"));
+        assert!(s.starts_with(" Night"));
+    }
+
+    #[test]
+    fn an_on_slot_reads_on() {
+        let slots = [Slot {
+            name: "cloak".into(),
+            state: SlotState::On,
+            flash: false,
+        }];
+        let mut f = footer_fixture();
+        f.slots = &slots;
+        let rows = footer_rows(&f, 120);
+        assert!(
+            rows[3].to_string().contains("[1] cloak on"),
+            "{:?}",
+            rows[3].to_string()
+        );
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(rows[3].to_string().as_str()),
+            120
+        );
+    }
+
+    #[test]
+    fn the_cell_row_says_the_seconds_left() {
+        assert!(
+            cell_row(game::FULL_CELL / 2, game::FULL_CELL, 10, CYAN, 40)
+                .to_string()
+                .starts_with(" CELL ")
+        );
+        assert!(
+            cell_row(game::FULL_CELL / 2, game::FULL_CELL, 10, CYAN, 40)
+                .to_string()
+                .contains("10s left")
+        );
     }
 }
