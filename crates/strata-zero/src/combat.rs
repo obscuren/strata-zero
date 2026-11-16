@@ -460,7 +460,7 @@ pub fn fire(st: &mut AppState, foe: usize) -> Result<(), String> {
         if !st.foes.get(foe).is_some_and(|f| f.standing()) {
             break;
         }
-        if roll(st) >= OFF_HAND_CHANCE {
+        if roll(st) > OFF_HAND_CHANCE {
             continue;
         }
         let Ok(chance) = chance_with(st, foe, &w) else {
@@ -1459,7 +1459,7 @@ mod tests {
         let mut st = engaged(Pos::new(14, 8));
         put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
         // Three rounds of the ratchet, then the follow-up's roll under 25.
-        seed(&mut st, |r| r(4) < u32::from(OFF_HAND_CHANCE));
+        seed(&mut st, |r| r(4) == u32::from(OFF_HAND_CHANCE));
         fire(&mut st, 0).unwrap();
         assert!(
             logged(&st, "off hand · Scrap nine"),
@@ -1470,7 +1470,7 @@ mod tests {
 
         let mut st = engaged(Pos::new(14, 8));
         put_in(&mut st, BodyPart::LeftHand, "scrap_nine");
-        seed(&mut st, |r| r(4) >= u32::from(OFF_HAND_CHANCE));
+        seed(&mut st, |r| r(4) == u32::from(OFF_HAND_CHANCE) + 1);
         fire(&mut st, 0).unwrap();
         assert!(!off_hand_logged(&st));
         assert_eq!(st.net.engaged.as_ref().unwrap().ap, 1);
@@ -1511,7 +1511,7 @@ mod tests {
         // the second, at the scrap nine's own chance.
         let chance = chance_with(&st, i, &gun_in(&st, BodyPart::LeftHand).unwrap().1).unwrap();
         seed(&mut st, |r| {
-            r(1) < u32::from(OFF_HAND_CHANCE) && r(2) <= u32::from(chance)
+            r(1) == u32::from(OFF_HAND_CHANCE) && r(2) <= u32::from(chance)
         });
         fire(&mut st, i).unwrap();
         assert!(logged(&st, "AMBUSH"));

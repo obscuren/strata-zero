@@ -1125,7 +1125,9 @@ impl Deck {
                 "{} damage × {} rounds · range {}",
                 w.damage, w.rounds, w.range
             )));
-            if on.is_some_and(|part| st.character.main_hand(&st.content) != Some(part)) {
+            // The hand that fires is no off hand, whichever hand that is.
+            let fires = crate::combat::your_weapon(st).ok().map(|(hand, ..)| hand);
+            if on.is_some_and(|part| fires != Some(part)) {
                 out.push(cyan(format!(
                     "off hand · 1 in {} to follow up",
                     100 / u32::from(crate::combat::OFF_HAND_CHANCE)
@@ -4282,6 +4284,14 @@ mod tests {
             card.contains(&"off hand · 1 in 4 to follow up".to_string()),
             "{card:?}"
         );
+        // With the right hand empty the left's gun is the one that fires.
+        st.character.take_off(BodyPart::RightHand);
+        let card = texts(&Deck::item_card_of(
+            &st,
+            &nine,
+            st.character.worn_copy(BodyPart::LeftHand),
+        ));
+        assert!(!card.iter().any(|l| l.starts_with("off hand")), "{card:?}");
         // In the pack it says neither.
         let card = texts(&Deck::item_card_of(&st, &ItemId::new("shiv_blade"), None));
         assert_eq!(card[1].split(" · ").nth(1), Some("hand"), "{card:?}");
