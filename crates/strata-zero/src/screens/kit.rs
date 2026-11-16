@@ -7,7 +7,7 @@ use crate::render::glyphs::kind_icon;
 use crate::screens::blueprint::{MISSING, preview_art};
 use crate::screens::deck::{
     Detail, REVEAL_TICKS, Row, Tone, card, copy_popup, cut, draw_rows, item_popup, item_row, lit,
-    marks, slot_popup,
+    marks, part_popup,
 };
 use crate::screens::popup::Popup;
 use crate::ui::chrome::{
@@ -16,7 +16,7 @@ use crate::ui::chrome::{
 use crate::ui::cyberdeck::Pen;
 use crate::ui::preview::half;
 use crossterm::event::KeyCode;
-use game::{CopyId, ItemId, ItemKind, Slot};
+use game::{BodyPart, CopyId, ItemId, ItemKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -52,7 +52,7 @@ pub enum Pane {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KitState {
     pub pane: Pane,
-    /// Index into `Slot::ALL`.
+    /// Index into the body's parts, in body order.
     pub tile: usize,
     /// The pack's row, headers counted.
     pub row: usize,
@@ -102,7 +102,13 @@ pub(crate) fn layout(body: Rect) -> Layout {
     }
 }
 
-/// The `i`th slot's tile in the rack: three across, three rows of three.
+/// The body's parts in body order: the rack's tiles.
+fn parts(st: &AppState) -> Vec<BodyPart> {
+    let body = st.character.body(&st.content);
+    body.into_iter().map(|n| n.part).collect()
+}
+
+/// The `i`th part's tile in the rack: three across, rows of three.
 pub(crate) fn tile_rect(rack: Rect, i: usize) -> Rect {
     let w = rack.width / 3;
     Rect::new(
@@ -199,10 +205,10 @@ impl Kit {
         rows
     }
 
-    /// What the cursor is on: the tile's slot, or the pack row's item.
+    /// What the cursor is on: the tile's part, or the pack row's item.
     pub(crate) fn selected(&self, st: &AppState) -> Option<Detail> {
         match self.state.pane {
-            Pane::Rack => Slot::ALL.get(self.state.tile).map(|s| Detail::Slot(*s)),
+            Pane::Rack => parts(st).get(self.state.tile).map(|p| Detail::Part(*p)),
             Pane::Pack => self.pack_rows(st).get(self.state.row)?.detail.clone(),
         }
     }
@@ -274,15 +280,15 @@ impl Kit {
                 let left = matches!(code, KeyCode::Left | KeyCode::Char('h'));
                 match self.state.pane {
                     Pane::Rack => {
-                        let t = self.state.tile;
+                        let (t, n) = (self.state.tile, parts(st).len());
                         if up && t >= 3 {
                             self.state.tile -= 3;
-                        } else if down && t + 3 < Slot::ALL.len() {
+                        } else if down && t + 3 < n {
                             self.state.tile += 3;
                         } else if left && !t.is_multiple_of(3) {
                             self.state.tile -= 1;
                         } else if !(up || down || left) {
-                            if t % 3 < 2 && t + 1 < Slot::ALL.len() {
+                            if t % 3 < 2 && t + 1 < n {
                                 self.state.tile += 1;
                             } else {
                                 self.set_pane(Pane::Pack, tick);
@@ -310,21 +316,21 @@ impl Kit {
 
     /// Keeps the cursor on something that exists after the gear or the pack changed.
     pub(crate) fn reselect(&mut self, st: &AppState) {
-        self.state.tile = self.state.tile.min(Slot::ALL.len() - 1);
+        self.state.tile = self.state.tile.min(parts(st).len().saturating_sub(1));
         let rows = self.pack_rows(st);
         if !rows.get(self.state.row).is_some_and(|r| r.detail.is_some()) {
             self.state.row = rows.iter().position(|r| r.detail.is_some()).unwrap_or(0);
         }
     }
 
-    /// The popup for the selection: a tile's slot, or a pack row's item or copy.
+    /// The popup for the selection: a tile's part, or a pack row's item or copy.
     pub(crate) fn interact(&self, st: &mut AppState) -> Option<Popup> {
         let detail = self.selected(st)?;
         let l = layout(self.body.get());
         match detail {
-            Detail::Slot(slot) => {
+            Detail::Part(part) => {
                 let tile = tile_rect(l.rack, self.state.tile);
-                slot_popup(st, slot, (tile.right() + 1, tile.y + 1))
+                part_popup(st, part, (tile.right() + 1, tile.y + 1))
             }
             other => {
                 let line = self.state.row.saturating_sub(self.first.get()) as u16;
@@ -358,7 +364,7 @@ impl Kit {
         self.body.set(body);
         // Rows draw after the cursor's two columns, one in from the pane's edge.
         self.room.set(l.pack.width.saturating_sub(3) as usize);
-        for i in 0..Slot::ALL.len() {
+        for i in 0..parts(st).len() {
             self.draw_tile(st, l.rack, i, buf);
         }
         self.draw_pack(st, l.pack, buf);
@@ -374,14 +380,19 @@ impl Kit {
         draw_viewer(st, selected.as_ref(), l.view, buf);
     }
 
-    /// One slot's tile: its label set in the top edge, the worn item's name inside and
+    /// One part's tile: its name set in the top edge, the worn item's name inside and
     /// its marks set in the bottom edge. The selected tile's edge is cyan while the rack
-    /// has the focus, dim while it does not.
+    /// has the focus, dim while it does not. A tile that would hang below the rack isn't
+    /// drawn.
     fn draw_tile(&self, st: &AppState, rack: Rect, i: usize, buf: &mut Buffer) {
-        let Some(&slot) = Slot::ALL.get(i) else {
+        let Some(node) = st.character.body(&st.content).get(i).copied() else {
             return;
         };
+        let part = node.part;
         let t = tile_rect(rack, i);
+        if t.bottom() > rack.bottom() {
+            return;
+        }
         let (x, y, w, right) = (t.x, t.y, t.width, t.right());
         let inner = right.saturating_sub(1);
         let focused = self.state.pane == Pane::Rack;
@@ -393,7 +404,7 @@ impl Kit {
             (true, false) => DIM,
         });
 
-        let label = slot.label().to_uppercase();
+        let label = node.name.clone();
         let run = "─".repeat((w as usize).saturating_sub(label.chars().count() + 4));
         put(buf, x, y, &format!("┌ {label} {run}┐"), edge, right);
         let label_style = if on {
@@ -407,7 +418,7 @@ impl Kit {
         put(buf, inner, y + 1, "│", edge, right);
         let item = st
             .character
-            .equipped(slot)
+            .equipped(part)
             .and_then(|id| st.content.item(id));
         let mut style = Style::default().fg(match item {
             None => FAINTER,
@@ -429,7 +440,7 @@ impl Kit {
         let Some(item) = item else {
             return;
         };
-        let marks = marks(st, item, st.character.worn_copy(slot), true, on);
+        let marks = marks(st, item, st.character.worn_copy(part), true, on);
         if marks.is_empty() {
             return;
         }
@@ -539,11 +550,11 @@ impl Kit {
 }
 
 /// The item a row's card and the viewer show, whether it is worn, and its copy: the
-/// pack's item or copy, or what the slot has on.
+/// pack's item or copy, or what the part has on.
 pub(crate) fn shown_item(st: &AppState, detail: &Detail) -> Option<(ItemId, bool, Option<CopyId>)> {
     match detail {
-        Detail::Slot(slot) => st.character.equipped(*slot).map(|id| {
-            let copy = st.character.worn_copy(*slot).map(|k| k.id);
+        Detail::Part(part) => st.character.equipped(*part).map(|id| {
+            let copy = st.character.worn_copy(*part).map(|k| k.id);
             (id.clone(), true, copy)
         }),
         Detail::Item(id) => Some((id.clone(), false, None)),
@@ -673,7 +684,7 @@ mod tests {
     }
 
     /// Fits the first `item` in the pack into a socket of what `slot` wears.
-    fn fit(st: &mut AppState, slot: Slot, socket: usize, item: &str) {
+    fn fit(st: &mut AppState, slot: BodyPart, socket: usize, item: &str) {
         let piece = st
             .character
             .inventory
@@ -690,6 +701,12 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    /// The rack's tile for a part.
+    fn tile_of(st: &AppState, part: BodyPart) -> usize {
+        let body = st.character.body(&st.content);
+        body.iter().position(|n| n.part == part).unwrap()
     }
 
     fn corners_in(buf: &Buffer, view: Rect, fg: Color) {
@@ -763,17 +780,18 @@ mod tests {
             assert!(k.key(&st, c, 5));
             k.state.tile
         };
-        // Seven tiles: two rows of three and the deck alone under the first column.
+        // Eleven tiles: three rows of three, then the legs and the feet.
         assert_eq!(at(&mut k, KeyCode::Right), 1);
         assert_eq!(at(&mut k, KeyCode::Down), 4);
+        assert_eq!(at(&mut k, KeyCode::Down), 7);
+        assert_eq!(at(&mut k, KeyCode::Down), 10);
         k.changed = 0;
-        assert_eq!(at(&mut k, KeyCode::Down), 4);
+        assert_eq!(at(&mut k, KeyCode::Down), 10);
         assert_eq!(k.changed, 0, "a stop is not a move");
-        assert_eq!(at(&mut k, KeyCode::Left), 3);
-        assert_eq!(at(&mut k, KeyCode::Down), 6);
-        assert_eq!(at(&mut k, KeyCode::Down), 6);
-        assert_eq!(at(&mut k, KeyCode::Left), 6);
-        for _ in 0..3 {
+        assert_eq!(at(&mut k, KeyCode::Left), 9);
+        assert_eq!(at(&mut k, KeyCode::Down), 9);
+        assert_eq!(at(&mut k, KeyCode::Left), 9);
+        for _ in 0..4 {
             at(&mut k, KeyCode::Up);
         }
         assert_eq!(k.state.tile, 0);
@@ -840,8 +858,8 @@ mod tests {
     fn selected_follows_the_pane() {
         let mut st = state();
         let mut k = Kit::new(0);
-        k.state.tile = 4;
-        assert_eq!(k.selected(&st), Some(Detail::Slot(Slot::Primary)));
+        k.state.tile = tile_of(&st, BodyPart::RightHand);
+        assert_eq!(k.selected(&st), Some(Detail::Part(BodyPart::RightHand)));
         st.character
             .give_item(&st.content, ItemId::new("hushcan"), 1);
         to_row(&mut k, &st, "Hushcan");
@@ -852,7 +870,7 @@ mod tests {
     fn space_on_a_tile_or_a_row_opens_its_popup() {
         let mut st = state();
         let mut k = Kit::new(0);
-        k.state.tile = 4;
+        k.state.tile = tile_of(&st, BodyPart::RightHand);
         let p = k.interact(&mut st).expect("popup");
         let labels: Vec<_> = p.choices().iter().map(|c| c.label.clone()).collect();
         assert!(labels.iter().any(|l| l == "Unequip"), "{labels:?}");
@@ -923,30 +941,30 @@ mod tests {
     #[test]
     fn the_rack_draws_tiles_with_marks_in_their_edges() {
         let mut st = state();
-        fit(&mut st, Slot::Deck, 0, "coldfin_2");
+        fit(&mut st, BodyPart::Waist, 0, "coldfin_2");
         let mut k = Kit::new(0);
-        k.state.tile = 6;
+        k.state.tile = tile_of(&st, BodyPart::Waist);
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
-        assert_eq!(cells(&buf, 1, 11, 16), "┌ DECK ────────┐");
-        assert_eq!(cells(&buf, 1, 12, 16), "│Rebuilt pawn… │");
-        assert_eq!(cells(&buf, 1, 13, 16), "└─ ■■■■■ · ■□ ─┘");
-        assert_eq!(buf[(1, 11)].fg, CYAN);
-        assert_eq!(buf[(2, 12)].bg, BAR_BG);
-        assert_eq!(buf[(4, 13)].fg, Color::Rgb(0x1a, 0x9a, 0xaa));
-        assert_eq!(buf[(10, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
-        assert_eq!(buf[(12, 13)].fg, Color::Rgb(0x00, 0xe5, 0xff));
-        assert_eq!(buf[(13, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
+        assert_eq!(cells(&buf, 33, 11, 16), "┌ WAIST ───────┐");
+        assert_eq!(cells(&buf, 33, 12, 16), "│Rebuilt pawn… │");
+        assert_eq!(cells(&buf, 33, 13, 16), "└─ ■■■■■ · ■□ ─┘");
+        assert_eq!(buf[(33, 11)].fg, CYAN);
+        assert_eq!(buf[(34, 12)].bg, BAR_BG);
+        assert_eq!(buf[(36, 13)].fg, Color::Rgb(0x1a, 0x9a, 0xaa));
+        assert_eq!(buf[(42, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
+        assert_eq!(buf[(44, 13)].fg, Color::Rgb(0x00, 0xe5, 0xff));
+        assert_eq!(buf[(45, 13)].fg, Color::Rgb(0x00, 0xa5, 0xb8));
         assert_eq!((buf[(2, 6)].symbol(), buf[(2, 6)].fg), ("—", FAINTER));
 
         k.state.pane = Pane::Pack;
         k.reselect(&st);
         let buf = drawn(&k, &st);
-        assert_eq!(buf[(1, 11)].fg, DIM, "the tile keeps its place, dim");
-        assert_ne!(buf[(2, 12)].bg, BAR_BG);
-        assert_eq!(buf[(4, 13)].fg, Color::Rgb(0x3f, 0x7c, 0x87));
-        assert_eq!(buf[(10, 13)].fg, DIM);
-        assert_eq!(buf[(13, 13)].fg, DIM);
+        assert_eq!(buf[(33, 11)].fg, DIM, "the tile keeps its place, dim");
+        assert_ne!(buf[(34, 12)].bg, BAR_BG);
+        assert_eq!(buf[(36, 13)].fg, Color::Rgb(0x3f, 0x7c, 0x87));
+        assert_eq!(buf[(42, 13)].fg, DIM);
+        assert_eq!(buf[(45, 13)].fg, DIM);
     }
 
     #[test]
@@ -1018,16 +1036,16 @@ mod tests {
     #[test]
     fn the_card_types_beside_the_viewer() {
         let mut st = state();
-        fit(&mut st, Slot::Primary, 0, "hushcan");
-        fit(&mut st, Slot::Primary, 1, "redeye");
+        fit(&mut st, BodyPart::RightHand, 0, "hushcan");
+        fit(&mut st, BodyPart::RightHand, 1, "redeye");
         let mut k = Kit::new(0);
-        k.state.tile = 4;
+        k.state.tile = tile_of(&st, BodyPart::RightHand);
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
         assert!(from(&buf, 3, 15).starts_with("RATCHET SMG"));
         let meta = from(&buf, 3, 16);
         assert!(
-            meta.starts_with("weapon · primary · 3.9 kg · ¤ 2150"),
+            meta.starts_with("weapon · hand · 3.9 kg · ¤ 2150"),
             "{meta:?}"
         );
         corners_in(&buf, Rect::new(46, 15, 52, 12), RULE);
@@ -1046,9 +1064,9 @@ mod tests {
     fn an_item_without_a_drawing_shows_the_missing_box() {
         let mut st = state();
         st.character
-            .wear(Slot::Primary, ItemId::new("scrap_nine"), None);
+            .wear(BodyPart::RightHand, ItemId::new("scrap_nine"), None);
         let mut k = Kit::new(0);
-        k.state.tile = 4;
+        k.state.tile = tile_of(&st, BodyPart::RightHand);
         settle(&k, &mut st);
         let buf = drawn(&k, &st);
         corners_in(&buf, Rect::new(61, 18, 21, 5), FAINTER);
@@ -1074,16 +1092,16 @@ mod tests {
 
     #[test]
     fn worn_armor_shows_its_picture() {
-        for (slot, tile, item) in [
-            (Slot::Head, 0, "hardhat"),
-            (Slot::Eyes, 1, "mirrorshades"),
-            (Slot::Torso, 2, "salvage_jacket"),
-            (Slot::Legs, 3, "cargo_pants"),
+        for (slot, item) in [
+            (BodyPart::Head, "hardhat"),
+            (BodyPart::Face, "mirrorshades"),
+            (BodyPart::Torso, "salvage_jacket"),
+            (BodyPart::Legs, "cargo_pants"),
         ] {
             let mut st = state();
             st.character.wear(slot, ItemId::new(item), None);
             let mut k = Kit::new(0);
-            k.state.tile = tile;
+            k.state.tile = tile_of(&st, slot);
             settle(&k, &mut st);
             let buf = drawn(&k, &st);
             assert!(!viewer_text(&buf).contains("MISSING"), "{item}");
@@ -1105,7 +1123,7 @@ mod tests {
     fn the_tallest_picture_stays_in_the_viewer() {
         let mut st = state();
         st.character
-            .wear(Slot::Torso, ItemId::new("salvage_jacket"), None);
+            .wear(BodyPart::Torso, ItemId::new("salvage_jacket"), None);
         let tall = st.content.picture(&ItemId::new("salvage_jacket")).unwrap();
         assert_eq!(
             tall.rows.len(),
@@ -1113,7 +1131,7 @@ mod tests {
             "the jacket is the tallest"
         );
         let mut k = Kit::new(0);
-        k.state.tile = 2;
+        k.state.tile = tile_of(&st, BodyPart::Torso);
         settle(&k, &mut st);
         let with = drawn(&k, &st);
         st.content.pictures.clear();
@@ -1131,7 +1149,7 @@ mod tests {
     #[test]
     fn an_empty_slot_shows_an_empty_viewer() {
         let mut st = state();
-        assert!(st.character.equipped(Slot::Head).is_none());
+        assert!(st.character.equipped(BodyPart::Head).is_none());
         let mut k = Kit::new(0);
         settle(&k, &mut st);
         let view = Rect::new(46, 15, 52, 12);

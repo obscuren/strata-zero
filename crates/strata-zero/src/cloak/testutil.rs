@@ -2,7 +2,7 @@
 
 use crate::app::AppState;
 use citygen::{Place, Pos};
-use game::{AbilityId, Action, Charge, CopyId, ItemId, SkillId, Slot};
+use game::{AbilityId, Action, BodyPart, Charge, CopyId, ItemId, SkillId};
 
 /// The lot with you at (6,8) and a goon at (20,8), out of its sight; the veil off.
 pub(crate) fn street() -> AppState {
@@ -16,11 +16,11 @@ pub(crate) fn stealthy(st: &mut AppState) {
     st.character.skills.insert(SkillId::new("stealth"));
 }
 
-/// A Ratchet SMG copy worn in the primary slot.
+/// A Ratchet SMG copy worn in the right hand.
 pub(crate) fn armed(st: &mut AppState) {
     let gun = ItemId::new("ratchet_smg");
     let copy = st.character.new_copy(&st.content, &gun);
-    st.character.wear(Slot::Primary, gun, Some(copy));
+    st.character.wear(BodyPart::RightHand, gun, Some(copy));
 }
 
 /// A field scrambler in the pack, its cell full; its copy.

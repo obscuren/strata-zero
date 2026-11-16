@@ -28,6 +28,8 @@ pub fn handles_items(action: &Action) -> bool {
         action,
         Action::Equip(_)
             | Action::EquipCopy(_)
+            | Action::EquipAt(..)
+            | Action::EquipCopyAt(..)
             | Action::Unequip(_)
             | Action::Install { .. }
             | Action::InstallCopy { .. }
@@ -166,6 +168,8 @@ pub fn perform(st: &mut AppState, action: Action) -> Result<String, String> {
         action,
         Action::Equip(_)
             | Action::EquipCopy(_)
+            | Action::EquipAt(..)
+            | Action::EquipCopyAt(..)
             | Action::Unequip(_)
             | Action::Install { .. }
             | Action::InstallCopy { .. }
@@ -383,7 +387,7 @@ mod tests {
     use crate::render::Visibility;
     use crate::walker::Player;
     use citygen::{City, GenParams, Generator, SizePreset};
-    use game::{AbilityId, CopyId, Host, ItemId, RecipeId, Site, Slot};
+    use game::{AbilityId, BodyPart, CopyId, Host, ItemId, RecipeId, Site};
 
     fn city() -> City {
         Generator::run(GenParams {
@@ -512,7 +516,7 @@ mod tests {
         assert_eq!(st.character, before);
         // Fitting a deck or a gun is no surgery: whatever else refuses it, the chair doesn't.
         let deck = Action::Fit {
-            host: Host::Worn(Slot::Deck),
+            host: Host::Worn(BodyPart::Waist),
             socket: 0,
             piece: hand,
         };
@@ -613,7 +617,7 @@ mod tests {
         let stim = ItemId::new("stim_patch");
         for action in [
             Action::Equip(ItemId::new("copper_coil")),
-            Action::Unequip(Slot::Deck),
+            Action::Unequip(BodyPart::Waist),
             Action::Use(stim.clone()),
             Action::Drop {
                 item: stim.clone(),
@@ -632,26 +636,28 @@ mod tests {
             },
             Action::Build(RecipeId::new("wire_shiv")),
             Action::EquipCopy(CopyId(1)),
+            Action::EquipAt(ItemId::new("rebuilt_deck"), BodyPart::Waist),
+            Action::EquipCopyAt(CopyId(1), BodyPart::Waist),
             Action::DropCopy(CopyId(1)),
             Action::TakeCopy(CopyId(1)),
             Action::Fit {
-                host: Host::Worn(Slot::Deck),
+                host: Host::Worn(BodyPart::Waist),
                 socket: 0,
                 piece: CopyId(1),
             },
             Action::Unfit {
-                host: Host::Worn(Slot::Deck),
+                host: Host::Worn(BodyPart::Waist),
                 socket: 0,
             },
             Action::Stick {
-                host: Host::Worn(Slot::Deck),
+                host: Host::Worn(BodyPart::Waist),
                 sticker: ItemId::new("sticker_neko"),
                 x: 54,
                 y: 12,
                 turn: game::Turn::Level,
             },
             Action::Peel {
-                host: Host::Worn(Slot::Deck),
+                host: Host::Worn(BodyPart::Waist),
                 index: 0,
             },
         ] {
@@ -661,8 +667,8 @@ mod tests {
         assert_eq!(st.character, before);
         // Back in the body, its hands are its own again.
         st.player = Some(Player::spawn(st.city.as_ref().unwrap(), 1));
-        perform(&mut st, Action::Unequip(Slot::Deck)).unwrap();
-        assert_eq!(st.character.equipped(Slot::Deck), None);
+        perform(&mut st, Action::Unequip(BodyPart::Waist)).unwrap();
+        assert_eq!(st.character.equipped(BodyPart::Waist), None);
     }
 
     #[test]
@@ -793,7 +799,7 @@ mod tests {
         st.character.give(shades.clone(), 1);
         perform(&mut st, Action::Equip(shades.clone())).unwrap();
         let worn = visible(&st);
-        perform(&mut st, Action::Unequip(Slot::Eyes)).unwrap();
+        perform(&mut st, Action::Unequip(BodyPart::Face)).unwrap();
         let bare = visible(&st);
         assert!(worn > bare, "shades on: {worn} vs {bare}");
         perform(&mut st, Action::Equip(shades)).unwrap();
@@ -849,7 +855,7 @@ mod tests {
         let mut st = AppState::new();
         st.character.give(ItemId::new("mirrorshades"), 1);
         assert!(perform(&mut st, Action::Equip(ItemId::new("mirrorshades"))).is_ok());
-        assert!(perform(&mut st, Action::Unequip(Slot::Eyes)).is_ok());
+        assert!(perform(&mut st, Action::Unequip(BodyPart::Face)).is_ok());
         st.character.hp = 1;
         assert!(perform(&mut st, Action::Use(ItemId::new("stim_patch"))).is_ok());
         let no_body = "no body in the city";

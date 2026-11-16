@@ -1085,6 +1085,41 @@ mod tests {
     /// (`MapScreen::resumed`), a few frames of the game's own loop, drawn. No fixture is
     /// ever rewritten.
     #[test]
+    fn old_slot_names_read_as_parts() {
+        use game::{BodyPart, ItemId};
+        use std::collections::BTreeMap;
+        let old: BTreeMap<&str, &str> = [
+            ("Primary", "ratchet_smg"),
+            ("Secondary", "shiv_blade"),
+            ("Eyes", "mirrorshades"),
+            ("Deck", "pawnshop_deck"),
+            ("Head", "hardhat"),
+            ("Torso", "salvage_jacket"),
+            ("Legs", "cargo_pants"),
+        ]
+        .into();
+        let bytes = rmp_serde::to_vec_named(&old).unwrap();
+        let parts: BTreeMap<BodyPart, ItemId> = rmp_serde::from_slice(&bytes).unwrap();
+        let want: BTreeMap<BodyPart, ItemId> = [
+            (BodyPart::RightHand, "ratchet_smg"),
+            (BodyPart::LeftHand, "shiv_blade"),
+            (BodyPart::Face, "mirrorshades"),
+            (BodyPart::Waist, "pawnshop_deck"),
+            (BodyPart::Head, "hardhat"),
+            (BodyPart::Torso, "salvage_jacket"),
+            (BodyPart::Legs, "cargo_pants"),
+        ]
+        .into_iter()
+        .map(|(p, id)| (p, ItemId::new(id)))
+        .collect();
+        assert_eq!(parts, want);
+        // A part is written by its own name.
+        let new = rmp_serde::to_vec_named(&want).unwrap();
+        let names: BTreeMap<String, String> = rmp_serde::from_slice(&new).unwrap();
+        assert!(names.contains_key("RightHand") && names.contains_key("Waist"));
+    }
+
+    #[test]
     fn the_first_saved_run_still_opens() {
         use crate::app::Runner;
         use crate::screens::explore::MapScreen;
@@ -1111,6 +1146,15 @@ mod tests {
                 "{name}"
             );
             assert!(st.missions.begun, "{name}");
+            // Written when the body had slots: Primary reads as the right hand, Deck as
+            // the waist.
+            assert_eq!(
+                st.character.equipped(game::BodyPart::RightHand),
+                Some(&game::ItemId::new("ratchet_smg")),
+                "{name}"
+            );
+            let deck = st.character.deck(&st.content).map(|(i, _)| i.id.0.as_str());
+            assert_eq!(deck, Some("pawnshop_deck"), "{name}");
             if name == "busy" {
                 let p = st.player.as_ref().unwrap();
                 assert!(
@@ -1396,7 +1440,7 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        if let Some(deck) = st.character.worn.get_mut(&game::Slot::Deck) {
+        if let Some(deck) = st.character.worn.get_mut(&game::BodyPart::Waist) {
             deck.stickers.push(game::Stuck {
                 sticker,
                 x: 2,

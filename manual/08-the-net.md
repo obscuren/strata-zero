@@ -8,7 +8,7 @@ You jack in from a terminal. On the street, stand on or next to a public termina
 
 Inside a hotel or office, the terminals are set in the walls (`◇`): a kiosk in the lobby, and desk terminals in some of the staff's rooms. The switch box of a line of turnstiles (`▪`) takes you too. Stand beside one, on its own side of the wall, and press `space`, then `j Jack in`. You start on its node, on the building's own Net (A building's own Net, below).
 
-You can jack in with nothing, but you can't run a program without a deck in your DECK slot. The log tells you when a port won't take you: it's locked down because its building, or the one next to it, is on alert, the port is dead, your deck is still cooling off, or you're in a fight.
+You can jack in with nothing, but you can't run a program without a deck on your waist. The log tells you when a port won't take you: it's locked down because its building, or the one next to it, is on alert, the port is dead, your deck is still cooling off, or you're in a fight.
 
 Your body stays where you jacked in. Cameras pay it no attention while you're away. Jacked in on a hotel's or office's floor, the `BODY` line in the HERE pane says where your body stands and who is near it: `nobody on L`, or how many guards are on that floor and how close the nearest one is.
 

@@ -1017,7 +1017,7 @@ mod tests {
     use crate::screens::testutil::key;
     use crate::ui::chrome::{BAR_BG, CYAN, DIM, FAINTER, MAGENTA, RULE, TEXT};
     use citygen::{GenParams, Generator, SizePreset};
-    use game::{Attribute, Build, ItemId, Num, Site, Slot};
+    use game::{Attribute, BodyPart, Build, ItemId, Num, Site};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1493,12 +1493,12 @@ mod tests {
         let mut st = state();
         st.character.attribute_points = 3;
         st.character
-            .wear(Slot::Eyes, ItemId::new("mirrorshades"), None);
+            .wear(BodyPart::Face, ItemId::new("mirrorshades"), None);
         let hush = ItemId::new("hushcan");
         let copy = st.character.new_copy(&st.content, &hush);
         let content = st.content.clone();
         st.character
-            .host_copy_mut(&content, game::Host::Worn(Slot::Primary))
+            .host_copy_mut(&content, game::Host::Worn(BodyPart::RightHand))
             .unwrap()
             .fitted[0] = Some(game::Stack {
             item: hush,
@@ -1547,7 +1547,7 @@ mod tests {
         st.character.attribute_points = 3;
         st.character.attributes.reflex = base;
         st.character
-            .wear(Slot::Secondary, ItemId::new("shiv_blade"), None);
+            .wear(BodyPart::LeftHand, ItemId::new("shiv_blade"), None);
         st.character
             .install(Site::Spine, ItemId::new("redline_spine"), None);
         st.character
@@ -1594,7 +1594,7 @@ mod tests {
         let copy = st.character.new_copy(&st.content, &eye);
         let content = st.content.clone();
         st.character
-            .host_copy_mut(&content, game::Host::Worn(Slot::Primary))
+            .host_copy_mut(&content, game::Host::Worn(BodyPart::RightHand))
             .unwrap()
             .fitted[1] = Some(game::Stack {
             item: eye,

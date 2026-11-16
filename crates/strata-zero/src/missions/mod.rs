@@ -48,7 +48,7 @@ use crate::app::AppState;
 use crate::render::Visibility;
 use crate::runs::ids::StepRef;
 use citygen::{Place, Pos, StratumKind};
-use game::{ItemId, SkillId, Slot};
+use game::{BodyPart, ItemId, SkillId};
 use sim::PersonId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -654,7 +654,7 @@ fn inside_elsewhere(st: &AppState, here: Place, id: PersonId) -> bool {
 /// Whether a need holds now (doctor spec §2), asked for mission `mission`: `Late`
 /// counts from when that mission began, so asked for none it never holds.
 pub fn holds(st: &AppState, mission: Option<usize>, need: &Need) -> bool {
-    let torso = || st.character.equipped(Slot::Torso);
+    let torso = || st.character.equipped(BodyPart::Torso);
     match need {
         Need::Skill(id) => st.character.has_skill(&SkillId::new(id)),
         Need::Read(item) => st.missions.read.contains(item),
@@ -2259,7 +2259,8 @@ pub(crate) mod tests {
         end(&mut st, 0, 0);
         news::put_out(&mut st, "marlo", None);
         let jacket = ItemId::new("salvage_jacket");
-        st.character.wear(game::Slot::Torso, jacket.clone(), None);
+        st.character
+            .wear(game::BodyPart::Torso, jacket.clone(), None);
         assert_eq!(both(&st), (false, false), "nobody saw you go");
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
@@ -2269,17 +2270,17 @@ pub(crate) mod tests {
         assert_eq!(both(&st), (false, false), "nothing worn then");
         st.missions.bodies[0].left.as_mut().unwrap().worn = Some(jacket.clone());
         assert_eq!(both(&st), (false, true));
-        st.character.take_off(game::Slot::Torso);
+        st.character.take_off(game::BodyPart::Torso);
         assert_eq!(both(&st), (true, false), "nothing on now");
         st.character
-            .wear(game::Slot::Torso, ItemId::new("ballistic_weave"), None);
+            .wear(game::BodyPart::Torso, ItemId::new("ballistic_weave"), None);
         assert_eq!(both(&st), (true, false), "another jacket");
         // Stale, the item still holds what the camera saw.
         let fresh = news::current(&st).unwrap().fresh;
         advance(&mut st, fresh);
         assert!(news::current(&st).is_none());
         assert_eq!(both(&st), (true, false));
-        st.character.wear(game::Slot::Torso, jacket, None);
+        st.character.wear(game::BodyPart::Torso, jacket, None);
         assert_eq!(both(&st), (false, true));
     }
 
@@ -2832,7 +2833,7 @@ pub(crate) mod tests {
         assert_eq!(seren.text, "Doctor's in by ten. Eat first.");
         // The camera saw you in this jacket, and you wear it still; it isn't ten yet.
         let jacket = ItemId::new("salvage_jacket");
-        st.character.wear(Slot::Torso, jacket.clone(), None);
+        st.character.wear(BodyPart::Torso, jacket.clone(), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
             heading: "north".to_string(),
@@ -2880,7 +2881,7 @@ pub(crate) mod tests {
         // camera saw, and late.
         st.character.skills = [SkillId::new("handguns")].into();
         st.character
-            .wear(Slot::Torso, ItemId::new("ballistic_weave"), None);
+            .wear(BodyPart::Torso, ItemId::new("ballistic_weave"), None);
         st.missions.bodies[0].left = Some(Left {
             at: (22, 41),
             heading: "north".to_string(),

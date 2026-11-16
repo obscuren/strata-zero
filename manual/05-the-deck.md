@@ -30,14 +30,14 @@ Your character sheet. On the left are your five attributes, with any unspent poi
 
 ## GEAR & INVENTORY
 
-On the left is what you wear: HEAD, EYES, TORSO, LEGS, a PRIMARY and a SECONDARY weapon, and your DECK. On the right is your pack, grouped by kind, with the item under the cursor drawn and described. `→` off the right edge of the rack crosses to the pack, `←` comes back, and `[ ]` filter the pack to one kind of thing.
+On the left is what you wear, part by part: HEAD, FACE, BACK, TORSO, each arm and hand (R ARM, R HAND, L ARM, L HAND), WAIST (your deck), LEGS and FEET. Arms take nothing yet; a weapon goes in a hand. On the right is your pack, grouped by kind, with the item under the cursor drawn and described. `→` off the right edge of the rack crosses to the pack, `←` comes back, and `[ ]` filter the pack to one kind of thing.
 
 `space` opens what you can do with the item:
 
-- `e` equip it (an item already in that slot comes off), `u` use it, `i` inspect it, `d` drop one, `D` drop the lot.
-- On a slot: a letter puts on something that fits, `u` takes off what is there.
+- `e` equip it on the first free part it fits (a hand item tries the right hand first); with none free, it goes on in place of what's there (for a hand item, the right hand's), which comes off. `u` use it, `i` inspect it, `d` drop one, `D` drop the lot.
+- On a part: a letter puts on something that fits, on that part, `u` takes off what is there.
 
-Only your PRIMARY weapon fires. Throwables are thrown from the map, not from here.
+Only the weapon in your right hand fires. Throwables are thrown from the map, not from here.
 
 ### Inspecting
 

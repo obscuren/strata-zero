@@ -17,7 +17,7 @@ use crate::ui::looks::ItemArt;
 use crate::ui::picture::PictureArt;
 use crate::ui::stickers::{Loose, Placed, placed};
 use crossterm::event::{KeyCode, KeyEvent};
-use game::{CopyId, HardwareLook, Host, Item, ItemId, ItemLook, Slot};
+use game::{BodyPart, CopyId, HardwareLook, Host, Item, ItemId, ItemLook};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -120,7 +120,7 @@ impl Inspect {
 fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Inspect {
     match st.content.item(item) {
         Some(i) if i.deck.is_some() => {
-            let jacked = equipped && st.character.equipped(Slot::Deck) == Some(item);
+            let jacked = equipped && st.character.equipped(BodyPart::Waist) == Some(item);
             Inspect::Deck(DeckTab::for_deck(st.tick, item.clone(), jacked, copy, st))
         }
         Some(i) => match (&i.hardware, i.look, &i.sticker) {
@@ -139,15 +139,19 @@ fn inspect_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId
     }
 }
 
-/// Where the item is fitted from: worn only when the slot still wears it, else the
-/// copy in the pack.
+/// Where the item is fitted from: worn only when a part still wears it (the part
+/// wearing that copy, when there is one), else the copy in the pack.
 fn host_for(st: &AppState, item: &ItemId, equipped: bool, copy: Option<CopyId>) -> Option<Host> {
-    let worn = st
-        .content
-        .item(item)
-        .and_then(|i| i.slot)
-        .filter(|s| equipped && st.character.equipped(*s) == Some(item));
-    worn.map(Host::Worn).or(copy.map(Host::Pack))
+    let ch = &st.character;
+    let wearing: Vec<BodyPart> = ch
+        .body(&st.content)
+        .into_iter()
+        .map(|n| n.part)
+        .filter(|p| equipped && ch.equipped(*p) == Some(item))
+        .collect();
+    let this_copy = |p: &&BodyPart| copy.is_some() && ch.worn_copy(**p).map(|k| k.id) == copy;
+    let worn = wearing.iter().find(this_copy).or(wearing.first());
+    worn.map(|p| Host::Worn(*p)).or(copy.map(Host::Pack))
 }
 
 /// The drawing the window would show for the same arguments, with the deck unplugged
@@ -700,7 +704,7 @@ mod tests {
         st.tick = 40;
         let mut bp = Blueprint::open(&st, id("pawnshop_deck"), false, None);
         assert!(!deck(&bp).equipped);
-        // Opened as the jacked deck, a deck not in the DECK slot still only reads.
+        // Opened as the jacked deck, a deck not on the waist still only reads.
         let guarded = Blueprint::open(&st, id("pawnshop_deck"), true, None);
         assert!(!deck(&guarded).equipped);
         st.tick += 40;
@@ -766,7 +770,7 @@ mod tests {
         let mut st = state();
         st.character = Character::debug_runner(&st.content);
         st.tick = 40;
-        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        let copy = st.character.worn_copy(BodyPart::Waist).map(|k| k.id);
         let mut bp = Blueprint::open(&st, id("rebuilt_deck"), true, copy);
         assert!(deck(&bp).equipped);
         st.tick += 40;
@@ -906,7 +910,9 @@ mod tests {
     fn odd_decks_read_as_they_are() {
         let mut st = state();
         // A deck the content does not know has no blueprint; nor has one without a spec.
-        st.character.equipment.insert(Slot::Deck, id("ghost_deck"));
+        st.character
+            .equipment
+            .insert(BodyPart::Waist, id("ghost_deck"));
         st.tick = 40;
         let bp = Blueprint::open(&st, id("ghost_deck"), true, None);
         let text = buffer_text(&screen(&bp, &st, 100, 30));
@@ -927,7 +933,9 @@ mod tests {
         bare.name = "Bare deck".into();
         bare.grants.clear();
         st.content.items.push(bare);
-        st.character.equipment.insert(Slot::Deck, id("bare_deck"));
+        st.character
+            .equipment
+            .insert(BodyPart::Waist, id("bare_deck"));
         let mut bp = Blueprint::open(&st, id("bare_deck"), true, None);
         assert!(deck(&bp).equipped);
         st.tick += 40;
@@ -951,7 +959,9 @@ mod tests {
         quiet.id = id("quiet_deck");
         quiet.grants = vec![passive];
         st.content.items.push(quiet);
-        st.character.equipment.insert(Slot::Deck, id("quiet_deck"));
+        st.character
+            .equipment
+            .insert(BodyPart::Waist, id("quiet_deck"));
         // The jacked deck's part is remembered across decks: it opens on the plate.
         let mut bp = Blueprint::open(&st, id("quiet_deck"), true, None);
         assert_eq!(deck(&bp).point, Part::Plate);
@@ -1030,7 +1040,7 @@ mod tests {
     fn dshawns_deck(st: &mut AppState) -> Blueprint {
         st.character = Character::debug_runner(&st.content);
         st.tick = 40;
-        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        let copy = st.character.worn_copy(BodyPart::Waist).map(|k| k.id);
         Blueprint::open(st, id("rebuilt_deck"), true, copy)
     }
 
@@ -1198,7 +1208,7 @@ mod tests {
             };
             perform(st, fit).unwrap();
         };
-        fit(&mut st, Host::Worn(Slot::Deck), 1, "coldfin_2");
+        fit(&mut st, Host::Worn(BodyPart::Waist), 1, "coldfin_2");
         press(&mut bp, &mut st, &[KeyCode::Char('m'), KeyCode::Char('l')]);
         let (_, readout, _) = rows_of(100, 30);
         let buf = screen(&bp, &st, 100, 30);
@@ -1240,7 +1250,7 @@ mod tests {
         for (socket, piece) in [(0, "coldfin_1"), (1, "sidecar")] {
             let piece = pack_copy(&st, piece);
             let fit = Action::Fit {
-                host: Host::Worn(Slot::Deck),
+                host: Host::Worn(BodyPart::Waist),
                 socket,
                 piece,
             };
@@ -1515,7 +1525,7 @@ mod tests {
         assert!(!choosing(&bp));
         assert_eq!(status(&bp, &mut st), "Coldfin vII fitted · socket L");
         assert_eq!(
-            fitted(&st, Host::Worn(Slot::Deck)),
+            fitted(&st, Host::Worn(BodyPart::Waist)),
             vec![Some(id("coldfin_2")), None]
         );
         let buf = screen(&bp, &st, w, h);
@@ -1550,7 +1560,7 @@ mod tests {
             &[KeyCode::Char('m'), space, KeyCode::Right, space],
         );
         assert_eq!(
-            fitted(&st, Host::Worn(Slot::Deck)),
+            fitted(&st, Host::Worn(BodyPart::Waist)),
             vec![Some(id("coldfin_2")), None]
         );
         press(&mut bp, &mut st, &[space]);
@@ -1581,7 +1591,7 @@ mod tests {
             "Coldfin vI fitted · socket L · Coldfin vII to the pack"
         );
         assert_eq!(
-            fitted(&st, Host::Worn(Slot::Deck)),
+            fitted(&st, Host::Worn(BodyPart::Waist)),
             vec![Some(id("coldfin_1")), None]
         );
         assert_eq!(
@@ -1595,7 +1605,7 @@ mod tests {
         press(&mut bp, &mut st, &[space]);
         assert!(!choosing(&bp));
         assert_eq!(status(&bp, &mut st), "Coldfin vI out · to the pack");
-        assert_eq!(fitted(&st, Host::Worn(Slot::Deck)), vec![None, None]);
+        assert_eq!(fitted(&st, Host::Worn(BodyPart::Waist)), vec![None, None]);
         assert_eq!(
             (in_pack(&st, "coldfin_1"), in_pack(&st, "coldfin_2")),
             (1, 1)
@@ -1721,7 +1731,7 @@ mod tests {
             fitted(&st, Host::Pack(copy)),
             vec![Some(id("sidecar")), None]
         );
-        assert_eq!(fitted(&st, Host::Worn(Slot::Deck)), vec![None, None]);
+        assert_eq!(fitted(&st, Host::Worn(BodyPart::Waist)), vec![None, None]);
         assert_eq!(in_pack(&st, "sidecar"), 0);
     }
 
@@ -1764,7 +1774,7 @@ mod tests {
 
     /// Vex's Ratchet, inspected from the rack.
     fn vexs_gun(st: &AppState) -> Blueprint {
-        let copy = st.character.worn_copy(Slot::Primary).map(|k| k.id);
+        let copy = st.character.worn_copy(BodyPart::RightHand).map(|k| k.id);
         Blueprint::open(st, id("ratchet_smg"), true, copy)
     }
 
@@ -1804,7 +1814,7 @@ mod tests {
         for (socket, piece) in [(0, "hushcan"), (1, "redeye")] {
             let piece = pack_copy(&st, piece);
             let fit = Action::Fit {
-                host: Host::Worn(Slot::Primary),
+                host: Host::Worn(BodyPart::RightHand),
                 socket,
                 piece,
             };
@@ -2133,7 +2143,7 @@ mod tests {
         st.character = Character::debug_runner(&st.content);
         for (socket, piece) in [(0, "hushcan"), (1, "redeye")] {
             let piece = pack_copy(&st, piece);
-            let host = Host::Worn(Slot::Primary);
+            let host = Host::Worn(BodyPart::RightHand);
             perform(
                 &mut st,
                 Action::Fit {
@@ -2148,7 +2158,7 @@ mod tests {
             let art = art.expect("a drawing");
             (art.extent(), crate::ui::preview::half(art.as_ref()).cells())
         };
-        let gun = st.character.worn_copy(Slot::Primary).map(|k| k.id);
+        let gun = st.character.worn_copy(BodyPart::RightHand).map(|k| k.id);
         let got = shape(preview_art(&st, &id("ratchet_smg"), true, gun));
         assert_eq!(got, ((0, 0, 88, 15), (44, 8)));
         let cold = Some(pack_copy(&st, "coldfin_1"));
@@ -2163,7 +2173,7 @@ mod tests {
     fn the_decks_preview_takes_its_cradles_and_not_its_cables() {
         let mut st = state();
         st.character = Character::debug_runner(&st.content);
-        let copy = st.character.worn_copy(Slot::Deck).map(|k| k.id);
+        let copy = st.character.worn_copy(BodyPart::Waist).map(|k| k.id);
         let art = preview_art(&st, &id("rebuilt_deck"), true, copy).unwrap();
         assert_eq!(art.extent(), (-4, 0, 92, 22));
         assert_eq!(crate::ui::preview::half(art.as_ref()).cells(), (46, 11));

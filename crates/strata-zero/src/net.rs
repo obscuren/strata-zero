@@ -4937,7 +4937,11 @@ pub(crate) mod tests {
             .position(|s| s.item == game::ItemId::new("coldfin_1"))
             .unwrap();
         let piece = st.character.inventory.remove(at);
-        st.character.worn.get_mut(&game::Slot::Deck).unwrap().fitted[0] = Some(piece);
+        st.character
+            .worn
+            .get_mut(&game::BodyPart::Waist)
+            .unwrap()
+            .fitted[0] = Some(piece);
         noise_on(&mut st, b, 4);
         noise_on(&mut st, b, 4);
         assert_eq!(heat(&st), 7);

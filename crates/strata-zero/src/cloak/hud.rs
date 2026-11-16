@@ -277,7 +277,7 @@ mod tests {
         stealthy(&mut st);
         st.character.focus = 10;
         fire(&mut st, "cloak").unwrap();
-        st.character.take_off(game::Slot::Primary);
+        st.character.take_off(game::BodyPart::RightHand);
         assert!(!ambush_ready(&st), "no gun and no strike");
         st.character.give(ItemId::new("neural_port"), 1);
         st.character

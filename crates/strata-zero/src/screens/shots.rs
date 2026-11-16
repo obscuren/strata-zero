@@ -15,7 +15,7 @@ use crate::screens::testutil::key;
 use crate::screens::title::CombatMap;
 use citygen::{GenParams, Generator, Place, Pos, SizePreset, StratumKind};
 use crossterm::event::KeyCode;
-use game::{ItemId, ItemKind, Slot};
+use game::{BodyPart, ItemId, ItemKind};
 use ratatui::Terminal as Term;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -978,8 +978,12 @@ fn blueprint_stack(st: &mut AppState, worn: bool, item: &str) -> (MapScreen, Dec
     // The copy the deck screen would pass: the one worn, else the first carried.
     let id = ItemId::new(item);
     let copy = if worn {
-        let slot = st.content.item(&id).and_then(|i| i.slot);
-        slot.and_then(|s| st.character.worn_copy(s)).map(|k| k.id)
+        let body = st.character.body(&st.content);
+        let part = body
+            .iter()
+            .find(|n| st.character.equipped(n.part) == Some(&id));
+        part.and_then(|n| st.character.worn_copy(n.part))
+            .map(|k| k.id)
     } else {
         let carried = st.character.inventory.iter().find(|s| s.item == id);
         carried.and_then(|s| s.copy_id())
@@ -1027,7 +1031,7 @@ fn modding_the_rebuilt_deck() {
     let map = MapScreen::walking(&mut st);
     let mut deck = Deck::new(st.tick);
     deck.update(&mut st, &[key(KeyCode::Char('3'))]);
-    let copy = st.character.worn_copy(game::Slot::Deck).map(|k| k.id);
+    let copy = st.character.worn_copy(game::BodyPart::Waist).map(|k| k.id);
     let mut window = Blueprint::open(&st, ItemId::new("rebuilt_deck"), true, copy);
     st.tick += 200;
     if st.tick % 90 < 3 {
@@ -1054,7 +1058,7 @@ fn modding_the_rebuilt_deck() {
             .and_then(|s| s.copy_id())
             .unwrap();
         let fit = game::Action::Fit {
-            host: game::Host::Worn(game::Slot::Deck),
+            host: game::Host::Worn(game::BodyPart::Waist),
             socket,
             piece,
         };
@@ -1118,7 +1122,7 @@ fn fit_on_the_ratchet(st: &mut AppState, pieces: &[(usize, &str)]) {
             .and_then(|s| s.copy_id())
             .unwrap();
         let fit = game::Action::Fit {
-            host: game::Host::Worn(game::Slot::Primary),
+            host: game::Host::Worn(game::BodyPart::RightHand),
             socket: *socket,
             piece,
         };
@@ -1135,7 +1139,10 @@ fn modding_the_ratchet() {
     let map = MapScreen::walking(&mut st);
     let mut deck = Deck::new(st.tick);
     deck.update(&mut st, &[key(KeyCode::Char('3'))]);
-    let copy = st.character.worn_copy(game::Slot::Primary).map(|k| k.id);
+    let copy = st
+        .character
+        .worn_copy(game::BodyPart::RightHand)
+        .map(|k| k.id);
     let mut window = Blueprint::open(&st, ItemId::new("ratchet_smg"), true, copy);
     st.tick += 200;
     if st.tick % 90 < 3 {
@@ -1165,7 +1172,11 @@ fn modding_the_ratchet() {
 
 /// The blueprint window on what D'SHAWN wears in `slot`, opened from GEAR, the
 /// glass typed out.
-fn worn_window(st: &mut AppState, item: &str, slot: game::Slot) -> (MapScreen, Deck, Blueprint) {
+fn worn_window(
+    st: &mut AppState,
+    item: &str,
+    slot: game::BodyPart,
+) -> (MapScreen, Deck, Blueprint) {
     st.character = game::Character::debug_runner(&st.content);
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
@@ -1185,7 +1196,7 @@ fn worn_window(st: &mut AppState, item: &str, slot: game::Slot) -> (MapScreen, D
 #[ignore]
 fn stickers_on_dshawns_deck() {
     let mut st = state_home();
-    let (map, deck, mut window) = worn_window(&mut st, "rebuilt_deck", game::Slot::Deck);
+    let (map, deck, mut window) = worn_window(&mut st, "rebuilt_deck", game::BodyPart::Waist);
     let sizes = [(100, 30), (120, 40)];
     let snap = |name: &str, st: &AppState, window: &Blueprint| {
         for (w, h) in sizes {
@@ -1223,7 +1234,7 @@ fn stickers_on_dshawns_deck() {
 #[ignore]
 fn stickers_on_the_ratchet() {
     let mut st = state_home();
-    let (map, deck, mut window) = worn_window(&mut st, "ratchet_smg", game::Slot::Primary);
+    let (map, deck, mut window) = worn_window(&mut st, "ratchet_smg", game::BodyPart::RightHand);
     window.update(&mut st, &[key(KeyCode::Char('s'))]);
     for (w, h) in [(100, 30), (120, 40)] {
         let name = format!("stickers_ratchet_tray_{w}x{h}");
@@ -1293,7 +1304,7 @@ fn workbench_sheets() {
 }
 
 /// GEAR & INVENTORY at each size: D'SHAWN with the Hushcan and Redeye fitted on the
-/// Ratchet and the rack on PRIMARY, then a fresh D'SHAWN with the pack filtered to
+/// Ratchet and the rack on R HAND, then a fresh D'SHAWN with the pack filtered to
 /// hardware and the cursor on the Hushcan.
 #[test]
 #[ignore]
@@ -1302,7 +1313,11 @@ fn gear_and_inventory() {
     let mut st = state_home();
     st.character = game::Character::debug_runner(&st.content);
     fit_on_the_ratchet(&mut st, &[(0, "hushcan"), (1, "redeye")]);
-    let tile = Slot::ALL.iter().position(|s| *s == Slot::Primary).unwrap();
+    let body = st.character.body(&st.content);
+    let tile = body
+        .iter()
+        .position(|n| n.part == BodyPart::RightHand)
+        .unwrap();
     kit_shots(&mut st, "gear_and_inventory_rack", &sizes, |kit, _| {
         kit.state.pane = Pane::Rack;
         kit.state.tile = tile;
@@ -1454,7 +1469,7 @@ fn attributes_sheet() {
     // cap want more rows than the readout has at 100×30.
     let mut st = fresh();
     st.character
-        .wear(game::Slot::Secondary, ItemId::new("shiv_blade"), None);
+        .wear(game::BodyPart::LeftHand, ItemId::new("shiv_blade"), None);
     let reflex = Num::ALL
         .iter()
         .position(|&n| n == Num::Attribute(game::Attribute::Reflex))
@@ -2000,7 +2015,7 @@ fn news_shots() {
     news::put_out(&mut st, "marlo", None);
     let about = person_of(&st, &news::current(&st).unwrap().about).unwrap();
     // You walk away in what you wear.
-    let worn = st.character.equipped(Slot::Torso).cloned();
+    let worn = st.character.equipped(BodyPart::Torso).cloned();
     let body = st.missions.bodies.iter_mut().find(|b| b.person == about);
     body.expect("the item's body").left = Some(Left {
         at: (22, 41),

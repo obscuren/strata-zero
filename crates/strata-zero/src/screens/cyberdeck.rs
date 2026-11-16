@@ -15,7 +15,7 @@ use crate::ui::stickers::placed;
 use citygen::Place;
 use crossterm::event::KeyCode;
 use game::{
-    AbilityId, Action, CopyId, DeckSpec, HardwareLook, Item, ItemCopy, ItemId, ItemKind, Slot,
+    AbilityId, Action, BodyPart, CopyId, DeckSpec, HardwareLook, Item, ItemCopy, ItemId, ItemKind,
     SlotPlan, Source,
 };
 use ratatui::buffer::Buffer;
@@ -419,7 +419,7 @@ fn drawn<'a>(st: &'a AppState, tab: &DeckTab) -> Option<(&'a Item, DeckSpec)> {
 /// pack it was opened on. `None` for a deck held without a copy.
 fn copy<'a>(st: &'a AppState, tab: &DeckTab) -> Option<&'a ItemCopy> {
     if tab.equipped {
-        return st.character.worn_copy(Slot::Deck);
+        return st.character.worn_copy(BodyPart::Waist);
     }
     st.character.copy_in_pack(tab.copy?)?.copy.as_ref()
 }
@@ -848,7 +848,7 @@ mod tests {
         st.content.items.push(deck);
         st.character
             .equipment
-            .insert(game::Slot::Deck, id("test_deck"));
+            .insert(game::BodyPart::Waist, id("test_deck"));
     }
 
     #[test]

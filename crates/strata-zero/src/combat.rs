@@ -8,7 +8,7 @@ use crate::render::map::{MapRef, TileMap};
 use citygen::pathing::bresenham;
 use citygen::rng::hash64;
 use citygen::{Place, Pos};
-use game::{AbilityId, AbilityKind, Action, Active, Attribute, Fx, ItemId, Slot, Weapon};
+use game::{AbilityId, AbilityKind, Action, Active, Attribute, BodyPart, Fx, ItemId, Weapon};
 
 /// Ticks between the rounds of one burst.
 pub const ROUND_GAP: u64 = 4;
@@ -54,10 +54,10 @@ pub fn miss_impact(map: &MapRef, from: Pos, target: Pos, range: i32) -> Pos {
     last
 }
 
-/// The worn gun: the Primary slot's item with a weapon on it.
+/// The worn gun: the right hand's item with a weapon on it.
 pub fn your_weapon(st: &AppState) -> Result<(ItemId, Weapon), String> {
     st.character
-        .equipped(Slot::Primary)
+        .equipped(BodyPart::RightHand)
         .and_then(|id| {
             st.content
                 .item(id)
@@ -1091,7 +1091,7 @@ mod tests {
         let mut st = engaged(Pos::new(20, 8));
         assert_eq!(fire(&mut st, 0).unwrap_err(), "out of range");
         st.character
-            .wear(Slot::Primary, ItemId::new("shiv_blade"), None);
+            .wear(BodyPart::RightHand, ItemId::new("shiv_blade"), None);
         assert_eq!(fire(&mut st, 0).unwrap_err(), "nothing to shoot with");
         let mut st = engaged(Pos::new(14, 8));
         st.foes[0].down = true;

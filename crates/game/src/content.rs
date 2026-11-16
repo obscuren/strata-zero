@@ -40,8 +40,10 @@ pub enum ContentError {
     UseOnNonConsumable { item: String },
     #[error("item `{item}` has perks or grants but no slot, implant, bot or cell")]
     PerkWithoutSlot { item: String },
-    #[error("item `{item}` cannot sit in slot {slot:?}")]
-    SlotMismatch { item: String, slot: Slot },
+    #[error("item `{item}` fits a {slot:?} and the body has none")]
+    SlotMismatch { item: String, slot: PartKind },
+    #[error("body: {why}")]
+    BodyInvalid { why: String },
     #[error("duplicate id `{0}`")]
     DuplicateId(String),
     #[error("ability `{ability}` is passive but has fx")]
@@ -108,6 +110,8 @@ pub enum ContentError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Content {
+    /// The runner's body, part by part, in the order worn things are read.
+    pub body: Vec<BodyNode>,
     pub items: Vec<Item>,
     pub skills: Vec<Skill>,
     pub talents: Vec<Talent>,
@@ -440,6 +444,7 @@ impl Content {
     }
 
     pub fn validate(&self) -> Result<(), ContentError> {
+        self.body_ok()?;
         let mut seen: HashSet<&str> = HashSet::new();
         let ids = self
             .items
@@ -681,10 +686,8 @@ impl Content {
                     id: i.id.0.clone(),
                     why: why.to_string(),
                 };
-                if i.kind != ItemKind::Weapon
-                    || !matches!(i.slot, Some(Slot::Primary | Slot::Secondary))
-                {
-                    return Err(bad("only a weapon in a hand slot shoots"));
+                if i.kind != ItemKind::Weapon || i.slot != Some(PartKind::Hand) {
+                    return Err(bad("only a weapon in a hand shoots"));
                 }
                 if w.rounds == 0 || w.range < 1 || w.damage == 0 {
                     return Err(bad("rounds, range and damage are at least one"));
@@ -735,6 +738,14 @@ impl Content {
                 if i.fx.iter().any(|f| matches!(f, Fx::Lock | Fx::Upload)) {
                     return Err(bad("a throw plays no Lock or Upload"));
                 }
+            }
+            if let Some(kind) = i.slot
+                && !self.body.iter().any(|n| n.kind == kind)
+            {
+                return Err(ContentError::SlotMismatch {
+                    item: i.id.0.clone(),
+                    slot: kind,
+                });
             }
             // Perks and grants count while worn, installed or docked; a cell's grant
             // counts while carried.
@@ -1215,8 +1226,43 @@ impl Content {
         Ok(())
     }
 
+    /// The body: parts listed once, each joining another part of the body without
+    /// coming back round to itself, and one main hand.
+    fn body_ok(&self) -> Result<(), ContentError> {
+        let bad = |why: String| Err(ContentError::BodyInvalid { why });
+        if self.body.is_empty() {
+            return bad("no parts".into());
+        }
+        for (k, n) in self.body.iter().enumerate() {
+            if self.body[..k].iter().any(|m| m.part == n.part) {
+                return bad(format!("{:?} is listed twice", n.part));
+            }
+            // Up the joins to a part that joins nothing, in fewer steps than parts.
+            let mut at = n;
+            for _ in 0..=self.body.len() {
+                let Some(to) = at.joins else { break };
+                let Some(up) = self.node(to) else {
+                    return bad(format!("{:?} joins {to:?}, not on the body", at.part));
+                };
+                at = up;
+            }
+            if at.joins.is_some() {
+                return bad(format!("{:?} joins round in a loop", n.part));
+            }
+        }
+        match self.body.iter().filter(|n| n.main).collect::<Vec<_>>()[..] {
+            [main] if main.kind == PartKind::Hand => Ok(()),
+            [_] => bad("the main part is a hand".into()),
+            _ => bad("one main hand".into()),
+        }
+    }
+
     pub fn item(&self, id: &ItemId) -> Option<&Item> {
         self.items.iter().find(|i| &i.id == id)
+    }
+    /// The body's node for a part, when the body has it.
+    pub fn node(&self, p: BodyPart) -> Option<&BodyNode> {
+        self.body.iter().find(|n| n.part == p)
     }
     pub fn origin(&self, id: &OriginId) -> Option<&Origin> {
         self.origins.iter().find(|o| &o.id == id)
@@ -1623,12 +1669,6 @@ mod tests {
         for kind in ItemKind::ALL {
             assert!(c.items.iter().any(|i| i.kind == kind), "no {kind:?} item");
         }
-        for slot in Slot::ALL {
-            assert!(
-                c.items.iter().any(|i| i.slot == Some(slot)),
-                "no item for {slot:?}"
-            );
-        }
         let vex = c.template(&TemplateId::new("vex")).unwrap();
         assert_eq!(vex.handle, "VEX");
         assert_eq!(
@@ -1636,6 +1676,86 @@ mod tests {
             ItemKind::Component
         );
         assert_eq!(c.talents_for(&SkillId::new("hacking")).count(), 4);
+    }
+
+    #[test]
+    fn the_body_is_eleven_parts_with_one_main_hand() {
+        let c = Content::load().unwrap();
+        assert_eq!(c.body.len(), 11);
+        let mains: Vec<_> = c.body.iter().filter(|n| n.main).collect();
+        assert_eq!(mains.len(), 1);
+        assert_eq!(
+            (mains[0].part, mains[0].kind),
+            (BodyPart::RightHand, PartKind::Hand)
+        );
+        assert_eq!(c.node(BodyPart::LeftHand).unwrap().name, "L HAND");
+        assert_eq!(
+            c.node(BodyPart::LeftHand).unwrap().joins,
+            Some(BodyPart::LeftArm)
+        );
+        let third = [BodyPart::ThirdArm, BodyPart::ThirdHand];
+        assert!(c.body.iter().all(|n| !third.contains(&n.part)));
+    }
+
+    #[test]
+    fn a_body_with_two_main_hands_or_a_join_to_nowhere_is_refused() {
+        let good = Content::load().unwrap();
+        let at = |c: &Content, p: BodyPart| c.body.iter().position(|n| n.part == p).unwrap();
+        let body_err = |c: &Content| matches!(c.validate(), Err(ContentError::BodyInvalid { .. }));
+        let mut c = good.clone();
+        let i = at(&c, BodyPart::LeftHand);
+        c.body[i].main = true;
+        assert!(body_err(&c), "two main hands");
+        let mut c = good.clone();
+        let i = at(&c, BodyPart::RightHand);
+        c.body[i].main = false;
+        assert!(body_err(&c), "no main hand");
+        let mut c = good.clone();
+        let (r, h) = (at(&c, BodyPart::RightHand), at(&c, BodyPart::Head));
+        c.body[r].main = false;
+        c.body[h].main = true;
+        assert!(body_err(&c), "a main head");
+        let mut c = good.clone();
+        let i = at(&c, BodyPart::Feet);
+        c.body[i].joins = Some(BodyPart::ThirdArm);
+        assert!(body_err(&c), "a join to nowhere");
+        let mut c = good.clone();
+        let i = at(&c, BodyPart::Head);
+        c.body[i].joins = Some(BodyPart::Feet);
+        assert!(body_err(&c), "a loop");
+        let mut c = good.clone();
+        let feet = c.body[at(&c, BodyPart::Feet)].clone();
+        c.body.push(feet);
+        assert!(body_err(&c), "a part twice");
+        let mut c = good.clone();
+        c.body.retain(|n| n.kind != PartKind::Feet);
+        assert!(matches!(
+            c.validate(),
+            Err(ContentError::SlotMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn every_part_kind_but_the_arm_has_an_item() {
+        let c = Content::load().unwrap();
+        for kind in PartKind::ALL {
+            let has = c.items.iter().any(|i| i.slot == Some(kind));
+            assert_eq!(has, kind != PartKind::Arm, "{kind:?}");
+            assert!(c.body.iter().any(|n| n.kind == kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_spec_needs_the_hand() {
+        let mut c = Content::load().unwrap();
+        let i = c
+            .items
+            .iter()
+            .position(|i| i.id.0 == "ratchet_smg")
+            .unwrap();
+        c.items[i].slot = Some(PartKind::Torso);
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("only a weapon in a hand shoots"), "{err}");
     }
 
     #[test]
@@ -1771,7 +1891,7 @@ mod tests {
         assert!(coil.perks.is_empty() && coil.grants.is_empty() && coil.on_use.is_none());
         assert_eq!(
             c.item(&ItemId::new("mirrorshades")).unwrap().slot,
-            Some(Slot::Eyes)
+            Some(PartKind::Face)
         );
         assert!(c.abilities.len() >= 4);
         let scan = c.ability(&AbilityId::new("netscan")).unwrap();
@@ -2234,7 +2354,7 @@ mod tests {
         let at = |c: &Content, id: &str| c.items.iter().position(|i| i.id.0 == id).unwrap();
         let mut bad = c.clone();
         let i = at(&bad, "crack");
-        bad.items[i].slot = Some(Slot::Deck);
+        bad.items[i].slot = Some(PartKind::Waist);
         let err = bad.validate().unwrap_err().to_string();
         assert!(err.contains("crack") && err.contains("slot"), "{err}");
         let mut bad = c.clone();
@@ -2656,7 +2776,7 @@ mod tests {
 
         let mut bad = c.clone();
         let i = at(&bad, "rack_zenbo");
-        bad.items[i].slot = Some(Slot::Torso);
+        bad.items[i].slot = Some(PartKind::Torso);
         assert!(matches!(
             bad.validate(),
             Err(ContentError::FrameInvalid { .. })
@@ -2875,7 +2995,7 @@ mod tests {
             colours: [('a', (1, 2, 3))].into_iter().collect(),
         };
         assert!(invalid(
-            broken("sticker_neko", &|i| i.slot = Some(Slot::Deck))
+            broken("sticker_neko", &|i| i.slot = Some(PartKind::Waist))
         ));
         assert!(invalid(broken("sticker_neko", &|i| i.sticker = None)));
         assert!(invalid(
@@ -3385,9 +3505,12 @@ mod tests {
             .iter()
             .filter(|i| i.kind == ItemKind::Armor)
             .collect();
-        assert_eq!(armor.len(), 5);
+        assert_eq!(armor.len(), 7);
+        // The boots and the sling aren't drawn yet: they show MISSING BLUEPRINT.
+        let undrawn = ["tread_boots", "courier_sling"];
         for i in armor {
-            assert!(c.picture(&i.id).is_some(), "{}", i.id);
+            let drawn = c.picture(&i.id).is_some();
+            assert_eq!(drawn, !undrawn.contains(&i.id.0.as_str()), "{}", i.id);
         }
         let hat = c.picture(&ItemId::new("hardhat")).unwrap();
         let labels: Vec<&str> = hat.labels.iter().map(|l| l.text.as_str()).collect();
@@ -3492,7 +3615,7 @@ mod tests {
             |r: Result<(), ContentError>| matches!(r, Err(ContentError::ChromeInvalid { .. }));
         assert!(invalid(broken("neural_port", &|i| i.implant = None)));
         assert!(invalid(
-            broken("neural_port", &|i| i.slot = Some(Slot::Head))
+            broken("neural_port", &|i| i.slot = Some(PartKind::Head))
         ));
         assert!(invalid(broken("mirrorshades", &|i| {
             i.implant = Some(Implant {

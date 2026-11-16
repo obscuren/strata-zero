@@ -88,7 +88,7 @@ pub fn surgery_fee(ch: &Character, c: &Content, action: &Action) -> Option<u32> 
 mod tests {
     use super::*;
     use crate::character::Stack;
-    use crate::model::{Site, Slot, TemplateId};
+    use crate::model::{BodyPart, Site, TemplateId};
 
     fn id(s: &str) -> ItemId {
         ItemId::new(s)
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(surgery_fee(&ch, &c, &Action::Use(id("stim_patch"))), None);
         ch.give_item(&c, id("arc_hand"), 1);
         let deck = Action::Fit {
-            host: Host::Worn(Slot::Deck),
+            host: Host::Worn(BodyPart::Waist),
             socket: 0,
             piece: pack_copy(&ch, "arc_hand"),
         };
