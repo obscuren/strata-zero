@@ -97,7 +97,10 @@ pub fn start(st: &mut AppState, kind: Kind, until: u64) {
             Kind::Sleep => "You can't sleep now.",
             Kind::Wait => "You can't wait now.",
         });
+        return;
     }
+    // Nothing holds a cloak through a rest.
+    crate::cloak::end(st, crate::cloak::End::Off);
 }
 
 /// One explore frame of resting.

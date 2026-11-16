@@ -167,7 +167,8 @@ mod tests {
         );
         assert_eq!(
             fire(&mut st, "scramble"),
-            Err("the cell is empty".to_string())
+            Err("the cell is burned out".to_string()),
+            "as the HUD reads it"
         );
         recharge(&mut st, 270);
         assert_eq!(
@@ -178,10 +179,27 @@ mod tests {
             }),
             "a tenth, not past it"
         );
+        assert_eq!(
+            fire(&mut st, "scramble"),
+            Err("the cell is burned out".to_string())
+        );
         recharge(&mut st, 1);
         assert!(!charge(&st, k).unwrap().burned);
         recharge(&mut st, 30 * sim::TICKS_PER_MINUTE);
         assert_eq!(charge(&st, k).unwrap().left, FULL_CELL);
+        // An empty cell that never burned out reads empty.
+        set_charge(
+            &mut st,
+            k,
+            Charge {
+                left: 0,
+                burned: false,
+            },
+        );
+        assert_eq!(
+            fire(&mut st, "scramble"),
+            Err("the cell is empty".to_string())
+        );
     }
 
     #[test]

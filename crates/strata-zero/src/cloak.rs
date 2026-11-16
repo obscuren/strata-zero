@@ -97,7 +97,7 @@ pub enum Phase {
 /// How a cloak ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum End {
-    /// Switched off: by its key, the Net, a jack-in, its time up.
+    /// Switched off: by its key, the Net, a jack-in, a rest, its time up.
     Off,
     /// The pool ran dry.
     Burnout,
@@ -185,7 +185,7 @@ pub fn toggle(st: &mut AppState, id: &AbilityId) -> Result<String, String> {
     {
         match cell::best(st, item) {
             Some((copy, c)) if cell::runs(c) => Pool::Cell(copy),
-            Some((_, c)) if c.left > 0 => return Err("the cell is burned out".to_string()),
+            Some((_, c)) if c.burned => return Err("the cell is burned out".to_string()),
             _ => return Err("the cell is empty".to_string()),
         }
     } else if st.character.focus == 0 {
@@ -296,9 +296,20 @@ pub fn frame(st: &mut AppState) {
     }
 }
 
-/// Ends the cloak, starting its fade from the heat it had; false with none on. A
-/// burnout warns that you're in the open.
+/// Ends the cloak, starting its fade from the heat it had; false with none on. FOCUS
+/// owed toward the next point is paid in full, so no cloak is free. A burnout warns
+/// that you're in the open.
 pub fn end(st: &mut AppState, why: End) -> bool {
+    if let Some(Cloak {
+        pool: Pool::Focus { owed, .. },
+        ..
+    }) = st.cloak.as_mut()
+        && *owed > 0
+        && st.character.focus > 0
+    {
+        *owed = 0;
+        st.character.focus -= 1;
+    }
     let hot = heat(st).unwrap_or(0.0);
     let Some(c) = st.cloak.take() else {
         return false;
@@ -435,6 +446,35 @@ mod tests {
             &st,
             "the cloak burns out · you're in the open"
         ));
+    }
+
+    #[test]
+    fn a_short_cloak_still_costs_a_focus() {
+        let mut st = street();
+        stealthy(&mut st);
+        st.character.focus = 10;
+        fire(&mut st, "cloak").unwrap();
+        frames(&mut st, 10);
+        fire(&mut st, "cloak").unwrap();
+        assert_eq!(st.character.focus, 9, "a third of a second is a FOCUS");
+        // Off and on again doesn't start the bill over.
+        fire(&mut st, "cloak").unwrap();
+        frames(&mut st, 10);
+        fire(&mut st, "cloak").unwrap();
+        assert_eq!(st.character.focus, 8);
+    }
+
+    #[test]
+    fn resting_ends_the_cloak() {
+        let mut st = street();
+        stealthy(&mut st);
+        st.character.focus = 10;
+        fire(&mut st, "cloak").unwrap();
+        let until = crate::rest::now(&st) + 60;
+        crate::rest::start(&mut st, crate::rest::Kind::Wait, until);
+        assert!(st.rest.is_some(), "the rest started");
+        assert!(!hidden(&st));
+        assert_eq!(st.veil.fade.unwrap().phase, Phase::SwitchingOff);
     }
 
     #[test]
