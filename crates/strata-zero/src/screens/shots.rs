@@ -1326,7 +1326,7 @@ fn gear_and_inventory() {
         }
         st
     };
-    let on_the_right_hand = |kit: &mut Kit, _: &AppState| {
+    let on_the_right_hand = |kit: &mut Kit, _: &mut AppState| {
         kit.state.pane = Pane::Body;
         kit.state.part = BodyPart::RightHand;
     };
@@ -1385,7 +1385,7 @@ fn kit_shots(
     st: &mut AppState,
     name: &str,
     sizes: &[(u16, u16)],
-    set: impl FnOnce(&mut Kit, &AppState),
+    set: impl FnOnce(&mut Kit, &mut AppState),
 ) {
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
@@ -1401,50 +1401,145 @@ fn kit_shots(
     }
 }
 
+/// D'SHAWN at home with the shots' chrome fitted, the sites in `without` left bare: the
+/// neural port, lens, jaw, spine, the drone cradle with its Scout drone, the adrenal
+/// pump, the mesh, and the Piston arm with its Arc hand on L ARM.
+fn chrome_loadout(without: &[game::Site]) -> AppState {
+    use game::{Site, Stack};
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    for (site, item) in [
+        (Site::Neural, "neural_port"),
+        (Site::Eyes, "target_lens"),
+        (Site::Jaw, "bulldog_jaw"),
+        (Site::Spine, "redline_spine"),
+        (Site::Back, "drone_cradle"),
+        (Site::Organs, "adrenal_pump"),
+        (Site::Skin, "subdermal_mesh"),
+        (Site::LeftArm, "piston_arm"),
+    ] {
+        if without.contains(&site) {
+            // The debug runner starts with a cradle: a bare site is one taken out.
+            st.character.chrome.remove(&site);
+            continue;
+        }
+        let id = ItemId::new(item);
+        let copy = st.content.item(&id).unwrap().per_copy().then(|| {
+            let mut k = st.character.new_copy(&st.content, &id);
+            // The arm with its Arc hand, the cradle with its Scout drone.
+            let fitted = match item {
+                "piston_arm" => Some("arc_hand"),
+                "drone_cradle" => Some("scout_drone"),
+                _ => None,
+            };
+            if let Some(piece) = fitted {
+                let piece = ItemId::new(piece);
+                let pc = st.character.new_copy(&st.content, &piece);
+                k.fitted[0] = Some(Stack {
+                    item: piece,
+                    qty: 1,
+                    copy: Some(pc),
+                });
+            }
+            k
+        });
+        st.character.install(site, id, copy);
+    }
+    st
+}
+
+/// CHROME on GEAR & INVENTORY at each size, the shots' loadout fitted: the Piston arm
+/// with its Arc hand, the cradle, its bay with the Scout drone docked, the picker on the
+/// bay, on the empty R ARM site, on the Piston arm's empty forearm socket and on a swap
+/// of the Piston arm; a body with no arms or cradle; and the doc's chair, seated, the
+/// picker open on the empty forearm.
+#[test]
+#[ignore]
+fn gear_chrome() {
+    use crate::clinic::testutil::seated;
+    use crate::screens::kit::chrome::Stop;
+    use game::Site;
+    let sizes = [(100, 30), (120, 40)];
+    let shots = |st: &mut AppState, name: &str, stop: Stop, keys: &[KeyCode]| {
+        kit_shots(st, &format!("gear_chrome_{name}"), &sizes, |kit, st| {
+            kit.open_chrome(stop, st.tick);
+            for k in keys {
+                kit.chrome_key(st, *k);
+            }
+        });
+    };
+    let space = [KeyCode::Char(' ')];
+    let bay = Stop::Socket(Site::Back, 0);
+    let forearm = Stop::Socket(Site::LeftArm, 1);
+
+    shots(
+        &mut chrome_loadout(&[]),
+        "limb",
+        Stop::Site(Site::LeftArm),
+        &[],
+    );
+    shots(
+        &mut chrome_loadout(&[]),
+        "cradle",
+        Stop::Site(Site::Back),
+        &[],
+    );
+    shots(&mut chrome_loadout(&[]), "bay", bay, &[]);
+    shots(&mut chrome_loadout(&[]), "picker_bay", bay, &space);
+
+    // The pickers open only in the doc's chair: seated, ¤ 1200 to pay with.
+    let seated_in = |without: &[Site]| {
+        let mut st = seated();
+        st.character = chrome_loadout(without).character;
+        st.character.credits = 1200;
+        st
+    };
+    shots(
+        &mut seated_in(&[]),
+        "picker_site",
+        Stop::Site(Site::RightArm),
+        &space,
+    );
+    shots(&mut seated_in(&[]), "picker_socket", forearm, &space);
+    shots(
+        &mut seated_in(&[]),
+        "picker_swap",
+        Stop::Site(Site::LeftArm),
+        &space,
+    );
+
+    // No arms, no cradle: the meat arms and the chrome that is left.
+    let mut st = chrome_loadout(&[Site::LeftArm, Site::Back]);
+    shots(&mut st, "meat_arms", Stop::Site(Site::Neural), &[]);
+
+    // The chair as the doc opens it (`Deck::chair`), space on the empty forearm.
+    let mut st = seated_in(&[]);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::chair(&st);
+    deck.kit.state.stop = forearm;
+    deck.update(&mut st, &[key(KeyCode::Char(' '))]);
+    deck.kit.changed = st.tick;
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+    for (w, h) in sizes {
+        let name = format!("gear_chrome_in_the_chair_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck], (w, h));
+    }
+}
+
 /// ATTRIBUTES at each size, with the spec's loadout fitted: EMP, two off for each piece;
 /// and REFLEX, its readout crowded with sources and its cap.
 #[test]
 #[ignore]
 fn attributes_sheet() {
-    use game::{Num, Site, Stack};
+    use game::Num;
     let sizes = [(100, 30), (120, 40)];
-    let fresh = || {
-        let mut st = state_home();
-        st.character = game::Character::debug_runner(&st.content);
-        for (site, item) in [
-            (Site::Neural, "neural_port"),
-            (Site::Eyes, "target_lens"),
-            (Site::Jaw, "bulldog_jaw"),
-            (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
-            (Site::Organs, "adrenal_pump"),
-            (Site::Skin, "subdermal_mesh"),
-            (Site::LeftArm, "piston_arm"),
-        ] {
-            let id = ItemId::new(item);
-            let copy = st.content.item(&id).unwrap().per_copy().then(|| {
-                let mut k = st.character.new_copy(&st.content, &id);
-                // The arm with its Arc hand, the cradle with its Scout drone.
-                let fitted = match item {
-                    "piston_arm" => Some("arc_hand"),
-                    "drone_cradle" => Some("scout_drone"),
-                    _ => None,
-                };
-                if let Some(piece) = fitted {
-                    let piece = ItemId::new(piece);
-                    let pc = st.character.new_copy(&st.content, &piece);
-                    k.fitted[0] = Some(Stack {
-                        item: piece,
-                        qty: 1,
-                        copy: Some(pc),
-                    });
-                }
-                k
-            });
-            st.character.install(site, id, copy);
-        }
-        st
-    };
+    let fresh = || chrome_loadout(&[]);
+    let mut st = fresh();
+    sheet_shots(&mut st, "attributes_sheet", &sizes, |_, _| {});
+
     let mut st = fresh();
     let emp = Num::ALL
         .iter()
