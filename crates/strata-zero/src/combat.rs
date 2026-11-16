@@ -1364,28 +1364,20 @@ mod tests {
             u32::from(after_ambush),
             200 - 2 * u32::from(w.damage) * u32::from(w.rounds)
         );
-        // The rolls are the shot's own again: some rounds land, some miss, at plain damage.
-        st.force_hit = None;
+        // The rolls rule again: every one missing, the second shot lands nothing.
+        st.force_hit = Some(false);
         fire(&mut st, i).unwrap();
-        let line = (st.log.iter().rev())
-            .find(|e| e.text.starts_with("you fire"))
-            .map(|e| e.text.clone())
-            .unwrap();
-        // "you fire · guard 4 · miss · 4": a round's outcome is its part's last word.
-        let hits: Vec<&str> = (line.split(" · ").skip(1))
-            .filter_map(|r| r.rsplit(' ').next())
-            .filter(|r| *r != "miss")
-            .collect();
-        assert!(
-            !hits.is_empty() && hits.len() < w.rounds as usize,
-            "a mixed volley: {line}"
-        );
-        let plain = w.damage.to_string();
-        assert!(hits.iter().all(|h| *h == plain), "{line}");
         assert_eq!(
-            after_ambush - st.foes[i].hp,
-            w.damage * hits.len() as u8,
-            "{line}"
+            st.foes[i].hp, after_ambush,
+            "a missed volley does no damage"
+        );
+        // Every one landing, a third (an AP more this turn) does plain damage, not ×2.
+        st.net.engaged.as_mut().unwrap().ap = 1;
+        st.force_hit = Some(true);
+        fire(&mut st, i).unwrap();
+        assert_eq!(
+            u32::from(after_ambush - st.foes[i].hp),
+            u32::from(w.damage) * u32::from(w.rounds)
         );
         let ambushes = (st.log.iter()).filter(|e| e.text == "AMBUSH").count();
         assert_eq!(ambushes, 1);

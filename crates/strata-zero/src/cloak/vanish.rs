@@ -148,6 +148,61 @@ mod tests {
     }
 
     #[test]
+    fn a_guard_of_another_building_keeps_hunting() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        shadow_step(&mut st);
+        let here = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let next_door = citygen::BuildingId(1);
+        let there = Place::Floor {
+            building: next_door,
+            level: 0,
+        };
+        st.foes.push(crate::foes::Foe {
+            name: "guard".to_string(),
+            glyph: '@',
+            post: Some(crate::foes::Post::new(next_door, 0, vec![Pos::new(4, 4)])),
+            ..crate::foes::Foe::goon(there, Pos::new(4, 4))
+        });
+        let other = st.foes.len() - 1;
+        for i in [here, other] {
+            st.foes[i].mode = crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0,
+            };
+            st.foes[i].post.as_mut().unwrap().spotted = true;
+        }
+        crate::net::engage(&mut st, on(0), false);
+        settle(&mut st);
+        crate::net::stay(&mut st);
+        vanish(&mut st, &vanish_out()).unwrap();
+        assert!(!st.foes[here].hunting(), "the ward's guard loses you");
+        assert!(st.foes[other].hunting(), "next door's keeps hunting");
+        assert!(st.foes[other].post.as_ref().unwrap().spotted);
+    }
+
+    #[test]
+    fn vanish_is_refused_in_a_construct() {
+        let mut st = street();
+        shadow_step(&mut st);
+        let here = st.player.as_ref().unwrap().place;
+        crate::net::engage(&mut st, here, false);
+        st.player.as_mut().unwrap().place = Place::Construct(citygen::BuildingId(0));
+        assert_eq!(
+            vanish(&mut st, &vanish_out()),
+            Err("not in here".to_string())
+        );
+        assert!(st.net.engaged.is_some(), "the fight stands");
+        assert!(st.cloak.is_none());
+        assert!(
+            (st.character)
+                .cooling(&st.content, &vanish_out(), st.tick)
+                .is_none(),
+            "no cooldown booked"
+        );
+    }
+
+    #[test]
     fn vanish_is_for_fights_only() {
         let mut st = street();
         shadow_step(&mut st);
