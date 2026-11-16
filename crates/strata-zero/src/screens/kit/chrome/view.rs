@@ -1,5 +1,5 @@
 //! CHROME on GEAR & INVENTORY: the tiles of the chrome in you, LOAD over the divider on
-//! the right and the card under it, and the keys, which do what the ledger's did.
+//! the right and the card under it, and the keys.
 
 use super::card::{draw_lines, fit_card, piece_card};
 use super::rules::{
@@ -12,7 +12,7 @@ use crate::screens::kit::body::{
     Dir, Ink, Lit, draw_joints, draw_label, draw_tile, header, perk_short, step,
 };
 use crate::screens::kit::{Kit, View};
-use crate::ui::chrome::{DIM, FAINTER, RULE, put, reveal};
+use crate::ui::chrome::{DIM, FAINTER, RULE, put, reveal, solid};
 use crate::ui::hud::AMBER;
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
@@ -234,16 +234,17 @@ impl Kit {
         true
     }
 
-    /// CHROME's hint row: the ledger's, with `c meat/chrome` and the four arrows.
+    /// CHROME's hint row: `c meat/chrome` and the four arrows, with what the lock refuses.
     pub(crate) fn chrome_hints(&self, st: &AppState) -> Line<'static> {
         let asked = self.pulling.is_some() && self.pulling == Some(self.stop(st));
         hint_line(st, &self.here(st), asked)
     }
 
-    /// Draws CHROME into the tab's `area`: the header with the ledger's mark, the tiles
+    /// Draws CHROME into the tab's `area`: the header with the load mark, the tiles
     /// and their lines, the divider (amber while chrome can change), and right of it
     /// LOAD over a divider of its own with the card under it.
     pub(crate) fn draw_chrome(&self, st: &AppState, area: Rect, buf: &mut Buffer) {
+        solid(buf, area);
         let l = chrome_layout(area, st);
         let stop = self.stop(st);
         let here = self.here(st);
@@ -290,8 +291,8 @@ impl Kit {
     }
 
     /// `LOAD ▰▰▰▱ 19/24` across the pane's columns `x0..x1` on row `y`, the count at its
-    /// right end, with the load after the pick while FITS is open (the ledger's
-    /// colours); under it, dim, what's left (or how far over) and the pieces in you.
+    /// right end, with the load after the pick while FITS is open (in its
+    /// own colours); under it, dim, what's left (or how far over) and the pieces in you.
     fn draw_load(
         &self,
         st: &AppState,

@@ -1,4 +1,4 @@
-//! CHROME's rules, as the ATTRIBUTES ledger had them: what in the pack fits a site or a
+//! CHROME's rules: what in the pack fits a site or a
 //! socket, what a pick does to the load, EMP and the doc's fee, and what `space` and
 //! `x` do there, in a doc's chair, with free chrome, locked or jacked in.
 
@@ -160,7 +160,7 @@ pub(crate) fn pick_fee(st: &AppState, v: &Here, pick: &Pick) -> (u32, u32) {
 }
 
 /// Whether chrome can change here: in a doc's chair, or with free chrome. CHROME's
-/// divider (and the ledger's rule) go amber.
+/// divider goes amber.
 pub(crate) fn changing(st: &AppState) -> bool {
     matches!(operating(st), Operating::Chair { .. } | Operating::Free)
 }
@@ -313,7 +313,6 @@ pub(crate) fn install(st: &mut AppState, v: &Here, pick: usize) -> bool {
 /// the lock is on; the picker's keys while it is open; the ask after a first `x`
 /// (`asked`).
 pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
-    let (select, back) = ("←↑↓→ select", "c meat/chrome");
     let dim = Style::default().fg(DIM);
     let faint = Style::default().fg(FAINTER);
     let amber = Style::default().fg(AMBER);
@@ -385,7 +384,7 @@ pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
     }
     if jacked_in(st) {
         let mut spans = vec![
-            Span::styled(format!("{select} · "), dim),
+            Span::styled("←↑↓→ select · ".to_string(), dim),
             Span::styled("space what fits", faint),
         ];
         if v.held.is_some() {
@@ -393,7 +392,7 @@ pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
             spans.push(Span::styled("x pull it out", faint));
         }
         spans.push(Span::styled(
-            format!(" · {back} · Q/E tabs · tab close"),
+            " · c meat/chrome · Q/E tabs · tab close".to_string(),
             dim,
         ));
         return Line::from(spans);
@@ -403,8 +402,9 @@ pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
     if chair_free(st, v.at) {
         let takes = socket_kind(st, v.at.0, v.at.1.unwrap_or(0)).map_or("they", |k| k.takes());
         let keys = match v.held {
-            Some(_) => format!("{select} · space swap · x stow in the bag · {back} · Q/E tabs"),
-            None => format!("{select} · space dock · {back} · Q/E tabs · tab close"),
+            Some(_) => "←↑↓→ select · space swap · x stow in the bag · c meat/chrome · Q/E tabs"
+                .to_string(),
+            None => "←↑↓→ select · space dock · c meat/chrome · Q/E tabs · tab close".to_string(),
         };
         return Line::from(vec![
             Span::styled(keys, dim),
@@ -413,11 +413,17 @@ pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
     }
     match mode {
         Operating::Locked | Operating::Gone { .. } => Line::from(vec![
-            Span::styled(format!("{select} · {back} · Q/E tabs · tab close"), dim),
+            Span::styled(
+                "←↑↓→ select · c meat/chrome · Q/E tabs · tab close".to_string(),
+                dim,
+            ),
             Span::styled(format!("   {OUTSIDE}"), faint),
         ]),
         Operating::Chair { .. } => {
-            let mut spans = vec![Span::styled(format!("{select} · space what fits"), dim)];
+            let mut spans = vec![Span::styled(
+                "←↑↓→ select · space what fits".to_string(),
+                dim,
+            )];
             if let Some(held) = v.held.as_ref() {
                 spans.push(Span::styled(" · x pull it out ", dim));
                 spans.push(Span::styled(
@@ -426,18 +432,21 @@ pub(crate) fn hint_line(st: &AppState, v: &Here, asked: bool) -> Line<'static> {
                 ));
             }
             spans.push(Span::styled(
-                format!(" · {back} · esc get out of the chair"),
+                " · c meat/chrome · esc get out of the chair".to_string(),
                 dim,
             ));
             Line::from(spans)
         }
         Operating::Free => {
-            let mut spans = vec![Span::styled(format!("{select} · space what fits"), dim)];
+            let mut spans = vec![Span::styled(
+                "←↑↓→ select · space what fits".to_string(),
+                dim,
+            )];
             if v.held.is_some() {
                 spans.push(Span::styled(" · x pull it out", dim));
             }
             spans.push(Span::styled(
-                format!(" · {back} · Q/E tabs · tab close"),
+                " · c meat/chrome · Q/E tabs · tab close".to_string(),
                 dim,
             ));
             Line::from(spans)

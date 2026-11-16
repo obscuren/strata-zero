@@ -115,7 +115,7 @@ on the body's left area (the same area MEAT uses), offsets from its origin:
 - The right pane is split by a horizontal divider, as MEAT's is between the pack and the card
   (`╠═══`, joined to the vertical one). Over it, LOAD (Jeff, round 3 of the mock): `LOAD`, the
   gauge across the pane's width and `19/24` at its right (over budget in magenta, as the
-  ledger's), and a dim line under it with what's left and how many pieces are in you. Under it,
+  ledger's), and a faint line under it with what's left and how many pieces are in you. Under it,
   the card, or FITS in its place.
 - The ledger's mark of whether chrome can change comes along unchanged, on CHROME only: the
   header's `· CHROMING UP` in amber in a doc's chair, the ` FREE ` badge with dev free chrome,

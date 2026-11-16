@@ -1920,7 +1920,12 @@ impl Screen for Deck {
             )),
         };
         let mut x = inner.x + 1;
-        for span in &hint.spans {
+        let last = hint.spans.len().saturating_sub(1);
+        for (i, span) in hint.spans.iter().enumerate() {
+            // A closing aside that wouldn't fit whole is left out, not cut mid-word.
+            if i == last && i > 0 && x.saturating_add(span.width() as u16) > right {
+                break;
+            }
             put(buf, x, hint_y, &span.content, span.style, right);
             x = x.saturating_add(span.width() as u16);
         }

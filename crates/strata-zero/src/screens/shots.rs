@@ -1379,6 +1379,14 @@ fn gear_and_inventory() {
     });
 }
 
+/// Lets the deck's typing finish, and steps off the screen-jitter burst.
+fn settle_ticks(st: &mut AppState) {
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+}
+
 /// The deck on `3`, `set` applied to its kit, then drawn at each size once the card
 /// has typed out, clear of the deck's signal jitter.
 fn kit_shots(
@@ -1392,10 +1400,7 @@ fn kit_shots(
     deck.update(st, &[key(KeyCode::Char('3'))]);
     set(&mut deck.kit, st);
     deck.kit.changed = st.tick;
-    st.tick += 200;
-    if st.tick % 90 < 3 {
-        st.tick += 3;
-    }
+    settle_ticks(st);
     for (w, h) in sizes {
         shot_stack(&format!("{name}_{w}x{h}"), st, &[&map, &deck], (*w, *h));
     }
@@ -1519,10 +1524,7 @@ fn gear_chrome() {
     deck.kit.state.stop = forearm;
     deck.update(&mut st, &[key(KeyCode::Char(' '))]);
     deck.kit.changed = st.tick;
-    st.tick += 200;
-    if st.tick % 90 < 3 {
-        st.tick += 3;
-    }
+    settle_ticks(&mut st);
     for (w, h) in sizes {
         let name = format!("gear_chrome_in_the_chair_{w}x{h}");
         shot_stack(&name, &st, &[&map, &deck], (w, h));
@@ -1984,7 +1986,7 @@ fn ripperdoc_clinic() {
     };
     let arm = Stop::Site(Site::LeftArm);
     let right = Stop::Site(Site::RightArm);
-    chair_shots("clinic_ledger_piece", 1200, false, arm, &[]);
+    chair_shots("clinic_chrome_piece", 1200, false, arm, &[]);
     chair_shots(
         "clinic_fits_paying",
         1200,

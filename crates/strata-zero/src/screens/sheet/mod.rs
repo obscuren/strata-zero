@@ -672,7 +672,8 @@ impl Sheet {
         }
     }
 
-    /// Reopens where the tab was left (`st.deck_sheet`): with the tile it had. The readout types out afresh.
+    /// Reopens where the tab was left (`st.deck_sheet`): with the tile it had. The
+    /// readout types out afresh.
     pub fn restore(st: &AppState) -> Sheet {
         let mut sheet = Sheet::new(st.tick);
         sheet.state = st.deck_sheet;
@@ -1657,47 +1658,45 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         for body in [BODY, WIDE] {
             for tile in 0..Num::ALL.len() {
-                {
-                    let mut s = Sheet::new(0);
-                    s.state = SheetState { tile };
-                    settle(&s, &mut st);
-                    let mut buf = Buffer::empty(area);
-                    for c in &mut buf.content {
-                        c.set_char('X');
-                    }
-                    s.draw(&st, body, &mut buf);
-                    for y in area.y..area.bottom() {
-                        for x in area.x..area.right() {
-                            let inside = body.contains((x, y).into());
-                            let sym = buf[(x, y)].symbol();
-                            if !inside {
-                                assert_eq!(sym, "X", "{body:?} tile {tile} ({x},{y})");
-                            } else if x == body.x + 45 {
-                                assert_eq!(sym, "║", "{body:?} tile {tile} ({x},{y})");
-                            }
+                let mut s = Sheet::new(0);
+                s.state = SheetState { tile };
+                settle(&s, &mut st);
+                let mut buf = Buffer::empty(area);
+                for c in &mut buf.content {
+                    c.set_char('X');
+                }
+                s.draw(&st, body, &mut buf);
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        let inside = body.contains((x, y).into());
+                        let sym = buf[(x, y)].symbol();
+                        if !inside {
+                            assert_eq!(sym, "X", "{body:?} tile {tile} ({x},{y})");
+                        } else if x == body.x + 45 {
+                            assert_eq!(sym, "║", "{body:?} tile {tile} ({x},{y})");
                         }
                     }
-                    // The pane's last column stays clear: nothing runs into the rule.
-                    // The pane is solid: no ghost between the blocks.
-                    for y in body.y..body.bottom() {
-                        assert_eq!(
-                            buf[(body.x + 44, y)].symbol(),
-                            " ",
-                            "{body:?} tile {tile} y {y}"
-                        );
-                    }
-                    for dy in [1, 5, 7] {
-                        assert_eq!(buf[(body.x, body.y + dy)].symbol(), " ");
-                    }
-                    // Everything the number comes from is drawn, and why it doesn't add up.
-                    let text = readout(&buf, body);
-                    let r = Reading::of(&st, Num::ALL[tile]);
-                    for part in Readout::of(&st, &r, readout_w(body) as usize).says() {
-                        assert!(
-                            text.contains(&part),
-                            "{body:?} tile {tile}: {part:?} in {text}"
-                        );
-                    }
+                }
+                // The pane's last column stays clear: nothing runs into the rule.
+                // The pane is solid: no ghost between the blocks.
+                for y in body.y..body.bottom() {
+                    assert_eq!(
+                        buf[(body.x + 44, y)].symbol(),
+                        " ",
+                        "{body:?} tile {tile} y {y}"
+                    );
+                }
+                for dy in [1, 5, 7] {
+                    assert_eq!(buf[(body.x, body.y + dy)].symbol(), " ");
+                }
+                // Everything the number comes from is drawn, and why it doesn't add up.
+                let text = readout(&buf, body);
+                let r = Reading::of(&st, Num::ALL[tile]);
+                for part in Readout::of(&st, &r, readout_w(body) as usize).says() {
+                    assert!(
+                        text.contains(&part),
+                        "{body:?} tile {tile}: {part:?} in {text}"
+                    );
                 }
             }
         }

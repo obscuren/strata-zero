@@ -1,4 +1,4 @@
-//! CHROME driven through the deck: the rules the ATTRIBUTES ledger had (the chair, the
+//! CHROME driven through the deck: the rules (the chair, the
 //! bay anywhere, the tab's free piece, the fee line, over budget, `x` asks first, the
 //! picker), the tiles, LOAD over the divider, and `c`.
 
@@ -263,9 +263,9 @@ fn hints_anywhere_else() {
         hints(&d, &st),
         "←↑↓→ select · c meat/chrome · Q/E tabs · tab close   chrome goes in and out in a ripperdoc's chair"
     );
-    let buf = screen(&d, &mut st, (100, 30));
-    let x = col_of(&buf, 28, 2, "chrome goes").unwrap();
-    assert_eq!(buf[(x, 28)].fg, FAINTER);
+    let buf = screen(&d, &mut st, (120, 40));
+    let x = col_of(&buf, 38, 2, "chrome goes").unwrap();
+    assert_eq!(buf[(x, 38)].fg, FAINTER);
     let before = st.character.clone();
     for code in [KeyCode::Char(' '), KeyCode::Char('x')] {
         press(&mut d, &mut st, &[code]);
@@ -353,10 +353,11 @@ fn the_bay_card_is_the_drones() {
         "docked in the Drone cradle",
         "grants Scout",
         "out with you · follows on foot",
-        "when it's bored.",
     ] {
         assert!(card.contains(want), "{want}:\n{card}");
     }
+    let joined = card.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(joined.contains("It comes back when it's bored."), "{card}");
     for not in ["load", "EMP"] {
         assert!(!card.contains(not), "{not}:\n{card}");
     }
@@ -1704,7 +1705,6 @@ fn the_chair_opens_gear_on_chrome() {
     assert_eq!(d.kit.state.picker, None);
     // Left on ATTRIBUTES.
     st.deck_tab = Tab::Attributes;
-
     let mut d = Deck::chair(&st);
     assert_eq!(
         (d.tab, d.kit.state.view, d.kit.state.stop),
@@ -1749,7 +1749,7 @@ fn load_sits_over_the_divider() {
             assert_eq!(buf[(DIV_W, y)].symbol(), "║", "y {y}");
         }
     }
-    // Free chrome: the divider and its junction amber, as the ledger's rule was.
+    // Free chrome: the divider and its junction amber.
     assert_eq!(buf[(DIV_W, 20)].fg, AMBER);
     assert_eq!(buf[(DIV_W, 12)].fg, AMBER);
     assert_eq!(buf[(DIV_W + 1, 12)].fg, RULE);
@@ -1809,4 +1809,24 @@ fn the_tiles_say_what_each_piece_gives() {
     let fore = tile(&st, Stop::Socket(Site::LeftArm, 1), (100, 30));
     assert_eq!(fore.width, 9);
     assert_eq!(cells(&buf, fore.x, fore.y, 9), "┌FOREARM┐");
+}
+
+#[test]
+fn the_locked_hint_tail_is_whole_or_left_out() {
+    for (size, must_hold) in [((100, 30), false), ((120, 40), true)] {
+        let (mut st, d) = locked_on(Stop::Site(Site::LeftArm));
+        let buf = screen(&d, &mut st, size);
+        let row = (0..size.1)
+            .map(|y| cells(&buf, 0, y, size.0))
+            .find(|r| r.contains("Q/E tabs · tab close"))
+            .unwrap_or_else(|| panic!("no hint row at {size:?}"));
+        let has = row.contains(OUTSIDE);
+        let cut = (1..OUTSIDE.len())
+            .filter(|&i| OUTSIDE.is_char_boundary(i))
+            .any(|i| row.trim_end().ends_with(&format!("   {}", &OUTSIDE[..i])) && !has);
+        assert!(!cut, "{size:?} cut mid-tail: {row}");
+        if must_hold {
+            assert!(has, "{size:?} should hold the tail: {row}");
+        }
+    }
 }
