@@ -125,8 +125,8 @@ pub enum Call {
     level: `links::link_to`, walking to the link's stop and taking it. A lift wait goes
     through `links::wait_for_lift`. It moves at `GUARD_RUN_TICKS`.
   - On `level`, it runs to `at` at `GUARD_RUN_TICKS`.
-  - At `at`, or held up `LOST_TURNS` steps in a row, or with no way to `at`, it sweeps
-    there: the call becomes `Call::Sweep` with stops near `at`.
+  - At `at`, held up beside it (someone else stands there), or with no way to `at`, it
+    sweeps there: the call becomes `Call::Sweep` with stops near `at`.
   - With no link left that goes to `level`, the call ends and it goes back to its round.
 - **Sweep.**
   - It walks to its first stop at `SWEEP_STEP_TICKS` = 2 × `WALK_TICKS` = 8 ticks a step,
