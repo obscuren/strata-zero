@@ -77,7 +77,7 @@ pub(crate) fn hunt_step(st: &mut AppState, i: usize, now: u64) {
         return run_to(st, i, building, level, at, now);
     }
     let lift = links::is_lift(&plan, link);
-    let rides = links::hops(st, post, &plan, link, level).contains(&to);
+    let rides = links::hops(post, &plan, link, level).contains(&to);
     let waited = post.round.lift == Some((link, to));
     drop(plan);
     if !rides {
@@ -496,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lift_that_stops_answering_while_a_guard_waits_to_follow_turns_it_calm() {
+    fn on_alert_a_guard_waiting_to_follow_still_rides_the_lift() {
         let mut st = ward();
         stand(&mut st, 1, Pos::new(28, 3));
         let i = guard(&mut st, 0, 1, &[Pos::new(12, 1)]);
@@ -508,12 +508,11 @@ mod tests {
         run(&mut st, 1);
         assert_eq!(st.foes[i].post.as_ref().unwrap().round.lift, Some((1, 1)));
         crate::net::lock_down(&mut st, WARD);
-        run_until(&mut st, 2 * crate::guards::GUARD_LIFT_TICKS, |st| {
-            !st.foes[i].hunting()
+        run_until(&mut st, 4 * crate::guards::GUARD_LIFT_TICKS, |st| {
+            st.foes[i].place == on(1)
         });
-        let post = st.foes[i].post.as_ref().unwrap();
-        assert_eq!((post.round.lift, post.follow), (None, None));
-        assert_eq!(st.foes[i].place, on(0));
+        assert!(st.foes[i].hunting(), "it lands hunting you");
+        assert_eq!(st.foes[i].post.as_ref().unwrap().follow, None);
     }
 
     #[test]
