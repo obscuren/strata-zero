@@ -603,11 +603,13 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         }
         None => {
             let lost = lost + 1;
-            st.foes[i].mode = if lost >= crate::net::LOST_TURNS {
-                FoeMode::Idle
+            if lost < crate::net::LOST_TURNS {
+                st.foes[i].mode = FoeMode::Hunting { seen, lost };
+            } else if foe.post.is_some() {
+                crate::guards::lost_you(st, i, st.clock_tick());
             } else {
-                FoeMode::Hunting { seen, lost }
-            };
+                st.foes[i].mode = FoeMode::Idle;
+            }
             Step::Nothing
         }
     }

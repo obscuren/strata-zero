@@ -62,7 +62,7 @@ pub(crate) fn hunt_step(st: &mut AppState, i: usize, now: u64) {
     let from = foe.pos;
     let Some((link, to)) = post.follow else {
         if from == seen || held_by_another(st, i, seen) {
-            return lose_you(st, i, now);
+            return lost_you(st, i, now);
         }
         return run_to(st, i, building, level, seen, now);
     };
@@ -119,13 +119,13 @@ fn run_to(
         return;
     };
     let lost = match step {
-        Step::NoWay => return lose_you(st, i, now),
+        Step::NoWay => return lost_you(st, i, now),
         Step::Held => lost + 1,
         Step::To(_) => 0,
         Step::NoMap => lost,
     };
     if lost >= crate::net::LOST_TURNS {
-        return lose_you(st, i, now);
+        return lost_you(st, i, now);
     }
     st.foes[i].mode = FoeMode::Hunting { seen, lost };
     round::wait(st, i, now + GUARD_RUN_TICKS);
@@ -190,6 +190,18 @@ pub(crate) fn drop_card(st: &mut AppState, i: usize) {
     st.ground.add(place, at, id.clone(), 1);
     if let Some(left) = st.interiors.left_mut(b) {
         left.push((place, at, id));
+    }
+}
+
+/// Guard `i` gave up on you where it stands (`lose_you`); with its building on alert it
+/// sweeps the rooms near there before its round (`call::sweep`).
+pub(crate) fn lost_you(st: &mut AppState, i: usize, now: u64) {
+    lose_you(st, i, now);
+    let foe = &st.foes[i];
+    let alert = (foe.post.as_ref()).is_some_and(|p| st.net.alert(p.building, st.net.now(st)));
+    if alert && matches!(foe.place, Place::Floor { .. }) {
+        let at = foe.pos;
+        super::call::sweep(st, i, at);
     }
 }
 
@@ -696,6 +708,91 @@ mod tests {
             !st.foes
                 .iter()
                 .any(|f| f.post.as_ref().is_some_and(|p| p.building == b))
+        );
+    }
+
+    fn call_of(st: &AppState, i: usize) -> Option<crate::foes::Call> {
+        st.foes[i].post.as_ref().unwrap().call.clone()
+    }
+
+    /// The ward on alert with you up on 2F out of the way, and a zone-2 guard on L at
+    /// (3,3) hunting toward (6,3): its index.
+    fn hunting_on_alert(alert: bool) -> (AppState, usize) {
+        let mut st = ward();
+        stand(&mut st, 1, Pos::new(30, 5));
+        if alert {
+            crate::net::lock_down(&mut st, WARD);
+        }
+        let i = guard(&mut st, 0, 2, &[Pos::new(3, 3)]);
+        st.foes[i].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(6, 3),
+            lost: 0,
+        };
+        (st, i)
+    }
+
+    #[test]
+    fn on_alert_a_guard_that_loses_you_sweeps() {
+        let (mut st, i) = hunting_on_alert(true);
+        run_until(&mut st, 400, |st| !st.foes[i].hunting());
+        assert!(
+            matches!(
+                call_of(&st, i),
+                Some(crate::foes::Call::Sweep { level: 0, .. })
+            ),
+            "{:?}",
+            call_of(&st, i)
+        );
+    }
+
+    #[test]
+    fn off_alert_a_guard_that_loses_you_just_walks_its_round() {
+        let (mut st, i) = hunting_on_alert(false);
+        run_until(&mut st, 400, |st| !st.foes[i].hunting());
+        assert_eq!(call_of(&st, i), None);
+    }
+
+    #[test]
+    fn in_a_fight_a_guard_lost_on_alert_sweeps() {
+        let mut st = ward();
+        crate::net::lock_down(&mut st, WARD);
+        let i = guard(&mut st, 0, 2, &[Pos::new(3, 3)]);
+        st.foes[i].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(3, 3),
+            lost: 0,
+        };
+        stand(&mut st, 0, Pos::new(20, 3)); // in the dark beyond the card lock: no line
+        crate::net::engage(&mut st, on(0), true);
+        for _ in 0..crate::net::LOST_TURNS {
+            crate::foes::step(&mut st, i, true, true);
+        }
+        assert!(!st.foes[i].hunting());
+        assert!(matches!(
+            call_of(&st, i),
+            Some(crate::foes::Call::Sweep { level: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn a_guard_mid_call_that_spots_you_never_goes_back_to_it() {
+        let mut st = ward();
+        crate::net::lock_down(&mut st, WARD);
+        let i = guard(&mut st, 0, 2, &[Pos::new(10, 3)]);
+        st.foes[i].post.as_mut().unwrap().call = Some(crate::foes::Call::Answer {
+            level: 1,
+            at: Pos::new(20, 3),
+        });
+        assert!(crate::foes::look_all(&mut st), "it sees you on L");
+        stand(&mut st, 1, Pos::new(30, 5)); // gone, unseen
+        run_until(&mut st, 400, |st| !st.foes[i].hunting());
+        assert_eq!(st.foes[i].place, on(0));
+        assert!(
+            matches!(
+                call_of(&st, i),
+                Some(crate::foes::Call::Sweep { level: 0, .. })
+            ),
+            "a fresh sweep where it lost you, not the old answer: {:?}",
+            call_of(&st, i)
         );
     }
 }

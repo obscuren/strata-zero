@@ -13,7 +13,7 @@ use citygen::BuildingId;
 pub(crate) use call::answer;
 pub use doors::opens;
 pub use hunt::hear;
-pub(crate) use hunt::{drop_card, lose_you, release_follow, you_left};
+pub(crate) use hunt::{drop_card, lose_you, lost_you, release_follow, you_left};
 pub(crate) use links::{forget_stale, free_landing};
 pub use placed::Placed;
 pub(crate) use placed::{place_you, place_you_here, placed};
