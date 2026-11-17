@@ -1830,3 +1830,34 @@ fn the_locked_hint_tail_is_whole_or_left_out() {
         }
     }
 }
+
+#[test]
+fn neither_view_shows_the_map_through() {
+    let mut st = AppState::new();
+    loadout(&mut st);
+    let mut d = Deck::new(0);
+    d.update(&mut st, &[key(KeyCode::Char('3'))]);
+    for view in [View::Meat, View::Chrome] {
+        if d.kit.state.view != view {
+            press(&mut d, &mut st, &[KeyCode::Char('c')]);
+        }
+        for ((w, h), body) in [((100, 30), BODY), ((120, 40), Rect::new(1, 10, 118, 27))] {
+            st.tick = d.kit.changed + REVEAL_TICKS + 30;
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| {
+                // A probe glyph nothing in the deck prints, as the map under the glass.
+                let area = f.area();
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        f.buffer_mut()[(x, y)].set_char('Ж');
+                    }
+                }
+                d.draw(&st, f);
+            })
+            .unwrap();
+            let buf = t.backend().buffer();
+            let seen = region(buf, (body.x, body.right()), (body.y, body.bottom()));
+            assert!(!seen.contains('Ж'), "{view:?} at {w}×{h}:\n{seen}");
+        }
+    }
+}

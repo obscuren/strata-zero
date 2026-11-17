@@ -465,12 +465,14 @@ impl Kit {
 
     /// Draws the tab into `area`: the body, the divider, the pack over the rule and the
     /// selection's card under it. Keeps the area and the pack's first row for the
-    /// arrows and the popups.
+    /// arrows and the popups. Both views draw solid: the map's labels would read as
+    /// words of the card's or a tile's where they show between them.
     pub(crate) fn draw(&self, st: &AppState, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }
         self.area.set(area);
+        solid(buf, area);
         if self.state.view == View::Chrome {
             return self.draw_chrome(st, area, buf);
         }

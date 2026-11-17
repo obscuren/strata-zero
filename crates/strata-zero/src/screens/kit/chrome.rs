@@ -240,8 +240,8 @@ mod tests {
         let l = chrome_layout(tab(120, 40), &st);
         assert!(l.full);
         assert_eq!(l.left, Rect::new(1, 10, 62, 27), "MEAT's columns");
-        // The graph, 59×23, centred under the header and its rule.
-        let (ox, oy) = (2, 13);
+        // The graph, 59×23, centred under the header and its rule in MEAT's 25 rows.
+        let (ox, oy) = (2, 12);
         let table = [
             (Site::Eyes, (12, 0)),
             (Site::Neural, (24, 0)),
@@ -275,6 +275,22 @@ mod tests {
             );
         }
         assert_eq!(l.tiles.len(), 14, "11 sites and 3 sockets");
+    }
+
+    #[test]
+    fn chrome_starts_on_meats_first_row_at_both_sizes() {
+        let st = loadout();
+        let top = |l: &[Rect]| l.iter().map(|r| r.y).min();
+        for (w, h) in [(120, 40), (100, 30), (113, 32), (140, 50)] {
+            let area = tab(w, h);
+            let meat = super::super::body::layout(area, &super::super::parts(&st));
+            let chrome = chrome_layout(area, &st);
+            assert_eq!(
+                top(&chrome.tiles.iter().map(|t| t.1).collect::<Vec<_>>()),
+                top(&meat.tiles.iter().map(|t| t.1).collect::<Vec<_>>()),
+                "{w}×{h}"
+            );
+        }
     }
 
     #[test]
@@ -451,5 +467,51 @@ mod tests {
                 assert!(reached.contains(stop), "{stop:?} unreached at {w}x{h}");
             }
         }
+    }
+
+    #[test]
+    fn every_piece_says_what_it_gives_whole_in_any_tile_it_fits() {
+        use game::Fits;
+        let st = fullest();
+        // What a stop takes: its site's kind, or its socket's.
+        let takes = |stop: Stop| match stop {
+            Stop::Site(site) => Some(site.fits()),
+            Stop::Socket(site, n) => socket_kind(&st, site, n).map(Fits::Socket),
+        };
+        let fits = |item: &game::Item| {
+            item.implant
+                .as_ref()
+                .map(|i| i.fits)
+                .or_else(|| item.hardware.as_ref().map(|h| Fits::Socket(h.fits)))
+        };
+        let mut checked = 0;
+        for (w, h) in [(100, 30), (120, 40)] {
+            let l = chrome_layout(tab(w, h), &st);
+            for item in &st.content.items {
+                if item.bot.is_some() {
+                    continue; // `docked`, whatever the room.
+                }
+                let Some(f) = fits(item) else { continue };
+                for &(stop, r) in l.tiles.iter().filter(|(s, _)| takes(*s) == Some(f)) {
+                    let room = usize::from(r.width - 2);
+                    let line: String = super::view::gives(&st, stop, item, room)
+                        .into_iter()
+                        .map(|(t, _)| t)
+                        .collect();
+                    assert!(
+                        !line.contains('…'),
+                        "{} at {stop:?} {w}x{h}: {line}",
+                        item.id
+                    );
+                    assert!(
+                        line.chars().count() <= room,
+                        "{} at {stop:?}: {line}",
+                        item.id
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 60, "{checked} checked");
     }
 }

@@ -140,8 +140,15 @@ pub(crate) fn layout(area: Rect, parts: &[BodyPart]) -> BodyLayout {
     place(area, &FULL, &COMPACT, parts, FULL_W)
 }
 
+/// The rows a table's graph takes.
+fn height<K>(table: &[Place<K>]) -> u16 {
+    table.iter().map(|p| p.y + p.h).max().unwrap_or(0)
+}
+
 /// `layout` for any table: the full places when the tab has room for them (its columns
-/// `full_w`), else the compact ones in the left half, for the `keys` to draw.
+/// `full_w`), else the compact ones in the left half, for the `keys` to draw. A graph
+/// shorter than MEAT's is centred in MEAT's rows, so every view's first row of tiles
+/// is MEAT's and switching views doesn't move it.
 pub(crate) fn place<K: Copy + Eq>(
     area: Rect,
     full: &[Place<K>],
@@ -150,14 +157,19 @@ pub(crate) fn place<K: Copy + Eq>(
     full_w: u16,
 ) -> BodyLayout<K> {
     let is_full = area.width >= FULL_MIN.0 && area.height >= FULL_MIN.1;
-    let (table, width, header) = if is_full {
-        (full, full_w, 2)
+    let (table, width, header, meat_h) = if is_full {
+        (full, full_w, 2, height(&FULL))
     } else {
-        (compact, area.width.saturating_sub(1) / 2, 1)
+        (
+            compact,
+            area.width.saturating_sub(1) / 2,
+            1,
+            height(&COMPACT),
+        )
     };
     let left = Rect::new(area.x, area.y, width.min(area.width), area.height);
     let graph_w = table.iter().map(|p| p.x + p.w).max().unwrap_or(0);
-    let graph_h = table.iter().map(|p| p.y + p.h).max().unwrap_or(0);
+    let graph_h = height(table).max(meat_h);
     let ox = left.x + left.width.saturating_sub(graph_w) / 2;
     let oy = left.y + header + left.height.saturating_sub(header + graph_h) / 2;
     let rect = |p: &Place<K>| Rect::new(ox + p.x, oy + p.y, p.w, p.h);
@@ -403,27 +415,68 @@ fn gives(st: &AppState, part: BodyPart, room: usize) -> Vec<(String, Ink)> {
     out
 }
 
-/// A perk in a tile's few columns: `+5 HP`, `+4 kg`, `COOL +1` (`REF +1` when the
-/// attribute's name has no room).
+/// A perk in a tile's few columns, the longest of its forms that fits `room`: `+4
+/// sight`, else the card's three-letter code, `SGT +4`, else that without its space,
+/// `SGT+4`; cut with `…` only when not even that fits.
 pub(crate) fn perk_short(perk: &Perk, room: usize) -> String {
-    match *perk {
-        Perk::Attribute(a, n) => {
-            let long = format!("{} {n:+}", a.name());
-            if long.chars().count() <= room {
-                long
-            } else {
-                format!("{} {n:+}", a.short())
-            }
-        }
-        Perk::Sight(n) => format!("{n:+} sight"),
-        Perk::Carry(kg) => format!("{}{kg} kg", if kg >= 0.0 { "+" } else { "" }),
-        Perk::HpMax(n) => format!("{n:+} HP"),
-        Perk::Focus(n) => format!("{n:+} focus"),
-        Perk::Armor(n) => format!("{n:+} armour"),
-        Perk::Move(n) => format!("{n:+} move"),
-        Perk::Resist(harm, n) => format!("{n:+}% {}", harm.label()),
-        Perk::Throw(n) => format!("{n:+} throw"),
+    let forms = perk_forms(perk);
+    let fits = forms.iter().find(|(f, _)| f.chars().count() <= room);
+    match fits {
+        Some((f, _)) => f.clone(),
+        None => cut(forms.last().map_or("", |(f, _)| f.as_str()), room),
     }
+}
+
+/// The longest of `perk`'s spaced forms that fits `room`, leaving out the tight ones
+/// (`SGT+4`) that only a tile with nothing else on the line should take.
+pub(crate) fn perk_spaced(perk: &Perk, room: usize) -> Option<String> {
+    perk_forms(perk)
+        .into_iter()
+        .find(|(f, tight)| !tight && f.chars().count() <= room)
+        .map(|(f, _)| f)
+}
+
+/// A perk's forms, longest first, each marked when it is tight (no space before the
+/// number). The codes are the card's (`ARM`, `MOV`, `SHK`) and the attributes' (`BOD`).
+fn perk_forms(perk: &Perk) -> Vec<(String, bool)> {
+    let (long, code, n): (Vec<String>, Option<&str>, String) = match *perk {
+        Perk::Attribute(a, n) => (
+            vec![format!("{} {n:+}", a.name())],
+            Some(a.short()),
+            format!("{n:+}"),
+        ),
+        Perk::Sight(n) => (vec![format!("{n:+} sight")], Some("SGT"), format!("{n:+}")),
+        Perk::Carry(kg) => {
+            let n = format!("{}{kg}", if kg >= 0.0 { "+" } else { "" });
+            (vec![format!("{n} kg")], None, n)
+        }
+        Perk::HpMax(n) => (vec![format!("{n:+} HP")], None, format!("{n:+}")),
+        Perk::Focus(n) => (vec![format!("{n:+} focus")], Some("FOC"), format!("{n:+}")),
+        Perk::Armor(n) => (vec![format!("{n:+} armour")], Some("ARM"), format!("{n:+}")),
+        Perk::Move(n) => (vec![format!("{n:+} move")], Some("MOV"), format!("{n:+}")),
+        Perk::Resist(h, n) => (
+            vec![
+                format!("{n:+}% {}", h.label()),
+                format!("{} {n:+}%", h.short()),
+            ],
+            Some(h.short()),
+            format!("{n:+}"),
+        ),
+        Perk::Throw(n) => (vec![format!("{n:+} throw")], Some("THR"), format!("{n:+}")),
+    };
+    let mut forms: Vec<(String, bool)> = long.into_iter().map(|f| (f, false)).collect();
+    match code {
+        Some(code) => {
+            forms.push((format!("{code} {n}"), false));
+            forms.push((format!("{code}{n}"), true));
+        }
+        // `+12kg`, `+20HP`.
+        None => {
+            let (f, _) = &forms[0];
+            forms.push((f.replace(' ', ""), true));
+        }
+    }
+    forms
 }
 
 /// How the cursor lights a tile.
