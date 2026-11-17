@@ -484,6 +484,9 @@ pub struct NetState {
     /// building's.
     #[serde(default)]
     pub firewalls: BTreeMap<BuildingId, Vec<(u8, u64)>>,
+    /// Where each building last placed you (`guards::placed`).
+    #[serde(default)]
+    pub placed: BTreeMap<BuildingId, crate::guards::Placed>,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -525,6 +528,7 @@ impl Default for NetState {
             line_next: 0,
             grid: Default::default(),
             firewalls: BTreeMap::new(),
+            placed: BTreeMap::new(),
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,

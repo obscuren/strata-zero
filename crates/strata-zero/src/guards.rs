@@ -3,6 +3,7 @@
 mod doors;
 mod hunt;
 mod links;
+mod placed;
 mod round;
 
 use crate::app::AppState;
@@ -12,6 +13,8 @@ pub use doors::opens;
 pub use hunt::hear;
 pub(crate) use hunt::{drop_card, lose_you, release_follow, you_left};
 pub(crate) use links::{forget_stale, free_landing};
+pub use placed::Placed;
+pub(crate) use placed::{place_you, place_you_here};
 
 /// A calm guard's step: an amble, three times your walk.
 pub const GUARD_STEP_TICKS: u64 = 3 * crate::net::WALK_TICKS;

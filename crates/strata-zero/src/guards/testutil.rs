@@ -20,6 +20,7 @@
 
 use crate::app::AppState;
 use crate::foes::{Foe, Post};
+use crate::render::map::TileMap;
 use citygen::venue::{LockKind, Ways};
 use citygen::{
     BuildingId, BuildingKind, City, DoorLock, Exit, Floor, FloorPlan, Grid, LevelLink, LinkKind,
@@ -327,6 +328,39 @@ pub(crate) fn settle(st: &mut AppState) {
 /// Whether a line of the log holds `needle`.
 pub(crate) fn logged(st: &AppState, needle: &str) -> bool {
     st.log.iter().any(|e| e.text.contains(needle))
+}
+
+/// Site `b`'s first guard moved onto a tile of the body's floor two tiles from it with a
+/// clear line, lit or not (2 is within the dark reach), its round held so it stands
+/// there; its index.
+pub(crate) fn guard_by_the_body(st: &mut AppState, b: BuildingId) -> usize {
+    nth_guard_by_the_body(st, b, 0)
+}
+
+/// The `n`th guard of building `b` (index order), set two tiles from the body in its
+/// sight, on a tile no foe holds.
+pub(crate) fn nth_guard_by_the_body(st: &mut AppState, b: BuildingId, n: usize) -> usize {
+    let (place, at) = st.player.as_ref().unwrap().body.unwrap();
+    let map = crate::foes::map_of(st, place).unwrap();
+    let spot = (at.x - 2..=at.x + 2)
+        .flat_map(|x| (at.y - 2..=at.y + 2).map(move |y| Pos::new(x, y)))
+        .filter(|p| {
+            p.chebyshev(at) == 2 && map.walkable(*p) && crate::foes::line_clear(&map, *p, at)
+        })
+        .find(|p| crate::foes::foe_at(st, place, *p).is_none())
+        .expect("a tile beside the body");
+    let i = st
+        .foes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.post.as_ref().is_some_and(|p| p.building == b))
+        .nth(n)
+        .map(|(i, _)| i)
+        .unwrap();
+    st.foes[i].place = place;
+    st.foes[i].pos = spot;
+    st.foes[i].post.as_mut().unwrap().round.next = u64::MAX;
+    i
 }
 
 #[cfg(test)]

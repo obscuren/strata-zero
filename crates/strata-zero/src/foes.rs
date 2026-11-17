@@ -378,7 +378,11 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         let guard = foe.post.as_mut().map(|post| {
             post.spotted = true;
             crate::guards::release_follow(post);
+            post.building
         });
+        if let Some(b) = guard {
+            crate::guards::place_you_here(st, b);
+        }
         if guard.is_some() && calm {
             st.warn("guard spots you");
         }

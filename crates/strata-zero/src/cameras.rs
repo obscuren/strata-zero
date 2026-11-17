@@ -241,7 +241,14 @@ pub fn tick(st: &mut AppState) {
         return;
     }
     st.net.eyes_minute = Some(now);
-    let mut buildings: Vec<BuildingId> = seeing(st).iter().map(|c| c.building).collect();
+    let seen = seeing(st);
+    for c in seen
+        .iter()
+        .filter(|c| matches!(c.place, Place::Floor { .. }))
+    {
+        crate::guards::place_you_here(st, c.building);
+    }
+    let mut buildings: Vec<BuildingId> = seen.iter().map(|c| c.building).collect();
     buildings.sort();
     buildings.dedup();
     let eye = if st.character.flags(&st.content).contains("ghost") {
