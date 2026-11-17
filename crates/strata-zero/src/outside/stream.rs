@@ -2237,9 +2237,13 @@ pub(crate) mod tests {
             assert!(!finish(&mut st), "no city came in");
             assert!(o(&st).stream.refused(s) && o(&st).stream.asked(s));
             assert!(o(&st).held_city(s).is_none());
-            let said = format!("building {name} broke: the generator broke");
+            // The panic's own words, or, while another test has a front end's hook in
+            // (the hook is the process's), the hook's: where it broke, then the words.
+            let head = format!("building {name} broke: ");
             assert!(
-                st.log.iter().any(|e| e.text.starts_with(&said)),
+                st.log
+                    .iter()
+                    .any(|e| e.text.starts_with(&head) && e.text.contains("the generator broke")),
                 "{:?}",
                 st.log.iter().map(|e| &e.text).collect::<Vec<_>>()
             );

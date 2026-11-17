@@ -9,10 +9,10 @@ use super::{Stop, chrome_layout, socket_kind, stops};
 use crate::app::AppState;
 use crate::screens::deck::{REVEAL_TICKS, cut};
 use crate::screens::kit::body::{
-    Dir, Ink, Lit, draw_joints, draw_label, draw_tile, header, perk_short, step,
+    Dir, Ink, Lit, draw_joints, draw_label, draw_tile, header, perk_short, perk_spaced, step,
 };
 use crate::screens::kit::{Kit, View};
-use crate::ui::chrome::{DIM, FAINTER, RULE, put, reveal, solid};
+use crate::ui::chrome::{DIM, FAINTER, RULE, put, reveal};
 use crate::ui::hud::AMBER;
 use crate::ui::implant_art;
 use crossterm::event::KeyCode;
@@ -59,8 +59,9 @@ fn label(st: &AppState, stop: Stop) -> String {
 /// What the piece `item` at `stop` gives, in a tile's `room` columns: `docked` for a
 /// drone in its bay; else its first perk short, or the first ability it grants, or the
 /// count of its sockets of a kind (`1 bay`); then, for a piece at a site, a pip for
-/// each of its sockets (`■` fitted, `□` empty).
-fn gives(st: &AppState, stop: Stop, item: &Item, room: usize) -> Vec<(String, Ink)> {
+/// each of its sockets (`■` fitted, `□` empty). The pips stay only beside words that
+/// read whole and spaced; else they give way, as the socket tiles show the same.
+pub(super) fn gives(st: &AppState, stop: Stop, item: &Item, room: usize) -> Vec<(String, Ink)> {
     if item.bot.is_some() {
         return vec![("docked".to_string(), Ink::Label)];
     }
@@ -76,13 +77,8 @@ fn gives(st: &AppState, stop: Stop, item: &Item, room: usize) -> Vec<(String, In
         }
         Stop::Socket(..) => String::new(),
     };
-    let room = match pips.chars().count() {
-        0 => room,
-        n => room.saturating_sub(n + 1),
-    };
-    let words = if let Some(perk) = item.perks.first() {
-        perk_short(perk, room)
-    } else if let Some(a) = item.grants.first() {
+    let perk = item.perks.first();
+    let other = if let Some(a) = item.grants.first() {
         st.content
             .ability(a)
             .map_or_else(|| a.to_string(), |a| a.name.clone())
@@ -92,12 +88,25 @@ fn gives(st: &AppState, stop: Stop, item: &Item, room: usize) -> Vec<(String, In
     } else {
         String::new()
     };
-    let mut out = vec![(cut(&words, room), Ink::Label)];
     if !pips.is_empty() {
-        out.push((" ".to_string(), Ink::Label));
-        out.push((pips, Ink::Pips));
+        let left = room.saturating_sub(pips.chars().count() + 1);
+        let words = match perk {
+            Some(p) => perk_spaced(p, left),
+            None => Some(other.clone()).filter(|w| w.chars().count() <= left),
+        };
+        if let Some(words) = words {
+            return vec![
+                (words, Ink::Label),
+                (" ".to_string(), Ink::Label),
+                (pips, Ink::Pips),
+            ];
+        }
     }
-    out
+    let words = match perk {
+        Some(p) => perk_short(p, room),
+        None => cut(&other, room),
+    };
+    vec![(words, Ink::Label)]
 }
 
 impl Kit {
@@ -244,7 +253,6 @@ impl Kit {
     /// and their lines, the divider (amber while chrome can change), and right of it
     /// LOAD over a divider of its own with the card under it.
     pub(crate) fn draw_chrome(&self, st: &AppState, area: Rect, buf: &mut Buffer) {
-        solid(buf, area);
         let l = chrome_layout(area, st);
         let stop = self.stop(st);
         let here = self.here(st);
