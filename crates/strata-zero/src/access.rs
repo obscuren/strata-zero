@@ -742,8 +742,13 @@ mod tests {
         );
         // the hour runs out: guest again
         let roots = st.backdoors.roots();
-        st.net
-            .minute(now + game::HACK_MINUTES, None, &mut st.constructs, &roots);
+        st.net.minute(
+            now + game::HACK_MINUTES,
+            None,
+            &mut st.constructs,
+            &roots,
+            &Default::default(),
+        );
         assert!(!st.net.server_cracked(b, now + game::HACK_MINUTES));
         assert_eq!(tier_on(&st, b), Tier::Guest);
         // a cracked door lock is not a cracked server

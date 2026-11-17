@@ -183,7 +183,8 @@ mod tests {
         // An hour and more on, the alert is over and the heat gone.
         let later = now + game::ALERT_MINUTES + 2;
         let roots = st.backdoors.roots();
-        st.net.minute(later, None, &mut st.constructs, &roots);
+        st.net
+            .minute(later, None, &mut st.constructs, &roots, &Default::default());
         assert!(!alert(&st, o, later));
         assert_eq!(heat(&st, o), 0);
     }

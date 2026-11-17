@@ -580,7 +580,6 @@ impl NetState {
     }
 
     /// The last game minute `minute` ran up to.
-    #[cfg(test)]
     pub(crate) fn last_minute(&self) -> u64 {
         self.last_minute
     }
@@ -796,13 +795,15 @@ impl NetState {
     }
 
     /// The game minutes up to `now` pass: hacks expire, broken firewall locks close, every
-    /// trace the player is not inside cools, alerts end and their guards stand again.
+    /// trace the player is not inside cools (but in minute `now` not one in `watched`, whose
+    /// camera sees you), alerts end and their guards stand again.
     pub fn minute(
         &mut self,
         now: u64,
         inside: Option<BuildingId>,
         constructs: &mut Constructs,
         roots: &BTreeSet<BuildingId>,
+        watched: &BTreeSet<BuildingId>,
     ) {
         if now <= self.last_minute {
             return;
@@ -815,7 +816,8 @@ impl NetState {
                 let backdoor = roots.contains(b);
                 let t = self.traces.get_mut(b).expect("traced");
                 let ending = t.alert_until.is_some_and(|u| m >= u);
-                if ending || inside != Some(*b) {
+                let seen = m == now && watched.contains(b);
+                if ending || (inside != Some(*b) && !seen) {
                     t.cool(m, backdoor);
                 }
             }
@@ -5062,6 +5064,7 @@ pub(crate) mod tests {
             None,
             &mut constructs,
             &BTreeSet::new(),
+            &BTreeSet::new(),
         );
         assert!(net.hacks.is_empty(), "{:?}", net.hacks);
         // Cooling.
@@ -5070,6 +5073,22 @@ pub(crate) mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_watched_trace_doesnt_cool_that_minute() {
+        let mut net = NetState::default();
+        let mut constructs = crate::constructs::Constructs::default();
+        let roots = BTreeSet::new();
+        net.trace(b(1)).heat = 10;
+        net.minute(1, None, &mut constructs, &roots, &BTreeSet::from([b(1)]));
+        assert_eq!(net.trace(b(1)).heat, 10, "watched");
+        net.minute(2, None, &mut constructs, &roots, &BTreeSet::new());
+        assert_eq!(net.trace(b(1)).heat, 9);
+        net.trace(b(1)).alert_until = Some(3);
+        net.minute(3, None, &mut constructs, &roots, &BTreeSet::from([b(1)]));
+        let t = net.trace(b(1));
+        assert_eq!((t.alert_until, t.heat), (None, 0), "an alert still ends");
     }
 
     #[test]

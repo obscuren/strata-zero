@@ -9629,8 +9629,13 @@ mod tests {
         assert_eq!(k.guard_at(k.guards[0].pos), None, "the gate guard is down");
         let heat = st.net.traces[&b].heat;
         let now = st.net.now(&st);
-        st.net
-            .minute(now + 1, None, &mut st.constructs, &st.backdoors.roots());
+        st.net.minute(
+            now + 1,
+            None,
+            &mut st.constructs,
+            &st.backdoors.roots(),
+            &Default::default(),
+        );
         assert_eq!(st.net.traces[&b].heat, heat.saturating_sub(2));
         // On alert, a standing guard beside you hits you at the end of a turn.
         let guard = st.constructs.get(b).unwrap().guards[1].pos;
@@ -9647,6 +9652,7 @@ mod tests {
             None,
             &mut st.constructs,
             &st.backdoors.roots(),
+            &Default::default(),
         );
         assert_eq!(st.net.traces[&b].heat, 0);
         assert!(!st.net.alert(b, now + game::ALERT_MINUTES + 1));
@@ -10219,6 +10225,7 @@ mod tests {
             None,
             &mut st.constructs,
             &st.backdoors.roots(),
+            &Default::default(),
         );
         let k = st.constructs.get(b).unwrap();
         assert_eq!(k.guard_at(k.guards[0].pos), Some(0));
@@ -10730,6 +10737,7 @@ mod tests {
             None,
             &mut st.constructs,
             &st.backdoors.roots(),
+            &Default::default(),
         );
         let k = st.constructs.get(b).unwrap();
         assert_eq!(
@@ -13772,6 +13780,7 @@ mod tests {
             Some(b),
             &mut st.constructs,
             &st.backdoors.roots(),
+            &Default::default(),
         );
         st.net.sync_guards(
             &mut st.constructs,
@@ -14073,8 +14082,13 @@ mod tests {
         crate::net::raise_alarm(&mut st, b);
         assert!(down(&st), "the alarm leaves a broken piece broken");
         st.net.trace(b).alert_until = Some(now + 10);
-        st.net
-            .minute(now + 11, Some(b), &mut st.constructs, &st.backdoors.roots());
+        st.net.minute(
+            now + 11,
+            Some(b),
+            &mut st.constructs,
+            &st.backdoors.roots(),
+            &Default::default(),
+        );
         assert!(down(&st), "the alert's end leaves it broken");
         // The hour brings it back.
         st.net.minute(
@@ -14082,6 +14096,7 @@ mod tests {
             Some(b),
             &mut st.constructs,
             &st.backdoors.roots(),
+            &Default::default(),
         );
         assert!(!down(&st), "whole again after the hour");
     }
