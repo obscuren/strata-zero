@@ -1,5 +1,6 @@
 //! Guards in a mission's copy of a venue: what only they do beside every other foe.
 
+mod call;
 mod doors;
 mod hunt;
 mod links;
@@ -26,6 +27,12 @@ pub const GUARD_PAUSE_TICKS: u64 = 90;
 pub const GUARD_LIFT_TICKS: u64 = 60;
 /// How far a shot wakes the calm guards of its floor, walls or not.
 pub const HEAR_RADIUS: i32 = 12;
+/// A sweeping guard's step: between a run and an amble.
+pub const SWEEP_STEP_TICKS: u64 = 2 * crate::net::WALK_TICKS;
+/// How long a sweeping guard stands at each room it checks: a second at 30 fps.
+pub const SWEEP_PAUSE_TICKS: u64 = 30;
+/// How many rooms a sweep checks.
+pub const SWEEP_ROOMS: usize = 3;
 
 /// The most a guard does in one step of the clock: a rest's game minute is a few steps of
 /// a walk, and this bounds a step that ran long.
@@ -36,8 +43,8 @@ const MOST_ACTIONS: usize = 64;
 /// it, each standing guard of it acts as often as its time comes in those ticks (at most
 /// `MOST_ACTIONS`), each action at the tick it fell due, the step's first tick at the
 /// earliest, so a minute's rest walks it as far as a minute of frames. One on the floor of
-/// a fight, which the turns move, holds. A calm one walks its round, a hunting one hunts
-/// (`hunt::hunt_step`). Out of it, its guards lose you and hold. Then a guard that sees
+/// a fight, which the turns move, holds. A hunting one hunts (`hunt::hunt_step`), a calm
+/// one the alarm sent somewhere goes (`call::call_step`), any other walks its round. Out of it, its guards lose you and hold. Then a guard that sees
 /// the body you left jacked in finds it (`hunt::body_check`).
 pub fn tick(st: &mut AppState, ticks: u64) {
     let mut buildings: Vec<BuildingId> = (st.foes.iter())
@@ -70,6 +77,8 @@ pub fn tick(st: &mut AppState, ticks: u64) {
                 let at = due.max(first);
                 if f.hunting() {
                     hunt::hunt_step(st, i, at);
+                } else if f.post.as_ref().is_some_and(|p| p.call.is_some()) {
+                    call::call_step(st, i, at);
                 } else {
                     round::round_step(st, i, at);
                 }

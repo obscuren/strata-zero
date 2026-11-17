@@ -106,7 +106,7 @@ fn hops_to(post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
 
 /// The steps of a guard's walk from `from` to `to` on `map`, its card's doors open:
 /// None when there's no way.
-fn walk(map: &MapRef, post: &Post, from: Pos, to: Pos) -> Option<usize> {
+pub(super) fn walk(map: &MapRef, post: &Post, from: Pos, to: Pos) -> Option<usize> {
     if from == to {
         return Some(0);
     }

@@ -193,13 +193,14 @@ pub(crate) fn drop_card(st: &mut AppState, i: usize) {
     }
 }
 
-/// Guard `i` loses you: calm, its trail and the lift it waited on to follow you let go,
-/// it walks back into its round a step on from `now`.
+/// Guard `i` loses you: calm, its trail, the lift it waited on to follow you and any call
+/// let go, it walks back into its round a step on from `now`.
 pub(crate) fn lose_you(st: &mut AppState, i: usize, now: u64) {
     let foe = &mut st.foes[i];
     foe.mode = FoeMode::Idle;
     if let Some(post) = foe.post.as_mut() {
         release_follow(post);
+        post.call = None;
         post.round.next = now + GUARD_STEP_TICKS;
     }
 }

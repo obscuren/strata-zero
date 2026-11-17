@@ -88,6 +88,18 @@ pub struct Post {
     /// It has radioed what it saw (or lost the call to a stun), so it doesn't again.
     #[serde(default)]
     pub radioed: bool,
+    /// What the alarm sent it to do, acted on while it's calm (`guards::call`).
+    #[serde(default)]
+    pub call: Option<Call>,
+}
+
+/// What an alarm sends a calm guard to do.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Call {
+    /// Running to where you were placed, on its floor or another.
+    Answer { level: i32, at: Pos },
+    /// Checking rooms on its own floor, nearest first; the first is the next.
+    Sweep { level: i32, stops: Vec<Pos> },
 }
 
 impl Post {
@@ -103,6 +115,7 @@ impl Post {
             follow: None,
             spotted: false,
             radioed: false,
+            call: None,
         }
     }
 }
@@ -629,7 +642,12 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     foes.sort_by_key(|f| f.pos.chebyshev(p.pos));
     foes.into_iter()
         .map(|f| {
-            let mode = if f.hunting() { "hunting" } else { "idle" };
+            let mode = match (f.hunting(), f.post.as_ref().and_then(|p| p.call.as_ref())) {
+                (true, _) => "hunting",
+                (false, Some(Call::Answer { .. })) => "answering",
+                (false, Some(Call::Sweep { .. })) => "sweeping",
+                (false, None) => "idle",
+            };
             let stunned = if f.stunned > 0 {
                 format!(" · stunned {}", f.stunned)
             } else {
