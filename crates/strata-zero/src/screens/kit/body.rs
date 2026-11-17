@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 /// A deck's slots and an item's sockets on a tile, unlit.
-const PIPS: Color = Color::Rgb(0x3f, 0x7c, 0x87);
+pub(crate) const PIPS: Color = Color::Rgb(0x3f, 0x7c, 0x87);
 
 /// An arrow's way across the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,19 +32,19 @@ pub(crate) struct Line {
 
 /// Where the body draws in the tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BodyLayout {
+pub(crate) struct BodyLayout<K = BodyPart> {
     /// The full body; else the compact one, in the left half.
     pub full: bool,
     /// The columns the body takes; the divider stands just right of them.
     pub left: Rect,
     /// The parts drawn, in body order, and their tiles.
-    pub tiles: Vec<(BodyPart, Rect)>,
+    pub tiles: Vec<(K, Rect)>,
     pub lines: Vec<Line>,
 }
 
-impl BodyLayout {
-    pub(crate) fn tile(&self, part: BodyPart) -> Option<Rect> {
-        self.tiles.iter().find(|(p, _)| *p == part).map(|(_, r)| *r)
+impl<K: Copy + Eq> BodyLayout<K> {
+    pub(crate) fn tile(&self, key: K) -> Option<Rect> {
+        self.tiles.iter().find(|(k, _)| *k == key).map(|(_, r)| *r)
     }
 }
 
@@ -52,23 +52,23 @@ impl BodyLayout {
 /// divider and 50 for the pack and the card; the header, its rule and the graph.
 pub(crate) const FULL_MIN: (u16, u16) = (113, 27);
 /// Columns the full body takes: the graph's 60 and a column each side.
-const FULL_W: u16 = 62;
+pub(crate) const FULL_W: u16 = 62;
 
 /// Where a part's tile sits from the graph's origin, its size, the column from its left
 /// edge where a line from above or below meets it, and the part its line runs to.
-struct Place {
-    part: BodyPart,
+pub(crate) struct Place<K> {
+    key: K,
     x: u16,
     y: u16,
     w: u16,
     h: u16,
     joint: u16,
-    joins: Option<BodyPart>,
+    joins: Option<K>,
 }
 
-const fn at(part: BodyPart, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) -> Place {
+pub(crate) const fn at<K>(key: K, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) -> Place<K> {
     Place {
-        part,
+        key,
         x,
         y,
         w,
@@ -78,10 +78,10 @@ const fn at(part: BodyPart, (x, y): (u16, u16), (w, h): (u16, u16), joint: u16) 
     }
 }
 
-impl Place {
-    const fn to(self, part: BodyPart) -> Place {
+impl<K: Copy> Place<K> {
+    pub(crate) const fn to(self, key: K) -> Place<K> {
         Place {
-            joins: Some(part),
+            joins: Some(key),
             ..self
         }
     }
@@ -92,7 +92,7 @@ const BIG: (u16, u16) = (12, 7);
 
 /// The full body, as the mock places it, with free places for a third arm and its hand
 /// under R ARM and R HAND.
-const FULL: [Place; 13] = {
+const FULL: [Place<BodyPart>; 13] = {
     use BodyPart::*;
     [
         at(Head, (24, 0), SMALL, 9),
@@ -116,7 +116,7 @@ const TRUNK: (u16, u16) = (14, 6);
 
 /// The compact body: the same shape without arms, the hands on the torso, tiles 4 tall
 /// for a name on one line.
-const COMPACT: [Place; 10] = {
+const COMPACT: [Place<BodyPart>; 10] = {
     use BodyPart::*;
     [
         at(Head, (15, 0), TILE, 10),
@@ -137,32 +137,44 @@ const COMPACT: [Place; 10] = {
 /// columns and rows. A tab too small for the deck (under 100×30) leaves out the tiles
 /// that would hang outside it.
 pub(crate) fn layout(area: Rect, parts: &[BodyPart]) -> BodyLayout {
-    let full = area.width >= FULL_MIN.0 && area.height >= FULL_MIN.1;
-    let (table, width, header): (&[Place], u16, u16) = if full {
-        (&FULL, FULL_W, 2)
+    place(area, &FULL, &COMPACT, parts, FULL_W)
+}
+
+/// `layout` for any table: the full places when the tab has room for them (its columns
+/// `full_w`), else the compact ones in the left half, for the `keys` to draw.
+pub(crate) fn place<K: Copy + Eq>(
+    area: Rect,
+    full: &[Place<K>],
+    compact: &[Place<K>],
+    keys: &[K],
+    full_w: u16,
+) -> BodyLayout<K> {
+    let is_full = area.width >= FULL_MIN.0 && area.height >= FULL_MIN.1;
+    let (table, width, header) = if is_full {
+        (full, full_w, 2)
     } else {
-        (&COMPACT, area.width.saturating_sub(1) / 2, 1)
+        (compact, area.width.saturating_sub(1) / 2, 1)
     };
     let left = Rect::new(area.x, area.y, width.min(area.width), area.height);
     let graph_w = table.iter().map(|p| p.x + p.w).max().unwrap_or(0);
     let graph_h = table.iter().map(|p| p.y + p.h).max().unwrap_or(0);
     let ox = left.x + left.width.saturating_sub(graph_w) / 2;
     let oy = left.y + header + left.height.saturating_sub(header + graph_h) / 2;
-    let rect = |p: &Place| Rect::new(ox + p.x, oy + p.y, p.w, p.h);
-    let placed = |part: BodyPart| {
+    let rect = |p: &Place<K>| Rect::new(ox + p.x, oy + p.y, p.w, p.h);
+    let placed = |key: K| {
         table
             .iter()
-            .find(|p| p.part == part)
-            .filter(|p| parts.contains(&part) && left.intersection(rect(p)) == rect(p))
+            .find(|p| p.key == key)
+            .filter(|p| keys.contains(&key) && left.intersection(rect(p)) == rect(p))
     };
-    let tiles = parts
+    let tiles = keys
         .iter()
-        .filter_map(|&part| placed(part).map(|p| (part, rect(p))))
+        .filter_map(|&key| placed(key).map(|p| (key, rect(p))))
         .collect();
-    let lines = parts
+    let lines = keys
         .iter()
-        .filter_map(|&part| {
-            let child = placed(part)?;
+        .filter_map(|&key| {
+            let child = placed(key)?;
             let parent = placed(child.joins?)?;
             Some(line(
                 (rect(parent), parent.joint),
@@ -171,7 +183,7 @@ pub(crate) fn layout(area: Rect, parts: &[BodyPart]) -> BodyLayout {
         })
         .collect();
     BodyLayout {
-        full,
+        full: is_full,
         left,
         tiles,
         lines,
@@ -210,7 +222,7 @@ const RIGHT: u8 = 8;
 
 /// The cells the lines draw, with the glyph each takes: where a line meets a tile's
 /// border, or lines meet each other, the junction of all of them.
-fn joints(l: &BodyLayout) -> Vec<((u16, u16), char)> {
+pub(crate) fn joints<K>(l: &BodyLayout<K>) -> Vec<((u16, u16), char)> {
     let mut ways: std::collections::BTreeMap<(u16, u16), u8> = Default::default();
     for line in &l.lines {
         for pair in line.path.windows(2) {
@@ -269,7 +281,7 @@ fn glyph(way: u8) -> char {
 /// The part an arrow goes to from `from`: among the drawn tiles whose centre lies that
 /// way (no more than half as far across it as along it), the nearest along it, then the
 /// nearest across. `None` when there is none.
-pub(crate) fn step(layout: &BodyLayout, from: BodyPart, dir: Dir) -> Option<BodyPart> {
+pub(crate) fn step<K: Copy + Eq>(layout: &BodyLayout<K>, from: K, dir: Dir) -> Option<K> {
     // In half cells, so a centre is a whole number.
     let centre = |r: Rect| {
         (
@@ -299,7 +311,7 @@ pub(crate) fn step(layout: &BodyLayout, from: BodyPart, dir: Dir) -> Option<Body
 
 /// How a tile's last line inks a run of what the worn item gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ink {
+pub(crate) enum Ink {
     Label,
     /// The main hand's `●`.
     Main,
@@ -309,7 +321,7 @@ enum Ink {
 
 /// The worn item's name in at most `rows` lines of `room` columns: wrapped at spaces,
 /// a word too long for its line cut with `…`, the last line taking the rest, cut.
-fn name_lines(name: &str, room: usize, rows: usize) -> Vec<String> {
+pub(crate) fn name_lines(name: &str, room: usize, rows: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut words = name.split_whitespace().peekable();
     while let Some(word) = words.next() {
@@ -393,7 +405,7 @@ fn gives(st: &AppState, part: BodyPart, room: usize) -> Vec<(String, Ink)> {
 
 /// A perk in a tile's few columns: `+5 HP`, `+4 kg`, `COOL +1` (`REF +1` when the
 /// attribute's name has no room).
-fn perk_short(perk: &Perk, room: usize) -> String {
+pub(crate) fn perk_short(perk: &Perk, room: usize) -> String {
     match *perk {
         Perk::Attribute(a, n) => {
             let long = format!("{} {n:+}", a.name());
@@ -416,12 +428,49 @@ fn perk_short(perk: &Perk, room: usize) -> String {
 
 /// How the cursor lights a tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Lit {
+pub(crate) enum Lit {
     Off,
     /// The cursor's tile while the body has the focus.
     On,
     /// The cursor's tile while the pack has it.
     Dim,
+}
+
+/// The header row of either view: `▌MEAT▐ CHROME` or `MEAT ▌CHROME▐`, the view shown
+/// lit while it has the focus, then `mark` and `c switch`; in the full body a rule
+/// under it.
+pub(crate) fn header(
+    st: &AppState,
+    l: &BodyLayout<impl Copy>,
+    chrome: bool,
+    focused: bool,
+    mark: &[(String, Style)],
+    buf: &mut Buffer,
+) {
+    let on = if focused {
+        lit_bold(st.tick)
+    } else {
+        Style::default().fg(DIM)
+    };
+    let off = Style::default().fg(DIM);
+    let mut runs: Vec<(String, Style)> = if chrome {
+        vec![("MEAT ".into(), off), ("▌CHROME▐".into(), on)]
+    } else {
+        vec![("▌MEAT▐".into(), on), (" CHROME".into(), off)]
+    };
+    runs.extend(mark.iter().cloned());
+    runs.push(("  c".into(), Style::default().fg(CYAN)));
+    runs.push((" switch".into(), Style::default().fg(FAINTER)));
+    let mut x = l.left.x + 1;
+    for (text, style) in runs {
+        put(buf, x, l.left.y, &text, style, l.left.right());
+        x = x.saturating_add(text.chars().count() as u16);
+    }
+    if l.full {
+        for x in l.left.x..l.left.right() {
+            buf[(x, l.left.y + 1)].set_char('─').set_fg(RULE);
+        }
+    }
 }
 
 /// The body: the header (`▌MEAT▐`, lit while the body has the focus) and in the full
@@ -433,24 +482,7 @@ pub(crate) fn draw(
     focused: bool,
     buf: &mut Buffer,
 ) {
-    let header = if focused {
-        lit_bold(st.tick)
-    } else {
-        Style::default().fg(DIM)
-    };
-    put(
-        buf,
-        l.left.x + 1,
-        l.left.y,
-        "▌MEAT▐",
-        header,
-        l.left.right(),
-    );
-    if l.full {
-        for x in l.left.x..l.left.right() {
-            buf[(x, l.left.y + 1)].set_char('─').set_fg(RULE);
-        }
-    }
+    header(st, l, false, focused, &[], buf);
     let rows = if l.full { 2 } else { 1 };
     for &(part, r) in &l.tiles {
         let light = match (part == cursor, focused) {
@@ -458,16 +490,58 @@ pub(crate) fn draw(
             (true, true) => Lit::On,
             (true, false) => Lit::Dim,
         };
-        draw_tile(st, part, r, light, rows, buf);
+        let label = st.content.node(part).map_or("", |n| n.name.as_str());
+        let worn = st
+            .character
+            .equipped(part)
+            .and_then(|id| st.content.item(id))
+            .map(|item| {
+                (
+                    item.name.as_str(),
+                    gives(st, part, usize::from(r.width - 2)),
+                )
+            });
+        draw_tile(st, r, label, worn, light, rows, buf);
     }
+    draw_joints(l, buf);
+}
+
+/// The lines between the tiles.
+pub(crate) fn draw_joints<K>(l: &BodyLayout<K>, buf: &mut Buffer) {
     for ((x, y), ch) in joints(l) {
         buf[(x, y)].set_char(ch).set_fg(RULE);
     }
 }
 
-/// One part's tile: its name in the top border; inside, the worn item's name on `rows`
-/// lines and, dim under it, what it gives, or a dim `·` when nothing is worn.
-fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf: &mut Buffer) {
+/// A tile's `label` in its top border: ` NAME ` after the corner, without its spaces
+/// where the border is short, cut where even that won't fit.
+pub(crate) fn draw_label(st: &AppState, r: Rect, label: &str, light: Lit, buf: &mut Buffer) {
+    let style = if light == Lit::On {
+        lit_bold(st.tick)
+    } else {
+        Style::default().fg(DIM)
+    };
+    let border = usize::from(r.width.saturating_sub(2));
+    let label = if label.chars().count() + 2 <= border {
+        format!(" {label} ")
+    } else {
+        cut(label, border)
+    };
+    put(buf, r.x + 1, r.y, &label, style, r.right() - 1);
+}
+
+/// A tile: `label` in the top border (without its spaces where the border is short,
+/// cut where even that won't fit); inside, what it holds, its name on `rows` lines and,
+/// dim under it, what it gives, or a dim `·` when it holds nothing.
+pub(crate) fn draw_tile(
+    st: &AppState,
+    r: Rect,
+    label: &str,
+    holds: Option<(&str, Vec<(String, Ink)>)>,
+    light: Lit,
+    rows: u16,
+    buf: &mut Buffer,
+) {
     let (x, y, w, h) = (r.x, r.y, r.width, r.height);
     let (right, inner) = (r.right(), r.right() - 1);
     let on = light == Lit::On;
@@ -479,13 +553,7 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     });
     let run = "─".repeat(usize::from(w - 2));
     put(buf, x, y, &format!("┌{run}┐"), edge, right);
-    let label = st.content.node(part).map_or("", |n| n.name.as_str());
-    let label_style = if on {
-        lit_bold(st.tick)
-    } else {
-        Style::default().fg(DIM)
-    };
-    put(buf, x + 1, y, &format!(" {label} "), label_style, inner);
+    draw_label(st, r, label, light, buf);
     for cy in y + 1..y + h - 1 {
         put(buf, x, cy, "│", edge, right);
         put(buf, inner, cy, "│", edge, right);
@@ -496,11 +564,7 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     }
     put(buf, x, y + h - 1, &format!("└{run}┘"), edge, right);
 
-    let Some(item) = st
-        .character
-        .equipped(part)
-        .and_then(|id| st.content.item(id))
-    else {
+    let Some((item, gives)) = holds else {
         let dot = Style::default().fg(FAINTER).bg(bg);
         put(buf, x + w / 2, y + h / 2, "·", dot, inner);
         return;
@@ -511,14 +575,11 @@ fn draw_tile(st: &AppState, part: BodyPart, r: Rect, light: Lit, rows: u16, buf:
     if on {
         name = name.fg(lit(st.tick)).add_modifier(Modifier::BOLD);
     }
-    for (i, line) in name_lines(&item.name, room, usize::from(rows))
-        .iter()
-        .enumerate()
-    {
+    for (i, line) in name_lines(item, room, usize::from(rows)).iter().enumerate() {
         put(buf, x + 1, top + i as u16, line, name, inner);
     }
     let mut cx = x + 1;
-    for (text, ink) in gives(st, part, room) {
+    for (text, ink) in gives {
         let fg = match ink {
             Ink::Label => DIM,
             Ink::Main => CYAN,

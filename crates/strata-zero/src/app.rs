@@ -152,7 +152,7 @@ pub struct AppState {
     pub deck_jobs_sel: Option<crate::screens::jobs_tab::Entry>,
     /// A listing JOBS asked MAP to put its cursor on, for the deck's next update.
     pub deck_map_to: Option<crate::track::ListingId>,
-    /// Where ATTRIBUTES was left: the focus, the tile, the ledger's row.
+    /// Where ATTRIBUTES was left: the tile.
     pub deck_sheet: crate::screens::sheet::SheetState,
     /// The TALENTS tab's tree and cursor spots.
     pub deck_talents: crate::ui::talents::TalentsState,
@@ -1248,9 +1248,9 @@ mod tests {
             part: game::BodyPart::Torso,
             row: 2,
             filter: Some(game::ItemKind::Program),
+            ..Default::default()
         };
         st.deck_sheet.tile = 9;
-        st.deck_sheet.pane = crate::screens::sheet::SheetPane::Ledger;
         let seed = city.seed;
         st.enter_city(city);
         assert!(st.player.is_none() && st.fx.is_empty());

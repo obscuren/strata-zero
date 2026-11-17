@@ -1,8 +1,10 @@
 //! GEAR & INVENTORY: the body on the left, a tile for each part with what it wears;
 //! on the right the pack of what you carry, and under it the card of the item under the
-//! cursor, with its drawing at half size when there is room.
+//! cursor, with its drawing at half size when there is room. `c` switches to CHROME
+//! (`chrome`): the chrome in you, a tile per site and socket, with LOAD and its card.
 
 pub(crate) mod body;
+pub(crate) mod chrome;
 
 use crate::app::AppState;
 use crate::render::glyphs::kind_icon;
@@ -16,6 +18,7 @@ use crate::ui::chrome::{DIM, FAINTER, RULE, dim, put, put_paragraph, reveal, sol
 use crate::ui::cyberdeck::Pen;
 use crate::ui::preview::half;
 use body::{BodyLayout, Dir};
+use chrome::Stop;
 use crossterm::event::KeyCode;
 use game::{BodyPart, CopyId, ItemId, ItemKind};
 use ratatui::buffer::Buffer;
@@ -52,6 +55,14 @@ fn lit_bold(tick: u64) -> Style {
     Style::default().fg(lit(tick)).add_modifier(Modifier::BOLD)
 }
 
+/// How the tab shows the body: what you wear and hold, or the chrome in you.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum View {
+    #[default]
+    Meat,
+    Chrome,
+}
+
 /// Which side holds the cursor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Pane {
@@ -63,6 +74,8 @@ pub enum Pane {
 /// Where the cursor is, kept between visits to the tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KitState {
+    /// MEAT or CHROME; kept while the game runs, never saved.
+    pub view: View,
     pub pane: Pane,
     /// The part the body's cursor is on.
     pub part: BodyPart,
@@ -70,15 +83,22 @@ pub struct KitState {
     pub row: usize,
     /// The kind the pack shows; `None` is all of them.
     pub filter: Option<ItemKind>,
+    /// CHROME's cursor: a site, or a socket of what a site holds.
+    pub stop: Stop,
+    /// CHROME's pick in FITS, while it is open.
+    pub picker: Option<usize>,
 }
 
 impl Default for KitState {
     fn default() -> Self {
         KitState {
+            view: View::Meat,
             pane: Pane::Body,
             part: BodyPart::Head,
             row: 0,
             filter: None,
+            stop: Stop::default(),
+            picker: None,
         }
     }
 }
@@ -149,8 +169,11 @@ fn without_blurb<'a>(lines: &'a [Line<'static>]) -> &'a [Line<'static>] {
 
 pub struct Kit {
     pub state: KitState,
-    /// Tick of the last selection or pane change; drives the card's typewriter.
+    /// Tick of the last selection or pane change; drives the card's typewriter, on
+    /// either view.
     pub changed: u64,
+    /// CHROME's stop `x` asked about: a second `x` there pulls it out and pays the doc.
+    pub pulling: Option<Stop>,
     /// Columns a pack row's text had at the last draw, after the cursor's `▸ `.
     room: Cell<usize>,
     /// The tab's body at the last draw, to place the tiles for the arrows and popups.
@@ -164,6 +187,7 @@ impl Kit {
         Kit {
             state: KitState::default(),
             changed: tick,
+            pulling: None,
             room: Cell::new(usize::MAX),
             area: Cell::new(Rect::default()),
             first: Cell::new(0),
@@ -175,8 +199,18 @@ impl Kit {
     pub fn restore(st: &AppState) -> Kit {
         let mut kit = Kit::new(st.tick);
         kit.state = st.deck_kit;
+        kit.state.picker = None;
         kit.reselect(st);
         kit
+    }
+
+    /// The tab comes up: on the view and the cursor it had, FITS shut, no pull asked
+    /// about, the card typing out.
+    pub(crate) fn opened(&mut self, st: &AppState) {
+        self.state.picker = None;
+        self.pulling = None;
+        self.reselect(st);
+        self.changed = st.tick;
     }
 
     /// The tab's body as last drawn, or a 120×40 window's before the first draw.
@@ -255,8 +289,12 @@ impl Kit {
         rows
     }
 
-    /// What the cursor is on: the tile's part, or the pack row's item.
+    /// What the cursor is on: the tile's part, or the pack row's item. Nothing on
+    /// CHROME, whose card is its own.
     pub(crate) fn selected(&self, st: &AppState) -> Option<Detail> {
+        if self.state.view == View::Chrome {
+            return None;
+        }
         match self.state.pane {
             Pane::Body => Some(Detail::Part(self.cursor(st, &self.layout(st).body))),
             Pane::Pack => self.pack_rows(st).get(self.state.row)?.detail.clone(),
@@ -310,11 +348,31 @@ impl Kit {
         }
     }
 
-    /// Handles a key; true when it was the kit's. On the body the arrows go from tile
-    /// to tile, and right with no tile that way crosses to the pack; on the pack they
-    /// move the row, and left comes back to the part left.
+    /// Switches MEAT and CHROME: CHROME on the stop it had, MEAT on the body; FITS
+    /// closes, an asked-about pull is forgotten, and the card types out afresh.
+    pub(crate) fn switch(&mut self, tick: u64) {
+        self.state.view = match self.state.view {
+            View::Meat => View::Chrome,
+            View::Chrome => {
+                self.state.pane = Pane::Body;
+                View::Meat
+            }
+        };
+        self.state.picker = None;
+        self.pulling = None;
+        self.changed = tick;
+    }
+
+    /// Handles a key on MEAT; true when it was the kit's. On the body the arrows go
+    /// from tile to tile, and right with no tile that way crosses to the pack; on the
+    /// pack they move the row, and left comes back to the part left. `c` switches to
+    /// CHROME from either.
     pub(crate) fn key(&mut self, st: &AppState, code: KeyCode, tick: u64) -> bool {
         let dir = match code {
+            KeyCode::Char('c') => {
+                self.switch(tick);
+                return true;
+            }
             KeyCode::Char('[') => {
                 self.step_filter(st, -1, tick);
                 return true;
@@ -351,7 +409,8 @@ impl Kit {
         true
     }
 
-    /// Keeps the cursor on something that exists after the gear or the pack changed.
+    /// Keeps the cursor on something that exists after the gear, the pack or the
+    /// chrome changed, on both views.
     pub(crate) fn reselect(&mut self, st: &AppState) {
         let parts = parts(st);
         if !parts.contains(&self.state.part) {
@@ -361,6 +420,7 @@ impl Kit {
         if !rows.get(self.state.row).is_some_and(|r| r.detail.is_some()) {
             self.state.row = rows.iter().position(|r| r.detail.is_some()).unwrap_or(0);
         }
+        self.reselect_chrome(st);
     }
 
     /// The popup for the selection: a tile's part, or a pack row's item or copy.
@@ -384,6 +444,14 @@ impl Kit {
         }
     }
 
+    /// The hint row: MEAT's, dim, or CHROME's, with what the lock refuses dimmer.
+    pub(crate) fn hint_line(&self, st: &AppState) -> Line<'static> {
+        match self.state.view {
+            View::Meat => Line::styled(self.hints(), Style::default().fg(DIM)),
+            View::Chrome => self.chrome_hints(st),
+        }
+    }
+
     pub(crate) fn hints(&self) -> &'static str {
         match self.state.pane {
             Pane::Body => {
@@ -403,6 +471,9 @@ impl Kit {
             return;
         }
         self.area.set(area);
+        if self.state.view == View::Chrome {
+            return self.draw_chrome(st, area, buf);
+        }
         let l = self.layout(st);
         // Rows draw after the cursor's two columns, one in from the pane's edge.
         self.room.set(l.pack.width.saturating_sub(3) as usize);

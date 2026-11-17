@@ -1326,7 +1326,7 @@ fn gear_and_inventory() {
         }
         st
     };
-    let on_the_right_hand = |kit: &mut Kit, _: &AppState| {
+    let on_the_right_hand = |kit: &mut Kit, _: &mut AppState| {
         kit.state.pane = Pane::Body;
         kit.state.part = BodyPart::RightHand;
     };
@@ -1379,125 +1379,168 @@ fn gear_and_inventory() {
     });
 }
 
+/// Lets the deck's typing finish, and steps off the screen-jitter burst.
+fn settle_ticks(st: &mut AppState) {
+    st.tick += 200;
+    if st.tick % 90 < 3 {
+        st.tick += 3;
+    }
+}
+
 /// The deck on `3`, `set` applied to its kit, then drawn at each size once the card
 /// has typed out, clear of the deck's signal jitter.
 fn kit_shots(
     st: &mut AppState,
     name: &str,
     sizes: &[(u16, u16)],
-    set: impl FnOnce(&mut Kit, &AppState),
+    set: impl FnOnce(&mut Kit, &mut AppState),
 ) {
     let map = MapScreen::walking(st);
     let mut deck = Deck::new(st.tick);
     deck.update(st, &[key(KeyCode::Char('3'))]);
     set(&mut deck.kit, st);
     deck.kit.changed = st.tick;
-    st.tick += 200;
-    if st.tick % 90 < 3 {
-        st.tick += 3;
-    }
+    settle_ticks(st);
     for (w, h) in sizes {
         shot_stack(&format!("{name}_{w}x{h}"), st, &[&map, &deck], (*w, *h));
     }
 }
 
-/// ATTRIBUTES at each size: the spec's loadout on the Piston arm; the picker on R ARM with
-/// a Grip arm in the pack; the picker on the forearm with a Monowire spool; the swap
-/// picker on the Piston arm at L ARM, the Grip arm picked; the left pane on EMP, two
-/// off for each piece; and on REFLEX, its readout crowded with sources and its cap.
+/// D'SHAWN at home with the shots' chrome fitted, the sites in `without` left bare: the
+/// neural port, lens, jaw, spine, the drone cradle with its Scout drone, the adrenal
+/// pump, the mesh, and the Piston arm with its Arc hand on L ARM.
+fn chrome_loadout(without: &[game::Site]) -> AppState {
+    use game::{Site, Stack};
+    let mut st = state_home();
+    st.character = game::Character::debug_runner(&st.content);
+    for (site, item) in [
+        (Site::Neural, "neural_port"),
+        (Site::Eyes, "target_lens"),
+        (Site::Jaw, "bulldog_jaw"),
+        (Site::Spine, "redline_spine"),
+        (Site::Back, "drone_cradle"),
+        (Site::Organs, "adrenal_pump"),
+        (Site::Skin, "subdermal_mesh"),
+        (Site::LeftArm, "piston_arm"),
+    ] {
+        if without.contains(&site) {
+            // The debug runner starts with a cradle: a bare site is one taken out.
+            st.character.chrome.remove(&site);
+            continue;
+        }
+        let id = ItemId::new(item);
+        let copy = st.content.item(&id).unwrap().per_copy().then(|| {
+            let mut k = st.character.new_copy(&st.content, &id);
+            // The arm with its Arc hand, the cradle with its Scout drone.
+            let fitted = match item {
+                "piston_arm" => Some("arc_hand"),
+                "drone_cradle" => Some("scout_drone"),
+                _ => None,
+            };
+            if let Some(piece) = fitted {
+                let piece = ItemId::new(piece);
+                let pc = st.character.new_copy(&st.content, &piece);
+                k.fitted[0] = Some(Stack {
+                    item: piece,
+                    qty: 1,
+                    copy: Some(pc),
+                });
+            }
+            k
+        });
+        st.character.install(site, id, copy);
+    }
+    st
+}
+
+/// CHROME on GEAR & INVENTORY at each size, the shots' loadout fitted: the Piston arm
+/// with its Arc hand, the cradle, its bay with the Scout drone docked, the picker on the
+/// bay, on the empty R ARM site, on the Piston arm's empty forearm socket and on a swap
+/// of the Piston arm; a body with no arms or cradle; and the doc's chair, seated, the
+/// picker open on the empty forearm.
+#[test]
+#[ignore]
+fn gear_chrome() {
+    use crate::clinic::testutil::seated;
+    use crate::screens::kit::chrome::Stop;
+    use game::Site;
+    let sizes = [(100, 30), (120, 40)];
+    let shots = |st: &mut AppState, name: &str, stop: Stop, keys: &[KeyCode]| {
+        kit_shots(st, &format!("gear_chrome_{name}"), &sizes, |kit, st| {
+            kit.open_chrome(stop, st.tick);
+            for k in keys {
+                kit.chrome_key(st, *k);
+            }
+        });
+    };
+    let space = [KeyCode::Char(' ')];
+    let bay = Stop::Socket(Site::Back, 0);
+    let forearm = Stop::Socket(Site::LeftArm, 1);
+
+    shots(
+        &mut chrome_loadout(&[]),
+        "limb",
+        Stop::Site(Site::LeftArm),
+        &[],
+    );
+    shots(
+        &mut chrome_loadout(&[]),
+        "cradle",
+        Stop::Site(Site::Back),
+        &[],
+    );
+    shots(&mut chrome_loadout(&[]), "bay", bay, &[]);
+    shots(&mut chrome_loadout(&[]), "picker_bay", bay, &space);
+
+    // The pickers open only in the doc's chair: seated, ¤ 1200 to pay with.
+    let seated_in = |without: &[Site]| {
+        let mut st = seated();
+        st.character = chrome_loadout(without).character;
+        st.character.credits = 1200;
+        st
+    };
+    shots(
+        &mut seated_in(&[]),
+        "picker_site",
+        Stop::Site(Site::RightArm),
+        &space,
+    );
+    shots(&mut seated_in(&[]), "picker_socket", forearm, &space);
+    shots(
+        &mut seated_in(&[]),
+        "picker_swap",
+        Stop::Site(Site::LeftArm),
+        &space,
+    );
+
+    // No arms, no cradle: the meat arms and the chrome that is left.
+    let mut st = chrome_loadout(&[Site::LeftArm, Site::Back]);
+    shots(&mut st, "meat_arms", Stop::Site(Site::Neural), &[]);
+
+    // The chair as the doc opens it (`Deck::chair`), space on the empty forearm.
+    let mut st = seated_in(&[]);
+    let map = MapScreen::walking(&mut st);
+    let mut deck = Deck::chair(&st);
+    deck.kit.state.stop = forearm;
+    deck.update(&mut st, &[key(KeyCode::Char(' '))]);
+    deck.kit.changed = st.tick;
+    settle_ticks(&mut st);
+    for (w, h) in sizes {
+        let name = format!("gear_chrome_in_the_chair_{w}x{h}");
+        shot_stack(&name, &st, &[&map, &deck], (w, h));
+    }
+}
+
+/// ATTRIBUTES at each size, with the spec's loadout fitted: EMP, two off for each piece;
+/// and REFLEX, its readout crowded with sources and its cap.
 #[test]
 #[ignore]
 fn attributes_sheet() {
-    use crate::screens::sheet::{LedgerRow, SheetPane};
-    use game::{Num, Site, Stack};
+    use game::Num;
     let sizes = [(100, 30), (120, 40)];
-    let fresh = || {
-        let mut st = state_home();
-        st.character = game::Character::debug_runner(&st.content);
-        for (site, item) in [
-            (Site::Neural, "neural_port"),
-            (Site::Eyes, "target_lens"),
-            (Site::Jaw, "bulldog_jaw"),
-            (Site::Spine, "redline_spine"),
-            (Site::Back, "drone_cradle"),
-            (Site::Organs, "adrenal_pump"),
-            (Site::Skin, "subdermal_mesh"),
-            (Site::LeftArm, "piston_arm"),
-        ] {
-            let id = ItemId::new(item);
-            let copy = st.content.item(&id).unwrap().per_copy().then(|| {
-                let mut k = st.character.new_copy(&st.content, &id);
-                // The arm with its Arc hand, the cradle with its Scout drone.
-                let fitted = match item {
-                    "piston_arm" => Some("arc_hand"),
-                    "drone_cradle" => Some("scout_drone"),
-                    _ => None,
-                };
-                if let Some(piece) = fitted {
-                    let piece = ItemId::new(piece);
-                    let pc = st.character.new_copy(&st.content, &piece);
-                    k.fitted[0] = Some(Stack {
-                        item: piece,
-                        qty: 1,
-                        copy: Some(pc),
-                    });
-                }
-                k
-            });
-            st.character.install(site, id, copy);
-        }
-        st
-    };
+    let fresh = || chrome_loadout(&[]);
     let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_limb", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-    });
-
-    // The cradle, its bay with the Scout drone docked, and what docks there.
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_cradle", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::Back);
-    });
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_ledger_bay", &sizes, |d, _| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
-    });
-    let mut st = fresh();
-    sheet_shots(&mut st, "attributes_picker_bay", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::Back, 0);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("grip_arm"), 1);
-    sheet_shots(&mut st, "attributes_picker_site", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::RightArm);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("monowire_spool"), 1);
-    sheet_shots(&mut st, "attributes_picker_socket", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Socket(Site::LeftArm, 1);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
-
-    let mut st = fresh();
-    st.character
-        .give_item(&st.content, ItemId::new("grip_arm"), 1);
-    sheet_shots(&mut st, "attributes_picker_swap", &sizes, |d, st| {
-        d.sheet.state.pane = SheetPane::Ledger;
-        d.sheet.state.row = LedgerRow::Site(Site::LeftArm);
-        d.update(st, &[key(KeyCode::Char(' '))]);
-    });
+    sheet_shots(&mut st, "attributes_sheet", &sizes, |_, _| {});
 
     let mut st = fresh();
     let emp = Num::ALL
@@ -1522,8 +1565,8 @@ fn attributes_sheet() {
     });
 }
 
-/// The deck on `2` (ATTRIBUTES), `set` applied, then drawn at each size once the card and
-/// the readout have typed out, clear of the deck's signal jitter.
+/// The deck on `2` (ATTRIBUTES), `set` applied, then drawn at each size once the readout has
+/// typed out, clear of the deck's signal jitter.
 fn sheet_shots(
     st: &mut AppState,
     name: &str,
@@ -1535,7 +1578,6 @@ fn sheet_shots(
     deck.update(st, &[key(KeyCode::Char('2'))]);
     set(&mut deck, st);
     deck.sheet.changed = st.tick;
-    deck.sheet.card = st.tick;
     st.tick += 200;
     if st.tick % 90 < 3 {
         st.tick += 3;
@@ -1847,14 +1889,14 @@ fn broadcast_and_perma_death() {
     }
 }
 
-/// A ripperdoc's: the shut door by day, the chair's window by night, and the ledger in
-/// the chair on a piece, in FITS paying and short, on a swap, asking before a pull, and
-/// with free chrome, at both sizes.
+/// A ripperdoc's: the shut door by day, the chair's window by night, and CHROME in the
+/// chair on a piece, in FITS paying and short, on a swap, asking before a pull, and with
+/// free chrome, at both sizes.
 #[test]
 #[ignore]
 fn ripperdoc_clinic() {
     use crate::clinic::testutil::{DAY, inside, outside, seated};
-    use crate::screens::sheet::LedgerRow;
+    use crate::screens::kit::chrome::Stop;
     use game::{Site, Stack};
     let sizes = [(100, 30), (120, 40)];
 
@@ -1920,7 +1962,7 @@ fn ripperdoc_clinic() {
             st.character.install(site, id, copy);
         }
     };
-    let chair_shots = |name: &str, credits: u32, free: bool, row: LedgerRow, keys: &[KeyCode]| {
+    let chair_shots = |name: &str, credits: u32, free: bool, stop: Stop, keys: &[KeyCode]| {
         let mut st = seated();
         loadout(&mut st);
         st.character.credits = credits;
@@ -1929,12 +1971,11 @@ fn ripperdoc_clinic() {
             .give_item(&st.content, ItemId::new("grip_arm"), 1);
         let map = MapScreen::walking(&mut st);
         let mut deck = Deck::chair(&st);
-        deck.sheet.state.row = row;
+        deck.kit.state.stop = stop;
         for k in keys {
             deck.update(&mut st, &[key(*k)]);
         }
-        deck.sheet.changed = st.tick;
-        deck.sheet.card = st.tick;
+        deck.kit.changed = st.tick;
         st.tick += 200;
         if st.tick % 90 < 3 {
             st.tick += 3;
@@ -1943,9 +1984,9 @@ fn ripperdoc_clinic() {
             shot_stack(&format!("{name}_{w}x{h}"), &st, &[&map, &deck], (w, h));
         }
     };
-    let arm = LedgerRow::Site(Site::LeftArm);
-    let right = LedgerRow::Site(Site::RightArm);
-    chair_shots("clinic_ledger_piece", 1200, false, arm, &[]);
+    let arm = Stop::Site(Site::LeftArm);
+    let right = Stop::Site(Site::RightArm);
+    chair_shots("clinic_chrome_piece", 1200, false, arm, &[]);
     chair_shots(
         "clinic_fits_paying",
         1200,
@@ -3041,7 +3082,7 @@ fn at_the_doctor(st: &mut AppState) {
 fn doctor_shots() {
     use crate::missions::ReadAt;
     use crate::missions::reading::ReadCard;
-    use crate::screens::sheet::LedgerRow;
+    use crate::screens::kit::chrome::Stop;
     let shard = ItemId::new("ledger_shard");
     for (w, h) in [(120u16, 40u16), (100, 30)] {
         let size = (w, h);
@@ -3135,10 +3176,9 @@ fn doctor_shots() {
         st.missions.tab = Some(tab);
         let map = MapScreen::walking(&mut st);
         let mut deck = Deck::chair(&st);
-        deck.sheet.state.row = LedgerRow::Site(site);
+        deck.kit.state.stop = Stop::Site(site);
         deck.update(&mut st, &[key(KeyCode::Char(' '))]);
-        deck.sheet.changed = st.tick;
-        deck.sheet.card = st.tick;
+        deck.kit.changed = st.tick;
         st.tick += 200;
         if st.tick % 90 < 3 {
             st.tick += 3;

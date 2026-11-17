@@ -10,7 +10,7 @@ A doc keeps the same hours as the city's fixers, from six in the evening until f
 
 ## In the chair
 
-Stand beside the operating chair and press `space`, then `i Interact: Sit in the chair`. The deck opens on ATTRIBUTES, on the list of your body's sites:
+Stand beside the operating chair and press `space`, then `i Interact: Sit in the chair`. The deck opens on GEAR & INVENTORY, on CHROME, with a tile for each site in your body:
 
 - the head: NEURAL, EYES, EARS, JAW
 - the body: SPINE, BACK, ORGANS, SKIN
@@ -18,13 +18,13 @@ Stand beside the operating chair and press `space`, then `i Interact: Sit in the
 
 | Key | What it does |
 |---|---|
-| `↑↓` | move between the sites |
+| `←↑↓→` | move between the sites |
 | `space` | what in your pack fits here |
 | `space` | in the list: put it in, or swap |
 | `x` | take a piece out (press twice) |
 | `esc` | get out of the chair |
 
-Chrome arms have sockets of their own for a hand and a forearm.
+Chrome arms have sockets of their own for a hand and a forearm, each with its own tile beside the arm.
 
 ### What it costs
 
@@ -32,13 +32,13 @@ The doc charges 12% of a piece's value to put it in and 4% to take it out, never
 
 ### How much you can take
 
-Your body can carry only so much chrome. Its **load** is twice your BODY and COOL added together, plus six, counting the attributes you built, not what gear adds. The ledger shows how much is used. The doc won't fit what your body can't take.
+Your body can carry only so much chrome. Its **load** is twice your BODY and COOL added together, plus six, counting the attributes you built, not what gear adds. LOAD on the CHROME view shows how much is used. The doc won't fit what your body can't take.
 
 Every piece of chrome also lowers your EMP resistance a little.
 
 ## Drones
 
-A drone cradle, fitted at your BACK by a doc, gives you a bay for a drone. Drones need no doc: dock one in the bay from the chrome list (`space`), or stow it in your pack (`x`), anywhere.
+A drone cradle, fitted at your BACK by a doc, gives you a bay for a drone. Drones need no doc: dock one in the bay from its BAY tile on CHROME (`space`), or stow it in your pack (`x`), anywhere.
 
 - The **Scout** gives you its scouting ability.
 - The **Mule** carries eight kilos more.
