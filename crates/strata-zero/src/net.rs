@@ -1559,6 +1559,14 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
 
+/// A building's alarm goes off fresh: `raise_alarm`, then its guards answer
+/// (`guards::answer`). Its line.
+pub fn alarm_goes_off(st: &mut AppState, b: BuildingId) -> String {
+    let line = raise_alarm(st, b);
+    crate::guards::answer(st, b);
+    line
+}
+
 /// Heat on the construct's trace with everything that follows: the alarm raised,
 /// the null route taken once, the dump. Returns whether the player was dumped.
 pub(crate) fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
@@ -1582,14 +1590,14 @@ fn heat_on(st: &mut AppState, b: BuildingId, noise: u8, cut: u8) -> bool {
     match event {
         TraceEvent::Dump => {
             if !was_alert {
-                let line = raise_alarm(st, b);
+                let line = alarm_goes_off(st, b);
                 st.warn(line);
             }
             dump(st, "the trace found you");
             true
         }
         TraceEvent::Alarm => {
-            let line = raise_alarm(st, b);
+            let line = alarm_goes_off(st, b);
             st.warn(line);
             false
         }
@@ -1720,15 +1728,21 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The building's trace at the alarm line, its gate on alert, its line warned.
+/// The building's trace at the alarm line, its gate on alert, its line warned. A building
+/// that wasn't on alert yet has its guards answer (`alarm_goes_off`).
 pub fn lock_down(st: &mut AppState, b: BuildingId) {
     let now = st.net.now(st);
+    let fresh = !st.net.alert(b, now);
     let t = st.net.trace(b);
     t.heat = t.heat.max(game::ALARM_HEAT);
     if t.alert_until.is_none() {
         t.alert_until = Some(now + game::ALERT_MINUTES);
     }
-    let line = raise_alarm(st, b);
+    let line = if fresh {
+        alarm_goes_off(st, b)
+    } else {
+        raise_alarm(st, b)
+    };
     st.warn(line);
 }
 

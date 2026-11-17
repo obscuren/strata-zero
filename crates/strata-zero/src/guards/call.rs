@@ -6,9 +6,9 @@ use super::{
     GUARD_RUN_TICKS, GUARD_STEP_TICKS, SWEEP_PAUSE_TICKS, SWEEP_ROOMS, SWEEP_STEP_TICKS, links,
 };
 use crate::app::AppState;
-use crate::foes::Call;
+use crate::foes::{Call, FoeMode};
 use crate::render::map::TileMap;
-use citygen::{Place, Pos};
+use citygen::{BuildingId, Place, Pos};
 
 /// The stops of a sweep by guard `i` of its own floor near `near`: of the rooms whose zone
 /// its card opens, nearest first by their centre (the one holding `near` too), each one's
@@ -44,6 +44,83 @@ pub(crate) fn sweep_stops(st: &mut AppState, i: usize, near: Pos) -> Vec<Pos> {
         })
         .take(SWEEP_ROOMS)
         .collect()
+}
+
+/// How many calm guards from other floors answer an alarm with a spot.
+const FROM_OTHER_FLOORS: usize = 2;
+
+/// Building `b`'s alarm has just gone off: its calm standing guards answer, while you or
+/// your body are in it. With a fresh placing (`placed`) on `level` at `at`, that floor's
+/// guards hunt there at once in a fight on it, else run there calm (`Call::Answer`), and
+/// the `FROM_OTHER_FLOORS` nearest by the fewest flights their card rides come from other
+/// floors. With none, every one sweeps the rooms near it.
+pub(crate) fn answer(st: &mut AppState, b: BuildingId) {
+    if !crate::venues::inside(st, b) {
+        return;
+    }
+    let calm: Vec<usize> = (st.foes.iter().enumerate())
+        .filter(|(_, f)| f.standing() && !f.hunting())
+        .filter(|(_, f)| f.post.as_ref().is_some_and(|p| p.building == b))
+        .filter(|(_, f)| matches!(f.place, Place::Floor { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let now = st.clock_tick();
+    let Some((level, at)) = super::placed(st, b) else {
+        let mut any = false;
+        for i in calm {
+            let here = st.foes[i].pos;
+            sweep(st, i, here);
+            any |= set_off(st, i, now);
+        }
+        if any {
+            st.warn("guards sweep the floors");
+        }
+        return;
+    };
+    let floor = Place::Floor { building: b, level };
+    let fight = (st.net.engaged.as_ref()).is_some_and(|e| e.place == floor);
+    let plan = crate::interiors::plan_now(st, b);
+    let mut here = Vec::new();
+    let mut others = Vec::new();
+    for i in calm {
+        let f = &st.foes[i];
+        if f.place == floor {
+            here.push(i);
+        } else if let (Some(plan), Some(post), Place::Floor { level: l, .. }) =
+            (plan.as_deref(), f.post.as_ref(), f.place)
+            && let Some(d) = links::hops_to(post, plan, level).get(&l)
+        {
+            others.push((*d, i));
+        }
+    }
+    drop(plan);
+    others.sort_unstable();
+    let call = Call::Answer { level, at };
+    let answering = (others.into_iter().take(FROM_OTHER_FLOORS)).map(|(_, i)| i);
+    let mut any = false;
+    for i in here.iter().copied().filter(|_| fight) {
+        st.foes[i].mode = FoeMode::Hunting { seen: at, lost: 0 };
+        any = true;
+    }
+    for i in here.into_iter().filter(|_| !fight).chain(answering) {
+        if let Some(post) = st.foes[i].post.as_mut() {
+            post.call = Some(call.clone());
+        }
+        any |= set_off(st, i, now);
+    }
+    if any {
+        st.warn("guards close in");
+    }
+}
+
+/// Guard `i`, given a call, sets off at once rather than finishing its pause: whether it
+/// has one.
+fn set_off(st: &mut AppState, i: usize, now: u64) -> bool {
+    let Some(post) = st.foes[i].post.as_mut().filter(|p| p.call.is_some()) else {
+        return false;
+    };
+    post.round.next = post.round.next.min(now);
+    true
 }
 
 /// Guard `i` sweeps its floor near `near` (`sweep_stops`); with nothing to check it has no
@@ -276,5 +353,126 @@ mod tests {
             crate::foes::lines(&st, |_| true),
             vec!["▣ guard · sweeping · 30/30 · 4 tiles"]
         );
+    }
+
+    /// A calm guard of the ward that can't see you where you stand on L at (6,3): on L in
+    /// the dark east hall beyond the card lock, else in the middle of its floor.
+    fn calm_guard(st: &mut AppState, level: i32, zone: u8) -> usize {
+        let at = if level == 0 {
+            Pos::new(20, 3)
+        } else {
+            Pos::new(24, 3)
+        };
+        guard(st, level, zone.max(u8::from(level == 0)), &[at])
+    }
+
+    #[test]
+    fn a_radio_call_in_a_fight_brings_the_floor_in() {
+        let mut st = ward();
+        let seer = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let far = calm_guard(&mut st, 0, 1);
+        assert!(crate::foes::look_all(&mut st));
+        assert!(st.foes[seer].hunting() && !st.foes[far].hunting());
+        crate::net::engage(&mut st, on(0), true);
+        crate::net::lock_down(&mut st, WARD);
+        assert_eq!(
+            st.foes[far].mode,
+            crate::foes::FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0
+            }
+        );
+        crate::net::seat_foes(&mut st);
+        let order = &st.net.engaged.as_ref().unwrap().order;
+        assert!(order.contains(&crate::net::Actor::Foe(far)), "{order:?}");
+        assert!(logged(&st, "guards close in"));
+    }
+
+    #[test]
+    fn a_camera_alarm_sends_the_floor_calm() {
+        let mut st = ward();
+        let far = calm_guard(&mut st, 0, 1);
+        crate::guards::place_you(&mut st, WARD, 0, Pos::new(6, 3));
+        crate::net::lock_down(&mut st, WARD);
+        assert_eq!(
+            call_of(&st, far),
+            Some(Call::Answer {
+                level: 0,
+                at: Pos::new(6, 3)
+            })
+        );
+        assert!(!st.foes[far].hunting());
+        assert!(st.net.engaged.is_none());
+    }
+
+    #[test]
+    fn two_guards_answer_from_other_floors_nearest_first() {
+        let mut st = ward3();
+        let near_a = calm_guard(&mut st, 1, 0);
+        let near_b = guard(&mut st, 1, 0, &[Pos::new(20, 3)]);
+        let far = calm_guard(&mut st, 2, 0);
+        crate::guards::place_you(&mut st, WARD, 0, Pos::new(6, 3));
+        crate::net::lock_down(&mut st, WARD);
+        let answer = Some(Call::Answer {
+            level: 0,
+            at: Pos::new(6, 3),
+        });
+        assert_eq!(call_of(&st, near_a), answer);
+        assert_eq!(call_of(&st, near_b), answer);
+        assert_eq!(call_of(&st, far), None, "3F is two flights off");
+    }
+
+    #[test]
+    fn a_net_alarm_with_no_spot_sweeps_every_floor() {
+        let mut st = ward();
+        let down = guard(&mut st, 0, 2, &[Pos::new(3, 3)]);
+        let up = calm_guard(&mut st, 1, 0);
+        crate::net::lock_down(&mut st, WARD);
+        assert!(matches!(
+            call_of(&st, down),
+            Some(Call::Sweep { level: 0, .. })
+        ));
+        assert!(matches!(
+            call_of(&st, up),
+            Some(Call::Sweep { level: 1, .. })
+        ));
+        assert!(logged(&st, "guards sweep the floors"));
+    }
+
+    #[test]
+    fn a_repeat_alarm_answers_nothing() {
+        let mut st = ward();
+        let i = calm_guard(&mut st, 1, 0);
+        crate::net::lock_down(&mut st, WARD);
+        assert!(call_of(&st, i).is_some());
+        st.foes[i].post.as_mut().unwrap().call = None;
+        crate::net::lock_down(&mut st, WARD);
+        assert_eq!(call_of(&st, i), None);
+    }
+
+    #[test]
+    fn an_alarm_while_youre_out_leaves_no_calls() {
+        let mut st = ward();
+        let i = calm_guard(&mut st, 1, 0);
+        let exit = *st
+            .interiors
+            .floor(WARD, 0)
+            .unwrap()
+            .1
+            .exit_at(Pos::new(0, 3))
+            .unwrap();
+        crate::interiors::leave(&mut st, &exit).unwrap();
+        crate::net::lock_down(&mut st, WARD);
+        assert_eq!(call_of(&st, i), None);
+    }
+
+    #[test]
+    fn heat_over_the_alarm_line_answers() {
+        let mut st = ward();
+        let far = calm_guard(&mut st, 0, 1);
+        crate::guards::place_you(&mut st, WARD, 0, Pos::new(6, 3));
+        crate::net::ice_heat(&mut st, WARD, game::ALARM_HEAT);
+        assert!(st.net.alert(WARD, st.net.now(&st)));
+        assert!(matches!(call_of(&st, far), Some(Call::Answer { .. })));
     }
 }

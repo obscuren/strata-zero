@@ -81,7 +81,7 @@ pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos, i
 
 /// The fewest hops from each level of `plan` to level `to` by the links a guard of
 /// `post` rides (`hops`), for the levels that reach it at all: `to` itself 0.
-fn hops_to(post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
+pub(super) fn hops_to(post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
     let rides: Vec<(i32, Vec<i32>)> = (plan.levels.iter())
         .map(|l| {
             let next = (0..plan.links.len()).flat_map(|k| hops(post, plan, k, *l));

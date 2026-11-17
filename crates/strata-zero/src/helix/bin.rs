@@ -550,7 +550,7 @@ impl AppIo<'_> {
             .net
             .add_heat(b, crate::backdoors::PLANT_NOISE, 0, now, false);
         if event == game::TraceEvent::Alarm {
-            let line = crate::net::raise_alarm(self.st, b);
+            let line = crate::net::alarm_goes_off(self.st, b);
             self.st.warn(line);
         }
         Ok(one(format!(
