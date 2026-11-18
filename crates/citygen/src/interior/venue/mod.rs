@@ -23,7 +23,8 @@ pub use frame::*;
 pub use graph::*;
 pub use layout::*;
 pub use mission::{
-    CardSpot, CodeSpot, Device, DeviceKind, GuardPost, MissionInputs, MissionLayer, Placed,
+    CardSpot, CodeSpot, ContainerSpot, Device, DeviceKind, GuardPost, MissionInputs, MissionLayer,
+    Placed,
 };
 pub use types::*;
 

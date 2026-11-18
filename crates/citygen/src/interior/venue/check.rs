@@ -326,7 +326,7 @@ pub fn validate_copy(
             (d.at, f)
         });
         let containers = (layer.containers.iter().filter(|c| c.level == level))
-            .map(|c| (c.at, Feature::Container));
+            .map(|c| (c.at, Feature::Furniture(c.kind.furniture())));
         let objective =
             (layer.objective.level == level).then_some((layer.objective.at, Feature::Objective));
         let steps: Vec<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
@@ -611,7 +611,7 @@ mod tests {
             let x = l.level(c.level).unwrap();
             c.at = x.doors.iter().find(|d| !d.open).unwrap().at;
         });
-        assert!(err.contains("Container"), "{err}");
+        assert!(err.contains("Furniture"), "{err}");
         // The objective's room dropped from the copy.
         let err = bad(small, &|m| m.kept.retain(|&k| k != m.objective.level));
         assert!(err.contains("objective"), "{err}");

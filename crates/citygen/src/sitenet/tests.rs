@@ -2,6 +2,7 @@ use super::*;
 use crate::construct::{Construct, Guard};
 use crate::geom::{Grid, Rect};
 use crate::ids::NodeId;
+use crate::interior::venue::draw_level;
 use crate::interior::venue::testutil;
 use crate::interior::venue::{
     MissionInputs, MissionSize, VenuePack, Ways, draw_copy_level, line_switches, terminals,
@@ -209,10 +210,11 @@ fn the_plain_building_has_no_gap_and_no_mission_devices() {
     for (c, p, t) in plains() {
         let net = SiteNet::of(c, &p, Some(t), None, 200).unwrap();
         assert_eq!(net.gap, None);
-        assert!(!net.nodes.iter().any(|n| matches!(
-            n.kind,
-            NodeKind::Camera | NodeKind::Turret | NodeKind::Container
-        )));
+        assert!(
+            !net.nodes
+                .iter()
+                .any(|n| matches!(n.kind, NodeKind::Camera | NodeKind::Turret))
+        );
         assert!(!net.nodes.iter().any(|n| n.kind == NodeKind::DataVault));
         let at_230 = SiteNet::of(c, &p, Some(t), None, 230).unwrap();
         let first_server_room = p
@@ -662,5 +664,70 @@ fn each_level_knows_its_fold_the_lifts_through_its_slab_and_its_turnstiles() {
     assert!(
         lifts > 0 && turnstiles > 0,
         "lifts {lifts} turnstiles {turnstiles}"
+    );
+}
+
+#[test]
+fn every_safe_and_every_layer_spot_is_a_container_node() {
+    use crate::tile::{ContainerKind, Furniture, wall_front};
+    let mut safes = 0;
+    let mut spots = 0;
+    let mut kinds = BTreeSet::new();
+    for (c, p, t) in plains() {
+        let net = SiteNet::of(c, &p, Some(t), None, 120).unwrap();
+        let v = p.venue.as_deref().unwrap();
+        for &level in &p.levels {
+            let floor = draw_level(v, level).unwrap();
+            for (at, tile) in floor.tiles.iter() {
+                let node = net.nodes.iter().find(|n| {
+                    n.kind == NodeKind::Container && n.node.level == level && n.node.at == at
+                });
+                match tile.feature {
+                    Some(Feature::Furniture(Furniture::Safe)) => {
+                        let node = node.unwrap_or_else(|| panic!("no node for the safe at {at:?}"));
+                        let want = if tile.terrain == Terrain::Wall {
+                            wall_front(&floor.tiles, at).unwrap()
+                        } else {
+                            at
+                        };
+                        assert_eq!(node.net, want);
+                        assert!(node.name.ends_with(" safe"), "{}", node.name);
+                        safes += 1;
+                    }
+                    Some(Feature::Furniture(f)) if f.container().is_some() => {
+                        assert!(node.is_none(), "a node on the {f:?} at {at:?}");
+                    }
+                    _ => assert!(node.is_none(), "a stray node at {at:?}"),
+                }
+            }
+        }
+    }
+    assert!(safes > 0, "no safe in any plain building");
+    for security in [60, 200] {
+        for (c, p, t, layer) in copies(security) {
+            let net = SiteNet::of(c, &p, Some(t), Some(&layer), security).unwrap();
+            for s in &layer.containers {
+                let n = (net.nodes.iter())
+                    .find(|n| {
+                        n.kind == NodeKind::Container
+                            && n.node.level == s.level
+                            && n.node.at == s.at
+                    })
+                    .unwrap_or_else(|| panic!("no node for the spot at {:?}", s.at));
+                assert!(
+                    n.name.ends_with(&format!(" {}", s.kind.word())),
+                    "{}",
+                    n.name
+                );
+                assert_eq!(n.net, s.at);
+                kinds.insert(s.kind);
+                spots += 1;
+            }
+        }
+    }
+    assert!(spots > 0, "no layer spot");
+    assert!(
+        kinds.contains(&ContainerKind::Locker) || kinds.len() > 1,
+        "{kinds:?}"
     );
 }

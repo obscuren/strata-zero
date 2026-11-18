@@ -22,6 +22,7 @@ use crate::interior::floor::doorstep_of;
 use crate::interior::layouts::walled_kind;
 use crate::interior::{FloorPlan, LinkKind, RoomKind};
 use crate::rng::hash64;
+use crate::tile::ContainerKind;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -41,11 +42,41 @@ pub struct MissionInputs {
     pub seed: u64,
 }
 
+/// What stands on the layer's spot `at` of `level`: a safe in a room of the type's
+/// `secure` or `executive` zone, else a crate in a storage or plant room, else a locker.
+/// It draws nothing from the rng.
+fn spot_kind(layout: &VenueLayout, level: i32, at: Pos) -> ContainerKind {
+    let room = layout
+        .level(level)
+        .and_then(|x| x.rooms.iter().find(|r| r.spots.contains(&at)));
+    let Some(r) = room else {
+        return ContainerKind::Locker;
+    };
+    let zone = layout.zones.get(r.zone as usize).map(String::as_str);
+    if matches!(zone, Some("secure" | "executive")) {
+        ContainerKind::Safe
+    } else if matches!(r.kind, RoomKind::Storage | RoomKind::Plant) {
+        ContainerKind::Crate
+    } else {
+        ContainerKind::Locker
+    }
+}
+
 /// A tile on a level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placed {
     pub level: i32,
     pub at: Pos,
+}
+
+/// A container a mission's layer stands on a spot: where, and what kind it is. A spot
+/// saved with no kind reads as a safe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerSpot {
+    pub level: i32,
+    pub at: Pos,
+    #[serde(default)]
+    pub kind: ContainerKind,
 }
 
 /// A guard's post: where it stands, the zone whose card it carries, the spots it walks,
@@ -112,7 +143,7 @@ pub struct MissionLayer {
     #[serde(default)]
     pub devices: Vec<Device>,
     #[serde(default)]
-    pub containers: Vec<Placed>,
+    pub containers: Vec<ContainerSpot>,
     /// In the order they were left: each lies before the lock it opens.
     #[serde(default)]
     pub cards: Vec<CardSpot>,
@@ -537,7 +568,8 @@ impl MissionLayer {
             &walked,
             &mut blocked,
         ) {
-            self.containers.push(Placed { level, at });
+            let kind = spot_kind(layout, level, at);
+            self.containers.push(ContainerSpot { level, at, kind });
         }
     }
 
