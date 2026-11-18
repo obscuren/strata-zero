@@ -224,6 +224,7 @@ mod tests {
             })],
             stickers: Vec::new(),
             charge: None,
+            credits: 0,
         }
     }
 

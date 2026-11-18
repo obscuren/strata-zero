@@ -676,7 +676,11 @@ impl Content {
                     });
                 }
             }
-            if i.on_use.is_some() && i.throw().is_none() && i.kind != ItemKind::Consumable {
+            if i.on_use.is_some()
+                && i.throw().is_none()
+                && !matches!(i.on_use, Some(Use::Cash { .. }))
+                && i.kind != ItemKind::Consumable
+            {
                 return Err(ContentError::UseOnNonConsumable {
                     item: i.id.0.clone(),
                 });

@@ -139,6 +139,7 @@ mod tests {
             fitted: vec![Some(Stack::new(ItemId::new("gone_chip"), 1)), None],
             stickers: vec![],
             charge: None,
+            credits: 0,
         };
         assert!(c.item(&deck).is_some());
         g.put(
@@ -190,6 +191,7 @@ mod tests {
                     fitted: vec![Some(Stack::new(ItemId::new("copper_coil"), 1))],
                     stickers: vec![],
                     charge: None,
+                    credits: 0,
                 }),
             },
         );
@@ -278,6 +280,7 @@ mod tests {
                 fitted: vec![None, None],
                 stickers: Vec::new(),
                 charge: None,
+                credits: 0,
             }),
         };
         g.put(k, p, copy(0));

@@ -52,6 +52,8 @@ pub enum Action {
     /// Drops one copy from the pack, with what is fitted in it.
     DropCopy(CopyId),
     Use(ItemId),
+    /// Uses one copy from the pack: a credchip is cashed.
+    UseCopy(CopyId),
     /// Spends one thrown item; the throw itself is the app's to play.
     Throw(ItemId),
     /// Takes from the stacks without a copy; copies are taken by id.
@@ -333,7 +335,7 @@ fn clamp_hp(ch: &mut Character, c: &Content) {
     }
 }
 
-fn over_capacity(ch: &Character, c: &Content) -> String {
+pub fn over_capacity(ch: &Character, c: &Content) -> String {
     format!(
         "over capacity · {:.1}/{:.1} kg",
         ch.weight(c),
@@ -417,6 +419,9 @@ pub fn apply(
             if item.throw().is_some() {
                 return Err("throw it from the map".to_string());
             }
+            if matches!(on_use, Use::Cash { .. }) {
+                return Err("use it from the pack".to_string());
+            }
             remove_from_pack(ch, &id, 1);
             match on_use {
                 Use::Heal(n) => {
@@ -424,8 +429,26 @@ pub fn apply(
                     ch.hp += healed;
                     done(format!("used `{}` · +{healed} hp", item.name))
                 }
-                Use::Throw { .. } => unreachable!("refused above"),
+                Use::Throw { .. } | Use::Cash { .. } => unreachable!("refused above"),
             }
+        }
+        Action::UseCopy(copy) => {
+            let i = pack_copy(ch, copy)?;
+            let s = &ch.inventory[i];
+            let item = c
+                .item(&s.item)
+                .ok_or_else(|| format!("unknown item {}", s.item))?;
+            match item.on_use {
+                Some(Use::Cash { locked: true }) => {
+                    return Err("locked · crack it at your rig".to_string());
+                }
+                Some(Use::Cash { locked: false }) => {}
+                _ => return Err(format!("{} cannot be used", item.name)),
+            }
+            let credits = s.copy.as_ref().map_or(0, |k| k.credits);
+            ch.inventory.remove(i);
+            ch.credits += credits;
+            done(format!("cashed `{}` · +{credits} cr", item.name))
         }
         Action::Open(id) => {
             let item = c.item(&id).ok_or_else(|| format!("unknown item {id}"))?;
@@ -1085,6 +1108,49 @@ mod tests {
             (0, 2, 1)
         );
         assert!(apply(&mut ch, &mut g, &c, at, 0, Action::Open(id("box"))).is_err());
+    }
+
+    #[test]
+    fn a_credchip_cashes_by_use_and_a_locked_one_refuses() {
+        let (c, mut ch, mut g, at) = setup();
+        let chip = id("credchip");
+        let k = ch.give_credchip(&c, &chip, 400);
+        let before = ch.credits;
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::Use(chip.clone())).unwrap_err(),
+            "use it from the pack"
+        );
+        let out = apply(&mut ch, &mut g, &c, at, 0, Action::UseCopy(k)).unwrap();
+        assert_eq!(ch.credits, before + 400);
+        assert_eq!(ch.count(&chip), 0);
+        assert_eq!(out.message, "cashed `Credchip` · +400 cr");
+        let locked = ch.give_credchip(&c, &id("credchip_locked"), 900);
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::UseCopy(locked)).unwrap_err(),
+            "locked · crack it at your rig"
+        );
+        assert_eq!(ch.credits, before + 400);
+        assert_eq!(ch.count(&id("credchip_locked")), 1);
+    }
+
+    #[test]
+    fn a_copy_saved_before_credits_reads_none() {
+        #[derive(serde::Serialize)]
+        struct OldCopy {
+            id: CopyId,
+            fitted: Vec<Option<Stack>>,
+            stickers: Vec<crate::model::Stuck>,
+            charge: Option<crate::character::Charge>,
+        }
+        let old = OldCopy {
+            id: CopyId(3),
+            fitted: vec![None],
+            stickers: Vec::new(),
+            charge: None,
+        };
+        let bytes = rmp_serde::to_vec_named(&old).unwrap();
+        let back: ItemCopy = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!((back.id, back.credits), (CopyId(3), 0));
     }
 
     #[test]
