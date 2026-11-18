@@ -499,6 +499,195 @@ fn keyjack_copy(st: &AppState) -> game::CopyId {
         .expect("a Keyjack in the pack")
 }
 
+/// A container re-kinded on its floor.
+fn container_as(
+    st: &mut AppState,
+    c: &crate::containers::Container,
+    kind: citygen::tile::ContainerKind,
+) -> crate::containers::Container {
+    let (b, level, at) = (c.at.building, c.at.level, c.at.at);
+    let mut floor = st.interiors.floor(b, level).unwrap().1.clone();
+    floor.tiles.get_mut(at).unwrap().feature = Some(citygen::Feature::Furniture(kind.furniture()));
+    st.interiors.put_floor(b, floor);
+    crate::containers::find(st, c.at).expect("still a container")
+}
+
+/// Containers: the locked panel on the Net and off it, the open panel, the Keyjack on a
+/// lock, a lock being forced, and the map with one of each kind, floor-standing and set in
+/// a wall, closed, open, empty and on the Net.
+#[test]
+#[ignore]
+fn container_shots() {
+    use crate::containers::state::{Loot, Opened};
+    use crate::containers::testutil::{all_in, beside, copy_with_spot, plain_site};
+    use crate::containers::{self, Status};
+    use crate::screens::container::ContainerPanel;
+    use crate::screens::lockjack::LockJack;
+    use citygen::tile::ContainerKind;
+    use citygen::{BuildingKind, Terrain};
+
+    let sizes = [(120, 40), (100, 30)];
+    let panel_shots = |name: &str, st: &AppState, map: &MapScreen, top: &dyn Screen| {
+        for (w, h) in sizes {
+            shot_stack(
+                &format!("container_{name}_{w}x{h}"),
+                st,
+                &[map, top],
+                (w, h),
+            );
+        }
+    };
+
+    // A safe on the Net, locked: jack in, Keyjack, force, card.
+    let (mut st, c) = copy_with_spot(150);
+    let c = container_as(&mut st, &c, ContainerKind::Safe);
+    beside(&mut st, &c);
+    let map = MapScreen::walking(&mut st);
+    let mut panel = ContainerPanel::open(&st, c.at);
+    panel.update(&mut st, &[]);
+    panel_shots("locked_net", &st, &map, &panel);
+
+    // The Keyjack on that lock, a beat in.
+    let mut jack = LockJack::open(&st, c.at).expect("clipped on");
+    jack.update(&mut st, &[]);
+    panel_shots("lockjack", &st, &map, &jack);
+
+    // A locked locker off the Net.
+    let mut found = None;
+    for seed in 0..12 {
+        let (mut st, b) = plain_site(BuildingKind::Hotel, seed);
+        let hit = all_in(&mut st, b).into_iter().find(|c| {
+            c.kind == ContainerKind::Locker
+                && matches!(containers::status(&st, c), Status::Locked(_))
+        });
+        if let Some(c) = hit {
+            found = Some((st, c));
+            break;
+        }
+    }
+    let (mut st2, c2) = found.expect("a locked locker");
+    beside(&mut st2, &c2);
+    let map2 = MapScreen::walking(&mut st2);
+    let mut panel2 = ContainerPanel::open(&st2, c2.at);
+    panel2.update(&mut st2, &[]);
+    panel_shots("locked", &st2, &map2, &panel2);
+
+    // The same safe opened, with something of each sort in it.
+    let s = containers::state_mut(&mut st, c.at);
+    s.opened = Some(Opened::Net);
+    s.left = Some(vec![
+        Loot::Cash(340),
+        Loot::Chip {
+            credits: 1200,
+            locked: false,
+        },
+        Loot::Chip {
+            credits: 4800,
+            locked: true,
+        },
+        Loot::Item {
+            item: game::ItemId::new("fuse_ceramic"),
+            qty: 2,
+        },
+        Loot::Card(1),
+    ]);
+    let mut open = ContainerPanel::open(&st, c.at);
+    open.update(&mut st, &[]);
+    panel_shots("open", &st, &map, &open);
+
+    // A lock being forced, halfway, the map alone.
+    let (mut st, c) = copy_with_spot(150);
+    beside(&mut st, &c);
+    let Status::Locked(lock) = containers::status(&st, &c) else {
+        panic!("locked")
+    };
+    st.character.attributes.body = containers::force::need(lock.grade);
+    let mut map = MapScreen::walking(&mut st);
+    let ticks = containers::force::can(&st, &c).expect("it can be forced");
+    let stand = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
+    map.forcing = Some(containers::force::Forcing {
+        at: c.at,
+        from: st.tick,
+        ticks,
+        stand,
+    });
+    st.tick += ticks / 2;
+    map.update(&mut st, &[]);
+    for (w, h) in sizes {
+        shot_stack(&format!("container_force_{w}x{h}"), &st, &[&map], (w, h));
+    }
+
+    // The map: one of each kind planted around you, in each state.
+    let (b, level) = (c.at.building, c.at.level);
+    let mut floor = st.interiors.floor(b, level).unwrap().1.clone();
+    let me = st.player.as_ref().unwrap().pos;
+    let dist = |p: citygen::Pos| {
+        let (dx, dy) = (p.x - me.x, p.y - me.y);
+        dx * dx + 4 * dy * dy
+    };
+    let mut standing: Vec<citygen::Pos> = floor
+        .tiles
+        .iter()
+        .filter(|(p, t)| {
+            t.is_walkable() && t.feature.is_none() && p.x % 2 == 0 && p.y % 2 == 0 && *p != me
+        })
+        .map(|(p, _)| p)
+        .collect();
+    standing.sort_by_key(|p| dist(*p));
+    let mut walls: Vec<citygen::Pos> = floor
+        .tiles
+        .iter()
+        .filter(|(p, t)| {
+            t.terrain == Terrain::Wall
+                && t.feature.is_none()
+                && p.x % 2 == 0
+                && p.y % 2 == 0
+                && p.neighbors4()
+                    .any(|n| floor.tiles.get(n).is_some_and(|t| t.is_walkable()))
+        })
+        .map(|(p, _)| p)
+        .collect();
+    walls.sort_by_key(|p| dist(*p));
+    let mut planted = Vec::new();
+    for spots in [standing, walls] {
+        let mut chosen: Vec<citygen::Pos> = spots.into_iter().take(15).collect();
+        chosen.sort_by_key(|p| (p.y, p.x));
+        for (i, at) in chosen.into_iter().enumerate() {
+            let kind = ContainerKind::ALL[i % 5];
+            floor.tiles.get_mut(at).unwrap().feature =
+                Some(citygen::Feature::Furniture(kind.furniture()));
+            planted.push((at, i / 5));
+        }
+    }
+    st.interiors.put_floor(b, floor);
+    for (at, state) in planted {
+        let at = containers::ContainerAt {
+            building: b,
+            level,
+            at,
+        };
+        let s = containers::state_mut(&mut st, at);
+        match state {
+            1 => {
+                s.opened = Some(Opened::Free);
+                s.left = Some(vec![Loot::Cash(50)]);
+            }
+            2 => {
+                s.opened = Some(Opened::Free);
+                s.left = Some(Vec::new());
+            }
+            _ => {}
+        }
+    }
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    st.tick += 3;
+    map.update(&mut st, &[]);
+    for (w, h) in sizes {
+        shot_stack(&format!("container_map_{w}x{h}"), &st, &[&map], (w, h));
+    }
+}
+
 /// The four racks as the desk draws them, at the map pane's size on 120x40 and on
 /// 100x30, and the stock rig with its relay pulled.
 #[test]
