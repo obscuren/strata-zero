@@ -8,6 +8,7 @@ use crate::containers::{self, Container, ContainerAt, Lock, Status, ways};
 use crate::render::tileset::{
     CONTAINER_NET, container_body, container_detail, container_open_shape,
 };
+use crate::screens::lockjack::LockJack;
 use crate::ui::chrome::{
     BAR_BG, CYAN, DIM, FAINT, FAINTER, MAGENTA, PANEL_BG, TEXT, frame, put, solid,
 };
@@ -59,7 +60,11 @@ fn locked_rows(st: &AppState, c: &Container, lock: &Lock) -> Vec<PanelRow> {
         crate::keyjack::carried(st),
         crate::keyjack::Carried::Fused(_)
     );
-    rows.push(if fused {
+    let (_, out) = ways::keyjack_now(st, c.at);
+    rows.push(if let Some(until) = out {
+        let left = until.saturating_sub(st.net.now(st)).max(1);
+        PanelRow::new('k', "Keyjack", format!("locked {left}m"), false)
+    } else if fused {
         let n = crate::keyjack::fuses(st);
         let word = if n == 1 { "fuse" } else { "fuses" };
         PanelRow::new('k', "Keyjack", format!("{n} {word}"), true)
@@ -188,11 +193,21 @@ impl ContainerPanel {
         None
     }
 
-    fn fire_locked(&mut self, st: &mut AppState, key: char) {
-        // Jacking in, the Keyjack and forcing it arrive with their own tasks.
-        if matches!(key, 'j' | 'k' | 'f') {
-            st.warn("not yet");
+    /// A locked panel's row fired: the Keyjack replaces the panel; jacking in and forcing
+    /// it arrive with their own tasks.
+    fn fire_locked(&mut self, st: &mut AppState, key: char) -> Option<ScreenCmd> {
+        match key {
+            'k' if st.net.engaged.is_some() => st.warn("not now"),
+            'k' => {
+                return LockJack::open(st, self.at).map(|jack| ScreenCmd::Replace {
+                    to: Box::new(jack),
+                    fx: TransitionKind::None,
+                });
+            }
+            'j' | 'f' => st.warn("not yet"),
+            _ => {}
         }
+        None
     }
 
     fn take(&mut self, st: &mut AppState, c: &Container, line: usize) {
@@ -202,26 +217,32 @@ impl ContainerPanel {
         }
     }
 
-    /// A key on the locked panel; true when it closes.
-    fn keys_locked(&mut self, st: &mut AppState, c: &Container, lock: &Lock, k: KeyEvent) -> bool {
+    /// A key on the locked panel: what it asks of the stack, if anything.
+    fn keys_locked(
+        &mut self,
+        st: &mut AppState,
+        c: &Container,
+        lock: &Lock,
+        k: KeyEvent,
+    ) -> Option<ScreenCmd> {
         let rows = locked_rows(st, c, lock);
         match k.code {
-            KeyCode::Esc => return true,
+            KeyCode::Esc => return Some(pop()),
             KeyCode::Up => self.step(&rows, -1),
             KeyCode::Down => self.step(&rows, 1),
             KeyCode::Enter | KeyCode::Char(' ') => {
                 if let Some(r) = rows.get(self.selected(&rows)).filter(|r| r.enabled) {
-                    self.fire_locked(st, r.key);
+                    return self.fire_locked(st, r.key);
                 }
             }
             KeyCode::Char(ch) => {
                 if let Some(r) = rows.iter().find(|r| r.key == ch && r.enabled) {
-                    self.fire_locked(st, r.key);
+                    return self.fire_locked(st, r.key);
                 }
             }
             _ => {}
         }
-        false
+        None
     }
 
     /// A key on the open panel; true when it closes.
@@ -262,13 +283,13 @@ impl Screen for ContainerPanel {
             }
         }
         for k in keys {
-            let done = match containers::status(st, &c) {
+            let cmd = match containers::status(st, &c) {
                 Status::Locked(lock) => self.keys_locked(st, &c, &lock, *k),
-                Status::Open(lines) => self.keys_open(st, &c, &lines, *k),
-                Status::Shut | Status::Empty => true,
+                Status::Open(lines) => self.keys_open(st, &c, &lines, *k).then(pop),
+                Status::Shut | Status::Empty => Some(pop()),
             };
-            if done {
-                return pop();
+            if let Some(cmd) = cmd {
+                return cmd;
             }
         }
         // The last line taken closes it.
