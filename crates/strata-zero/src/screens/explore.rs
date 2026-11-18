@@ -4334,6 +4334,18 @@ impl Screen for MapScreen {
         if !devices.is_empty() {
             overlays.push(&floor_devices);
         }
+        // A site's containers that are open, empty or on the Net.
+        let container_looks = match self.place {
+            Place::Floor { building, level } => crate::containers::looks(st, building, level),
+            _ => Vec::new(),
+        };
+        let container_overlay = crate::render::containers::ContainerLooks {
+            looks: &container_looks,
+            vis,
+        };
+        if !container_looks.is_empty() {
+            overlays.push(&container_overlay);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
         let force_bar = self.forcing.as_ref().and_then(|f| {

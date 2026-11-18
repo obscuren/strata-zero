@@ -271,6 +271,23 @@ impl Interiors {
         self.containers.get(&(b, level, at))
     }
 
+    /// The tiles of level `level` of plain building `b` that have a container state.
+    pub(crate) fn container_tiles(&self, b: BuildingId, level: i32) -> Vec<Pos> {
+        (self.containers.keys())
+            .filter(|(kb, kl, _)| *kb == b && *kl == level)
+            .map(|(_, _, p)| *p)
+            .collect()
+    }
+
+    /// The tiles of level `level` of venue `b`'s live copy that have a container state.
+    pub(crate) fn copy_container_tiles(&self, b: BuildingId, level: i32) -> Vec<Pos> {
+        (self.copies.get(&b).into_iter())
+            .flat_map(|c| c.containers.keys())
+            .filter(|(l, _)| *l == level)
+            .map(|(_, p)| *p)
+            .collect()
+    }
+
     /// The same, to change; a default one is put there if there was none.
     pub(crate) fn container_mut(
         &mut self,

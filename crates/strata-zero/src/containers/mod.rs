@@ -208,6 +208,78 @@ pub fn status(st: &AppState, c: &Container) -> Status {
     }
 }
 
+/// How a container with something to show looks on the map beyond its closed body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerLook {
+    /// Opened, with something left.
+    Open,
+    /// Opened, with nothing left.
+    Empty,
+    /// Locked, with a node on the site's Net, not yet opened.
+    Net,
+}
+
+/// The containers of floor `level` of `b` that are open, empty or on the Net (closed ones are
+/// the tileset's). Visits only the tiles with a state or a node, not the floor.
+pub fn looks(st: &AppState, b: BuildingId, level: i32) -> Vec<(Pos, ContainerKind, ContainerLook)> {
+    let mut tiles: std::collections::BTreeSet<Pos> = if crate::venues::copy_live(st, b) {
+        st.interiors.copy_container_tiles(b, level)
+    } else {
+        st.interiors.container_tiles(b, level)
+    }
+    .into_iter()
+    .collect();
+    if let Some(net) = crate::sitenet::net_of(st, b) {
+        tiles.extend(
+            (net.nodes.iter())
+                .filter(|n| n.node.level == level && n.kind == citygen::NodeKind::Container)
+                .map(|n| n.node.at),
+        );
+    }
+    tiles
+        .into_iter()
+        .filter_map(|at| {
+            let c = find(
+                st,
+                ContainerAt {
+                    building: b,
+                    level,
+                    at,
+                },
+            )?;
+            let look = match status(st, &c) {
+                Status::Open(_) => ContainerLook::Open,
+                Status::Empty => ContainerLook::Empty,
+                Status::Locked(l) if l.node.is_some() => ContainerLook::Net,
+                _ => return None,
+            };
+            Some((at, c.kind, look))
+        })
+        .collect()
+}
+
+/// The look line: the word, the lock, and where it stands.
+pub fn look_line(st: &AppState, c: &Container) -> String {
+    let status = status(st, c);
+    let mut s = c.kind.word().to_string();
+    if let Some(l) = lock(st, c) {
+        match &l.maker {
+            Some(m) => s.push_str(&format!(" · {m} grade {}", l.grade)),
+            None => s.push_str(&format!(" · grade {}", l.grade)),
+        }
+    }
+    s.push_str(match &status {
+        Status::Locked(_) => " · locked",
+        Status::Shut => " · closed",
+        Status::Open(_) => " · open",
+        Status::Empty => " · empty",
+    });
+    if matches!(&status, Status::Locked(l) if l.node.is_some()) {
+        s.push_str(" · on the Net");
+    }
+    s
+}
+
 /// The roll a container makes when it is opened; pure.
 fn rolled(st: &AppState, c: &Container) -> Vec<Loot> {
     let b = c.at.building;

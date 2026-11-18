@@ -536,10 +536,8 @@ pub fn container_open_shape(k: ContainerKind) -> char {
 }
 
 /// An emptied container's shape colour.
-#[allow(dead_code)] // drawn by the container states, a later task
 pub const CONTAINER_EMPTY_FG: Rgb = Rgb(0x5b, 0x6b, 0x7d);
 /// An emptied container's body colour.
-#[allow(dead_code)] // drawn by the container states, a later task
 pub const CONTAINER_EMPTY_BG: Rgb = Rgb(0x20, 0x26, 0x2e);
 /// A container on the Net and not yet opened: its detail in this.
 pub const CONTAINER_NET: Rgb = Rgb(0x00, 0xe6, 0xd2);

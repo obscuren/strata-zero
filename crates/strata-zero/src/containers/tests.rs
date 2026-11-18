@@ -367,3 +367,53 @@ fn a_plain_container_is_not_on_the_net() {
         Err("not on the Net".to_string())
     );
 }
+
+#[test]
+fn the_look_names_the_lock_and_the_state() {
+    let (mut st, safe) = plain_site_with(ContainerKind::Safe);
+    let l = lock(&st, &safe).expect("a safe is locked");
+    let line = look_line(&st, &safe);
+    assert!(
+        line.starts_with(&format!(
+            "safe · {} grade {} · locked",
+            l.maker.clone().unwrap(),
+            l.grade
+        )),
+        "{line}"
+    );
+    assert_eq!(line.ends_with("on the Net"), l.node.is_some());
+    holding(&mut st, &safe, vec![Loot::Cash(10)]);
+    assert!(look_line(&st, &safe).ends_with("· open"));
+    holding(&mut st, &safe, vec![]);
+    assert!(look_line(&st, &safe).ends_with("· empty"));
+
+    let (st, c) = plain_site_with(ContainerKind::Crate);
+    assert_eq!(look_line(&st, &c), "crate · closed");
+
+    let (st, spot) = copy_with_spot(150);
+    let line = look_line(&st, &spot);
+    assert!(line.ends_with("· locked · on the Net"), "{line}");
+}
+
+#[test]
+fn looks_shows_open_empty_and_the_net() {
+    let (mut st, spot) = copy_with_spot(150);
+    let (b, level) = (spot.at.building, spot.at.level);
+    let all = looks(&st, b, level);
+    assert!(
+        all.contains(&(spot.at.at, spot.kind, ContainerLook::Net)),
+        "{all:?}"
+    );
+    holding(&mut st, &spot, vec![Loot::Cash(5)]);
+    assert!(looks(&st, b, level).contains(&(spot.at.at, spot.kind, ContainerLook::Open)));
+    holding(&mut st, &spot, vec![]);
+    assert!(looks(&st, b, level).contains(&(spot.at.at, spot.kind, ContainerLook::Empty)));
+
+    let (st, c) = plain_site_with(ContainerKind::Crate);
+    assert!(
+        !looks(&st, c.at.building, c.at.level)
+            .iter()
+            .any(|(p, ..)| *p == c.at.at),
+        "an untouched crate is absent"
+    );
+}

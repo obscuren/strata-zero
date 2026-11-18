@@ -863,6 +863,32 @@ pub fn look_card(
         card.body
             .extend(item.map(|i| crate::missions::item_desc(st, &i.id)));
         card.also.extend(rest.iter().cloned());
+    } else if let Some(c) = tile
+        .feature
+        .filter(|f| f.container().is_some())
+        .and_then(|_| {
+            let Place::Floor { building, level } = place else {
+                return None;
+            };
+            crate::containers::find(
+                st,
+                crate::containers::ContainerAt {
+                    building,
+                    level,
+                    at: pos,
+                },
+            )
+        })
+    {
+        set_head(&mut card, capitalised(c.kind.word()), mark());
+        card.second = Some(crate::containers::look_line(st, &c));
+        if visible {
+            card.body.extend(
+                looks
+                    .line(Group::Furniture, c.kind.word(), seed, at)
+                    .map(String::from),
+            );
+        }
     } else if let Some(f) = tile.feature {
         let glyph = mark();
         match f {
