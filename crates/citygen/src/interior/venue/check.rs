@@ -3,14 +3,14 @@
 
 use super::mission::joined;
 use super::{
-    DeviceKind, Keys, Means, MissionInputs, MissionLayer, NodeAt, PLAYS, SizeRule, VenueGraph,
-    VenueLayout, VenueType, WayInKind, Ways, draw_copy_level, draw_level,
+    DeviceKind, Keys, LevelLayout, Means, MissionInputs, MissionLayer, NodeAt, PLAYS, SizeRule,
+    VenueGraph, VenueLayout, VenueType, WayInKind, Ways, draw_copy_level, draw_level,
 };
 use crate::geom::Pos;
 use crate::interior::floor::doorstep_of;
-use crate::interior::{FloorPlan, validate_floor};
+use crate::interior::{Floor, FloorPlan, RoomKind, validate_floor};
 use crate::rng::hash64;
-use crate::tile::{Feature, Terrain};
+use crate::tile::{Feature, Terrain, wall_front};
 use crate::world::StratumKind;
 use std::collections::BTreeSet;
 
@@ -176,6 +176,52 @@ fn free_way_out(layout: &VenueLayout, g: &VenueGraph) -> Result<(), String> {
     }
 }
 
+/// The containers of `floor`, drawn from `x`: each stands clear of every door and doorstep
+/// and in a room off the spine; one set in a wall has the one floor tile in front of it
+/// that opens it, a walkable tile with nothing on it. Errors name the tile.
+pub fn validate_containers(x: &LevelLayout, floor: &Floor) -> Result<(), String> {
+    let by_door = |p: Pos| {
+        let door = |q: Pos| {
+            floor
+                .tiles
+                .get(q)
+                .is_some_and(|t| t.terrain == Terrain::Door)
+        };
+        door(p) || p.neighbors4().any(door)
+    };
+    for (at, t) in floor.tiles.iter() {
+        if t.feature.and_then(|f| f.container()).is_none() {
+            continue;
+        }
+        let stands = if t.terrain == Terrain::Wall {
+            let front = wall_front(&floor.tiles, at)
+                .ok_or_else(|| format!("the container in the wall at {at:?} has no front"))?;
+            let ft = &floor.tiles[front];
+            if !ft.is_walkable() || ft.feature.is_some() {
+                return Err(format!(
+                    "the front of the container at {at:?} is blocked at {front:?}"
+                ));
+            }
+            front
+        } else {
+            at
+        };
+        if by_door(stands) {
+            return Err(format!(
+                "the container at {at:?} stands on a doorstep or a door's side at {stands:?}"
+            ));
+        }
+        // A spine room is a band's piece of corridor; on a hall spine the band is a room
+        // (an open plan) and holds its furniture like any.
+        let room = x.rooms.iter().position(|r| r.rect.contains(stands));
+        let spine = |i: usize| i < x.bands.len() && x.rooms[i].kind == RoomKind::Corridor;
+        if room.is_none_or(spine) {
+            return Err(format!("the container at {at:?} stands on a spine"));
+        }
+    }
+    Ok(())
+}
+
 /// The layout's checks and every level drawn and checked.
 pub fn validate_venue(layout: &VenueLayout) -> Result<(), String> {
     validate_layout(layout)?;
@@ -184,6 +230,7 @@ pub fn validate_venue(layout: &VenueLayout) -> Result<(), String> {
         let on = FloorPlan::label(x.level);
         let floor = draw_level(layout, x.level).ok_or_else(|| format!("{on} draws no floor"))?;
         validate_floor(&plan, &floor).map_err(|e| format!("{on}: {e}"))?;
+        validate_containers(x, &floor).map_err(|e| format!("{on}: {e}"))?;
     }
     Ok(())
 }
@@ -568,6 +615,47 @@ mod tests {
         // The objective's room dropped from the copy.
         let err = bad(small, &|m| m.kept.retain(|&k| k != m.objective.level));
         assert!(err.contains("objective"), "{err}");
+    }
+
+    #[test]
+    fn validate_containers_finds_a_piece_on_a_doorstep_and_one_walled_in() {
+        use crate::tile::Furniture;
+        let pack = VenuePack::builtin();
+        let t = pack.types.iter().find(|t| t.id == "hotel").unwrap();
+        let l = lay_out(t, VenueFrame::own(t), 0).unwrap();
+        let x = l.levels.iter().find(|x| x.level == 0).unwrap();
+        let floor = draw_level(&l, 0).unwrap();
+        validate_containers(x, &floor).unwrap();
+        // A locker on a floor tile beside a door.
+        let door = x.doors.iter().find(|d| !d.open).unwrap().at;
+        let step = door
+            .neighbors4()
+            .find(|p| floor.tiles[*p].terrain == Terrain::Floor)
+            .unwrap();
+        let mut f = floor.clone();
+        f.tiles[step].feature = Some(Feature::Furniture(Furniture::Locker));
+        let err = validate_containers(x, &f).unwrap_err();
+        assert!(err.contains("doorstep"), "{err}");
+        // A safe in a wall tile with no floor beside it.
+        let size = f.tiles.size();
+        let buried = size
+            .rect()
+            .inset(1)
+            .iter()
+            .find(|p| {
+                floor.tiles[*p].terrain == Terrain::Wall
+                    && p.neighbors4().all(|n| {
+                        floor
+                            .tiles
+                            .get(n)
+                            .is_none_or(|t| t.terrain != Terrain::Floor)
+                    })
+            })
+            .unwrap();
+        let mut f = floor.clone();
+        f.tiles[buried].feature = Some(Feature::Furniture(Furniture::Safe));
+        let err = validate_containers(x, &f).unwrap_err();
+        assert!(err.contains("front"), "{err}");
     }
 
     #[test]

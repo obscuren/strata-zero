@@ -5,6 +5,7 @@
 //! checker proves it. A mission's copy of a level is the plain level with the layer laid
 //! on top.
 
+use super::devices::switch_tiles;
 use super::mission::roomy;
 use super::{
     DeviceKind, LevelLayout, MissionLayer, PieceKind, PlacedPiece, PlannedRoom, VenueLayout,
@@ -15,7 +16,7 @@ use crate::interior::floor::{Role, Room, RoomKind, doorstep_of};
 use crate::interior::layouts::{Builder, walled};
 use crate::interior::{Floor, FloorPlan, LinkKind};
 use crate::rng::hash64;
-use crate::tile::{Feature, Furniture, Terrain};
+use crate::tile::{Feature, Furniture, Terrain, wall_front};
 use rand::Rng;
 use std::collections::BTreeSet;
 
@@ -54,8 +55,11 @@ pub fn draw_level(layout: &VenueLayout, level: i32) -> Option<Floor> {
         })
         .collect();
     // A room whose def lists nothing stands bare: its floor, its doors and its light.
-    for r in (x.rooms.iter()).filter(|r| !r.furniture.is_empty() || !r.stations.is_empty()) {
-        furnish(&mut b, r, &round_spots);
+    let switches = switch_tiles(x);
+    for r in (x.rooms.iter())
+        .filter(|r| !r.furniture.is_empty() || !r.stations.is_empty() || !r.wall.is_empty())
+    {
+        furnish(&mut b, r, &round_spots, &switches, seed);
     }
     b.light();
     Some(b.finish())
@@ -239,8 +243,15 @@ fn rooms(x: &LevelLayout) -> Vec<Room> {
 /// a tile the rng picks with a tile between pieces, then a station for each of its roles
 /// beside a piece nobody stands at yet, the role's own kind first (a desk's for a desk
 /// station); with no piece a station fits beside, the free tile nearest the room's middle.
-/// Neither stands on a tile `off` holds.
-fn furnish(b: &mut Builder, r: &PlannedRoom, off: &BTreeSet<Pos>) {
+/// Neither stands on a tile `off` holds. Last, the pieces its def sets in its wall
+/// (`wall_pieces`), on what the floor pieces and stations leave.
+fn furnish(
+    b: &mut Builder,
+    r: &PlannedRoom,
+    off: &BTreeSet<Pos>,
+    switches: &BTreeSet<Pos>,
+    floor_seed: u64,
+) {
     let free = |b: &Builder, p: Pos| b.open(p) && !off.contains(&p);
     let rect = r.rect;
     let mut along: Vec<Pos> = round(rect)
@@ -257,20 +268,13 @@ fn furnish(b: &mut Builder, r: &PlannedRoom, off: &BTreeSet<Pos>) {
     if !along.is_empty() {
         let start = b.rng.random_range(0..along.len());
         along.rotate_left(start);
-        let mut from = 0;
-        for &piece in &r.furniture {
-            let n = along.len();
-            let Some(k) = (from..n)
-                .chain(0..from)
-                .find(|&k| free(b, along[k]) && fits(b, along[k]))
-            else {
-                continue;
-            };
-            b.put(along[k], piece);
-            placed.push((along[k], piece));
-            from = (k + 2) % n;
-        }
     }
+    // The containers standing on the floor go after the stations, on what is left: a
+    // small room keeps its furniture and its stations.
+    let (boxes, solid): (Vec<Furniture>, Vec<Furniture>) =
+        (r.furniture.iter().copied()).partition(|f| f.container().is_some());
+    let mut from = 0;
+    stand(b, &along, &mut from, &solid, &free, &mut placed);
     let mut staffed = vec![false; placed.len()];
     for &role in &r.stations {
         let own = |j: usize| Some(placed[j].1) == piece_of(role);
@@ -294,6 +298,93 @@ fn furnish(b: &mut Builder, r: &PlannedRoom, off: &BTreeSet<Pos>) {
                 }
             }
         }
+    }
+    stand(b, &along, &mut from, &boxes, &free, &mut Vec::new());
+    wall_pieces(b, r, switches, floor_seed);
+}
+
+/// Each of `pieces` on a tile of `along`, round from index `from` (left after the last
+/// piece, two on) where `free` takes one and it cuts no way; a piece with none is left out.
+fn stand(
+    b: &mut Builder,
+    along: &[Pos],
+    from: &mut usize,
+    pieces: &[Furniture],
+    free: &impl Fn(&Builder, Pos) -> bool,
+    placed: &mut Vec<(Pos, Furniture)>,
+) {
+    let n = along.len();
+    for &piece in pieces {
+        let Some(k) = (*from..n)
+            .chain(0..*from)
+            .find(|&k| free(b, along[k]) && fits(b, along[k]))
+        else {
+            continue;
+        };
+        b.put(along[k], piece);
+        placed.push((along[k], piece));
+        *from = (k + 2) % n;
+    }
+}
+
+/// Salt of the walk that sets a room's wall pieces: its start comes from the floor's seed
+/// and the room's number, never from the builder's rng, so a room with no wall pieces
+/// draws as it did before they existed.
+const WALL_SALT: u64 = 0x3A11_5E75;
+
+/// The wall tiles round `rect` with the room's floor tile in front of each, corners left
+/// out, clockwise from the north-west.
+fn wall_ring(rect: Rect) -> Vec<(Pos, Pos)> {
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right() - 1, rect.bottom() - 1);
+    let mut v: Vec<(Pos, Pos)> = (x0..=x1)
+        .map(|x| (Pos::new(x, y0 - 1), Pos::new(x, y0)))
+        .collect();
+    v.extend((y0..=y1).map(|y| (Pos::new(x1 + 1, y), Pos::new(x1, y))));
+    v.extend(
+        (x0..=x1)
+            .rev()
+            .map(|x| (Pos::new(x, y1 + 1), Pos::new(x, y1))),
+    );
+    v.extend(
+        (y0..=y1)
+            .rev()
+            .map(|y| (Pos::new(x0 - 1, y), Pos::new(x0, y))),
+    );
+    v
+}
+
+/// The room's wall pieces, each set into a bare wall tile round its rect whose one floor
+/// neighbour is a free tile of the room (its front: no furniture, no station, nothing kept
+/// clear), neither tile a switch's. They go after the floor pieces, so a small room keeps
+/// the furniture it lists. The walk starts where the floor's seed and the room's corner say
+/// (a room's number is 0 unless a lock names it) and goes on from each piece, so pieces sit
+/// in a bank; each front is then kept clear for what is drawn after.
+fn wall_pieces(b: &mut Builder, r: &PlannedRoom, switches: &BTreeSet<Pos>, floor_seed: u64) {
+    let ring = wall_ring(r.rect);
+    let n = ring.len();
+    if r.wall.is_empty() || n == 0 {
+        return;
+    }
+    let corner = ((r.rect.y as u32 as u64) << 32) | (r.rect.x as u32 as u64);
+    let start = (hash64(hash64(floor_seed, WALL_SALT), corner) % n as u64) as usize;
+    let mut from = 0;
+    for &piece in &r.wall {
+        let found = (0..n).map(|k| (from + k) % n).find(|&k| {
+            let (at, front) = ring[(start + k) % n];
+            let t = b.tiles.get(at);
+            t.is_some_and(|t| t.terrain == Terrain::Wall && t.feature.is_none())
+                && !b.reserved.contains(&at)
+                && !switches.contains(&at)
+                && !switches.contains(&front)
+                && wall_front(&b.tiles, at) == Some(front)
+                && b.open(front)
+                && b.station_free(front)
+        });
+        let Some(k) = found else { continue };
+        let (at, front) = ring[(start + k) % n];
+        b.tiles[at].feature = Some(Feature::Furniture(piece));
+        b.clear.insert(front);
+        from = (k + 1) % n;
     }
 }
 
@@ -805,5 +896,153 @@ mod tests {
                 assert_eq!(draw_level(&layout, l.level), draw_level(&layout, l.level));
             }
         }
+    }
+
+    /// The drawn floors of `layout`: every tile's terrain and feature and every station,
+    /// hashed.
+    fn floors_hash(layout: &VenueLayout) -> u64 {
+        use std::fmt::Write;
+        let mut text = String::new();
+        for x in &layout.levels {
+            let f = draw_level(layout, x.level).unwrap();
+            for (_, t) in f.tiles.iter() {
+                let _ = writeln!(text, "{:?} {:?}", t.terrain, t.feature);
+            }
+            for s in &f.stations {
+                let _ = writeln!(text, "{s:?}");
+            }
+        }
+        (text.as_bytes().iter()).fold(0, |h, b| hash64(h, u64::from(*b)))
+    }
+
+    #[test]
+    fn a_room_with_no_wall_pieces_draws_as_before() {
+        // Recorded before wall pieces existed: the test type lists none.
+        const BEFORE: [u64; 4] = [
+            580858314144424478,
+            12633438185046163235,
+            8053143386205850694,
+            13915019319269244675,
+        ];
+        let t = test_type();
+        for (seed, want) in (0..4u64).zip(BEFORE) {
+            let l = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+            assert_eq!(floors_hash(&l), want, "seed {seed}");
+        }
+    }
+
+    /// Every builtin type over its own frame, seeds 0..6.
+    fn site_layouts() -> Vec<(String, u64, VenueLayout)> {
+        let mut v = Vec::new();
+        for t in &VenuePack::builtin().types {
+            for seed in 0..6 {
+                let l = lay_out(t, VenueFrame::own(t), seed).unwrap();
+                v.push((t.id.clone(), seed, l));
+            }
+        }
+        v
+    }
+
+    fn near_door(f: &Floor, p: Pos) -> bool {
+        let door = |q: Pos| f.tiles.get(q).is_some_and(|t| t.terrain == Terrain::Door);
+        door(p) || p.neighbors4().any(door)
+    }
+
+    #[test]
+    fn wall_pieces_stand_in_the_wall_with_their_front_free() {
+        let mut seen = 0;
+        for (id, seed, layout) in site_layouts() {
+            for x in &layout.levels {
+                let f = draw_level(&layout, x.level).unwrap();
+                let what = format!("{id} seed {seed} level {}", x.level);
+                let mut fronts = BTreeSet::new();
+                for (at, t) in f.tiles.iter() {
+                    let Some(Feature::Furniture(piece)) = t.feature else {
+                        continue;
+                    };
+                    if t.terrain != Terrain::Wall || piece.container().is_none() {
+                        continue;
+                    }
+                    seen += 1;
+                    let front = crate::tile::wall_front(&f.tiles, at)
+                        .unwrap_or_else(|| panic!("{what}: {at:?} has no front"));
+                    let ft = &f.tiles[front];
+                    assert!(
+                        ft.is_walkable() && ft.feature.is_none(),
+                        "{what}: {front:?}"
+                    );
+                    assert!(
+                        x.rooms
+                            .iter()
+                            .any(|r| r.rect.contains(front) && r.wall.contains(&piece)),
+                        "{what}: {front:?} is in no room that lists it"
+                    );
+                    assert!(!near_door(&f, front), "{what}: {front:?} by a door");
+                    assert!(fronts.insert(front), "{what}: two share {front:?}");
+                }
+            }
+        }
+        assert!(seen > 0, "no wall piece was drawn");
+    }
+
+    #[test]
+    fn a_room_holds_its_wall_pieces() {
+        let wall_pieces = |f: &Floor, r: &PlannedRoom, piece: Furniture| {
+            (r.rect.grow(1).iter())
+                .filter(|p| !r.rect.contains(*p))
+                .filter(|p| f.tiles[*p].terrain == Terrain::Wall)
+                .filter(|p| f.tiles[*p].feature == Some(Feature::Furniture(piece)))
+                .count()
+        };
+        let (mut lockers, mut safes) = (0, 0);
+        for (id, seed, layout) in site_layouts() {
+            for x in &layout.levels {
+                let f = draw_level(&layout, x.level).unwrap();
+                for r in &x.rooms {
+                    let want =
+                        |name: &str, piece: Furniture| r.name == name && r.wall.contains(&piece);
+                    if id == "hotel" && want("lockers", Furniture::Locker) {
+                        let n = wall_pieces(&f, r, Furniture::Locker);
+                        assert!(n >= 1, "{id} seed {seed}: the lockers room has none");
+                        lockers += 1;
+                    }
+                    if id == "office" && want("executive office", Furniture::Safe) {
+                        let n = wall_pieces(&f, r, Furniture::Safe);
+                        assert!(n >= 1, "{id} seed {seed}: the executive office has none");
+                        safes += 1;
+                    }
+                }
+            }
+        }
+        assert!(lockers > 0 && safes > 0);
+    }
+
+    #[test]
+    fn no_container_stands_on_a_doorstep_or_a_spine() {
+        let mut seen = 0;
+        for (id, seed, layout) in site_layouts() {
+            for x in &layout.levels {
+                let f = draw_level(&layout, x.level).unwrap();
+                let what = format!("{id} seed {seed} level {}", x.level);
+                for (at, t) in f.tiles.iter() {
+                    if t.terrain != Terrain::Floor
+                        || t.feature.and_then(|g| g.container()).is_none()
+                    {
+                        continue;
+                    }
+                    seen += 1;
+                    assert!(!near_door(&f, at), "{what}: {at:?} by a door");
+                    let room = x.rooms.iter().position(|r| r.rect.contains(at));
+                    // A hall spine's band is a room of its own (an open plan).
+                    assert!(
+                        room.is_some_and(|i| {
+                            i >= x.bands.len() || x.rooms[i].kind != RoomKind::Corridor
+                        }),
+                        "{what}: {at:?} stands on a spine"
+                    );
+                }
+            }
+        }
+        assert!(seen > 0);
     }
 }

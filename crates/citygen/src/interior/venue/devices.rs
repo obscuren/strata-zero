@@ -7,7 +7,7 @@ use super::{LevelLayout, PieceKind, PlannedDoor, VenueLayout, VenueType, WayInKi
 use crate::geom::{Pos, Rect};
 use crate::interior::Floor;
 use crate::rng::hash64;
-use crate::tile::Terrain;
+use crate::tile::{Terrain, Tile, wall_front};
 use crate::world::StratumKind;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -37,9 +37,43 @@ pub struct LineSwitch {
 
 /// The tiles a device's floor tile may not be: reserved, a room's spot, a door or its
 /// doorstep, a station.
+/// A container set in a wall is opened from the tile in front of it, which a device keeps
+/// off too.
 fn unfree(x: &LevelLayout, floor: &Floor) -> BTreeSet<Pos> {
     let mut v = held(x, floor);
     v.extend(x.reserved.iter().copied());
+    v.extend(
+        (floor.tiles.iter())
+            .filter(|(_, t)| t.terrain == Terrain::Wall && holds_container(t))
+            .filter_map(|(at, _)| wall_front(&floor.tiles, at)),
+    );
+    v
+}
+
+/// Whether a tile's feature is a container.
+fn holds_container(t: &Tile) -> bool {
+    t.feature.and_then(|f| f.container()).is_some()
+}
+
+/// The tiles a gate line's switch may take on `x`, and the floor tiles in front of each:
+/// every spot it tries, either side, whichever the drawn level ends by using. Drawing keeps
+/// the room's wall pieces off them, and a switch is found only on the drawn floor.
+pub(super) fn switch_tiles(x: &LevelLayout) -> BTreeSet<Pos> {
+    let mut v = BTreeSet::new();
+    for piece in 0..x.pieces.len() {
+        let Some((_, horizontal, spots)) = switch_spots(x, piece) else {
+            continue;
+        };
+        for at in spots {
+            v.insert(at);
+            let (a, b) = if horizontal {
+                (at.offset(0, -1), at.offset(0, 1))
+            } else {
+                (at.offset(-1, 0), at.offset(1, 0))
+            };
+            v.extend([a, b]);
+        }
+    }
     v
 }
 
@@ -100,7 +134,7 @@ impl Used {
                     && floor
                         .tiles
                         .get(at)
-                        .is_some_and(|t| t.terrain == Terrain::Wall)
+                        .is_some_and(|t| t.terrain == Terrain::Wall && !holds_container(t))
                     && free(floor, &self.unfree, front)
             })
             .collect();

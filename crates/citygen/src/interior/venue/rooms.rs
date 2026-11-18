@@ -221,6 +221,7 @@ fn plain(rect: Rect, kind: RoomKind, zone: u8) -> PlannedRoom {
         number: 0,
         private: false,
         furniture: Vec::new(),
+        wall: Vec::new(),
         stations: Vec::new(),
         spots: Vec::new(),
     }
@@ -351,6 +352,7 @@ impl<'a> Stage<'a> {
             number,
             private: d.private,
             furniture: d.furniture.clone(),
+            wall: d.wall.clone(),
             stations: d.stations.clone(),
             spots: Vec::new(),
         }

@@ -304,6 +304,9 @@ pub struct RoomDef {
     pub private: bool,
     #[serde(default)]
     pub furniture: Vec<Furniture>,
+    /// Pieces set into the room's bare wall tiles, each opened from the floor in front.
+    #[serde(default)]
+    pub wall: Vec<Furniture>,
     #[serde(default)]
     pub stations: Vec<Role>,
 }

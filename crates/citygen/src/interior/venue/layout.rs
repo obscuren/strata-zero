@@ -121,6 +121,9 @@ pub struct PlannedRoom {
     pub private: bool,
     /// From the room's def.
     pub furniture: Vec<Furniture>,
+    /// From the room's def: pieces set into its wall.
+    #[serde(default)]
+    pub wall: Vec<Furniture>,
     pub stations: Vec<Role>,
     /// Interior tiles the mission layer may use.
     pub spots: Vec<Pos>,
