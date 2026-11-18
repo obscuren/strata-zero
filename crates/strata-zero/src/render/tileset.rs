@@ -525,7 +525,6 @@ pub fn container_detail(k: ContainerKind) -> (char, Rgb) {
 }
 
 /// The shape an opened container shows.
-#[allow(dead_code)] // drawn by the container states, a later task
 pub fn container_open_shape(k: ContainerKind) -> char {
     match k {
         ContainerKind::Locker => '▯',
@@ -543,7 +542,6 @@ pub const CONTAINER_EMPTY_FG: Rgb = Rgb(0x5b, 0x6b, 0x7d);
 #[allow(dead_code)] // drawn by the container states, a later task
 pub const CONTAINER_EMPTY_BG: Rgb = Rgb(0x20, 0x26, 0x2e);
 /// A container on the Net and not yet opened: its detail in this.
-#[allow(dead_code)] // drawn by the container states, a later task
 pub const CONTAINER_NET: Rgb = Rgb(0x00, 0xe6, 0xd2);
 
 /// A fitting that leaves the ground's glyph showing: set in a wall, or a stage's lights.

@@ -1,7 +1,7 @@
 //! What Space offers: the things in reach, one window each, with fixed verbs on fixed
 //! letters (`x` look, `t` talk, `i` interact, `j` jack, `g` take, `>` `<` go).
 
-use crate::app::AppState;
+use crate::app::{AppState, Screen};
 use crate::missions::ReadAt;
 use crate::render::map::MapRef;
 use crate::render::map::TileMap;
@@ -31,6 +31,8 @@ pub struct Subject {
     pub body: Vec<String>,
     /// Its verbs, Look not included: `window` puts Look first.
     pub choices: Vec<Choice>,
+    /// A container: Space opens its panel in place of a window of verbs.
+    pub panel: Option<crate::containers::ContainerAt>,
 }
 
 impl Subject {
@@ -47,6 +49,14 @@ impl Subject {
         rows.extend(self.choices.iter().cloned());
         Popup::about(self.header.clone(), self.subtitle.clone(), rows, tick)
             .with_body(self.body.clone())
+    }
+
+    /// What Space opens on it: a container's panel, else its window.
+    pub fn open(&self, st: &AppState) -> Box<dyn Screen> {
+        match self.panel {
+            Some(at) => Box::new(crate::screens::container::ContainerPanel::open(st, at)),
+            None => Box::new(self.window(st.tick)),
+        }
     }
 }
 
@@ -157,6 +167,7 @@ fn add(
         subtitle,
         body: Vec::new(),
         choices: rows,
+        panel: None,
     });
 }
 
@@ -190,6 +201,7 @@ pub fn gather(
         subtitle: None,
         body: Vec::new(),
         choices: Vec::new(),
+        panel: None,
     };
     let mut letters = FREE_LETTERS.chars();
 
@@ -447,6 +459,34 @@ pub fn gather(
             None,
             vec![row],
         );
+    }
+
+    // A container within reach: Space opens its panel.
+    if let Place::Floor { building, level } = place {
+        for at in pos.neighbors8().chain(std::iter::once(pos)) {
+            let id = crate::containers::ContainerAt {
+                building,
+                level,
+                at,
+            };
+            let Some(c) = crate::containers::find(st, id) else {
+                continue;
+            };
+            // A wall piece that lost its one front (floor on both sides) has no side to
+            // stand on: out of reach from either.
+            let walled = c.front.is_none()
+                && map
+                    .tile(at)
+                    .is_some_and(|t| t.terrain == citygen::Terrain::Wall);
+            if walled || !crate::containers::ways::reach(&c, pos) {
+                continue;
+            }
+            let head = header(capitalised(c.kind.word()), mark_tile(st, &map, at));
+            add(&mut subs, &mut here, at, Some(head), None, Vec::new());
+            if let Some(s) = subs.iter_mut().find(|s| s.pos == at) {
+                s.panel = Some(id);
+            }
+        }
     }
 
     // Your own bed beside you, in your flat: sleep in it.
@@ -1557,5 +1597,51 @@ mod tests {
         let shard = game::ItemId::new("ledger_shard");
         game::remove_from_pack(&mut st.character, &shard, 1);
         assert!(reads(&st).is_empty(), "no shard, no row");
+    }
+
+    #[test]
+    fn a_container_beside_you_is_a_subject_with_a_panel() {
+        let (mut st, c) =
+            crate::containers::testutil::plain_site_with(citygen::tile::ContainerKind::Crate);
+        crate::containers::testutil::beside(&mut st, &c);
+        let subjects = gather(&st, &|_, _| None);
+        let s = subjects
+            .iter()
+            .find(|s| s.pos == c.at.at)
+            .expect("the crate is a subject");
+        assert_eq!(s.panel, Some(c.at));
+        assert_eq!(s.name(), "Crate");
+    }
+
+    #[test]
+    fn a_wall_container_is_out_of_reach_from_behind_its_wall() {
+        use crate::containers::testutil::{all_in, beside, plain_site};
+        let mut found = None;
+        'seeds: for seed in 0..12 {
+            for kind in [citygen::BuildingKind::Hotel, citygen::BuildingKind::Office] {
+                let (mut st, b) = plain_site(kind, seed);
+                if let Some(c) = all_in(&mut st, b).into_iter().find(|c| c.front.is_some()) {
+                    found = Some((st, c));
+                    break 'seeds;
+                }
+            }
+        }
+        let (mut st, c) = found.expect("a wall-set container");
+        let (front, at) = (c.front.unwrap(), c.at.at);
+        let far = citygen::Pos::new(2 * at.x - front.x, 2 * at.y - front.y);
+        // From its front it is in reach.
+        beside(&mut st, &c);
+        assert!(gather(&st, &|_, _| None).iter().any(|s| s.pos == at));
+        // Floor on its far side: standing there, it is out of reach.
+        let mut floor = st
+            .interiors
+            .floor(c.at.building, c.at.level)
+            .unwrap()
+            .1
+            .clone();
+        floor.tiles.get_mut(far).expect("a far tile").terrain = citygen::Terrain::Floor;
+        st.interiors.put_floor(c.at.building, floor);
+        st.player.as_mut().unwrap().pos = far;
+        assert!(gather(&st, &|_, _| None).iter().all(|s| s.pos != at));
     }
 }

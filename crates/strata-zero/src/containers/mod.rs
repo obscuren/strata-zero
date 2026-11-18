@@ -2,9 +2,6 @@
 //! are locked and how, what became of each, and taking what is in them. The pure roll is
 //! `loot`, the saved shape `state`; spec `docs/superpowers/specs/2026-11-18-containers-design.md`.
 
-// The panel and the keys that use these arrive with the later tasks of #96.
-#![allow(dead_code)]
-
 use crate::app::AppState;
 use citygen::rng::hash64;
 use citygen::tile::{ContainerKind, wall_front};
@@ -14,6 +11,7 @@ use game::ItemId;
 
 pub mod loot;
 pub mod state;
+pub mod ways;
 
 use loot::{TableKey, Tables};
 use state::{ContainerState, Loot, Opened};
@@ -21,7 +19,7 @@ use state::{ContainerState, Loot, Opened};
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 /// Salt for a container's roll seed.
 pub const CONTAINER_SALT: u64 = 0xC047_A1E5;

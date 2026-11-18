@@ -6,6 +6,7 @@ pub mod blueprint;
 pub mod broadcast;
 pub mod configure;
 pub mod console;
+pub mod container;
 pub mod create;
 pub mod cyberdeck;
 pub mod deck;

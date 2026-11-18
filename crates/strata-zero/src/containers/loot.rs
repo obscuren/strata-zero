@@ -109,6 +109,8 @@ impl Tables {
     }
 
     /// The tables against the content: known items, sane ranges, a fallback per kind.
+    // Only the tests read it; the shipped tables are checked there.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn check(&self, content: &game::Content) -> Result<(), String> {
         if self.scale.0 == 0 || self.scale.1 == 0 || self.scale.2 == 0 {
             return Err("a band scales sums to nothing".into());

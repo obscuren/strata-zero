@@ -160,6 +160,25 @@ pub enum Carried<'a> {
     Fused(&'a ItemCopy),
 }
 
+/// The fuses a runner has: fitted in carried Keyjacks, and loose in the pack.
+pub fn fuses(st: &AppState) -> u32 {
+    (st.character.inventory.iter())
+        .map(|s| {
+            if s.item.0 == ITEM {
+                let fitted = s
+                    .copy
+                    .as_ref()
+                    .map_or(0, |c| c.fitted.iter().flatten().count());
+                return fitted as u32 * s.qty;
+            }
+            let fuse = (st.content.item(&s.item))
+                .and_then(|i| i.hardware.as_ref())
+                .is_some_and(|h| h.fits == game::SocketKind::Fuse);
+            if fuse { s.qty } else { 0 }
+        })
+        .sum()
+}
+
 /// The Keyjacks in the pack (it has no slot to be worn in).
 pub fn carried(st: &AppState) -> Carried<'_> {
     let mut jacks = st

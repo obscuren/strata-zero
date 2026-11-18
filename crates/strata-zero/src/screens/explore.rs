@@ -2064,9 +2064,9 @@ impl MapScreen {
                 });
             }
         }
-        let popup = match subjects.as_slice() {
-            [] => Popup::verbs("", vec![look], st.tick),
-            [s] => s.window(st.tick),
+        let to: Box<dyn Screen> = match subjects.as_slice() {
+            [] => Box::new(Popup::verbs("", vec![look], st.tick)),
+            [s] => s.open(st),
             _ => {
                 self.which_way = Some(WhichWay {
                     subjects,
@@ -2076,7 +2076,7 @@ impl MapScreen {
             }
         };
         Some(ScreenCmd::Push {
-            to: Box::new(popup),
+            to,
             fx: TransitionKind::None,
         })
     }
@@ -2219,7 +2219,7 @@ impl MapScreen {
         let Some(s) = pick else {
             return ScreenCmd::Stay;
         };
-        let to = Box::new(s.window(st.tick));
+        let to = s.open(st);
         self.which_way = None;
         ScreenCmd::Push {
             to,
@@ -2345,7 +2345,7 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
-        let popup = if let Some(b) = place.construct() {
+        let to: Box<dyn Screen> = if let Some(b) = place.construct() {
             let mut letters = FREE_LETTERS.chars();
             let rows: Vec<Choice> = interact::run_rows(st, b, pos, None, &mut letters)
                 .into_iter()
@@ -2358,17 +2358,17 @@ impl MapScreen {
             }
             let mut choices = vec![Choice::new('x', "Look", Pick::Look(cursor))];
             choices.extend(rows);
-            Popup::verbs("", choices, st.tick)
+            Box::new(Popup::verbs("", choices, st.tick))
         } else {
             let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
             match subjects.iter().find(|s| s.pos == cursor) {
-                Some(s) => s.window(st.tick),
+                Some(s) => s.open(st),
                 None => return ScreenCmd::Stay,
             }
         };
         self.looking = None;
         ScreenCmd::Push {
-            to: Box::new(popup),
+            to,
             fx: TransitionKind::None,
         }
     }
