@@ -300,7 +300,7 @@ fn furnish(
         }
     }
     stand(b, &along, &mut from, &boxes, &free, &mut Vec::new());
-    wall_pieces(b, r, switches, floor_seed);
+    wall_pieces(b, r, off, switches, floor_seed);
 }
 
 /// Each of `pieces` on a tile of `along`, round from index `from` (left after the last
@@ -353,13 +353,29 @@ fn wall_ring(rect: Rect) -> Vec<(Pos, Pos)> {
     v
 }
 
+/// Whether `p` is a door or beside one (a doorstep): no container stands there or is
+/// opened from there.
+fn by_door(b: &Builder, p: Pos) -> bool {
+    let door = |q: Pos| b.tiles.get(q).is_some_and(|t| t.terrain == Terrain::Door);
+    door(p) || p.neighbors4().any(door)
+}
+
 /// The room's wall pieces, each set into a bare wall tile round its rect whose one floor
 /// neighbour is a free tile of the room (its front: no furniture, no station, nothing kept
-/// clear), neither tile a switch's. They go after the floor pieces, so a small room keeps
-/// the furniture it lists. The walk starts where the floor's seed and the room's corner say
-/// (a room's number is 0 unless a lock names it) and goes on from each piece, so pieces sit
-/// in a bank; each front is then kept clear for what is drawn after.
-fn wall_pieces(b: &mut Builder, r: &PlannedRoom, switches: &BTreeSet<Pos>, floor_seed: u64) {
+/// clear, no door or doorstep), neither tile a switch's. They go after the floor pieces, so
+/// a small room keeps the furniture it lists. The walk starts where the floor's seed and
+/// the room's corner say (a room's number is 0 unless a lock names it) and goes on from
+/// each piece, so pieces sit in a bank; each front is then kept clear for what is drawn
+/// after. A piece with no such wall spot stands on the room's floor instead (a free tile
+/// off the doorsteps that cuts no way, off the spots' rings if one is left), so a listed
+/// piece is never lost.
+fn wall_pieces(
+    b: &mut Builder,
+    r: &PlannedRoom,
+    off: &BTreeSet<Pos>,
+    switches: &BTreeSet<Pos>,
+    floor_seed: u64,
+) {
     let ring = wall_ring(r.rect);
     let n = ring.len();
     if r.wall.is_empty() || n == 0 {
@@ -378,9 +394,23 @@ fn wall_pieces(b: &mut Builder, r: &PlannedRoom, switches: &BTreeSet<Pos>, floor
                 && !switches.contains(&front)
                 && wall_front(&b.tiles, at) == Some(front)
                 && b.open(front)
+                && !by_door(b, front)
                 && b.station_free(front)
         });
-        let Some(k) = found else { continue };
+        let Some(k) = found else {
+            let floor = |b: &Builder, p: Pos| {
+                b.open(p) && b.station_free(p) && !by_door(b, p) && keeps_way(b, p)
+            };
+            let tiles = round(r.rect).into_iter().chain(r.rect.iter());
+            let tiles: Vec<Pos> = tiles.collect();
+            let spot = (tiles.iter().copied())
+                .find(|&p| floor(b, p) && !off.contains(&p))
+                .or_else(|| tiles.iter().copied().find(|&p| floor(b, p)));
+            if let Some(p) = spot {
+                b.put(p, piece);
+            }
+            continue;
+        };
         let (at, front) = ring[(start + k) % n];
         b.tiles[at].feature = Some(Feature::Furniture(piece));
         b.clear.insert(front);

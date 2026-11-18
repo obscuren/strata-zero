@@ -36,9 +36,8 @@ pub struct LineSwitch {
 }
 
 /// The tiles a device's floor tile may not be: reserved, a room's spot, a door or its
-/// doorstep, a station.
-/// A container set in a wall is opened from the tile in front of it, which a device keeps
-/// off too.
+/// doorstep, a station, and the front of a container set in a wall (it is opened from
+/// there).
 fn unfree(x: &LevelLayout, floor: &Floor) -> BTreeSet<Pos> {
     let mut v = held(x, floor);
     v.extend(x.reserved.iter().copied());
