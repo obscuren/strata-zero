@@ -10,7 +10,7 @@ mod round;
 use crate::app::AppState;
 use citygen::BuildingId;
 
-pub(crate) use call::answer;
+pub(crate) use call::{answer, join_fight};
 pub use doors::opens;
 pub use hunt::hear;
 pub(crate) use hunt::{drop_card, lose_you, lost_you, release_follow, you_left};
@@ -45,8 +45,9 @@ const MOST_ACTIONS: usize = 64;
 /// `MOST_ACTIONS`), each action at the tick it fell due, the step's first tick at the
 /// earliest, so a minute's rest walks it as far as a minute of frames. One on the floor of
 /// a fight, which the turns move, holds. A hunting one hunts (`hunt::hunt_step`), a calm
-/// one the alarm sent somewhere goes (`call::call_step`), any other walks its round. Out of it, its guards lose you and hold. Then a guard that sees
-/// the body you left jacked in finds it (`hunt::body_check`).
+/// one the alarm sent somewhere goes (`call::call_step`), any other walks its round. Out
+/// of it, its guards lose you and hold. Then a guard that sees the body you left jacked
+/// in finds it (`hunt::body_check`).
 pub fn tick(st: &mut AppState, ticks: u64) {
     let mut buildings: Vec<BuildingId> = (st.foes.iter())
         .filter_map(|f| f.post.as_ref().map(|p| p.building))

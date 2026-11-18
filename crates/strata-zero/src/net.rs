@@ -2415,13 +2415,15 @@ fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
 }
 
 /// Every standing foe in sight memory the order does not hold yet takes its place
-/// at the end: one that came hunting mid-fight. On a floor every calm guard of it looks
-/// first, and every guard of it that hunts takes a seat, seen or not.
+/// at the end: one that came hunting mid-fight. On a floor a guard that answered the
+/// alarm to it joins first (`guards::join_fight`), every calm guard of it looks, and every
+/// guard of it that hunts takes a seat, seen or not.
 pub fn seat_foes(st: &mut AppState) {
     let Some(place) = st.net.engaged.as_ref().map(|e| e.place) else {
         return;
     };
     if matches!(place, Place::Floor { .. }) {
+        crate::guards::join_fight(st, place);
         for i in crate::foes::standing(st, place) {
             if st.foes[i].post.is_some() && !st.foes[i].hunting() {
                 crate::foes::look(st, i);

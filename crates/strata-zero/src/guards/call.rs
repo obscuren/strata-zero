@@ -113,6 +113,26 @@ pub(crate) fn answer(st: &mut AppState, b: BuildingId) {
     }
 }
 
+/// The calm guards on `place`, a floor with a fight on, that answered a spot on it join
+/// the fight: they hunt toward the spot, so the fight seats them as it does its floor's
+/// own (`net::seat_foes`).
+pub(crate) fn join_fight(st: &mut AppState, place: Place) {
+    let Place::Floor { level, .. } = place else {
+        return;
+    };
+    for foe in (st.foes.iter_mut()).filter(|f| f.place == place && f.standing() && !f.hunting()) {
+        let Some(post) = foe.post.as_mut() else {
+            continue;
+        };
+        if let Some(Call::Answer { level: there, at }) = post.call
+            && there == level
+        {
+            post.call = None;
+            foe.mode = FoeMode::Hunting { seen: at, lost: 0 };
+        }
+    }
+}
+
 /// Guard `i`, given a call, sets off at once rather than finishing its pause: whether it
 /// has one.
 fn set_off(st: &mut AppState, i: usize, now: u64) -> bool {
@@ -386,6 +406,28 @@ mod tests {
         let order = &st.net.engaged.as_ref().unwrap().order;
         assert!(order.contains(&crate::net::Actor::Foe(far)), "{order:?}");
         assert!(logged(&st, "guards close in"));
+    }
+
+    #[test]
+    fn a_guard_answering_into_a_fight_joins_it() {
+        let mut st = ward();
+        // The fight is in the dark east hall, out of sight of the stair's landing.
+        stand(&mut st, 0, Pos::new(18, 3));
+        let seer = guard(&mut st, 0, 1, &[Pos::new(20, 3)]);
+        let up = calm_guard(&mut st, 1, 0);
+        assert!(crate::foes::look_all(&mut st));
+        crate::net::engage(&mut st, on(0), true);
+        crate::net::lock_down(&mut st, WARD);
+        assert!(matches!(
+            call_of(&st, up),
+            Some(Call::Answer { level: 0, .. })
+        ));
+        run_until(&mut st, 2000, |st| st.foes[up].place == on(0));
+        crate::net::seat_foes(&mut st);
+        assert!(st.foes[up].hunting(), "it came for the fight");
+        let order = &st.net.engaged.as_ref().unwrap().order;
+        assert!(order.contains(&crate::net::Actor::Foe(up)), "{order:?}");
+        assert!(st.foes[seer].hunting());
     }
 
     #[test]
