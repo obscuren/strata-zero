@@ -33,6 +33,11 @@ pub struct Interiors {
     /// saves, so it defaults: they hold none.
     #[serde(default)]
     copies: BTreeMap<BuildingId, crate::venues::MissionCopy>,
+    /// What became of each container opened or worked on in a building's plain floors:
+    /// an untouched one has no entry and rolls from its seed. A live copy's go in the copy
+    /// (`MissionCopy.containers`). After the first saves, so it defaults.
+    #[serde(default)]
+    containers: BTreeMap<(BuildingId, i32, Pos), crate::containers::state::ContainerState>,
     /// Whether each building asked about with no plan yet would be laid out as a venue:
     /// a cache, made from the city when first asked (saving rule 16), never saved.
     #[serde(skip)]
@@ -253,6 +258,36 @@ impl Interiors {
             Some(c) => self.copies.insert(b, c),
             None => self.copies.remove(&b),
         };
+    }
+
+    /// The state of the container at `at` of a plain floor of `b`, if anything has happened
+    /// to it.
+    pub(crate) fn container(
+        &self,
+        b: BuildingId,
+        level: i32,
+        at: Pos,
+    ) -> Option<&crate::containers::state::ContainerState> {
+        self.containers.get(&(b, level, at))
+    }
+
+    /// The same, to change; a default one is put there if there was none.
+    pub(crate) fn container_mut(
+        &mut self,
+        b: BuildingId,
+        level: i32,
+        at: Pos,
+    ) -> &mut crate::containers::state::ContainerState {
+        self.containers.entry((b, level, at)).or_default()
+    }
+
+    /// A live copy's container states of venue `b`, to change: unlike `copy_mut` it keeps
+    /// the site's Net, since a container's state changes no Net.
+    pub(crate) fn copy_containers_mut(
+        &mut self,
+        b: BuildingId,
+    ) -> Option<&mut BTreeMap<(i32, Pos), crate::containers::state::ContainerState>> {
+        self.copies.get_mut(&b).map(|c| &mut c.containers)
     }
 
     /// Every venue a mission holds, in building order.

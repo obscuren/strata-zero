@@ -216,6 +216,19 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   `lost in the update · the job in {building}`.
 - **Another city.** The copies are a field of `Interiors`, which `outside::Stay` and
   `kept::StayParts` carry whole, so a copy in a city you've left travels with it.
+- **Containers.** What became of a container is a `containers::state::ContainerState`:
+  how it was opened (`opened`), what is left in it (`left`, the loot rolled at opening
+  less what was taken, as `Loot` lines naming items by id), and the Keyjack's `faults` and
+  `locked_until`, all `#[serde(default)]`. They live in `Interiors.containers` (by
+  building, level and tile) for plain floors and in `MissionCopy.containers` (by level and
+  tile) for a live copy, both defaulting to none, so a save from before opens with every
+  container untouched. An untouched container has no entry: its lock and its contents come
+  from its seed (`containers::seed`: the site's seed, the level and the tile), rolled again
+  the same every time until it is opened. A copy's go with it when it ends, and a new copy
+  has another seed. A line naming an item this build lacks is left out of what the panel
+  shows and what is taken, and stays in `left` untouched. The player's own flat's lockers
+  are furniture and keep no state. `Interiors` is saved whole inside `outside::Stay`, so
+  another city's containers travel with it.
 
 ## A site's own Net
 

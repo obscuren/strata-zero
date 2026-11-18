@@ -12,6 +12,7 @@ use crate::app::AppState;
 use citygen::venue::{MissionInputs, MissionLayer, VenuePack, draw_copy_level};
 use citygen::{BuildingId, Floor, FloorPlan, Place, Pos, StratumKind};
 use game::ItemId;
+use std::collections::BTreeMap;
 
 /// A venue a mission holds, and how far it has got.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -30,6 +31,10 @@ pub struct MissionCopy {
     /// lost.
     #[serde(default)]
     pub layer: Option<MissionLayer>,
+    /// What became of each container of the copy's floors, by level and tile; they go
+    /// with the copy.
+    #[serde(default)]
+    pub containers: BTreeMap<(i32, Pos), crate::containers::state::ContainerState>,
 }
 
 /// What a venue's door on the city map shows.
@@ -85,6 +90,7 @@ pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<
         ending: false,
         left: Vec::new(),
         layer: Some(layer),
+        containers: BTreeMap::new(),
     };
     st.interiors.set_copy(b, Some(copy));
     tick(st);

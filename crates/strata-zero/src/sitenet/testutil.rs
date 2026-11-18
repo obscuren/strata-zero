@@ -20,7 +20,7 @@ use game::{HackTarget, ItemId, Op, Target};
 
 /// `jobs::testutil::state_home`'s city, D'SHAWN in dev mode with crack, spoof, blind, copy
 /// and backdoor loaded.
-fn runner_home() -> AppState {
+pub(crate) fn runner_home() -> AppState {
     let mut st = crate::jobs::testutil::state_home();
     st.character = game::Character::debug_runner(&st.content);
     st.unlock_dev();

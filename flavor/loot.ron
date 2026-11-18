@@ -34,11 +34,12 @@ Loot(
             Line(weight: 2, what: Card),
         ]),
 
-        // ---- Drawers: loose change, now and then a credchip.
-        Table(kind: Drawer, site: None, guarded: false, empty: 60, count: (1, 1), lines: [
-            Line(weight: 6, what: Cash((3, 20))),
-            Line(weight: 2, what: Chip((20, 80), 25)),
-            Line(weight: 1, what: Item("soy_noodle_cup", (1, 1))),
+        // ---- Drawers: loose change, now and then a credchip. An office has a drawer to
+        // every desk, so they lean very empty: the whole building pays less than a job.
+        Table(kind: Drawer, site: None, guarded: false, empty: 92, count: (1, 1), lines: [
+            Line(weight: 6, what: Cash((2, 10))),
+            Line(weight: 1, what: Chip((15, 50), 25)),
+            Line(weight: 2, what: Item("soy_noodle_cup", (1, 1))),
         ]),
         Table(kind: Drawer, site: None, guarded: true, empty: 20, count: (1, 2), lines: [
             Line(weight: 4, what: Cash((30, 90))),
@@ -72,8 +73,8 @@ Loot(
         // ---- Safes: cash and credchips, a locked one often; programs and
         // hardware when the security is high.
         Table(kind: Safe, site: None, guarded: false, empty: 40, count: (1, 2), lines: [
-            Line(weight: 5, what: Cash((40, 160))),
-            Line(weight: 4, what: Chip((100, 300), 50)),
+            Line(weight: 5, what: Cash((30, 110))),
+            Line(weight: 4, what: Chip((80, 220), 50)),
             Line(weight: 1, bands: [High], what: Item("crack_2", (1, 1))),
             Line(weight: 1, bands: [High], what: Item("fuse_ceramic", (1, 1))),
         ]),
@@ -86,14 +87,14 @@ Loot(
         ]),
         // Safes deeper in an office or hotel hold an executive card.
         Table(kind: Safe, site: Some("office"), guarded: false, empty: 30, count: (1, 2), lines: [
-            Line(weight: 5, what: Cash((60, 220))),
-            Line(weight: 4, what: Chip((150, 400), 55)),
+            Line(weight: 5, what: Cash((40, 140))),
+            Line(weight: 4, what: Chip((100, 260), 55)),
             Line(weight: 2, what: Card),
             Line(weight: 1, bands: [High], what: Item("copy_2", (1, 1))),
         ]),
         Table(kind: Safe, site: Some("hotel"), guarded: false, empty: 35, count: (1, 2), lines: [
-            Line(weight: 5, what: Cash((60, 200))),
-            Line(weight: 4, what: Chip((120, 350), 50)),
+            Line(weight: 5, what: Cash((40, 130))),
+            Line(weight: 4, what: Chip((90, 240), 50)),
             Line(weight: 2, what: Card),
         ]),
     ],
