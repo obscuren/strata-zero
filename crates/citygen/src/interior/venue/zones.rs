@@ -250,6 +250,7 @@ fn level(
                 number: 0,
                 private: false,
                 furniture: Vec::new(),
+                wall: Vec::new(),
                 stations: Vec::new(),
                 spots: Vec::new(),
             }

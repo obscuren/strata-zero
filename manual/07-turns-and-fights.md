@@ -10,6 +10,8 @@ Who goes first depends on where you are: on foot your REFLEX, on the Net your NE
 
 A fight on a hotel's or office's floor works as it does on the street, a floor at a time: you step, shoot, push and throw the same. If something kills you there, what killed you names the building, not the street.
 
+Forcing a lock and the Keyjack are not for a fight: they wait until it is over.
+
 A guard who sees you says so, `guard spots you`, and on its next turn it radios it in: `guard radios it in · ALARM`, and the building's alarm goes off (The Net). Drop it or stun it before that turn comes and the call is never made. Each guard calls once, and none calls while the alarm is already on.
 
 When the alarm goes off, the building comes for you. If you were last seen on a floor, that floor's guards head for the spot: in a fight there they join it at once, otherwise they run over and fight only once one of them sees you. Two more guards come from the nearest other floors, by the stairs or a lift; a lockdown shuts the lifts to you, not to them. A guard that gets there and doesn't find you checks the rooms nearby before going back to its round, and so does any guard that loses you while the alarm is on. An alarm raised in the Net, with nobody having seen you, sends each floor's guards to check the rooms around them, and a body you left jacked in is found that way. The footer shows a guard on its way as `answering` and one checking rooms as `sweeping`. The building answers each alarm once, and only while you or your body are inside; when the alarm ends, they go back to their rounds.

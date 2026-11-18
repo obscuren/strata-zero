@@ -44,6 +44,9 @@ pub struct ItemCopy {
     /// Its cell's charge (an item with a `cell`); none reads as full.
     #[serde(default)]
     pub charge: Option<Charge>,
+    /// A credchip's sum; none for anything else.
+    #[serde(default)]
+    pub credits: u32,
 }
 
 impl ItemCopy {
@@ -1402,7 +1405,21 @@ impl Character {
                 left: FULL_CELL,
                 burned: false,
             }),
+            credits: 0,
         }
+    }
+
+    /// A new credchip of `item` carrying `credits`, stowed in the pack.
+    pub fn give_credchip(&mut self, c: &Content, item: &ItemId, credits: u32) -> CopyId {
+        let mut copy = self.new_copy(c, item);
+        copy.credits = credits;
+        let id = copy.id;
+        self.inventory.push(Stack {
+            item: item.clone(),
+            qty: 1,
+            copy: Some(copy),
+        });
+        id
     }
 
     /// Wears an item on a part, with its copy when it has one; returns what the

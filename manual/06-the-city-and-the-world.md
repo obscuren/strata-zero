@@ -80,6 +80,19 @@ A lock's maker sets its rating, shown on the Keyjack's screen beside the beat. S
 
 What you've learned counts too. The **Lockpick** skill (GHOST) makes every zone a cell wider, and the **Skeleton key** talent allows one more fault. Both add to what the fuse does.
 
+### Containers
+
+Hotels, offices and other sites hold **containers**: a locker, a safe, a crate, a cabinet and a drawer. Each stands on the floor or is set in a wall. A closed one is a solid body with a mark on it: `┃` a locker, `◉` a safe, `╳` a crate, `╋` a cabinet, `╍` a drawer. An open one with something left shows its open shape (`▯ ○ □ ┼ ─`), and one with nothing left shows the same shape greyed. A closed one whose lock is a node on the site's Net has its mark in cyan, and looking at it (`x`) says so.
+
+`space` beside one opens it. A crate has no lock of its own, and some lockers, drawers and cabinets have none either; a job's guarded containers are always locked. A locked one shows its lock's grade, 1 to 3, and the ways in:
+
+- The card of the container's zone, or of a deeper one. It has no key: carry it and the container opens straight to what is in it.
+- `k` the Keyjack, the same game as on a keypad (The Keyjack, above). A lock's grade is its rating, and its fault count and lockout belong to the one lock. A burnt fuse keeps the Keyjack off that lock for 30 minutes.
+- `j` jack in at it, when its lock is on the Net and the building isn't on alert. You enter the site's Net at that node (The Net covers it). A node you have already cracked from anywhere opens the container with no prompt, unless the building's alarm has gone off since: then only a crack made after the alarm counts.
+- `f` force it with Body: Body 2 for a grade 1 lock, Body 4 for grade 2, Body 6 for grade 3. A bar fills over the container while you stand there, longer for a stronger lock and quicker with more Body. A step or any key lets go and the bar starts over. Forcing a lock that is on the Net raises the building's alarm.
+
+An open container lists what is in it. A letter takes a line, `t` takes it all, and what you take counts against the pack's load. What you leave stays there. Loot can be cash, items, a zone's keycard or a **credchip**. Use a credchip from the pack to cash it. A locked credchip won't cash yet: it needs cracking at your rig.
+
 ### The field scrambler
 
 A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and fights covers the cloak). It's worn on your BACK (GEAR & INVENTORY, in The deck), and while you wear it you have the Scramble ability on your ability bar; one in your pack gives you nothing. The back holds one thing: the scrambler or the Courier sling, not both. A full cell holds the cloak 20 seconds, 30 with the Stealth skill. While it runs, your XP bar becomes a `CELL` bar that counts its seconds down.

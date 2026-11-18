@@ -4,14 +4,16 @@
 //! zone, a hit keys that digit in, a miss is a fault on the door, and the last fault locks
 //! the pad and burns the Keyjack's fuse.
 
-use crate::app::{AppState, FPS, Screen, ScreenCmd, TransitionKind};
+#[cfg(test)]
+use crate::app::FPS;
+use crate::app::{AppState, Screen, ScreenCmd, TransitionKind};
 use crate::credentials::{self, Source, Verdict};
 use crate::keyjack::{self, Carried};
+use crate::screens::clip::{Clip, Strike};
 use crate::ui::device::{self, DEVICE_H, DEVICE_W, Device, KeyLit, Led, Look};
-use crate::ui::slab::{self, Panel, Shows};
+use crate::ui::slab;
 use citygen::BuildingId;
 use crossterm::event::{KeyCode, KeyEvent};
-use game::CopyId;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -31,94 +33,6 @@ enum Flash {
     Open(u64),
     Denied(u64),
     Refused(u64),
-}
-
-/// How the Keyjack's run ended, while it still hangs on the pad.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ended {
-    /// The last fault burnt its fuse and locked the pad.
-    Blown,
-    /// The fourth hit opened the door.
-    Cracked,
-}
-
-/// The Keyjack clipped on the pad: the copy that runs, the run it makes of this door and
-/// the beat it is on. The faults are the door's, in the journal; `faults` is their count
-/// as this run last saw it, for the lights (which stay lit on OPEN, though the door's
-/// clear).
-#[derive(Clone, Debug)]
-struct Clip {
-    copy: CopyId,
-    run: keyjack::Run,
-    /// The door's seed, for where its zones sit.
-    seed: u64,
-    /// The digit being cracked, left to right; 4 once all are.
-    beat: usize,
-    /// The zone's left cell.
-    at: u16,
-    /// The tick the marker sets off from the bar's left end. After a miss it lies ahead,
-    /// and ERR shows until then.
-    from: u64,
-    /// The last strike missed.
-    missed: bool,
-    faults: u8,
-    ended: Option<Ended>,
-}
-
-impl Clip {
-    /// The zone's width on this beat.
-    fn width(&self) -> u16 {
-        self.run.zones[self.beat.min(3)]
-    }
-
-    /// The marker's cell at `tick`: off from the left end at the beat's speed, end to end
-    /// and back, a cell's time at each end. A tick is a frame.
-    fn marker(&self, tick: u64) -> u16 {
-        let bar = self.run.bar.max(1);
-        let speed = self.run.speed[self.beat.min(3)] as f64;
-        let cells = tick.saturating_sub(self.from) as f64 * speed / FPS as f64;
-        let p = (cells % (2 * bar) as f64) as u16;
-        if p < bar { p } else { 2 * bar - 1 - p }
-    }
-
-    /// A strike with the marker on `cell` lands in the zone.
-    fn hits(&self, cell: u16) -> bool {
-        cell >= self.at && cell < self.at + self.width()
-    }
-
-    /// Puts this beat's zone where the door and its faults so far put it; after a miss,
-    /// never back where it was.
-    fn place(&mut self) {
-        let (w, bar) = (self.width(), self.run.bar);
-        let seed = citygen::rng::hash64(self.seed, self.faults as u64);
-        let mut at = keyjack::zone_at(seed, self.beat, w, bar);
-        let room = bar.saturating_sub(w);
-        if self.missed && at == self.at && room > 0 {
-            at = (at + room.div_ceil(2)) % (room + 1);
-        }
-        self.at = at;
-    }
-
-    /// The slab's frame at `tick`, with `digits` cracked so far.
-    fn panel(&self, tick: u64, digits: &[u8]) -> Panel {
-        let shows = match self.ended {
-            Some(Ended::Blown) => Shows::Blown,
-            Some(Ended::Cracked) => Shows::Open,
-            None if self.missed && tick < self.from => Shows::Err,
-            None => Shows::Sweep,
-        };
-        Panel {
-            shows,
-            bar: self.run.bar,
-            zone: (self.at, self.width()),
-            marker: self.marker(tick),
-            digits: digits.to_vec(),
-            faults: self.faults,
-            allowed: self.run.faults,
-            beat: self.beat.min(3),
-            rating: self.run.rating,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -208,11 +122,7 @@ impl Keypad {
     #[cfg(test)]
     pub(crate) fn aim(&self, st: &mut AppState, hit: bool) {
         let c = self.clip.as_ref().expect("clipped on");
-        let start = st.tick.max(c.from);
-        let shown = (start..start + 3_000)
-            .find(|t| c.hits(c.marker(*t)) == hit)
-            .expect("the marker gets there");
-        st.tick = shown + 1;
+        st.tick = c.aim_tick(st.tick, hit);
     }
 
     /// Whether the run is over (blown or cracked), for a shot to stop on.
@@ -221,7 +131,7 @@ impl Keypad {
         self.clip
             .as_ref()
             .and_then(|c| c.ended)
-            .map(|e| e == Ended::Cracked)
+            .map(|e| e == crate::screens::clip::Ended::Cracked)
     }
 
     /// In the middle of the screen, always inside the area.
@@ -289,18 +199,8 @@ impl Keypad {
             .journal
             .keypad_now(self.building, self.level, self.number, now)
             .faults;
-        let mut clip = Clip {
-            copy,
-            run,
-            seed: keyjack::door_seed(st, self.building, self.level, self.number),
-            beat: 0,
-            at: 0,
-            from: st.tick,
-            missed: false,
-            faults,
-            ended: None,
-        };
-        clip.place();
+        let seed = keyjack::door_seed(st, self.building, self.level, self.number);
+        let clip = Clip::new(copy, run, seed, faults, st.tick);
         self.typed.clear();
         self.flash = Flash::None;
         self.clip = Some(clip);
@@ -319,41 +219,29 @@ impl Keypad {
         let Some(c) = self.clip.as_mut() else {
             return;
         };
-        let shown = st.tick.saturating_sub(1);
-        if c.ended.is_some() || shown < c.from {
-            return;
-        }
-        if c.hits(c.marker(shown)) {
-            let digit = (self.code / 10u16.pow(3 - c.beat as u32) % 10) as u8;
-            self.typed.push(digit);
-            c.beat += 1;
-            c.missed = false;
-            if c.beat == 4 {
-                c.ended = Some(Ended::Cracked);
+        let beat = c.beat;
+        match c.strike(st.tick) {
+            Strike::Nothing => {}
+            Strike::Hit { .. } => self.typed.push(digit_of(self.code, beat)),
+            Strike::Cracked => {
+                self.typed.push(digit_of(self.code, beat));
                 credentials::open_with(st, b, level, number, Source::Keyjack);
                 self.known = Some(self.code);
                 self.flash = Flash::Open(st.tick);
-            } else {
-                c.from = st.tick;
-                c.place();
             }
-            return;
-        }
-        c.faults = credentials::fault(st, b, level, number);
-        if c.faults >= c.run.faults {
-            credentials::lock_out(st, b, level, number);
-            keyjack::blow_fuse(st, c.copy);
-            c.ended = Some(Ended::Blown);
-            self.typed.clear();
-            self.flash = Flash::Denied(st.tick);
-            st.warn(format!(
-                "The Keyjack's fuse blew. The pad locked for {}m.",
-                credentials::LOCKOUT_MINUTES
-            ));
-        } else {
-            c.missed = true;
-            c.from = st.tick + DENIED_TICKS;
-            c.place();
+            Strike::Miss => {
+                let faults = credentials::fault(st, b, level, number);
+                if c.faulted(faults, st.tick) {
+                    credentials::lock_out(st, b, level, number);
+                    keyjack::blow_fuse(st, c.copy);
+                    self.typed.clear();
+                    self.flash = Flash::Denied(st.tick);
+                    st.warn(format!(
+                        "The Keyjack's fuse blew. The pad locked for {}m.",
+                        credentials::LOCKOUT_MINUTES
+                    ));
+                }
+            }
         }
     }
 
@@ -363,6 +251,11 @@ impl Keypad {
         self.clip = None;
         self.typed.clear();
     }
+}
+
+/// The code's digit on beat `beat`.
+fn digit_of(code: u16, beat: usize) -> u8 {
+    (code / 10u16.pow(3 - beat as u32) % 10) as u8
 }
 
 fn pop() -> ScreenCmd {

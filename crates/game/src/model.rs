@@ -962,6 +962,10 @@ pub enum Use {
         arc: Arc,
         blast: Blast,
     },
+    /// A credchip: cashed from the pack for the sum its copy carries, unless locked.
+    Cash {
+        locked: bool,
+    },
 }
 
 /// What a blast does where it lands, from a grenade or an ability.
@@ -1072,12 +1076,13 @@ impl Item {
     }
 
     /// Held per copy, since it can carry state or be fitted: it has sockets, is
-    /// hardware or chrome that fits a socket, takes stickers, or holds a cell.
+    /// hardware or chrome that fits a socket, takes stickers, holds a cell, or is a credchip.
     pub fn per_copy(&self) -> bool {
         !self.sockets.is_empty()
             || self.fits_socket().is_some()
             || self.takes_stickers()
             || self.cell
+            || matches!(self.on_use, Some(Use::Cash { .. }))
     }
 
     /// The kind of socket it goes in: hardware's, socket chrome's, a bot's dock.

@@ -99,6 +99,8 @@ pub struct AppState {
     pub at_desk: bool,
     /// A popup asked the map for its look cursor on this tile; the map takes it.
     pub look_at: Option<citygen::Pos>,
+    /// A container panel asked the map to start forcing it; the map takes it.
+    pub force_at: Option<crate::containers::ContainerAt>,
     /// The console's `target`: a Street tile the free camera should jump to.
     pub jump_to: Option<citygen::Pos>,
     /// A level gained and not yet played: the map plays its upload on you the first
@@ -342,6 +344,7 @@ impl AppState {
             chair: None,
             at_desk: false,
             look_at: None,
+            force_at: None,
             jump_to: None,
             levelled: None,
             content,
@@ -540,6 +543,7 @@ impl AppState {
     /// map's next frame and a save that run asked for or failed.
     pub fn clear_screens(&mut self) {
         self.look_at = None;
+        self.force_at = None;
         self.jump_to = None;
         self.levelled = None;
         self.save_due = false;

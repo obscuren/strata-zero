@@ -29,11 +29,15 @@ fn opens_now(st: &AppState, b: BuildingId, h: &Hack) -> bool {
 /// Whether a lock's own node of a site is held open now: a crack or spoof on it, landed
 /// since the alarm when there is one.
 pub fn opened(st: &AppState, node: SiteNode) -> bool {
+    opened_by(st, node, &OPENS)
+}
+
+/// Whether a live hack of `ops` on `node` holds it open now: any, off alert; in an alarm
+/// only one landed since it went off.
+pub fn opened_by(st: &AppState, node: SiteNode, ops: &[Op]) -> bool {
     let now = st.net.now(st);
     (st.net.live(now)).any(|h| {
-        h.target == HackTarget::Site(node)
-            && OPENS.contains(&h.op)
-            && opens_now(st, node.building, h)
+        h.target == HackTarget::Site(node) && ops.contains(&h.op) && opens_now(st, node.building, h)
     })
 }
 

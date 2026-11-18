@@ -1,5 +1,6 @@
 //! Tiles: terrain, features and derived walkability.
 
+use crate::geom::{Grid, Pos};
 use crate::ids::{BuildingId, DistrictId};
 use crate::net::NodeKind;
 use serde::{Deserialize, Serialize};
@@ -355,9 +356,74 @@ pub enum Furniture {
     /// The flat's holo set, which carries the morning news. After `Chair`, so old saves
     /// keep their indices.
     Holo,
+    /// A safe. Appended, so old saves keep their indices.
+    Safe,
+    /// A crate.
+    Crate,
+    /// A medicine cabinet.
+    Cabinet,
+    /// A desk drawer.
+    Drawer,
+}
+
+/// What kind of container a piece of furniture is: its look, its grade and its lock follow
+/// from it.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum ContainerKind {
+    Locker,
+    #[default]
+    Safe,
+    Crate,
+    Cabinet,
+    Drawer,
+}
+
+impl ContainerKind {
+    pub const ALL: [ContainerKind; 5] = [
+        ContainerKind::Locker,
+        ContainerKind::Safe,
+        ContainerKind::Crate,
+        ContainerKind::Cabinet,
+        ContainerKind::Drawer,
+    ];
+
+    /// The piece of furniture that stands for this kind.
+    pub fn furniture(self) -> Furniture {
+        match self {
+            ContainerKind::Locker => Furniture::Locker,
+            ContainerKind::Safe => Furniture::Safe,
+            ContainerKind::Crate => Furniture::Crate,
+            ContainerKind::Cabinet => Furniture::Cabinet,
+            ContainerKind::Drawer => Furniture::Drawer,
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            ContainerKind::Locker => "locker",
+            ContainerKind::Safe => "safe",
+            ContainerKind::Crate => "crate",
+            ContainerKind::Cabinet => "cabinet",
+            ContainerKind::Drawer => "drawer",
+        }
+    }
 }
 
 impl Furniture {
+    /// The container kind this piece is, if it is one.
+    pub fn container(self) -> Option<ContainerKind> {
+        match self {
+            Furniture::Locker => Some(ContainerKind::Locker),
+            Furniture::Safe => Some(ContainerKind::Safe),
+            Furniture::Crate => Some(ContainerKind::Crate),
+            Furniture::Cabinet => Some(ContainerKind::Cabinet),
+            Furniture::Drawer => Some(ContainerKind::Drawer),
+            _ => None,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Furniture::Desk => "desk",
@@ -376,8 +442,37 @@ impl Furniture {
             Furniture::Bike => "bike",
             Furniture::Chair => "operating chair",
             Furniture::Holo => "holo set",
+            Furniture::Safe => "safe",
+            Furniture::Crate => "crate",
+            Furniture::Cabinet => "medicine cabinet",
+            Furniture::Drawer => "desk drawer",
         }
     }
+}
+
+impl Feature {
+    /// The container kind this feature is: a piece of furniture of one, or an old mission
+    /// container, which plays as a safe.
+    pub fn container(self) -> Option<ContainerKind> {
+        match self {
+            Feature::Furniture(f) => f.container(),
+            Feature::Container => Some(ContainerKind::Safe),
+            _ => None,
+        }
+    }
+}
+
+/// For a wall tile, the one floor tile beside it (its front); none for any other tile, or
+/// for a wall with no floor or floor on two or more sides.
+pub fn wall_front(tiles: &Grid<Tile>, at: Pos) -> Option<Pos> {
+    if tiles.get(at)?.terrain != Terrain::Wall {
+        return None;
+    }
+    let mut floors = at
+        .neighbors4()
+        .filter(|p| tiles.get(*p).is_some_and(|t| t.terrain == Terrain::Floor));
+    let first = floors.next()?;
+    floors.next().is_none().then_some(first)
 }
 
 pub const ALL_FEATURES: [Feature; 29] = [
@@ -674,6 +769,49 @@ mod tests {
         }
         assert!(on(Feature::Objective).is_walkable());
         assert!(on(Feature::Camera).is_walkable());
+    }
+
+    #[test]
+    fn each_container_kind_is_a_piece_and_back() {
+        for k in ContainerKind::ALL {
+            assert_eq!(k.furniture().container(), Some(k));
+            assert_eq!(Feature::Furniture(k.furniture()).container(), Some(k));
+        }
+        assert_eq!(Feature::Container.container(), Some(ContainerKind::Safe));
+        assert_eq!(Furniture::Desk.container(), None);
+        assert_eq!(ContainerKind::default(), ContainerKind::Safe);
+        let words: Vec<_> = ContainerKind::ALL.iter().map(|k| k.word()).collect();
+        assert_eq!(words, ["locker", "safe", "crate", "cabinet", "drawer"]);
+    }
+
+    #[test]
+    fn new_furniture_keeps_the_old_indices() {
+        let lead = |f: Furniture| postcard::to_stdvec(&f).unwrap()[0];
+        assert_eq!(lead(Furniture::Locker), 8);
+        assert_eq!(lead(Furniture::Holo), 15);
+        assert_eq!(lead(Furniture::Safe), 16);
+        assert_eq!(lead(Furniture::Drawer), 19);
+    }
+
+    #[test]
+    fn a_wall_tile_has_a_front_only_with_one_floor_beside_it() {
+        let mut g = Grid::filled(crate::geom::Size { w: 5, h: 3 }, Tile::new(Terrain::Wall));
+        for x in 0..5 {
+            g.set(Pos::new(x, 1), Tile::new(Terrain::Floor));
+        }
+        assert_eq!(wall_front(&g, Pos::new(2, 0)), Some(Pos::new(2, 1)));
+        assert_eq!(wall_front(&g, Pos::new(2, 2)), Some(Pos::new(2, 1)));
+        assert_eq!(wall_front(&g, Pos::new(2, 1)), None, "a floor has none");
+        g.set(Pos::new(2, 2), Tile::new(Terrain::Floor));
+        assert_eq!(wall_front(&g, Pos::new(2, 2)), None, "it is floor now");
+        // a wall with floor above and below
+        let mut h = Grid::filled(crate::geom::Size { w: 3, h: 3 }, Tile::new(Terrain::Floor));
+        h.set(Pos::new(1, 1), Tile::new(Terrain::Wall));
+        assert_eq!(wall_front(&h, Pos::new(1, 1)), None);
+        // no floor beside it at all, and off the grid
+        let w = Grid::filled(crate::geom::Size { w: 3, h: 3 }, Tile::new(Terrain::Wall));
+        assert_eq!(wall_front(&w, Pos::new(1, 1)), None);
+        assert_eq!(wall_front(&w, Pos::new(9, 9)), None);
     }
 
     #[test]

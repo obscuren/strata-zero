@@ -231,6 +231,9 @@ pub(crate) fn marks(
             Span::styled("□", tone(SOCKET_EMPTY))
         });
     }
+    if let Some(k) = copy.filter(|k| k.credits > 0) {
+        out.push(Span::styled(format!(" · {} cr", k.credits), tone(MARK_DOT)));
+    }
     out
 }
 
@@ -451,6 +454,9 @@ pub(crate) fn copy_popup(st: &mut AppState, copy: CopyId, anchor: (u16, u16)) ->
     if openable(st, item) {
         let open = Action::Open(stack.item.clone());
         choices.push(Choice::new('o', "Open", Pick::Act(open)));
+    }
+    if matches!(item.on_use, Some(game::Use::Cash { .. })) {
+        choices.push(Choice::new('u', "Use", Pick::Act(Action::UseCopy(copy))));
     }
     choices.push(Choice::new('d', "Drop", Pick::Act(Action::DropCopy(copy))));
     let mut body = hands_off(st, &mut choices);
@@ -4342,6 +4348,24 @@ mod tests {
             .position(|l| l == "cell 0% · burned out");
         let at = at.unwrap_or_else(|| panic!("{:?}", texts(&lines)));
         assert_eq!(lines[at].spans[0].style.fg, Some(MAGENTA));
+    }
+
+    #[test]
+    fn a_credchip_names_its_sum_and_cashes_from_the_pack() {
+        let mut st = dshawn();
+        let k = st
+            .character
+            .give_credchip(&st.content, &ItemId::new("credchip"), 400);
+        let item = st.content.item(&ItemId::new("credchip")).unwrap();
+        let copy = st.character.copy_in_pack(k).unwrap().copy.clone();
+        let text: String = marks(&st, item, copy.as_ref(), false, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.ends_with(" · 400 cr"), "{text:?}");
+        let p = copy_popup(&mut st, k, (0, 0)).unwrap();
+        let row = p.choices().iter().find(|c| c.key == 'u').unwrap();
+        assert!(matches!(row.pick, Pick::Act(Action::UseCopy(c)) if c == k));
     }
 
     #[test]

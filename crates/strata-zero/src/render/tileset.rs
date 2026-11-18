@@ -8,8 +8,8 @@ use crate::render::{Cell, ConnDir, RenderCtx, Rgb, Visibility};
 use crate::ui::chrome::MAGENTA_RGB;
 use citygen::lighting::tuning::tone_rgb;
 use citygen::{
-    BuildingKind, ConnectorKind, Feature, Fitting, FittingKind, Furniture, IceGrade, NodeKind,
-    StratumKind, Terrain, Tile, Tone, Wear,
+    BuildingKind, ConnectorKind, ContainerKind, Feature, Fitting, FittingKind, Furniture, IceGrade,
+    NodeKind, StratumKind, Terrain, Tile, Tone, Wear,
 };
 
 pub(crate) const LIGHT: [char; 16] = [
@@ -132,7 +132,7 @@ pub fn glyph_for(
             Feature::FireBarrel => '•',
             Feature::Shutter => '▓',
             Feature::Turret => '◆',
-            Feature::Container => '□',
+            Feature::Container => container_detail(ContainerKind::Safe).0,
             Feature::Objective => '◎',
             Feature::Node(k) => node_glyph(k, style),
             Feature::Furniture(piece) => match piece {
@@ -144,7 +144,6 @@ pub fn glyph_for(
                 Furniture::Machine => '⚙',
                 Furniture::Bed => '▤',
                 Furniture::Shrine => '♦',
-                Furniture::Locker => '▮',
                 Furniture::Couch => '▬',
                 Furniture::Shower => '≋',
                 Furniture::Bench => '╥',
@@ -152,6 +151,11 @@ pub fn glyph_for(
                 Furniture::Bike => 'ꝺ',
                 Furniture::Chair => '╦',
                 Furniture::Holo => '◫',
+                Furniture::Locker
+                | Furniture::Safe
+                | Furniture::Crate
+                | Furniture::Cabinet
+                | Furniture::Drawer => piece.container().map_or(' ', |k| container_detail(k).0),
             },
         };
     }
@@ -483,6 +487,9 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         }
         Feature::Furniture(Furniture::Counter | Furniture::Shrine) => ts.accent2,
         Feature::Furniture(Furniture::Chair) => CHAIR,
+        Feature::Furniture(p) if p.container().is_some() => {
+            container_detail(p.container().unwrap_or_default()).1
+        }
         Feature::Furniture(_) => ts.wall.scale(1.2),
         Feature::Pylon => Rgb(106, 110, 118),
         // round 2's fire in a drum, guttering
@@ -490,10 +497,50 @@ fn feature_color(f: Feature, tile: &Tile, ctx: &RenderCtx, tick: u64) -> Rgb {
         Feature::PowerLine(_) => Rgb(42, 46, 54),
         Feature::Shutter => Rgb(120, 120, 128),
         Feature::Turret => Rgb(255, 60, 70),
-        Feature::Container => Rgb(150, 160, 170),
+        Feature::Container => container_detail(ContainerKind::Safe).1,
         Feature::Objective => MAGENTA_RGB,
     }
 }
+
+/// A container's body colour: the solid it is drawn on, whatever the tile under it.
+pub fn container_body(k: ContainerKind) -> Rgb {
+    match k {
+        ContainerKind::Locker => Rgb(0x3a, 0x4a, 0x5c),
+        ContainerKind::Safe => Rgb(0x2b, 0x2f, 0x36),
+        ContainerKind::Crate => Rgb(0x5a, 0x4a, 0x32),
+        ContainerKind::Cabinet => Rgb(0xb9, 0xc3, 0xcc),
+        ContainerKind::Drawer => Rgb(0x3e, 0x4c, 0x5c),
+    }
+}
+
+/// A closed container's detail: the glyph on its body and that glyph's colour.
+pub fn container_detail(k: ContainerKind) -> (char, Rgb) {
+    match k {
+        ContainerKind::Locker => ('┃', Rgb(0x9f, 0xb6, 0xcc)),
+        ContainerKind::Safe => ('◉', Rgb(0xd8, 0xc8, 0x90)),
+        ContainerKind::Crate => ('╳', Rgb(0xa8, 0x90, 0x60)),
+        ContainerKind::Cabinet => ('╋', Rgb(0xc0, 0x39, 0x2b)),
+        ContainerKind::Drawer => ('╍', Rgb(0xa0, 0xb8, 0xd0)),
+    }
+}
+
+/// The shape an opened container shows.
+pub fn container_open_shape(k: ContainerKind) -> char {
+    match k {
+        ContainerKind::Locker => '▯',
+        ContainerKind::Safe => '○',
+        ContainerKind::Crate => '□',
+        ContainerKind::Cabinet => '┼',
+        ContainerKind::Drawer => '─',
+    }
+}
+
+/// An emptied container's shape colour.
+pub const CONTAINER_EMPTY_FG: Rgb = Rgb(0x5b, 0x6b, 0x7d);
+/// An emptied container's body colour.
+pub const CONTAINER_EMPTY_BG: Rgb = Rgb(0x20, 0x26, 0x2e);
+/// A container on the Net and not yet opened: its detail in this.
+pub const CONTAINER_NET: Rgb = Rgb(0x00, 0xe6, 0xd2);
 
 /// A fitting that leaves the ground's glyph showing: set in a wall, or a stage's lights.
 fn keeps_ground(f: Feature) -> bool {
@@ -564,6 +611,11 @@ fn styled(tile: &Tile, ctx: &RenderCtx, reader: bool) -> Cell {
     if let Some(f) = tile.feature {
         fg = feature_color(f, tile, ctx, tick);
     }
+    // a container is a solid body with its detail on it, whatever stands under it
+    let container = tile.feature.and_then(Feature::container);
+    if let Some(k) = container {
+        bg = container_body(k);
+    }
     let (dr, dg, db) = ctx.style.stratum(ctx.stratum).tint;
     fg = fg.tint(dr, dg, db);
     bg = bg.tint(dr, dg, db);
@@ -626,7 +678,8 @@ fn styled(tile: &Tile, ctx: &RenderCtx, reader: bool) -> Cell {
     let bold = tile.is_connector()
         || matches!(tile.feature, Some(Feature::Sign(_) | Feature::Neon(_)))
         || fitting.is_some_and(|f| f.kind.on_wall() || f.kind == FittingKind::Bulb)
-        || (matches!(tile.feature, Some(Feature::Node(_))) && jack);
+        || (matches!(tile.feature, Some(Feature::Node(_))) && jack)
+        || container == Some(ContainerKind::Safe);
     Cell {
         ch,
         fg,
@@ -1002,12 +1055,52 @@ mod tests {
     }
 
     #[test]
+    fn a_container_draws_its_detail_on_its_body() {
+        let s = StylePack::load().unwrap();
+        let ctx = glow_ctx(&s, None);
+        let full = |c: &Cell, k: ContainerKind| {
+            let (_, fg) = container_detail(k);
+            assert_eq!(c.fg, lit(street_tint(&s, fg), 120), "{k:?} detail");
+            assert_eq!(
+                c.bg,
+                lit(street_tint(&s, container_body(k)), 120),
+                "{k:?} body"
+            );
+        };
+        let mut safe = Tile::new(Terrain::Floor);
+        safe.feature = Some(Feature::Furniture(Furniture::Safe));
+        let c = cell(&safe, &ctx);
+        assert_eq!(c.ch, '◉');
+        assert!(c.bold);
+        full(&c, ContainerKind::Safe);
+        assert_eq!(
+            container_detail(ContainerKind::Safe).1,
+            Rgb(0xd8, 0xc8, 0x90)
+        );
+        assert_eq!(container_body(ContainerKind::Safe), Rgb(0x2b, 0x2f, 0x36));
+        let mut locker = Tile::new(Terrain::Wall);
+        locker.feature = Some(Feature::Furniture(Furniture::Locker));
+        let c = cell(&locker, &ctx);
+        assert_eq!(c.ch, '┃');
+        assert!(!c.bold);
+        full(&c, ContainerKind::Locker);
+        let mut old = Tile::new(Terrain::Floor);
+        old.feature = Some(Feature::Container);
+        assert_eq!(cell(&old, &ctx), cell(&safe, &ctx));
+        for k in ContainerKind::ALL {
+            let mut t = Tile::new(Terrain::Floor);
+            t.feature = Some(Feature::Furniture(k.furniture()));
+            assert_eq!(cell(&t, &ctx).ch, container_detail(k).0, "{k:?}");
+        }
+    }
+
+    #[test]
     fn a_missions_devices_draw_in_their_own_colours() {
         let s = StylePack::load().unwrap();
         let ctx = glow_ctx(&s, None);
         for (f, ch, colour) in [
             (Feature::Turret, '◆', Rgb(255, 60, 70)),
-            (Feature::Container, '□', Rgb(150, 160, 170)),
+            (Feature::Container, '◉', Rgb(0xd8, 0xc8, 0x90)),
             (Feature::Objective, '◎', MAGENTA_RGB),
         ] {
             let mut t = Tile::new(Terrain::Floor);

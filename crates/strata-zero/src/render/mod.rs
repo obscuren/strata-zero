@@ -2,6 +2,7 @@
 
 pub mod atrium;
 pub mod bots;
+pub mod containers;
 pub mod cord;
 pub mod doors;
 pub mod feed;

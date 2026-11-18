@@ -108,6 +108,86 @@ fn cuts_keep_their_doors(t: &VenueType, l: &VenueLayout, what: &str) {
     }
 }
 
+/// The frames of the buildings `t` stands in across `cities`: those of its kinds; a type
+/// no kind builds stands in the five largest closed buildings of each city, raised to its
+/// own top so every size is held (the console raises only when a building can't hold the
+/// size).
+fn building_frames(t: &VenueType, cities: &[City]) -> Vec<VenueFrame> {
+    if t.builds.is_empty() {
+        (cities.iter())
+            .flat_map(|c| {
+                (largest_closed(c, 5).into_iter())
+                    .filter_map(|b| VenueFrame::of_building(c, b))
+                    .map(|f| {
+                        let top = t.frame.top.max(f.storeys.1);
+                        f.raised(top)
+                    })
+            })
+            .collect()
+    } else {
+        (cities.iter())
+            .flat_map(|c| {
+                (c.buildings.iter())
+                    .filter(|b| t.builds.contains(&b.kind))
+                    .filter_map(|b| VenueFrame::of_building(c, b.id))
+            })
+            .collect()
+    }
+}
+
+/// Every piece a room's `wall` lists is in the room: set in the wall round its rect or, as
+/// the fallback, standing on its floor. Over every builtin type, its own frame and its
+/// buildings' frames, many seeds.
+#[test]
+fn every_listed_wall_piece_is_in_its_room() {
+    use citygen::tile::{Feature, Furniture, Terrain};
+    let cities = cities();
+    let mut rooms = 0;
+    for t in &VenuePack::builtin().types {
+        let mut frames = vec![VenueFrame::own(t)];
+        frames.extend(building_frames(t, &cities));
+        for seed in 0..SEEDS {
+            let f = frames[seed as usize % frames.len()].clone();
+            let l = lay_out(t, f, seed).unwrap_or_else(|e| panic!("{} {seed}: {e}", t.id));
+            for x in &l.levels {
+                let floor = citygen::venue::draw_level(&l, x.level).unwrap();
+                for r in x.rooms.iter().filter(|r| !r.wall.is_empty()) {
+                    rooms += 1;
+                    let held = |piece: Furniture| {
+                        let walled = r.rect.grow(1).iter().filter(|p| {
+                            !r.rect.contains(*p)
+                                && floor.tiles[*p].terrain == Terrain::Wall
+                                && floor.tiles[*p].feature == Some(Feature::Furniture(piece))
+                        });
+                        let stood = r
+                            .rect
+                            .iter()
+                            .filter(|p| floor.tiles[*p].feature == Some(Feature::Furniture(piece)));
+                        walled.count() + stood.count()
+                    };
+                    let kinds: BTreeSet<String> = r.wall.iter().map(|p| format!("{p:?}")).collect();
+                    for k in kinds {
+                        let want = r.wall.iter().filter(|p| format!("{p:?}") == k).count();
+                        let piece = *r.wall.iter().find(|p| format!("{p:?}") == k).unwrap();
+                        // Floor furniture of the same kind the room also lists counts too.
+                        let listed = r.furniture.iter().filter(|p| **p == piece).count();
+                        assert!(
+                            held(piece) >= want + listed,
+                            "{} seed {seed} {}: the {} at {:?} lists {want} {k} for its wall and holds {}",
+                            t.id,
+                            citygen::FloorPlan::label(x.level),
+                            r.name,
+                            r.rect,
+                            held(piece)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(rooms > 0);
+}
+
 #[test]
 fn every_type_passes_the_checker() {
     let pack = VenuePack::builtin();
@@ -126,26 +206,7 @@ fn every_type_passes_the_checker() {
         // The buildings of its kinds; a type no kind builds stands in the
         // five largest closed buildings of each city, raised to its own top here so every size is held
         // (the console raises only when a building can't hold the size).
-        let frames: Vec<VenueFrame> = if t.builds.is_empty() {
-            (cities.iter())
-                .flat_map(|c| {
-                    (largest_closed(c, 5).into_iter())
-                        .filter_map(|b| VenueFrame::of_building(c, b))
-                        .map(|f| {
-                            let top = t.frame.top.max(f.storeys.1);
-                            f.raised(top)
-                        })
-                })
-                .collect()
-        } else {
-            (cities.iter())
-                .flat_map(|c| {
-                    (c.buildings.iter())
-                        .filter(|b| t.builds.contains(&b.kind))
-                        .filter_map(|b| VenueFrame::of_building(c, b.id))
-                })
-                .collect()
-        };
+        let frames = building_frames(&t, &cities);
         for seed in 0..if frames.is_empty() { 0 } else { SEEDS } {
             let f = frames[seed as usize % frames.len()].clone();
             let l =
@@ -256,9 +317,9 @@ fn every_builtin_type_is_a_whole_site() {
 #[test]
 fn venue_fingerprints_are_pinned() {
     const PINNED: &[u64] = &[
-        10811627059381793165,
-        13561429448275412134,
-        3395241277663048963,
+        8600537587414070885,
+        3522225867674925331,
+        17189332098588950270,
     ];
     let pack = VenuePack::builtin();
     assert_eq!(

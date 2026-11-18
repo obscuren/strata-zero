@@ -111,8 +111,13 @@ pub fn rating(st: &AppState, building: BuildingId) -> u8 {
 /// the fuse's and Lockpick's, the faults plus the fuse's and Skeleton key's, and the
 /// speeds at the fuse's sweep.
 pub fn run_for(st: &AppState, building: BuildingId, keyjack: &ItemCopy) -> Run {
+    run_at(st, rating(st, building), keyjack)
+}
+
+/// The same for a lock of any kind, by its rating.
+pub fn run_at(st: &AppState, rating: u8, keyjack: &ItemCopy) -> Run {
     let n = Numbers::shipped();
-    let rating = rating(st, building).clamp(1, n.zones.len() as u8);
+    let rating = rating.clamp(1, n.zones.len() as u8);
     let mods: Vec<Mod> = keyjack
         .fitted
         .first()
@@ -158,6 +163,25 @@ pub enum Carried<'a> {
     NoFuse,
     /// The first with a fuse in: the one that runs.
     Fused(&'a ItemCopy),
+}
+
+/// The fuses a runner has: fitted in carried Keyjacks, and loose in the pack.
+pub fn fuses(st: &AppState) -> u32 {
+    (st.character.inventory.iter())
+        .map(|s| {
+            if s.item.0 == ITEM {
+                let fitted = s
+                    .copy
+                    .as_ref()
+                    .map_or(0, |c| c.fitted.iter().flatten().count());
+                return fitted as u32 * s.qty;
+            }
+            let fuse = (st.content.item(&s.item))
+                .and_then(|i| i.hardware.as_ref())
+                .is_some_and(|h| h.fits == game::SocketKind::Fuse);
+            if fuse { s.qty } else { 0 }
+        })
+        .sum()
 }
 
 /// The Keyjacks in the pack (it has no slot to be worn in).
@@ -224,6 +248,7 @@ mod tests {
             })],
             stickers: Vec::new(),
             charge: None,
+            credits: 0,
         }
     }
 

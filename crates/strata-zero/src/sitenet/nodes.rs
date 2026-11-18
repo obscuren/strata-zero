@@ -100,10 +100,10 @@ pub fn city_landed(
     }
 }
 
-/// A container's lock cracked: a live crack on its node, which an alarm drops. The Look
-/// reads it; a mission's containers open with it from #96 on.
+/// A container's lock cracked: a live crack on its node, as a door's is, so in an alarm
+/// only a crack landed since it went off counts. The Look reads it, and so does the way in.
 pub fn container_open(st: &AppState, node: SiteNode) -> bool {
-    super::hacked(st, node, &[Op::Crack])
+    super::locks::opened_by(st, node, &[Op::Crack])
 }
 
 #[cfg(test)]
@@ -168,6 +168,25 @@ mod tests {
         crate::net::lock_down(&mut st, b);
         assert!(!container_open(&st, c.node), "an alarm drops it");
         assert_eq!(look(&st).as_deref(), Some("container lock · locked"));
+    }
+
+    #[test]
+    fn a_crack_from_before_the_alarm_does_not_hold_a_container_open() {
+        let (mut st, b) = office_copy(230);
+        let c = beside_device(&mut st, b, NodeKind::Container);
+        hack(&mut st, c.node, NodeKind::Container, Op::Crack);
+        assert!(container_open(&st, c.node));
+        match (st.city.as_ref(), st.world.as_mut()) {
+            (Some(city), Some(world)) => {
+                world.advance(city, world.tick() + sim::TICKS_PER_MINUTE);
+            }
+            _ => st.tick += sim::TICKS_PER_MINUTE,
+        }
+        let now = st.net.now(&st);
+        st.net.trace(b).alert_until = Some(now + game::ALERT_MINUTES);
+        assert!(!container_open(&st, c.node), "cracked before the alarm");
+        hack(&mut st, c.node, NodeKind::Container, Op::Crack);
+        assert!(container_open(&st, c.node), "cracked since the alarm");
     }
 
     #[test]

@@ -1,0 +1,101 @@
+// What containers hold. Read by containers::loot; checked against content.ron.
+//
+// A table is picked by kind, then the building's site type (`site: Some("office")`,
+// None for any), then whether the container is a job's guarded spot. The lookup falls
+// back: (site, guarded), (any, guarded), (site, plain), (any, plain).
+// Plain tables lean empty and cheap; the guarded ones are where the money is.
+Loot(
+    // Percent a cash or credchip sum is scaled by in each band: low, mid, high.
+    scale: (100, 150, 220),
+    tables: [
+        // ---- Lockers: a little cash, noodle cups, stim patches.
+        Table(kind: Locker, site: None, guarded: false, empty: 55, count: (1, 2), lines: [
+            Line(weight: 5, what: Cash((5, 25))),
+            Line(weight: 3, what: Item("soy_noodle_cup", (1, 2))),
+            Line(weight: 2, what: Item("stim_patch", (1, 1))),
+        ]),
+        Table(kind: Locker, site: None, guarded: true, empty: 15, count: (2, 3), lines: [
+            Line(weight: 5, what: Cash((40, 120))),
+            Line(weight: 3, what: Item("stim_patch", (1, 2))),
+            Line(weight: 2, what: Chip((60, 160), 30)),
+            Line(weight: 1, what: Item("frag", (1, 1))),
+        ]),
+        // A security locker: the guards' own, with a frag and a card.
+        Table(kind: Locker, site: Some("office"), guarded: false, empty: 40, count: (1, 2), lines: [
+            Line(weight: 4, what: Cash((10, 40))),
+            Line(weight: 3, what: Item("stim_patch", (1, 2))),
+            Line(weight: 2, what: Item("frag", (1, 1))),
+            Line(weight: 2, what: Card),
+        ]),
+        Table(kind: Locker, site: Some("hotel"), guarded: false, empty: 45, count: (1, 2), lines: [
+            Line(weight: 4, what: Cash((10, 30))),
+            Line(weight: 3, what: Item("soy_noodle_cup", (1, 2))),
+            Line(weight: 2, what: Item("frag", (1, 1))),
+            Line(weight: 2, what: Card),
+        ]),
+
+        // ---- Drawers: loose change, now and then a credchip. An office has a drawer to
+        // every desk, so they lean very empty: the whole building pays less than a job.
+        Table(kind: Drawer, site: None, guarded: false, empty: 92, count: (1, 1), lines: [
+            Line(weight: 6, what: Cash((2, 10))),
+            Line(weight: 1, what: Chip((15, 50), 25)),
+            Line(weight: 2, what: Item("soy_noodle_cup", (1, 1))),
+        ]),
+        Table(kind: Drawer, site: None, guarded: true, empty: 20, count: (1, 2), lines: [
+            Line(weight: 4, what: Cash((30, 90))),
+            Line(weight: 4, what: Chip((80, 250), 40)),
+        ]),
+
+        // ---- Cabinets: first aid.
+        Table(kind: Cabinet, site: None, guarded: false, empty: 50, count: (1, 2), lines: [
+            Line(weight: 6, what: Item("stim_patch", (1, 2))),
+            Line(weight: 2, what: Cash((5, 20))),
+        ]),
+        Table(kind: Cabinet, site: None, guarded: true, empty: 15, count: (2, 3), lines: [
+            Line(weight: 6, what: Item("stim_patch", (2, 4))),
+            Line(weight: 2, what: Cash((30, 90))),
+            Line(weight: 1, what: Chip((60, 160), 35)),
+        ]),
+
+        // ---- Crates: parts and salvage.
+        Table(kind: Crate, site: None, guarded: false, empty: 45, count: (1, 2), lines: [
+            Line(weight: 4, what: Item("fuse_stock", (1, 3))),
+            Line(weight: 4, what: Item("copper_coil", (1, 2))),
+            Line(weight: 3, what: Item("scrap_servo", (1, 2))),
+        ]),
+        Table(kind: Crate, site: None, guarded: true, empty: 10, count: (2, 3), lines: [
+            Line(weight: 4, what: Item("fuse_stock", (2, 4))),
+            Line(weight: 4, what: Item("copper_coil", (2, 3))),
+            Line(weight: 3, what: Item("scrap_servo", (1, 3))),
+            Line(weight: 3, what: Item("frag", (1, 2))),
+        ]),
+
+        // ---- Safes: cash and credchips, a locked one often; programs and
+        // hardware when the security is high.
+        Table(kind: Safe, site: None, guarded: false, empty: 40, count: (1, 2), lines: [
+            Line(weight: 5, what: Cash((30, 110))),
+            Line(weight: 4, what: Chip((80, 220), 50)),
+            Line(weight: 1, bands: [High], what: Item("crack_2", (1, 1))),
+            Line(weight: 1, bands: [High], what: Item("fuse_ceramic", (1, 1))),
+        ]),
+        Table(kind: Safe, site: None, guarded: true, empty: 5, count: (2, 3), lines: [
+            Line(weight: 5, what: Cash((300, 900))),
+            Line(weight: 5, what: Chip((400, 1200), 60)),
+            Line(weight: 2, bands: [Mid, High], what: Item("fuse_ceramic", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("crack_2", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("copy_2", (1, 1))),
+        ]),
+        // Safes deeper in an office or hotel hold an executive card.
+        Table(kind: Safe, site: Some("office"), guarded: false, empty: 30, count: (1, 2), lines: [
+            Line(weight: 5, what: Cash((40, 140))),
+            Line(weight: 4, what: Chip((100, 260), 55)),
+            Line(weight: 2, what: Card),
+            Line(weight: 1, bands: [High], what: Item("copy_2", (1, 1))),
+        ]),
+        Table(kind: Safe, site: Some("hotel"), guarded: false, empty: 35, count: (1, 2), lines: [
+            Line(weight: 5, what: Cash((40, 130))),
+            Line(weight: 4, what: Chip((90, 240), 50)),
+            Line(weight: 2, what: Card),
+        ]),
+    ],
+)

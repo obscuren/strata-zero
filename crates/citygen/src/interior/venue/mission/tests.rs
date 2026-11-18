@@ -322,7 +322,7 @@ fn devices_stand_on_floor_spots() {
                 ));
             }
             for c in layer.containers.iter().filter(|c| c.level == lv.level) {
-                want.push((c.at, Feature::Container));
+                want.push((c.at, Feature::Furniture(c.kind.furniture())));
             }
             if layer.objective.level == lv.level {
                 want.push((layer.objective.at, Feature::Objective));
@@ -334,16 +334,12 @@ fn devices_stand_on_floor_spots() {
                 assert_eq!(t.feature, Some(feature), "{on}: {at:?}");
                 assert!(!steps.contains(&at), "{on}: {feature:?} on a doorstep");
                 turrets += usize::from(feature == Feature::Turret);
-                containers += usize::from(feature == Feature::Container);
+                containers += usize::from(feature.container().is_some());
             }
             let laid = |p: Pos, feature: Feature| want.contains(&(p, feature));
             for (p, t) in f.tiles.iter() {
-                if let Some(
-                    feature @ (Feature::Camera
-                    | Feature::Turret
-                    | Feature::Container
-                    | Feature::Objective),
-                ) = t.feature
+                if let Some(feature @ (Feature::Camera | Feature::Turret | Feature::Objective)) =
+                    t.feature
                 {
                     assert!(laid(p, feature), "{on}: a stray {feature:?} at {p:?}");
                 }
@@ -553,7 +549,8 @@ fn a_copy_is_the_plain_level_and_its_layer() {
                 })
                 .collect();
             features.extend(
-                (layer.containers.iter().filter(|c| here(c))).map(|c| (c.at, Feature::Container)),
+                (layer.containers.iter().filter(|c| c.level == level))
+                    .map(|c| (c.at, Feature::Furniture(c.kind.furniture()))),
             );
             if here(&layer.objective) {
                 features.push((layer.objective.at, Feature::Objective));
@@ -581,7 +578,7 @@ fn a_copy_is_the_plain_level_and_its_layer() {
                 "{on}: lit otherwise"
             );
             // A turret or a container touches no furniture, and the copy is one piece.
-            let blocks = |f: &Feature| matches!(f, Feature::Turret | Feature::Container);
+            let blocks = |f: &Feature| matches!(f, Feature::Turret) || f.container().is_some();
             for &(at, f) in features.iter().filter(|(_, f)| blocks(f)) {
                 for q in at.neighbors8() {
                     let piece = matches!(plain.tiles[q].feature, Some(Feature::Furniture(_)));
@@ -839,4 +836,66 @@ fn a_guard_post_saved_before_reads_with_no_stop() {
     };
     let g: GuardPost = rmp_serde::from_slice(&rmp_serde::to_vec_named(&old).unwrap()).unwrap();
     assert_eq!((g.level, g.zone, g.stop), (2, 1, None));
+}
+
+#[test]
+fn a_spot_takes_its_kind_from_its_room() {
+    use crate::interior::RoomKind;
+    use crate::tile::ContainerKind;
+    let pack = VenuePack::builtin();
+    let mut seen = BTreeSet::new();
+    for t in &pack.types {
+        for seed in 0..8 {
+            let layout = lay_out(t, VenueFrame::own(t), seed).unwrap();
+            for size in SIZES {
+                let rule = pack.size(size);
+                let lay = || {
+                    (0..t.objectives.len()).find_map(|objective| {
+                        let inputs = MissionInputs {
+                            size,
+                            objective,
+                            security: 200,
+                            seed,
+                        };
+                        MissionLayer::lay(&layout, t, rule, inputs).ok()
+                    })
+                };
+                let Some(layer) = lay() else {
+                    continue;
+                };
+                assert_eq!(Some(&layer), lay().as_ref(), "{} seed {seed}", t.id);
+                for c in &layer.containers {
+                    let x = layout.level(c.level).unwrap();
+                    let r = x.rooms.iter().find(|r| r.spots.contains(&c.at)).unwrap();
+                    let zone = layout.zones[r.zone as usize].as_str();
+                    let want = if matches!(zone, "secure" | "executive") {
+                        ContainerKind::Safe
+                    } else if matches!(r.kind, RoomKind::Storage | RoomKind::Plant) {
+                        ContainerKind::Crate
+                    } else {
+                        ContainerKind::Locker
+                    };
+                    assert_eq!(c.kind, want, "{} seed {seed}: {}", t.id, r.name);
+                    seen.insert(c.kind);
+                }
+            }
+        }
+    }
+    assert!(seen.len() >= 2, "only {seen:?}");
+}
+
+#[test]
+fn a_spot_saved_with_no_kind_reads_as_a_safe() {
+    #[derive(serde::Serialize)]
+    struct Old {
+        level: i32,
+        at: Pos,
+    }
+    let old = Old {
+        level: 2,
+        at: Pos::new(4, 5),
+    };
+    let bytes = rmp_serde::to_vec_named(&old).unwrap();
+    let back: ContainerSpot = rmp_serde::from_slice(&bytes).unwrap();
+    assert_eq!(back.kind, crate::tile::ContainerKind::Safe);
 }

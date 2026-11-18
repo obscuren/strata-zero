@@ -239,7 +239,10 @@ fn the_copy_draws_its_layer() {
             assert_eq!(f.tiles[d.at].feature, Some(want), "{level} {d:?}");
         }
         for c in layer.containers.iter().filter(|c| c.level == level) {
-            assert_eq!(f.tiles[c.at].feature, Some(citygen::Feature::Container));
+            assert_eq!(
+                f.tiles[c.at].feature,
+                Some(citygen::Feature::Furniture(c.kind.furniture()))
+            );
         }
         if layer.objective.level == level {
             let at = layer.objective.at;
@@ -568,12 +571,10 @@ fn drawn_afresh(st: &mut AppState, b: BuildingId) -> Drawn {
             let f = st.interiors.ensure(&city, b, level).unwrap().clone();
             let marks = (f.tiles.iter())
                 .filter_map(|(p, t)| match t.feature {
-                    Some(
-                        k @ (Feature::Camera
-                        | Feature::Turret
-                        | Feature::Container
-                        | Feature::Objective),
-                    ) => Some((p, k)),
+                    Some(k @ (Feature::Camera | Feature::Turret | Feature::Objective)) => {
+                        Some((p, k))
+                    }
+                    Some(k) if k.container().is_some() => Some((p, k)),
                     _ => None,
                 })
                 .collect();

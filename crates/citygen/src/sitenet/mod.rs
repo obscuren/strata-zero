@@ -19,6 +19,7 @@ use crate::interior::venue::{
 };
 use crate::interior::{DoorLock, FloorPlan, LinkKind, RoomKind};
 use crate::net::{NodeKind, SiteNode};
+use crate::tile::{Feature, Furniture, Terrain, wall_front};
 use crate::world::City;
 use std::collections::BTreeSet;
 
@@ -217,6 +218,26 @@ impl SiteNet {
             for (at, name) in door_locks(v, x, layer) {
                 push(level, at, NodeKind::DoorLock, at, name);
             }
+            // Every safe the floor draws is on the Net: floor-standing at its own tile,
+            // set in a wall at the floor tile in front of it. No other room container is.
+            for (at, tile) in floor.tiles.iter() {
+                if tile.feature != Some(Feature::Furniture(Furniture::Safe)) {
+                    continue;
+                }
+                let front = if tile.terrain == Terrain::Wall {
+                    wall_front(&floor.tiles, at)
+                } else {
+                    Some(at)
+                };
+                let Some(front) = front else {
+                    continue;
+                };
+                let name = match room_at(x, front) {
+                    Some(room) => format!("{} safe", room.name),
+                    None => "safe".to_string(),
+                };
+                push(level, at, NodeKind::Container, front, name);
+            }
             net.levels.push(SiteLevel {
                 level,
                 name: x.role.clone(),
@@ -268,21 +289,27 @@ impl SiteNet {
                 };
                 (d.level, d.at, kind)
             });
-            let containers =
-                (layer.containers.iter()).map(|c| (c.level, c.at, NodeKind::Container));
-            for (level, at, kind) in devices.chain(containers) {
+            for (level, at, kind) in devices {
                 let Some(x) = v.level(level).filter(|_| plan.has_level(level)) else {
                     continue;
                 };
-                let what = match kind {
-                    NodeKind::Container => "safe",
-                    other => other.label(),
-                };
+                let what = kind.label();
                 let name = match room_at(x, at) {
                     Some(room) => format!("{} {what}", room.name),
                     None => what.to_string(),
                 };
                 push(level, at, kind, at, name);
+            }
+            for c in &layer.containers {
+                let Some(x) = v.level(c.level).filter(|_| plan.has_level(c.level)) else {
+                    continue;
+                };
+                let what = c.kind.word();
+                let name = match room_at(x, c.at) {
+                    Some(room) => format!("{} {what}", room.name),
+                    None => what.to_string(),
+                };
+                push(c.level, c.at, NodeKind::Container, c.at, name);
             }
         }
         let rank = |k: NodeKind| {

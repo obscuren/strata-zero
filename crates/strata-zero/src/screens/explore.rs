@@ -205,6 +205,8 @@ pub struct MapScreen {
     /// on screen: they come of the site's Net, worked out whole, and a mission's copy
     /// waits to begin or end while you're in its building.
     devices: RefCell<Option<(Place, DeviceTiles)>>,
+    /// A lock being forced by Body: its bar fills while you stand at it.
+    pub forcing: Option<crate::containers::force::Forcing>,
 }
 
 /// A site's floor's terminals and gate switches, by their wall tiles.
@@ -904,6 +906,7 @@ impl MapScreen {
             traffic: RefCell::new(Default::default()),
             placement: None,
             devices: RefCell::new(None),
+            forcing: None,
         }
     }
 
@@ -923,6 +926,55 @@ impl MapScreen {
         let devices = crate::sitenet::floor_devices(st, building, level);
         *kept = Some((self.place, devices.clone()));
         devices
+    }
+
+    /// Stops forcing a lock when another screen goes over the map: the world is frozen
+    /// under it, so the bar must not count that time.
+    fn let_go_of_the_lock(&mut self, st: &mut AppState) {
+        if self.forcing.take().is_some() {
+            st.say("you let go");
+        }
+    }
+
+    /// Starts, runs and ends the forcing of a lock; Some when the container's open panel
+    /// goes up over the map.
+    fn forcing_step(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> Option<ScreenCmd> {
+        if let Some(at) = st.force_at.take()
+            && self.mode == Mode::Walk
+        {
+            let stand = st.player.as_ref().map(|p| (p.place, p.pos));
+            if let (Some(c), Some(stand)) = (crate::containers::find(st, at), stand) {
+                match crate::containers::force::can(st, &c) {
+                    Ok(ticks) => {
+                        self.forcing = Some(crate::containers::force::Forcing {
+                            at,
+                            from: st.tick,
+                            ticks,
+                            stand,
+                        });
+                    }
+                    Err(why) => st.warn(why),
+                }
+            }
+            return None;
+        }
+        let f = self.forcing.as_ref()?;
+        let here = st.player.as_ref().map(|p| (p.place, p.pos));
+        if !keys.is_empty() || here != Some(f.stand) || st.net.engaged.is_some() {
+            self.forcing = None;
+            st.say("you let go");
+            return None;
+        }
+        if !f.done(st.tick) {
+            return None;
+        }
+        let at = f.at;
+        self.forcing = None;
+        crate::containers::force::finish(st, at);
+        Some(ScreenCmd::Push {
+            to: Box::new(crate::screens::container::ContainerPanel::open(st, at)),
+            fx: TransitionKind::None,
+        })
     }
 
     /// Your act half on turns, on any map: the keys aim and fire.
@@ -2064,9 +2116,9 @@ impl MapScreen {
                 });
             }
         }
-        let popup = match subjects.as_slice() {
-            [] => Popup::verbs("", vec![look], st.tick),
-            [s] => s.window(st.tick),
+        let to: Box<dyn Screen> = match subjects.as_slice() {
+            [] => Box::new(Popup::verbs("", vec![look], st.tick)),
+            [s] => s.open(st),
             _ => {
                 self.which_way = Some(WhichWay {
                     subjects,
@@ -2076,7 +2128,7 @@ impl MapScreen {
             }
         };
         Some(ScreenCmd::Push {
-            to: Box::new(popup),
+            to,
             fx: TransitionKind::None,
         })
     }
@@ -2219,7 +2271,7 @@ impl MapScreen {
         let Some(s) = pick else {
             return ScreenCmd::Stay;
         };
-        let to = Box::new(s.window(st.tick));
+        let to = s.open(st);
         self.which_way = None;
         ScreenCmd::Push {
             to,
@@ -2345,7 +2397,7 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
-        let popup = if let Some(b) = place.construct() {
+        let to: Box<dyn Screen> = if let Some(b) = place.construct() {
             let mut letters = FREE_LETTERS.chars();
             let rows: Vec<Choice> = interact::run_rows(st, b, pos, None, &mut letters)
                 .into_iter()
@@ -2358,17 +2410,17 @@ impl MapScreen {
             }
             let mut choices = vec![Choice::new('x', "Look", Pick::Look(cursor))];
             choices.extend(rows);
-            Popup::verbs("", choices, st.tick)
+            Box::new(Popup::verbs("", choices, st.tick))
         } else {
             let subjects = interact::gather(st, &|pl, p| self.inside_person_at(pl, p));
             match subjects.iter().find(|s| s.pos == cursor) {
-                Some(s) => s.window(st.tick),
+                Some(s) => s.open(st),
                 None => return ScreenCmd::Stay,
             }
         };
         self.looking = None;
         ScreenCmd::Push {
-            to: Box::new(popup),
+            to,
             fx: TransitionKind::None,
         }
     }
@@ -3652,6 +3704,7 @@ impl Screen for MapScreen {
         if crate::missions::scene::running(st).is_none()
             && let Some(view) = st.missions.feeds.pop_front()
         {
+            self.let_go_of_the_lock(st);
             return ScreenCmd::Push {
                 to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
                 fx: TransitionKind::Glitch,
@@ -3664,6 +3717,7 @@ impl Screen for MapScreen {
         {
             tray.shown = true;
             if let Some(popup) = Popup::tray(st) {
+                self.let_go_of_the_lock(st);
                 return ScreenCmd::Push {
                     to: Box::new(popup),
                     fx: TransitionKind::None,
@@ -3705,6 +3759,11 @@ impl Screen for MapScreen {
                 cursor: pos,
                 place: self.place,
             });
+        }
+        // A panel's force row: the bar starts over the container, and runs while you stand
+        // at it, no key pressed and no fight begun.
+        if let Some(cmd) = self.forcing_step(st, keys) {
+            return cmd;
         }
         // A level plays its upload on you once you're walking with nothing over the
         // map: no scene, no rest's timeline, no console. Until then it waits.
@@ -4285,8 +4344,35 @@ impl Screen for MapScreen {
         if !devices.is_empty() {
             overlays.push(&floor_devices);
         }
+        // A site's containers that are open, empty or on the Net.
+        let container_looks = match self.place {
+            Place::Floor { building, level } => crate::containers::looks(st, building, level),
+            _ => Vec::new(),
+        };
+        let container_overlay = crate::render::containers::ContainerLooks {
+            looks: &container_looks,
+            vis,
+        };
+        if !container_looks.is_empty() {
+            overlays.push(&container_overlay);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
+        let force_bar = self.forcing.as_ref().and_then(|f| {
+            (self.place
+                == Place::Floor {
+                    building: f.at.building,
+                    level: f.at.level,
+                })
+            .then(|| crate::render::containers::ForceBar {
+                at: f.at.at,
+                frac: f.frac(st.tick),
+                vis,
+            })
+        });
+        if let Some(bar) = force_bar.as_ref() {
+            overlays.push(bar);
+        }
         let scorch = ScorchOverlay { fx: &st.fx, vis };
         overlays.push(&scorch);
         // On the street or a site's floor: the cones of cameras that see you, or that you
@@ -19728,5 +19814,149 @@ mod tests {
                 failed.join("\n")
             );
         }
+    }
+
+    /// A locked spot, you beside it with the Body to force it, on a map walking its floor.
+    fn force_setup(security: u8) -> (AppState, MapScreen, crate::containers::Container) {
+        use crate::containers::testutil::*;
+        let (mut st, c) = copy_with_spot(security);
+        beside(&mut st, &c);
+        let crate::containers::Status::Locked(lock) = crate::containers::status(&st, &c) else {
+            panic!("locked")
+        };
+        st.character.attributes.body = crate::containers::force::need(lock.grade);
+        let mut s = MapScreen::explore(0);
+        s.mode = Mode::Walk;
+        s.place = st.player.as_ref().unwrap().place;
+        (st, s, c)
+    }
+
+    /// The panel's force row, pressed.
+    fn press_force(st: &mut AppState, c: &crate::containers::Container) -> ScreenCmd {
+        let mut p = crate::screens::container::ContainerPanel::open(st, c.at);
+        p.update(st, &[]);
+        p.update(st, &[key(KeyCode::Char('f'))])
+    }
+
+    fn opened(
+        st: &AppState,
+        c: &crate::containers::Container,
+    ) -> Option<crate::containers::state::Opened> {
+        crate::containers::state(st, c.at).and_then(|s| s.opened)
+    }
+
+    #[test]
+    fn forcing_runs_its_time_and_opens_it() {
+        let (mut st, mut s, c) = force_setup(0);
+        assert!(matches!(press_force(&mut st, &c), ScreenCmd::Pop { .. }));
+        assert_eq!(st.force_at, Some(c.at));
+        s.update(&mut st, &[]);
+        let f = s.forcing.clone().expect("it started");
+        assert_eq!(st.force_at, None);
+        for _ in 0..f.ticks - 1 {
+            st.tick += 1;
+            let cmd = s.update(&mut st, &[]);
+            assert!(!matches!(cmd, ScreenCmd::Push { .. }));
+            assert!(
+                s.forcing.is_some(),
+                "stopped at {} of {}: engaged {} pos {:?} stand {:?}",
+                st.tick - f.from,
+                f.ticks,
+                st.net.engaged.is_some(),
+                st.player.as_ref().map(|p| (p.place, p.pos)),
+                f.stand
+            );
+        }
+        assert_eq!(opened(&st, &c), None);
+        st.tick += 1;
+        let cmd = s.update(&mut st, &[]);
+        assert!(
+            matches!(cmd, ScreenCmd::Push { .. }),
+            "{:?} {}",
+            s.forcing,
+            st.log.latest().unwrap().text
+        );
+        assert_eq!(
+            opened(&st, &c),
+            Some(crate::containers::state::Opened::Forced)
+        );
+        assert!(s.forcing.is_none());
+    }
+
+    #[test]
+    fn a_step_or_a_key_stops_it_and_it_starts_over() {
+        let (mut st, mut s, c) = force_setup(150);
+        press_force(&mut st, &c);
+        s.update(&mut st, &[]);
+        let ticks = s.forcing.as_ref().unwrap().ticks;
+        st.tick += 10;
+        s.update(&mut st, &[key(KeyCode::Char('x'))]);
+        assert!(s.forcing.is_none());
+        st.tick += ticks;
+        s.update(&mut st, &[]);
+        assert_eq!(opened(&st, &c), None);
+        press_force(&mut st, &c);
+        s.update(&mut st, &[]);
+        assert_eq!(s.forcing.as_ref().unwrap().from, st.tick);
+        // Stepping off the spot stops it too.
+        st.player.as_mut().unwrap().pos.x += 1;
+        st.tick += 1;
+        s.update(&mut st, &[]);
+        assert!(s.forcing.is_none());
+    }
+
+    #[test]
+    fn a_feed_over_the_map_lets_go_of_the_lock() {
+        let (mut st, mut s, c) = force_setup(150);
+        press_force(&mut st, &c);
+        s.update(&mut st, &[]);
+        let ticks = s.forcing.as_ref().expect("it started").ticks;
+        st.missions.feeds.push_back(crate::missions::FeedView {
+            story: None,
+            from: "HOLO".into(),
+            text: vec!["a word".into()],
+            close: "close".into(),
+        });
+        let cmd = s.update(&mut st, &[]);
+        assert!(matches!(cmd, ScreenCmd::Push { .. }), "the feed opens");
+        assert!(s.forcing.is_none(), "forcing stops under the feed");
+        // The world was frozen under it: coming back, the lock is not done.
+        st.tick += ticks;
+        s.update(&mut st, &[]);
+        assert_eq!(opened(&st, &c), None);
+    }
+
+    #[test]
+    fn forcing_a_lock_on_the_net_sets_off_the_alarm() {
+        let (mut st, mut s, c) = force_setup(150);
+        let b = c.at.building;
+        assert!(crate::containers::lock(&st, &c).unwrap().node.is_some());
+        press_force(&mut st, &c);
+        s.update(&mut st, &[]);
+        let ticks = s.forcing.as_ref().unwrap().ticks;
+        st.tick += ticks;
+        s.update(&mut st, &[]);
+        assert!(st.net.alert(b, st.net.now(&st)), "the alarm is up");
+    }
+
+    #[test]
+    fn not_in_a_fight() {
+        let (mut st, _s, c) = force_setup(150);
+        st.net.engaged = Some(crate::net::Engagement {
+            place: citygen::Place::Stratum(citygen::StratumKind::Net),
+            spent_at: None,
+            boosted: false,
+            round: 1,
+            order: vec![crate::net::Actor::You],
+            turn: 0,
+            moves: 1,
+            ap: 2,
+            phase: crate::net::Phase::Act,
+            manual: false,
+            acting_since: 0,
+        });
+        press_force(&mut st, &c);
+        assert_eq!(st.force_at, None);
+        assert_eq!(st.log.latest().unwrap().text, "not now");
     }
 }
