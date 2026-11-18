@@ -147,6 +147,13 @@ Looks(
         "bench": ["A bench bolted down so it stays where it is."],
         "vending machine": ["Drinks behind scratched glass, prices taped over prices."],
         "bike": ["A bike chained to itself, missing its front wheel."],
+        "safe": [
+            "A floor safe, bolted down by someone who meant it.",
+            "A safe with a keypad worn blank on three of the keys.",
+        ],
+        "crate": ["A crate with a stencilled number and the lid nailed twice."],
+        "medicine cabinet": ["A medicine cabinet with a cracked mirror and a red cross gone pink."],
+        "desk drawer": ["A desk drawer that sticks, which means someone keeps something in it."],
         "holo set": [
             "A cheap holo set, the picture a hand's width off true.",
             "Older than the flat. It still gets every channel.",
