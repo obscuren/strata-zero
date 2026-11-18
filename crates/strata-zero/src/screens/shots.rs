@@ -512,6 +512,21 @@ fn container_as(
     crate::containers::find(st, c.at).expect("still a container")
 }
 
+/// You shown around where you stand, as walking does, and under your carry cap.
+fn container_see(st: &mut AppState) {
+    st.character.attributes.body = 32;
+    let bonus = st.sight_bonus();
+    let minute = st.minute_of_day();
+    let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_mut()) else {
+        return;
+    };
+    if let Some(map) =
+        crate::render::map::MapRef::for_place(city, &st.interiors, &st.constructs, p.place, minute)
+    {
+        p.update_fov(&map, bonus);
+    }
+}
+
 /// Containers: the locked panel on the Net and off it, the open panel, the Keyjack on a
 /// lock, a lock being forced, and the map with one of each kind, floor-standing and set in
 /// a wall, closed, open, empty and on the Net.
@@ -542,6 +557,7 @@ fn container_shots() {
     let (mut st, c) = copy_with_spot(150);
     let c = container_as(&mut st, &c, ContainerKind::Safe);
     beside(&mut st, &c);
+    container_see(&mut st);
     let map = MapScreen::walking(&mut st);
     let mut panel = ContainerPanel::open(&st, c.at);
     panel.update(&mut st, &[]);
@@ -567,6 +583,7 @@ fn container_shots() {
     }
     let (mut st2, c2) = found.expect("a locked locker");
     beside(&mut st2, &c2);
+    container_see(&mut st2);
     let map2 = MapScreen::walking(&mut st2);
     let mut panel2 = ContainerPanel::open(&st2, c2.at);
     panel2.update(&mut st2, &[]);
@@ -595,13 +612,68 @@ fn container_shots() {
     open.update(&mut st, &[]);
     panel_shots("open", &st, &map, &open);
 
-    // A lock being forced, halfway, the map alone.
+    // A lock being forced, halfway, the map alone: you in the floor's most open spot, a safe
+    // on the Net beside you.
     let (mut st, c) = copy_with_spot(150);
-    beside(&mut st, &c);
+    let (b, level) = (c.at.building, c.at.level);
+    let me = {
+        let floor = &st.interiors.floor(b, level).unwrap().1;
+        let free = |p: citygen::Pos| {
+            floor
+                .tiles
+                .get(p)
+                .is_some_and(|t| t.is_walkable() && t.feature.is_none())
+        };
+        let open = |p: citygen::Pos| {
+            (-6..=6)
+                .flat_map(|dx| (-3..=3).map(move |dy| (dx, dy)))
+                .filter(|(dx, dy)| free(citygen::Pos::new(p.x + dx, p.y + dy)))
+                .count()
+        };
+        floor
+            .tiles
+            .iter()
+            .map(|(p, _)| p)
+            .filter(|p| free(*p) && free(citygen::Pos::new(p.x + 1, p.y)))
+            .max_by_key(|p| open(*p))
+            .expect("an open spot")
+    };
+    {
+        let p = st.player.as_mut().unwrap();
+        p.place = citygen::Place::Floor { building: b, level };
+        p.pos = me;
+    }
+    let at = citygen::Pos::new(me.x + 1, me.y);
+    let mut floor = st.interiors.floor(b, level).unwrap().1.clone();
+    floor.tiles.get_mut(at).unwrap().feature =
+        Some(citygen::Feature::Furniture(ContainerKind::Safe.furniture()));
+    st.interiors.put_floor(b, floor);
+    let mut net = (*crate::sitenet::net_of(&st, b).expect("its Net")).clone();
+    net.nodes.push(citygen::sitenet::SiteNodeInfo {
+        node: citygen::SiteNode {
+            building: b,
+            level,
+            at,
+        },
+        kind: citygen::NodeKind::Container,
+        net: at,
+        name: "safe".to_string(),
+    });
+    st.interiors.put_site_net(b, net);
+    let c = containers::find(
+        &st,
+        containers::ContainerAt {
+            building: b,
+            level,
+            at,
+        },
+    )
+    .expect("the safe");
+    container_see(&mut st);
     let Status::Locked(lock) = containers::status(&st, &c) else {
         panic!("locked")
     };
-    st.character.attributes.body = containers::force::need(lock.grade);
+    assert!(st.character.attributes.body >= containers::force::need(lock.grade));
     let mut map = MapScreen::walking(&mut st);
     let ticks = containers::force::can(&st, &c).expect("it can be forced");
     let stand = st.player.as_ref().map(|p| (p.place, p.pos)).unwrap();
@@ -613,12 +685,12 @@ fn container_shots() {
     });
     st.tick += ticks / 2;
     map.update(&mut st, &[]);
+    assert!(map.forcing.is_some(), "the bar is still running");
     for (w, h) in sizes {
         shot_stack(&format!("container_force_{w}x{h}"), &st, &[&map], (w, h));
     }
 
     // The map: one of each kind planted around you, in each state.
-    let (b, level) = (c.at.building, c.at.level);
     let mut floor = st.interiors.floor(b, level).unwrap().1.clone();
     let me = st.player.as_ref().unwrap().pos;
     let dist = |p: citygen::Pos| {
@@ -648,8 +720,33 @@ fn container_shots() {
         .map(|(p, _)| p)
         .collect();
     walls.sort_by_key(|p| dist(*p));
+    // Per placement (standing, set in a wall): first, nearest, one of each kind that has a
+    // lock, on the Net (a crate has none); then each kind closed, open and empty.
     let mut planted = Vec::new();
+    let mut net_nodes = Vec::new();
     for spots in [standing, walls] {
+        let mut spots: Vec<citygen::Pos> = spots.into_iter().take(80).collect();
+        for kind in ContainerKind::ALL {
+            let hit = spots.iter().position(|&at| {
+                floor.tiles.get_mut(at).unwrap().feature =
+                    Some(citygen::Feature::Furniture(kind.furniture()));
+                st.interiors.put_floor(b, floor.clone());
+                let spot = containers::ContainerAt {
+                    building: b,
+                    level,
+                    at,
+                };
+                let locked = containers::find(&st, spot)
+                    .is_some_and(|c| matches!(containers::status(&st, &c), Status::Locked(_)));
+                if !locked {
+                    floor.tiles.get_mut(at).unwrap().feature = None;
+                }
+                locked
+            });
+            if let Some(i) = hit {
+                net_nodes.push((spots.remove(i), kind));
+            }
+        }
         let mut chosen: Vec<citygen::Pos> = spots.into_iter().take(15).collect();
         chosen.sort_by_key(|p| (p.y, p.x));
         for (i, at) in chosen.into_iter().enumerate() {
@@ -660,6 +757,20 @@ fn container_shots() {
         }
     }
     st.interiors.put_floor(b, floor);
+    let mut net = (*crate::sitenet::net_of(&st, b).expect("its Net")).clone();
+    for (at, kind) in net_nodes {
+        net.nodes.push(citygen::sitenet::SiteNodeInfo {
+            node: citygen::SiteNode {
+                building: b,
+                level,
+                at,
+            },
+            kind: citygen::NodeKind::Container,
+            net: at,
+            name: kind.word().to_string(),
+        });
+    }
+    st.interiors.put_site_net(b, net);
     for (at, state) in planted {
         let at = containers::ContainerAt {
             building: b,
@@ -679,6 +790,7 @@ fn container_shots() {
             _ => {}
         }
     }
+    container_see(&mut st);
     let mut map = MapScreen::walking(&mut st);
     map.update(&mut st, &[]);
     st.tick += 3;

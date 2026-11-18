@@ -219,6 +219,12 @@ impl Interiors {
         net
     }
 
+    /// Keeps `net` as site `b`'s Net (a shot plants nodes this way).
+    #[cfg(test)]
+    pub(crate) fn put_site_net(&self, b: BuildingId, net: SiteNet) {
+        self.site_nets.borrow_mut().insert(b, Some(Arc::new(net)));
+    }
+
     /// Drops site `b`'s kept Net: worked out again when next asked.
     pub(crate) fn drop_site_net(&mut self, b: BuildingId) {
         self.site_nets.get_mut().remove(&b);
