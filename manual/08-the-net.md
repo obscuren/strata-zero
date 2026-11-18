@@ -92,7 +92,7 @@ Everything you do in the Net makes **noise**, and noise raises the **trace** of 
 - At 60 the alarm goes off for an hour, or until a job on there ends: the building locks down, its hacks end, its ICE wakes, its gate closes and its ports lock, on its floors and beside it. A firewall's broken locks close again; break them all again and its gate lets you through, until the alarm ends.
 - At 100 you're **dumped**: thrown back into your body.
 
-Trace falls by itself, a little each minute, once you've left. A camera that sees you, on the street or on a hotel's or office's floor, raises its building's trace too: enough to set off the alarm, never enough to dump you.
+Trace falls by itself, a little each minute, once you've left. A camera that sees you, on the street or on a hotel's or office's floor, raises its building's trace too: enough to set off the alarm, never enough to dump you. While a camera sees you, its building's trace doesn't fall.
 
 ## ICE
 

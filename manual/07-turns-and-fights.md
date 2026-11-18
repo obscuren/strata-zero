@@ -12,6 +12,8 @@ A fight on a hotel's or office's floor works as it does on the street, a floor a
 
 A guard who sees you says so, `guard spots you`, and on its next turn it radios it in: `guard radios it in · ALARM`, and the building's alarm goes off (The Net). Drop it or stun it before that turn comes and the call is never made. Each guard calls once, and none calls while the alarm is already on.
 
+When the alarm goes off, the building comes for you. If you were last seen on a floor, that floor's guards head for the spot: in a fight there they join it at once, otherwise they run over and fight only once one of them sees you. Two more guards come from the nearest other floors, by the stairs or a lift; a lockdown shuts the lifts to you, not to them. A guard that gets there and doesn't find you checks the rooms nearby before going back to its round, and so does any guard that loses you while the alarm is on. An alarm raised in the Net, with nobody having seen you, sends each floor's guards to check the rooms around them, and a body you left jacked in is found that way. The footer shows a guard on its way as `answering` and one checking rooms as `sweeping`. The building answers each alarm once, and only while you or your body are inside; when the alarm ends, they go back to their rounds.
+
 Guards hear what they can't see. A gunshot, yours or a guard's, or anything thrown going off wakes every guard within twelve tiles of it on that floor, through walls, and they come looking. A guard that only heard you has nothing to radio yet. A strike makes no sound.
 
 On a floor, every guard hunting you takes a turn, seen or not. One you haven't seen stays out of the column, and its turn reads `FOOTSTEPS`. A fight started only by things you haven't seen, on a floor or on the street, opens with `ENGAGED · footsteps`.
@@ -60,7 +62,7 @@ While you're cloaked with a foe in reach of your gun or one of your strikes, the
 
 ## Vanish
 
-The Shadow step talent (STREET) gives you **Vanish**, a way out of a fight. It's on the act half's list and costs no AP. The fight ends, every foe on your map and every guard of the building you're in, on any floor, loses you, and you're cloaked for 4 seconds for free to get away under. The log says `vanish · they lose you`. A guard that already radioed has radioed: an alarm stays on.
+The Shadow step talent (STREET) gives you **Vanish**, a way out of a fight. It's on the act half's list and costs no AP. The fight ends, every foe on your map and every guard of the building you're in, on any floor, loses you, and you're cloaked for 4 seconds for free to get away under. The log says `vanish · they lose you`. A guard that already radioed has radioed: an alarm stays on, but the guards go back to their rounds rather than checking rooms.
 
 Vanish cools for 120 seconds, 90 with Shadow step at its best. Out of a fight it's refused (`only in a fight`); there the cloak is the tool.
 
