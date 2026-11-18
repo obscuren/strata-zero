@@ -302,3 +302,68 @@ fn a_plain_site_pays_less_than_a_job() {
         }
     }
 }
+
+#[test]
+fn jacking_in_at_a_container_lands_on_its_node_with_the_body_beside_it() {
+    let (mut st, c) = copy_with_spot(150);
+    beside(&mut st, &c);
+    let b = c.at.building;
+    let body = st.player.as_ref().unwrap().pos;
+    let node = lock(&st, &c).expect("locked").node.expect("on the net");
+    ways::jack_in(&mut st, &c).expect("jacks in");
+    let p = st.player.as_ref().unwrap();
+    assert_eq!(
+        p.place,
+        citygen::Place::SiteNet {
+            building: b,
+            level: c.at.level
+        }
+    );
+    assert_eq!(
+        p.body,
+        Some((
+            citygen::Place::Floor {
+                building: b,
+                level: c.at.level
+            },
+            body
+        ))
+    );
+    let k = st.constructs.site(b).unwrap();
+    let d = k.device(node).expect("the construct holds its node");
+    assert!(d.at.chebyshev(p.pos) <= 1, "on or beside its node");
+}
+
+#[test]
+fn an_alarm_locks_the_port_down() {
+    let (mut st, c) = copy_with_spot(150);
+    beside(&mut st, &c);
+    crate::net::lock_down(&mut st, c.at.building);
+    assert_eq!(
+        ways::jack_in(&mut st, &c),
+        Err("port locked down".to_string())
+    );
+}
+
+#[test]
+fn a_container_node_is_no_port() {
+    let (mut st, c) = copy_with_spot(150);
+    let (b, level) = (c.at.building, c.at.level);
+    assert!(
+        crate::sitenet::floor_devices(&st, b, level)
+            .iter()
+            .all(|(_, k)| *k != citygen::NodeKind::Container)
+    );
+    beside(&mut st, &c);
+    assert!(crate::sitenet::port_in_reach(&st).is_none());
+}
+
+#[test]
+fn a_plain_container_is_not_on_the_net() {
+    let (mut st, c) = plain_site_with(ContainerKind::Locker);
+    beside(&mut st, &c);
+    assert_eq!(
+        ways::jack_in(&mut st, &c),
+        Err("not on the Net".to_string())
+    );
+}

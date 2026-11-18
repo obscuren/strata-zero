@@ -193,9 +193,9 @@ impl ContainerPanel {
         None
     }
 
-    /// A locked panel's row fired: the Keyjack replaces the panel; jacking in and forcing
-    /// it arrive with their own tasks.
-    fn fire_locked(&mut self, st: &mut AppState, key: char) -> Option<ScreenCmd> {
+    /// A locked panel's row fired: the Keyjack replaces the panel, jacking in pops it; forcing
+    /// it arrives with its own task.
+    fn fire_locked(&mut self, st: &mut AppState, c: &Container, key: char) -> Option<ScreenCmd> {
         match key {
             'k' if st.net.engaged.is_some() => st.warn("not now"),
             'k' => {
@@ -204,7 +204,16 @@ impl ContainerPanel {
                     fx: TransitionKind::None,
                 });
             }
-            'j' | 'f' => st.warn("not yet"),
+            'j' => match ways::jack_in(st, c) {
+                Ok(said) => {
+                    st.say(said);
+                    return Some(ScreenCmd::Pop {
+                        fx: TransitionKind::Glitch,
+                    });
+                }
+                Err(why) => st.warn(why),
+            },
+            'f' => st.warn("not yet"),
             _ => {}
         }
         None
@@ -232,12 +241,12 @@ impl ContainerPanel {
             KeyCode::Down => self.step(&rows, 1),
             KeyCode::Enter | KeyCode::Char(' ') => {
                 if let Some(r) = rows.get(self.selected(&rows)).filter(|r| r.enabled) {
-                    return self.fire_locked(st, r.key);
+                    return self.fire_locked(st, c, r.key);
                 }
             }
             KeyCode::Char(ch) => {
                 if let Some(r) = rows.iter().find(|r| r.key == ch && r.enabled) {
-                    return self.fire_locked(st, r.key);
+                    return self.fire_locked(st, c, r.key);
                 }
             }
             _ => {}
@@ -537,6 +546,30 @@ mod tests {
             .find("jack in")
             .unwrap();
         assert_eq!(buf[(x as u16 - 2, y)].bg, BAR_BG, "jack in is selected");
+    }
+
+    #[test]
+    fn the_j_row_jacks_in_and_pops_with_a_glitch_or_warns_and_stays() {
+        let (mut st, c) = copy_with_spot(150);
+        let c = as_kind(&mut st, &c, ContainerKind::Safe);
+        beside(&mut st, &c);
+        let mut p = ContainerPanel::open(&st, c.at);
+        let cmd = p.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert!(matches!(
+            cmd,
+            ScreenCmd::Pop {
+                fx: TransitionKind::Glitch
+            }
+        ));
+        assert!(st.player.as_ref().unwrap().jacked_in());
+        // Alarmed, it stays.
+        let (mut st, c) = copy_with_spot(150);
+        let c = as_kind(&mut st, &c, ContainerKind::Safe);
+        beside(&mut st, &c);
+        crate::net::lock_down(&mut st, c.at.building);
+        let mut p = ContainerPanel::open(&st, c.at);
+        assert!(!popped(&p.update(&mut st, &[key(KeyCode::Char('j'))])));
+        assert!(!st.player.as_ref().unwrap().jacked_in());
     }
 
     #[test]

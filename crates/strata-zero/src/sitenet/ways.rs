@@ -59,6 +59,24 @@ pub fn jack_in_on_floor(st: &mut AppState) -> Result<String, String> {
         return Err(why);
     }
     let (b, port) = port_in_reach(st).ok_or("no terminal within reach")?;
+    jack_in_at(st, b, port)
+}
+
+/// Jacks in on `port`, a node of site `b`'s Net (a terminal, a switch or a container's
+/// lock), your body left standing where it is: refused with a gun on you, while the deck
+/// cools, or while `b` is on alert. You land on that level of its Net on the node (beside
+/// it when ICE stands there), the construct made the first time.
+pub fn jack_in_at(st: &mut AppState, b: BuildingId, port: SiteNodeInfo) -> Result<String, String> {
+    if crate::net::engaged_on_foot(st) {
+        return Err("not with a gun on you".to_string());
+    }
+    let now = st.net.now(st);
+    if let Some(left) = st.net.cooling(now) {
+        return Err(format!("deck cooling · {left} min"));
+    }
+    if st.net.alert(b, now) {
+        return Err("port locked down".to_string());
+    }
     let (from, body) = (st.player.as_ref())
         .filter(|p| !p.jacked_in())
         .map(|p| (p.place, p.pos))

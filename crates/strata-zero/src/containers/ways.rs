@@ -2,7 +2,7 @@
 //! its node; and where you stand to reach a container at all.
 
 use super::state::Opened;
-use super::{Container, ContainerAt, Lock, layout_of, seed, state, state_mut};
+use super::{Container, ContainerAt, Lock, layout_of, lock, seed, state, state_mut};
 use crate::app::AppState;
 use citygen::Pos;
 use citygen::rng::hash64;
@@ -89,4 +89,15 @@ pub fn keyjack_seed(st: &AppState, c: &Container) -> u64 {
 /// The lock's four digits, as a number: the code a Keyjack keys in a beat at a time.
 pub fn lock_code(st: &AppState, c: &Container) -> u16 {
     (hash64(seed(st, c), 0xC0DE) % 10_000) as u16
+}
+
+/// Jacks in at a container's lock on the site's Net, your body left standing at it: the
+/// refusal when the port refuses, else the line the log reads.
+pub fn jack_in(st: &mut AppState, c: &Container) -> Result<String, String> {
+    let node = lock(st, c).and_then(|l| l.node).ok_or("not on the Net")?;
+    let b = c.at.building;
+    let port = crate::sitenet::net_of(st, b)
+        .and_then(|net| net.nodes.iter().find(|n| n.node == node).cloned())
+        .ok_or("not on the Net")?;
+    crate::sitenet::jack_in_at(st, b, port)
 }
