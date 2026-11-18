@@ -45,11 +45,6 @@ impl PanelRow {
     }
 }
 
-/// The body a character needs to force a lock of `grade`.
-fn body_need(grade: u8) -> u8 {
-    2 * grade
-}
-
 /// The rows of a locked container's panel.
 fn locked_rows(st: &AppState, c: &Container, lock: &Lock) -> Vec<PanelRow> {
     let mut rows = Vec::new();
@@ -71,7 +66,7 @@ fn locked_rows(st: &AppState, c: &Container, lock: &Lock) -> Vec<PanelRow> {
     } else {
         PanelRow::new('k', "Keyjack", "none", false)
     });
-    let need = body_need(lock.grade);
+    let need = containers::force::need(lock.grade);
     let body = st.character.attribute(&st.content, Attribute::Body);
     rows.push(PanelRow::new(
         'f',
@@ -194,7 +189,7 @@ impl ContainerPanel {
     }
 
     /// A locked panel's row fired: the Keyjack replaces the panel, jacking in pops it; forcing
-    /// it arrives with its own task.
+    /// it asks the map to start the bar.
     fn fire_locked(&mut self, st: &mut AppState, c: &Container, key: char) -> Option<ScreenCmd> {
         match key {
             'k' if st.net.engaged.is_some() => st.warn("not now"),
@@ -213,7 +208,13 @@ impl ContainerPanel {
                 }
                 Err(why) => st.warn(why),
             },
-            'f' => st.warn("not yet"),
+            'f' => match containers::force::can(st, c) {
+                Ok(_) => {
+                    st.force_at = Some(self.at);
+                    return Some(pop());
+                }
+                Err(why) => st.warn(why),
+            },
             _ => {}
         }
         None

@@ -109,6 +109,7 @@ pub fn snapshot(st: &AppState) -> SnapshotRef<'_> {
         chair: _,
         at_desk: _,  // UI: the desk's own flag
         look_at: _,  // UI: a popup's request, taken on the map's next frame
+        force_at: _, // UI: a panel's request, taken on the map's next frame
         jump_to: _,  // UI: the console's request, taken on the map's next frame
         levelled: _, // UI: a level's upload, played on the map's next frame
         content,
@@ -226,6 +227,7 @@ pub fn restore(st: &mut AppState, s: Snapshot) {
         chair,           // UI: the deck's; up out of it below
         at_desk: _,      // UI: the desk's own flag; `clear_screens` below
         look_at: _,      // UI: `clear_screens` below
+        force_at: _,     // UI: `clear_screens` below
         jump_to: _,      // UI: `clear_screens` below
         levelled: _,     // UI: `clear_screens` below
         content,

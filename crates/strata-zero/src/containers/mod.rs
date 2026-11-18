@@ -9,6 +9,7 @@ use citygen::venue::VenueLayout;
 use citygen::{BuildingId, Pos, SiteNode, Terrain};
 use game::ItemId;
 
+pub mod force;
 pub mod loot;
 pub mod state;
 pub mod ways;
