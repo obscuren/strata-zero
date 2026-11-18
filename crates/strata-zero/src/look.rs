@@ -885,7 +885,7 @@ pub fn look_card(
         if visible {
             card.body.extend(
                 looks
-                    .line(Group::Furniture, c.kind.word(), seed, at)
+                    .line(Group::Furniture, c.kind.furniture().label(), seed, at)
                     .map(String::from),
             );
         }
@@ -1745,5 +1745,35 @@ mod tests {
             &|_, _| None,
         );
         assert!(near.contains(&beside));
+    }
+
+    #[test]
+    fn every_container_kind_reads_its_flavour_line() {
+        use crate::containers::testutil::{beside, plain_site_with};
+        for kind in citygen::tile::ContainerKind::ALL {
+            let (mut st, c) = plain_site_with(kind);
+            beside(&mut st, &c);
+            let place = Place::Floor {
+                building: c.at.building,
+                level: c.at.level,
+            };
+            let map = MapRef::for_place(
+                st.city.as_ref().unwrap(),
+                &st.interiors,
+                &st.constructs,
+                place,
+                0,
+            )
+            .unwrap();
+            let mut p = Player::at(place, st.player.as_ref().unwrap().pos);
+            p.update_fov(&map, 0);
+            st.player = Some(p);
+            let card = look_card(&st, &map, place, c.at.at, &|_, _| None, &[]);
+            assert_eq!(
+                card.header.as_deref(),
+                Some(capitalised(kind.word()).as_str())
+            );
+            assert!(!card.body.is_empty(), "{kind:?} has no flavour line");
+        }
     }
 }

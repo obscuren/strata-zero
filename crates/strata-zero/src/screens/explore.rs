@@ -928,6 +928,14 @@ impl MapScreen {
         devices
     }
 
+    /// Stops forcing a lock when another screen goes over the map: the world is frozen
+    /// under it, so the bar must not count that time.
+    fn let_go_of_the_lock(&mut self, st: &mut AppState) {
+        if self.forcing.take().is_some() {
+            st.say("you let go");
+        }
+    }
+
     /// Starts, runs and ends the forcing of a lock; Some when the container's open panel
     /// goes up over the map.
     fn forcing_step(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> Option<ScreenCmd> {
@@ -3696,6 +3704,7 @@ impl Screen for MapScreen {
         if crate::missions::scene::running(st).is_none()
             && let Some(view) = st.missions.feeds.pop_front()
         {
+            self.let_go_of_the_lock(st);
             return ScreenCmd::Push {
                 to: Box::new(crate::missions::feed::Feed::new(view, st.tick)),
                 fx: TransitionKind::Glitch,
@@ -3708,6 +3717,7 @@ impl Screen for MapScreen {
         {
             tray.shown = true;
             if let Some(popup) = Popup::tray(st) {
+                self.let_go_of_the_lock(st);
                 return ScreenCmd::Push {
                     to: Box::new(popup),
                     fx: TransitionKind::None,
@@ -19893,6 +19903,27 @@ mod tests {
         st.tick += 1;
         s.update(&mut st, &[]);
         assert!(s.forcing.is_none());
+    }
+
+    #[test]
+    fn a_feed_over_the_map_lets_go_of_the_lock() {
+        let (mut st, mut s, c) = force_setup(150);
+        press_force(&mut st, &c);
+        s.update(&mut st, &[]);
+        let ticks = s.forcing.as_ref().expect("it started").ticks;
+        st.missions.feeds.push_back(crate::missions::FeedView {
+            story: None,
+            from: "HOLO".into(),
+            text: vec!["a word".into()],
+            close: "close".into(),
+        });
+        let cmd = s.update(&mut st, &[]);
+        assert!(matches!(cmd, ScreenCmd::Push { .. }), "the feed opens");
+        assert!(s.forcing.is_none(), "forcing stops under the feed");
+        // The world was frozen under it: coming back, the lock is not done.
+        st.tick += ticks;
+        s.update(&mut st, &[]);
+        assert_eq!(opened(&st, &c), None);
     }
 
     #[test]
