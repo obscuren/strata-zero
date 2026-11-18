@@ -10,15 +10,13 @@ use citygen::{FloorPlan, LinkKind, Place, Pos};
 use std::collections::BTreeMap;
 
 /// The levels a guard of `post` reaches by link `link` of `plan` from level `from` in one
-/// go: none by a crawl; a lift's rides only while it answers and to stops its card opens;
-/// a stair's, an escalator's or a ladder's next stop up and down, which ask no card.
-pub fn hops(st: &AppState, post: &Post, plan: &FloorPlan, link: usize, from: i32) -> Vec<i32> {
+/// go: none by a crawl; a lift's rides to stops its card opens, alarm or not (a lockdown
+/// shuts the lifts to intruders, not to security); a stair's, an escalator's or a
+/// ladder's next stop up and down, which ask no card.
+pub fn hops(post: &Post, plan: &FloorPlan, link: usize, from: i32) -> Vec<i32> {
     let hops = plan.hops(link, from);
     if !is_lift(plan, link) {
         return hops;
-    }
-    if !crate::sitenet::lift_answers(st, post.building, link) {
-        return Vec::new();
     }
     (hops.into_iter())
         .filter(|to| crate::venues::ride_card(plan, link, *to) <= post.zone)
@@ -45,7 +43,7 @@ pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos, i
     };
     let plan = crate::interiors::plan_now(st, building)?;
     let stop = |k: usize| Some((k, plan.links.get(k)?.stop(level)?.at));
-    let goes = |k: &usize| hops(st, post, &plan, *k, level).contains(&to);
+    let goes = |k: &usize| hops(post, &plan, *k, level).contains(&to);
     if let Some((k, at)) = post.round.via.filter(goes).and_then(stop) {
         return Some((k, at, to));
     }
@@ -64,10 +62,10 @@ pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos, i
     if let Some(way) = nearest(one_hop) {
         return Some(way);
     }
-    let dist = hops_to(st, post, &plan, to);
+    let dist = hops_to(post, &plan, to);
     let ways: Vec<(usize, usize, i32)> = (0..plan.links.len())
         .filter_map(|k| {
-            (hops(st, post, &plan, k, level).into_iter())
+            (hops(post, &plan, k, level).into_iter())
                 .filter_map(|hop| Some((*dist.get(&hop)?, k, hop)))
                 .min()
         })
@@ -83,10 +81,10 @@ pub(crate) fn link_to(st: &AppState, i: usize, to: i32) -> Option<(usize, Pos, i
 
 /// The fewest hops from each level of `plan` to level `to` by the links a guard of
 /// `post` rides (`hops`), for the levels that reach it at all: `to` itself 0.
-fn hops_to(st: &AppState, post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
+pub(super) fn hops_to(post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i32, usize> {
     let rides: Vec<(i32, Vec<i32>)> = (plan.levels.iter())
         .map(|l| {
-            let next = (0..plan.links.len()).flat_map(|k| hops(st, post, plan, k, *l));
+            let next = (0..plan.links.len()).flat_map(|k| hops(post, plan, k, *l));
             (*l, next.collect())
         })
         .collect();
@@ -108,7 +106,7 @@ fn hops_to(st: &AppState, post: &Post, plan: &FloorPlan, to: i32) -> BTreeMap<i3
 
 /// The steps of a guard's walk from `from` to `to` on `map`, its card's doors open:
 /// None when there's no way.
-fn walk(map: &MapRef, post: &Post, from: Pos, to: Pos) -> Option<usize> {
+pub(super) fn walk(map: &MapRef, post: &Post, from: Pos, to: Pos) -> Option<usize> {
     if from == to {
         return Some(0);
     }
@@ -157,7 +155,7 @@ pub(crate) fn wait_for_lift(st: &mut AppState, i: usize, link: usize, to: i32, n
                 .is_some_and(|s| s.at == pos);
             (
                 on_stop && plan.hops(link, level).contains(&to),
-                post.is_some_and(|p| hops(st, p, &plan, link, level).contains(&to)),
+                post.is_some_and(|p| hops(p, &plan, link, level).contains(&to)),
             )
         }),
         _ => None,
@@ -312,38 +310,40 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_0_card_never_takes_the_carded_lift_and_an_alarm_sends_a_guard_to_the_stairs() {
+    fn a_zone_0_card_never_takes_the_carded_lift_and_an_alarm_still_lets_a_guard_ride() {
         let mut st = ward();
         stand(&mut st, 0, Pos::new(28, 3));
         let plan = st.interiors.plan_of(WARD).unwrap().clone();
         assert!(
-            hops(&st, &post(0, &[]), &plan, 1, 0).is_empty(),
+            hops(&post(0, &[]), &plan, 1, 0).is_empty(),
             "the lift's 2F asks zone 1"
         );
-        assert_eq!(hops(&st, &post(1, &[]), &plan, 1, 0), vec![1]);
+        assert_eq!(hops(&post(1, &[]), &plan, 1, 0), vec![1]);
         crate::net::lock_down(&mut st, WARD);
-        assert!(
-            hops(&st, &post(1, &[]), &plan, 1, 0).is_empty(),
-            "the lift doesn't answer"
+        assert_eq!(
+            hops(&post(1, &[]), &plan, 1, 0),
+            vec![1],
+            "a lockdown shuts the lift to you, not to security"
         );
         let i = guard(&mut st, 0, 1, &[Pos::new(12, 3)]);
-        assert_eq!(link_to(&st, i, 1).map(|(k, _, _)| k), Some(0), "the stairs");
+        assert_eq!(
+            link_to(&st, i, 1).map(|(k, _, _)| k),
+            Some(1),
+            "the nearer lift"
+        );
     }
 
     #[test]
-    fn a_lift_that_stops_answering_keeps_a_guard_waiting() {
+    fn on_alert_a_waiting_guard_still_rides_the_lift() {
         let mut st = ward();
         stand(&mut st, 0, Pos::new(28, 3));
         let i = guard(&mut st, 0, 1, &[Pos::new(12, 1)]);
         st.foes[i].post.as_mut().unwrap().round.lift = Some((1, 1));
         crate::net::lock_down(&mut st, WARD);
-        run(&mut st, 4 * GUARD_LIFT_TICKS);
-        assert_eq!(st.foes[i].place, on(0));
-        assert_eq!(
-            st.foes[i].post.as_ref().unwrap().round.lift,
-            Some((1, 1)),
-            "still waiting for it"
-        );
+        run_until(&mut st, 4 * GUARD_LIFT_TICKS, |st| {
+            st.foes[i].place == on(1)
+        });
+        assert_eq!(st.foes[i].post.as_ref().unwrap().round.lift, None);
     }
 
     #[test]
@@ -367,7 +367,7 @@ mod tests {
         let st = ward();
         let mut plan = st.interiors.plan_of(WARD).unwrap().clone();
         plan.links[0].kind = citygen::LinkKind::Crawl;
-        assert!(hops(&st, &post(2, &[]), &plan, 0, 0).is_empty());
+        assert!(hops(&post(2, &[]), &plan, 0, 0).is_empty());
     }
 
     #[test]

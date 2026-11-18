@@ -28,7 +28,14 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     let now = st.net.now(st);
     let inside = st.player.as_ref().and_then(|p| p.place.construct());
     let roots = st.backdoors.roots();
-    st.net.minute(now, inside, &mut st.constructs, &roots);
+    // A building whose camera sees you as the minute turns doesn't cool that minute.
+    let watched = if now > st.net.last_minute() && !crate::outside::away(st) {
+        crate::cameras::watching(st)
+    } else {
+        Default::default()
+    };
+    st.net
+        .minute(now, inside, &mut st.constructs, &roots, &watched);
     crate::net::tick_backdoors(st);
     crate::holds::tick(st);
     crate::grid::tick(st);

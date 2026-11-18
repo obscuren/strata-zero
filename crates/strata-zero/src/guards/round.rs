@@ -340,7 +340,7 @@ mod tests {
         let post = it.post.as_mut().unwrap();
         let (to, at) = (0..plan.links.len())
             .find_map(|k| {
-                let to = *links::hops(&st, post, &plan, k, level).first()?;
+                let to = *links::hops(post, &plan, k, level).first()?;
                 Some((to, plan.links[k].stop(to)?.at))
             })
             .expect("a link off its level");

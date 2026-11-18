@@ -92,6 +92,31 @@ mod tests {
     }
 
     #[test]
+    fn vanish_on_alert_sends_the_guards_back_to_their_rounds() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        shadow_step(&mut st);
+        crate::net::lock_down(&mut st, WARD);
+        let hunter = guard(&mut st, 0, 0, &[Pos::new(10, 3)]);
+        let sweeper = guard(&mut st, 0, 2, &[Pos::new(3, 3)]);
+        st.foes[hunter].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(6, 3),
+            lost: 0,
+        };
+        st.foes[sweeper].post.as_mut().unwrap().call = Some(crate::foes::Call::Sweep {
+            level: 0,
+            stops: vec![Pos::new(8, 3)],
+        });
+        crate::net::engage(&mut st, on(0), false);
+        settle(&mut st);
+        crate::net::stay(&mut st);
+        vanish(&mut st, &vanish_out()).unwrap();
+        for i in [hunter, sweeper] {
+            assert_eq!(st.foes[i].post.as_ref().unwrap().call, None, "{i}");
+        }
+    }
+
+    #[test]
     fn vanish_ends_the_fight_and_every_guard_of_the_building_loses_you() {
         use crate::guards::testutil::*;
         let mut st = ward();

@@ -232,6 +232,12 @@ pub fn seeing(st: &AppState) -> Vec<Camera> {
         .collect()
 }
 
+/// The buildings whose cameras see you now (`seeing`): their traces don't cool this
+/// minute.
+pub fn watching(st: &AppState) -> std::collections::BTreeSet<BuildingId> {
+    seeing(st).iter().map(|c| c.building).collect()
+}
+
 /// A game minute on the street or a site's floor: each camera that sees you warms its
 /// building's trace, by half with the Ghost talent, never past the alarm line (a camera
 /// can lock a building down, not dump you).
@@ -241,7 +247,14 @@ pub fn tick(st: &mut AppState) {
         return;
     }
     st.net.eyes_minute = Some(now);
-    let mut buildings: Vec<BuildingId> = seeing(st).iter().map(|c| c.building).collect();
+    let seen = seeing(st);
+    for c in seen
+        .iter()
+        .filter(|c| matches!(c.place, Place::Floor { .. }))
+    {
+        crate::guards::place_you_here(st, c.building);
+    }
+    let mut buildings: Vec<BuildingId> = seen.iter().map(|c| c.building).collect();
     buildings.sort();
     buildings.dedup();
     let eye = if st.character.flags(&st.content).contains("ghost") {
@@ -576,5 +589,29 @@ mod tests {
             st.net.traces.get(&b).map_or(0, |t| t.heat),
             before + GHOST_EYE_HEAT
         );
+    }
+
+    #[test]
+    fn under_a_camera_the_trace_doesnt_cool() {
+        use crate::sitenet::testutil::{heat, pass_minutes};
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        st.character.talents.remove(&game::TalentId::new("ghost"));
+        in_a_floor_cameras_cone(&mut st, b);
+        pass_minutes(&mut st, 1);
+        st.net.trace(b).heat = 10;
+        pass_minutes(&mut st, 1);
+        assert_eq!(heat(&st, b), 10 + EYE_HEAT);
+    }
+
+    #[test]
+    fn with_ghost_a_camera_costs_half() {
+        use crate::sitenet::testutil::{heat, pass_minutes};
+        let (mut st, b) = crate::sitenet::testutil::office_copy(190);
+        st.character.talents.insert(game::TalentId::new("ghost"), 1);
+        in_a_floor_cameras_cone(&mut st, b);
+        pass_minutes(&mut st, 1);
+        st.net.trace(b).heat = 10;
+        pass_minutes(&mut st, 1);
+        assert_eq!(heat(&st, b), 10 + GHOST_EYE_HEAT, "+1, not +0");
     }
 }

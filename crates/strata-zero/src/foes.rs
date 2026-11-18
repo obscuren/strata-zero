@@ -88,6 +88,18 @@ pub struct Post {
     /// It has radioed what it saw (or lost the call to a stun), so it doesn't again.
     #[serde(default)]
     pub radioed: bool,
+    /// What the alarm sent it to do, acted on while it's calm (`guards::call`).
+    #[serde(default)]
+    pub call: Option<Call>,
+}
+
+/// What an alarm sends a calm guard to do.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Call {
+    /// Running to where you were placed, on its floor or another.
+    Answer { level: i32, at: Pos },
+    /// Checking rooms on its own floor, nearest first; the first is the next.
+    Sweep { level: i32, stops: Vec<Pos> },
 }
 
 impl Post {
@@ -103,6 +115,7 @@ impl Post {
             follow: None,
             spotted: false,
             radioed: false,
+            call: None,
         }
     }
 }
@@ -378,7 +391,11 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
         let guard = foe.post.as_mut().map(|post| {
             post.spotted = true;
             crate::guards::release_follow(post);
+            post.building
         });
+        if let Some(b) = guard {
+            crate::guards::place_you_here(st, b);
+        }
         if guard.is_some() && calm {
             st.warn("guard spots you");
         }
@@ -586,11 +603,13 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         }
         None => {
             let lost = lost + 1;
-            st.foes[i].mode = if lost >= crate::net::LOST_TURNS {
-                FoeMode::Idle
+            if lost < crate::net::LOST_TURNS {
+                st.foes[i].mode = FoeMode::Hunting { seen, lost };
+            } else if foe.post.is_some() {
+                crate::guards::lost_you(st, i, st.clock_tick());
             } else {
-                FoeMode::Hunting { seen, lost }
-            };
+                st.foes[i].mode = FoeMode::Idle;
+            }
             Step::Nothing
         }
     }
@@ -625,7 +644,12 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     foes.sort_by_key(|f| f.pos.chebyshev(p.pos));
     foes.into_iter()
         .map(|f| {
-            let mode = if f.hunting() { "hunting" } else { "idle" };
+            let mode = match (f.hunting(), f.post.as_ref().and_then(|p| p.call.as_ref())) {
+                (true, _) => "hunting",
+                (false, Some(Call::Answer { .. })) => "answering",
+                (false, Some(Call::Sweep { .. })) => "sweeping",
+                (false, None) => "idle",
+            };
             let stunned = if f.stunned > 0 {
                 format!(" · stunned {}", f.stunned)
             } else {

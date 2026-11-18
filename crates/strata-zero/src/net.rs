@@ -484,6 +484,9 @@ pub struct NetState {
     /// building's.
     #[serde(default)]
     pub firewalls: BTreeMap<BuildingId, Vec<(u8, u64)>>,
+    /// Where each building last placed you (`guards::placed`).
+    #[serde(default)]
+    pub placed: BTreeMap<BuildingId, crate::guards::Placed>,
     last_minute: u64,
     /// Every roll comes out this way, for tests.
     #[cfg(test)]
@@ -525,6 +528,7 @@ impl Default for NetState {
             line_next: 0,
             grid: Default::default(),
             firewalls: BTreeMap::new(),
+            placed: BTreeMap::new(),
             last_minute: 0,
             #[cfg(test)]
             force_roll: None,
@@ -576,7 +580,6 @@ impl NetState {
     }
 
     /// The last game minute `minute` ran up to.
-    #[cfg(test)]
     pub(crate) fn last_minute(&self) -> u64 {
         self.last_minute
     }
@@ -792,13 +795,15 @@ impl NetState {
     }
 
     /// The game minutes up to `now` pass: hacks expire, broken firewall locks close, every
-    /// trace the player is not inside cools, alerts end and their guards stand again.
+    /// trace the player is not inside cools (but in minute `now` not one in `watched`, whose
+    /// camera sees you), alerts end and their guards stand again.
     pub fn minute(
         &mut self,
         now: u64,
         inside: Option<BuildingId>,
         constructs: &mut Constructs,
         roots: &BTreeSet<BuildingId>,
+        watched: &BTreeSet<BuildingId>,
     ) {
         if now <= self.last_minute {
             return;
@@ -811,7 +816,8 @@ impl NetState {
                 let backdoor = roots.contains(b);
                 let t = self.traces.get_mut(b).expect("traced");
                 let ending = t.alert_until.is_some_and(|u| m >= u);
-                if ending || inside != Some(*b) {
+                let seen = m == now && watched.contains(b);
+                if ending || (inside != Some(*b) && !seen) {
                     t.cool(m, backdoor);
                 }
             }
@@ -1555,6 +1561,14 @@ pub fn raise_alarm(st: &mut AppState, b: BuildingId) -> String {
     format!("ALARM · `{}` locks down", building_name(st, b))
 }
 
+/// A building's alarm goes off fresh: `raise_alarm`, then its guards answer
+/// (`guards::answer`). Its line.
+pub fn alarm_goes_off(st: &mut AppState, b: BuildingId) -> String {
+    let line = raise_alarm(st, b);
+    crate::guards::answer(st, b);
+    line
+}
+
 /// Heat on the construct's trace with everything that follows: the alarm raised,
 /// the null route taken once, the dump. Returns whether the player was dumped.
 pub(crate) fn noise_on(st: &mut AppState, b: BuildingId, noise: u8) -> bool {
@@ -1578,14 +1592,14 @@ fn heat_on(st: &mut AppState, b: BuildingId, noise: u8, cut: u8) -> bool {
     match event {
         TraceEvent::Dump => {
             if !was_alert {
-                let line = raise_alarm(st, b);
+                let line = alarm_goes_off(st, b);
                 st.warn(line);
             }
             dump(st, "the trace found you");
             true
         }
         TraceEvent::Alarm => {
-            let line = raise_alarm(st, b);
+            let line = alarm_goes_off(st, b);
             st.warn(line);
             false
         }
@@ -1716,15 +1730,21 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The building's trace at the alarm line, its gate on alert, its line warned.
+/// The building's trace at the alarm line, its gate on alert, its line warned. A building
+/// that wasn't on alert yet has its guards answer (`alarm_goes_off`).
 pub fn lock_down(st: &mut AppState, b: BuildingId) {
     let now = st.net.now(st);
+    let fresh = !st.net.alert(b, now);
     let t = st.net.trace(b);
     t.heat = t.heat.max(game::ALARM_HEAT);
     if t.alert_until.is_none() {
         t.alert_until = Some(now + game::ALERT_MINUTES);
     }
-    let line = raise_alarm(st, b);
+    let line = if fresh {
+        alarm_goes_off(st, b)
+    } else {
+        raise_alarm(st, b)
+    };
     st.warn(line);
 }
 
@@ -2395,13 +2415,15 @@ fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
 }
 
 /// Every standing foe in sight memory the order does not hold yet takes its place
-/// at the end: one that came hunting mid-fight. On a floor every calm guard of it looks
-/// first, and every guard of it that hunts takes a seat, seen or not.
+/// at the end: one that came hunting mid-fight. On a floor a guard that answered the
+/// alarm to it joins first (`guards::join_fight`), every calm guard of it looks, and every
+/// guard of it that hunts takes a seat, seen or not.
 pub fn seat_foes(st: &mut AppState) {
     let Some(place) = st.net.engaged.as_ref().map(|e| e.place) else {
         return;
     };
     if matches!(place, Place::Floor { .. }) {
+        crate::guards::join_fight(st, place);
         for i in crate::foes::standing(st, place) {
             if st.foes[i].post.is_some() && !st.foes[i].hunting() {
                 crate::foes::look(st, i);
@@ -5044,6 +5066,7 @@ pub(crate) mod tests {
             None,
             &mut constructs,
             &BTreeSet::new(),
+            &BTreeSet::new(),
         );
         assert!(net.hacks.is_empty(), "{:?}", net.hacks);
         // Cooling.
@@ -5052,6 +5075,22 @@ pub(crate) mod tests {
         assert_eq!(net.cooling(5), Some(10));
         assert_eq!(net.cooling(15), None);
         let _ = IceGrade::White;
+    }
+
+    #[test]
+    fn a_watched_trace_doesnt_cool_that_minute() {
+        let mut net = NetState::default();
+        let mut constructs = crate::constructs::Constructs::default();
+        let roots = BTreeSet::new();
+        net.trace(b(1)).heat = 10;
+        net.minute(1, None, &mut constructs, &roots, &BTreeSet::from([b(1)]));
+        assert_eq!(net.trace(b(1)).heat, 10, "watched");
+        net.minute(2, None, &mut constructs, &roots, &BTreeSet::new());
+        assert_eq!(net.trace(b(1)).heat, 9);
+        net.trace(b(1)).alert_until = Some(3);
+        net.minute(3, None, &mut constructs, &roots, &BTreeSet::from([b(1)]));
+        let t = net.trace(b(1));
+        assert_eq!((t.alert_until, t.heat), (None, 0), "an alert still ends");
     }
 
     #[test]

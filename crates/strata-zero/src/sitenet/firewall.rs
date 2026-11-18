@@ -303,7 +303,8 @@ mod tests {
         );
         let roots = st.backdoors.roots();
         let end = now + 10 + game::HACK_MINUTES;
-        st.net.minute(end, None, &mut st.constructs, &roots);
+        st.net
+            .minute(end, None, &mut st.constructs, &roots, &Default::default());
         assert!(!st.net.firewalls.contains_key(&b));
     }
 
