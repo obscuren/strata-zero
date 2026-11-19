@@ -264,6 +264,9 @@ pub fn tick(st: &mut AppState) {
         .filter(|c| matches!(c.place, Place::Floor { .. }))
     {
         crate::guards::place_you_here(st, c.building);
+        if let Some(at) = st.player.as_ref().map(|p| p.pos) {
+            crate::turrets::told(st, c.place, at);
+        }
     }
     let mut buildings: Vec<BuildingId> = seen.iter().map(|c| c.building).collect();
     buildings.sort();

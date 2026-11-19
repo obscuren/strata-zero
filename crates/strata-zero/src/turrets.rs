@@ -10,9 +10,12 @@ use citygen::{Dir, Place, Pos, SiteNode};
 use game::ItemId;
 use serde::{Deserialize, Serialize};
 
+pub mod clock;
 pub mod field;
 #[cfg(test)]
 pub(crate) mod testutil;
+
+pub use clock::{tick, told};
 
 pub const TURRET_HP: u8 = 40;
 /// Its plate at mid security, and at high.

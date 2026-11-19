@@ -1,0 +1,207 @@
+//! A turret on the clock: asleep until a camera's word or an alarm wakes it, then
+//! turning toward where you were, and asleep again once nothing has been seen.
+
+use super::field::{aim, in_field, turn_toward};
+use crate::app::AppState;
+use crate::foes::FoeMode;
+use crate::guards::GUARD_STEP_TICKS;
+use citygen::{Place, Pos};
+
+/// The holds read back onto turret `i`: a hold that has run out lets it go. Filled in by
+/// the Net verbs.
+pub(super) fn sync(_st: &mut AppState, _i: usize) {}
+
+/// Wakes turret `i` toward `told`, logging it when you remember its tile.
+fn wake(st: &mut AppState, i: usize, told: Option<Pos>) {
+    let minute = st.net.now(st);
+    let tick = st.clock_tick();
+    let seen = !crate::foes::unseen(st, i);
+    if let Some(t) = st.foes[i].turret.as_mut() {
+        t.awake = true;
+        t.told = told;
+        t.since = minute;
+        t.next = tick + GUARD_STEP_TICKS;
+    }
+    if seen {
+        st.say("turret wakes");
+    }
+}
+
+/// Each frame: the turrets of the city asleep, awake and sweeping.
+pub fn tick(st: &mut AppState) {
+    let minute = st.net.now(st);
+    let tick = st.clock_tick();
+    let you = st.player.as_ref().map(|p| p.place);
+    for i in 0..st.foes.len() {
+        if st.foes[i].turret.is_none() {
+            continue;
+        }
+        sync(st, i);
+        let f = &st.foes[i];
+        if !super::hostile(f) || f.stunned > 0 {
+            continue;
+        }
+        let (place, at) = (f.place, f.pos);
+        let t = f.turret.as_ref().expect("a turret");
+        let (building, awake) = (t.node.building, t.awake);
+        let alert = st.net.alert(building, minute);
+        let fight = st.net.engaged.as_ref().is_some_and(|e| e.place == place);
+        if !awake {
+            if alert && !f.hunting() {
+                wake(st, i, None);
+            }
+            continue;
+        }
+        // lose you off a fight
+        if let FoeMode::Hunting { seen, .. } = f.mode {
+            if !fight && you != Some(place) {
+                let f = &mut st.foes[i];
+                f.mode = FoeMode::Idle;
+                if let Some(t) = f.turret.as_mut() {
+                    t.told = Some(seen);
+                    t.since = minute;
+                }
+            }
+            continue;
+        }
+        let (facing, told, next, since) = (t.facing, t.told, t.next, t.since);
+        if tick >= next && !fight {
+            let told = told.filter(|p| !in_field(at, facing, *p));
+            let goal = told.map(|p| aim(at, facing, p));
+            let turned = goal.map_or_else(|| clockwise(facing), |g| turn_toward(facing, g));
+            let f = &mut st.foes[i];
+            f.glyph = super::field::glyph(turned);
+            if let Some(t) = f.turret.as_mut() {
+                t.told = told;
+                t.facing = turned;
+                t.next = tick + GUARD_STEP_TICKS;
+            }
+        }
+        // sleep
+        if minute >= since + crate::net::LOST_TURNS as u64
+            && !alert
+            && !fight
+            && let Some(t) = st.foes[i].turret.as_mut()
+        {
+            t.awake = false;
+            t.told = None;
+        }
+    }
+}
+
+/// One eighth clockwise.
+fn clockwise(facing: citygen::Dir) -> citygen::Dir {
+    let i = citygen::Dir::ALL
+        .iter()
+        .position(|d| *d == facing)
+        .unwrap_or(0);
+    citygen::Dir::ALL[(i + 1) % 8]
+}
+
+/// A word that you are at `at` on `place`: every asleep turret there wakes toward it, an
+/// awake one has its word and its minute renewed.
+pub fn told(st: &mut AppState, place: Place, at: Pos) {
+    let minute = st.net.now(st);
+    for i in 0..st.foes.len() {
+        let f = &st.foes[i];
+        if f.place != place || !super::hostile(f) {
+            continue;
+        }
+        match f.turret.as_ref() {
+            Some(t) if t.awake => {
+                let t = st.foes[i].turret.as_mut().expect("a turret");
+                t.told = Some(at);
+                t.since = minute;
+            }
+            Some(_) => wake(st, i, Some(at)),
+            None => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guards::testutil::*;
+    use crate::turrets::testutil::turret_in_ward;
+    use citygen::Dir;
+
+    #[test]
+    fn an_asleep_turret_neither_turns_nor_wakes_on_its_own() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(3, 1));
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        for _ in 0..200 {
+            advance(&mut st, 1);
+            tick(&mut st);
+        }
+        let t = st.foes[i].turret.as_ref().unwrap();
+        assert_eq!((t.facing, t.awake), (Dir::E, false));
+    }
+
+    #[test]
+    fn a_cameras_word_wakes_it_and_it_turns_toward_where_you_were() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        told(&mut st, on(0), Pos::new(4, 3));
+        assert!(st.foes[i].turret.as_ref().unwrap().awake);
+        // NW and SW both hold (4,3) three eighths off E; clockwise first: SW, via SE.
+        for _ in 0..=crate::guards::GUARD_STEP_TICKS {
+            advance(&mut st, 1);
+            tick(&mut st);
+        }
+        assert_eq!(st.foes[i].turret.as_ref().unwrap().facing, Dir::SE);
+    }
+
+    #[test]
+    fn facing_the_tile_it_was_told_of_it_sweeps_on_clockwise() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::W);
+        told(&mut st, on(0), Pos::new(6, 3)); // already in its field
+        let steps = |st: &mut AppState, n: u64| {
+            for _ in 0..n * crate::guards::GUARD_STEP_TICKS + 1 {
+                advance(st, 1);
+                tick(st);
+            }
+        };
+        steps(&mut st, 1);
+        assert_eq!(st.foes[i].turret.as_ref().unwrap().facing, Dir::NW);
+        steps(&mut st, 1);
+        assert_eq!(st.foes[i].turret.as_ref().unwrap().facing, Dir::N);
+    }
+
+    #[test]
+    fn an_alarm_wakes_it_and_holds_it_awake() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        crate::net::lock_down(&mut st, crate::guards::testutil::WARD);
+        advance(&mut st, 1);
+        tick(&mut st);
+        assert!(st.foes[i].turret.as_ref().unwrap().awake);
+        crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64 + 1);
+        tick(&mut st);
+        assert!(
+            st.foes[i].turret.as_ref().unwrap().awake,
+            "on alarm it stays awake"
+        );
+    }
+
+    #[test]
+    fn awake_with_nothing_seen_it_sleeps_after_three_minutes() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        told(&mut st, on(0), Pos::new(4, 3));
+        crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64);
+        tick(&mut st);
+        assert!(!st.foes[i].turret.as_ref().unwrap().awake);
+    }
+
+    #[test]
+    fn awake_it_takes_no_seat_and_holds_no_fight() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        told(&mut st, on(0), Pos::new(20, 3));
+        assert!(!crate::foes::any_hunting(&st, on(0)));
+        assert!(!crate::foes::hunting_on(&st, on(0)).contains(&i));
+    }
+}
