@@ -726,6 +726,9 @@ pub struct FrameSpec {
     pub theme: String,
     pub head: String,
     pub base: FrameBase,
+    /// How many slots its reader has, for chips the rig cracks.
+    #[serde(default)]
+    pub reader: u8,
 }
 
 /// A piece of hardware: the socket it fits, what it does, how it looks.

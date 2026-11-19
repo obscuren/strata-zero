@@ -97,5 +97,23 @@ Loot(
             Line(weight: 4, what: Chip((90, 240), 50)),
             Line(weight: 2, what: Card),
         ]),
+        // A guarded office or hotel safe: the guarded fallback's lines, and now and then
+        // a black chip for a rig to break.
+        Table(kind: Safe, site: Some("office"), guarded: true, empty: 5, count: (2, 3), lines: [
+            Line(weight: 5, what: Cash((300, 900))),
+            Line(weight: 5, what: Chip((400, 1200), 60)),
+            Line(weight: 2, bands: [Mid, High], what: Item("fuse_ceramic", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("crack_2", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("copy_2", (1, 1))),
+            Line(weight: 1, what: BlackChip((2000, 6000))),
+        ]),
+        Table(kind: Safe, site: Some("hotel"), guarded: true, empty: 5, count: (2, 3), lines: [
+            Line(weight: 5, what: Cash((300, 900))),
+            Line(weight: 5, what: Chip((400, 1200), 60)),
+            Line(weight: 2, bands: [Mid, High], what: Item("fuse_ceramic", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("crack_2", (1, 1))),
+            Line(weight: 2, bands: [High], what: Item("copy_2", (1, 1))),
+            Line(weight: 1, what: BlackChip((2000, 6000))),
+        ]),
     ],
 )

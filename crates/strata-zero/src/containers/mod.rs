@@ -348,6 +348,9 @@ pub fn cr(n: u32) -> String {
     format!("{out} cr")
 }
 
+/// The black credchip: its sum opens only at a rig.
+const BLACK_CHIP: &str = "credchip_black";
+
 fn chip_item(locked: bool) -> ItemId {
     ItemId::new(if locked {
         "credchip_locked"
@@ -362,6 +365,7 @@ pub fn line_weight(st: &AppState, l: &Loot) -> f32 {
     match l {
         Loot::Cash(_) | Loot::Card(_) => 0.0,
         Loot::Chip { locked, .. } => weight(&chip_item(*locked)),
+        Loot::BlackChip(_) => weight(&ItemId::new(BLACK_CHIP)),
         Loot::Item { item, qty } => weight(item) * *qty as f32,
     }
 }
@@ -371,6 +375,7 @@ fn name_of(st: &AppState, l: &Loot) -> String {
     match l {
         Loot::Cash(n) => cr(*n),
         Loot::Chip { credits, .. } => format!("credchip, {}", cr(*credits)),
+        Loot::BlackChip(credits) => format!("black credchip, {}", cr(*credits)),
         Loot::Item { item, qty } => {
             let name = st.content.item(item).map_or(item.0.as_str(), |i| &i.name);
             if *qty > 1 {
@@ -402,6 +407,10 @@ fn take_raw(st: &mut AppState, c: &Container, raw: usize) -> Result<String, Stri
         Loot::Chip { credits, locked } => {
             st.character
                 .give_credchip(&st.content, &chip_item(locked), credits);
+        }
+        Loot::BlackChip(credits) => {
+            st.character
+                .give_credchip(&st.content, &ItemId::new(BLACK_CHIP), credits);
         }
         Loot::Item { item, qty } => st.character.give_item(&st.content, item, qty),
         Loot::Card(z) => {

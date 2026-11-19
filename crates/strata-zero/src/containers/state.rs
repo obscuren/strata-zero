@@ -10,6 +10,8 @@ pub enum Loot {
     Cash(u32),
     /// A credchip with a sum on it, and whether it is locked.
     Chip { credits: u32, locked: bool },
+    /// A black credchip with a sum on it.
+    BlackChip(u32),
     /// Items; also a fixed item a job names.
     Item { item: ItemId, qty: u32 },
     /// The building's card for zone `z`.

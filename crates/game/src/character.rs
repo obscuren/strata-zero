@@ -47,6 +47,9 @@ pub struct ItemCopy {
     /// A credchip's sum; none for anything else.
     #[serde(default)]
     pub credits: u32,
+    /// How many times a black credchip has been cracked at the reader.
+    #[serde(default)]
+    pub cracked: u8,
 }
 
 impl ItemCopy {
@@ -356,6 +359,10 @@ pub struct Character {
     /// The fitted rack, set once the rig exists; spare racks are in the pack.
     #[serde(default)]
     pub frame: Option<ItemId>,
+    /// The rig's reader: one slot per `FrameSpec.reader` of the fitted rack, grown when a
+    /// slot is first used; a chip in it is the rig's to work on.
+    #[serde(default)]
+    pub reader: Vec<Option<Stack>>,
     /// The first saves' racks "in the flat", the fitted one first: read, never written,
     /// and emptied on load by `unpack_old_racks` (the fitted one to `frame`, the rest
     /// into the pack).
@@ -457,6 +464,7 @@ impl Character {
             dev: false,
             rig: None,
             frame: None,
+            reader: Vec::new(),
             old_frames: Vec::new(),
             rig_rewards: RigRewards::default(),
         };
@@ -1406,6 +1414,7 @@ impl Character {
                 burned: false,
             }),
             credits: 0,
+            cracked: 0,
         }
     }
 
@@ -1778,6 +1787,74 @@ impl Character {
             .collect()
     }
 
+    /// How many slots the fitted rack's reader has (the stock rack's until a rig exists).
+    pub fn reader_slots(&self, c: &Content) -> usize {
+        c.item(&self.rig_frame())
+            .and_then(|i| i.frame.as_ref())
+            .map_or(0, |f| f.reader as usize)
+    }
+
+    /// Moves the copy `copy` from the pack into reader slot `slot`.
+    pub fn put_in_reader(&mut self, c: &Content, slot: usize, copy: CopyId) -> Result<(), String> {
+        self.check_slot(c, slot)?;
+        let at = self
+            .inventory
+            .iter()
+            .position(|s| s.copy_id() == Some(copy))
+            .ok_or("that is not in your pack")?;
+        self.reader[slot] = Some(self.inventory.remove(at));
+        Ok(())
+    }
+
+    /// Moves one of `item` (a stack with no copy) from the pack into reader slot `slot`.
+    pub fn put_item_in_reader(
+        &mut self,
+        c: &Content,
+        slot: usize,
+        item: &ItemId,
+    ) -> Result<(), String> {
+        self.check_slot(c, slot)?;
+        let at = self
+            .inventory
+            .iter()
+            .position(|s| &s.item == item && s.copy.is_none())
+            .ok_or_else(|| format!("no {} in your pack", item_name(c, item)))?;
+        let stack = if self.inventory[at].qty > 1 {
+            self.inventory[at].qty -= 1;
+            Stack::new(item.clone(), 1)
+        } else {
+            self.inventory.remove(at)
+        };
+        self.reader[slot] = Some(stack);
+        Ok(())
+    }
+
+    /// Moves what reader slot `slot` holds to the pack and returns it.
+    pub fn pull_from_reader(&mut self, slot: usize) -> Result<Stack, String> {
+        let stack = self
+            .reader
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or("that slot is empty")?;
+        self.stow(stack.clone());
+        Ok(stack)
+    }
+
+    /// Grows the reader to its slots and checks `slot` is one of them and free.
+    fn check_slot(&mut self, c: &Content, slot: usize) -> Result<(), String> {
+        let slots = self.reader_slots(c);
+        if slot >= slots {
+            return Err("no such slot".into());
+        }
+        if self.reader.len() < slots {
+            self.reader.resize(slots, None);
+        }
+        if self.reader[slot].is_some() {
+            return Err("that slot is full".into());
+        }
+        Ok(())
+    }
+
     /// Fits the first rack of `frame` in the pack as the rig (`fit_frame`).
     pub fn set_frame(&mut self, c: &Content, frame: &ItemId) -> Result<Vec<ItemId>, String> {
         let copy = self
@@ -1833,6 +1910,10 @@ impl Character {
         out[0].copy = Some(old);
         self.rig = Some(new);
         self.frame = Some(frame);
+        let slots = self.reader_slots(c);
+        if self.reader.len() > slots {
+            out.extend(self.reader.split_off(slots).into_iter().flatten());
+        }
         let ids = out.iter().map(|s| s.item.clone()).collect();
         for s in out {
             self.stow(s);
@@ -3716,6 +3797,109 @@ mod tests {
     fn fit_new_frame(ch: &mut Character, c: &Content, id: &str) -> Vec<ItemId> {
         ch.give_item(c, ItemId::new(id), 1);
         ch.set_frame(c, &ItemId::new(id)).unwrap()
+    }
+
+    #[test]
+    fn racks_carry_their_reader_slots() {
+        let c = Content::load().unwrap();
+        for (id, n) in [
+            ("rack_zenbo", 1),
+            ("rack_lotus", 2),
+            ("rack_civitas", 3),
+            ("rack_halcyon", 4),
+        ] {
+            let spec = c.item(&ItemId::new(id)).unwrap().frame.as_ref().unwrap();
+            assert_eq!(spec.reader, n, "{id}");
+        }
+        assert_eq!(vex(&c).reader_slots(&c), 1);
+    }
+
+    #[test]
+    fn the_reader_keeps_a_chips_sum() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let chip = ItemId::new("credchip");
+        let k = ch.give_credchip(&c, &chip, 400);
+        ch.put_in_reader(&c, 0, k).unwrap();
+        assert_eq!(ch.count(&chip), 0);
+        assert_eq!(
+            ch.reader[0]
+                .as_ref()
+                .unwrap()
+                .copy
+                .as_ref()
+                .unwrap()
+                .credits,
+            400
+        );
+        let back = ch.pull_from_reader(0).unwrap();
+        assert_eq!(back.item, chip);
+        assert_eq!(ch.count(&chip), 1);
+        assert_eq!(
+            ch.copy_in_pack(k).unwrap().copy.as_ref().unwrap().credits,
+            400
+        );
+        assert!(ch.reader[0].is_none());
+        assert!(ch.pull_from_reader(0).is_err());
+    }
+
+    #[test]
+    fn a_stack_without_a_copy_goes_in_by_item() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let bolt = ItemId::new("bolt");
+        ch.give(bolt.clone(), 3);
+        ch.put_item_in_reader(&c, 0, &bolt).unwrap();
+        assert_eq!(ch.count(&bolt), 2);
+        assert_eq!(ch.reader[0], Some(Stack::new(bolt.clone(), 1)));
+        ch.pull_from_reader(0).unwrap();
+        assert_eq!(ch.count(&bolt), 3);
+        assert!(ch.put_in_reader(&c, 1, CopyId(999)).is_err(), "no slot 1");
+    }
+
+    #[test]
+    fn a_full_slot_refuses() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        let chip = ItemId::new("credchip");
+        let a = ch.give_credchip(&c, &chip, 100);
+        let b = ch.give_credchip(&c, &chip, 200);
+        ch.put_in_reader(&c, 0, a).unwrap();
+        assert!(ch.put_in_reader(&c, 0, b).is_err());
+        assert_eq!(ch.reader[0].as_ref().unwrap().copy_id(), Some(a));
+        assert_eq!(ch.count(&chip), 1);
+        assert!(ch.copy_in_pack(b).is_some());
+    }
+
+    #[test]
+    fn fewer_reader_slots_send_the_extras_to_the_pack() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        fit_new_frame(&mut ch, &c, "rack_halcyon");
+        let chip = ItemId::new("credchip");
+        for (slot, sum) in [100, 200, 300, 400].into_iter().enumerate() {
+            let k = ch.give_credchip(&c, &chip, sum);
+            ch.put_in_reader(&c, slot, k).unwrap();
+        }
+        assert_eq!(ch.reader.len(), 4);
+        fit_new_frame(&mut ch, &c, "rack_civitas");
+        assert_eq!(ch.reader.len(), 3);
+        assert_eq!(ch.count(&chip), 1);
+        let sums = |ch: &Character| {
+            let mut v: Vec<u32> = ch
+                .inventory
+                .iter()
+                .filter(|s| s.item == chip)
+                .map(|s| s.copy.as_ref().unwrap().credits)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(sums(&ch), [400]);
+        fit_new_frame(&mut ch, &c, "rack_zenbo");
+        assert_eq!(ch.reader.len(), 1);
+        assert_eq!(sums(&ch), [200, 300, 400]);
+        assert!(ch.reader[0].is_some());
     }
 
     #[test]

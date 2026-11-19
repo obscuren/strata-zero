@@ -102,6 +102,13 @@ fn open_rows(st: &AppState, c: &Container, lines: &[Loot]) -> Vec<PanelRow> {
                     }
                     r
                 }
+                Loot::BlackChip(credits) => {
+                    let mut r =
+                        PanelRow::new(key, "black credchip", containers::cr(*credits), true);
+                    r.right = "BLACK ICE".to_string();
+                    r.right_fg = MAGENTA;
+                    r
+                }
                 Loot::Item { item, qty } => {
                     let name = st.content.item(item).map_or(item.0.as_str(), |i| &i.name);
                     let label = if *qty > 1 {
