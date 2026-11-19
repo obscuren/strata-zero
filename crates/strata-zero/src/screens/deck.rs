@@ -1374,6 +1374,10 @@ impl Deck {
                     | Place::SiteNet { building, .. } => {
                         c.building_opt(building).map(|b| b.district)
                     }
+                    // Your rig's Net is your home's.
+                    Place::Rig => (st.home)
+                        .and_then(|h| c.building_opt(h.home.building))
+                        .map(|b| b.district),
                 };
                 d.and_then(|d| c.district_opt(d)).map(|d| d.name.clone())
             })
@@ -1382,6 +1386,7 @@ impl Deck {
             Place::Stratum(k) => k.label().to_string(),
             Place::Floor { level, .. } => FloorPlan::label(level),
             Place::Construct(_) | Place::SiteNet { .. } => "construct".to_string(),
+            Place::Rig => "your rig".to_string(),
         };
         format!("▍ LINK · {district} · {label}")
     }

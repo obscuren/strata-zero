@@ -407,6 +407,19 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
             st.warn(format!("lost in the update · {line}"));
         }
     }
+    // Your rig's room isn't saved: a run reopened in it has it laid out again from the
+    // rig, as jacking in does (`Constructs.rig`).
+    if st
+        .player
+        .as_ref()
+        .is_some_and(|p| p.place == citygen::Place::Rig)
+    {
+        crate::rigroom::build(st);
+        if crate::rigroom::room(st).is_none() {
+            let _ = crate::net::jack_out(st);
+            st.warn("your rig is gone · jacked out");
+        }
+    }
     crate::track::refollow(st);
     // The overworld is skipped by the save: made again from its params, and you back
     // in the city if what you stood on out there is gone.

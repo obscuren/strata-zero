@@ -602,6 +602,26 @@ mod tests {
         );
     }
 
+    /// A save made in your rig's room reopens in it: the room isn't saved, and is laid
+    /// out again from the rig.
+    #[test]
+    fn a_save_inside_reopens_inside() {
+        use citygen::Place;
+        let a = crate::rigroom::testutil::in_the_room();
+        let land = crate::rigroom::room(&a).unwrap().land;
+        let body = a.player.as_ref().unwrap().body;
+        let dir = Dir::new("rig-room");
+        let a = running(a);
+        let st = reopened(&write(&dir.0, &a).unwrap());
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos, p.body), (Place::Rig, land, body));
+        let room = st.constructs.rig.as_ref().expect("the room laid out again");
+        assert!(room.construct.tiles[p.pos].is_walkable());
+        let st = played(st, 12);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Rig, land), "it plays there");
+    }
+
     /// A save standing in a site's old construct (one made before the site had a Net of
     /// its own) opens and plays there, the old construct kept while you stand in it; out
     /// through its gate, the gate in is the firewall's (Ruling 13 of the plan

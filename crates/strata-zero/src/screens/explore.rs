@@ -332,7 +332,8 @@ fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
             walked_map(st, city, place, beyond.as_ref()).walkable(to)
         }
         Place::Floor { .. } => crate::foes::map_of(st, place).is_some_and(|m| m.walkable(to)),
-        Place::Construct(_) | Place::SiteNet { .. } => false,
+        // On the Net's inside maps, your rig's room too, steps are the Net's own.
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => false,
     }
 }
 
@@ -1100,14 +1101,15 @@ impl MapScreen {
         }
     }
 
-    /// In the Net: a construct, or the open Net, where the deck's programs are the
-    /// number keys and nothing of the meat's (no throws, no pushes) works.
+    /// In the Net: a construct, the open Net or your rig's room, where the deck's
+    /// programs are the number keys and nothing of the meat's (no throws, no pushes)
+    /// works.
     fn in_net(st: &AppState) -> bool {
         st.player.as_ref().is_some_and(|p| Self::net_place(p.place))
     }
 
     fn net_place(place: Place) -> bool {
-        place.in_construct() || place == Place::Stratum(StratumKind::Net)
+        place.in_construct() || matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig)
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
@@ -1525,6 +1527,7 @@ impl MapScreen {
                     format!("{} · {district}", crate::net::building_name(st, b))
                 }
             }
+            (true, Some(Place::Rig)) => crate::rigroom::PLACE_LINE.to_string(),
             (true, Some(_)) => {
                 // off the live city's cells, the Net is named as HERE names it
                 let pos = st.player.as_ref().map(|q| q.pos).unwrap_or(Pos::new(0, 0));
@@ -1559,6 +1562,8 @@ impl MapScreen {
                     }
                     t
                 }
+                // Inside your own firewall nothing traces you.
+                Place::Rig => format!("TRACE {} 0", crate::net::trace_bar(0)),
                 _ => match st.net.nearest_trace(city, p.pos) {
                     Some((b, heat)) => format!(
                         "TRACE {} {heat} · {}",
@@ -1887,6 +1892,7 @@ impl MapScreen {
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
             (Place::Construct(_) | Place::SiteNet { .. }, _) => "construct".to_string(),
+            (Place::Rig, _) => "your rig".to_string(),
         }
     }
 
@@ -2671,6 +2677,12 @@ impl MapScreen {
                 }
                 crate::venues::Meets::Nothing => None,
             },
+            // In your rig's room the trunk's end leads out onto the grid.
+            Place::Rig => {
+                let result = crate::rigroom::ways::step(st, target)?;
+                report(st, result);
+                Some(ScreenCmd::Stay)
+            }
         }
     }
 
@@ -4981,7 +4993,8 @@ impl Screen for MapScreen {
             Place::Construct(b)
             | Place::SiteNet { building: b, .. }
             | Place::Floor { building: b, .. } => Some(b),
-            Place::Stratum(_) => None,
+            // No building's alarm reaches your rig's Net.
+            Place::Stratum(_) | Place::Rig => None,
         };
         if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
             location = format!("ALERT · {location}");
@@ -4990,14 +5003,13 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure =
-            if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
-                crate::exposure::net_text(self.place, crate::net::hunted(st))
-            } else if matches!(self.place, Place::Stratum(_)) {
-                crate::exposure::text(&crate::exposure::of(st))
-            } else {
-                String::new()
-            };
+        let exposure = if Self::net_place(self.place) {
+            crate::exposure::net_text(self.place, crate::net::hunted(st))
+        } else if matches!(self.place, Place::Stratum(_)) {
+            crate::exposure::text(&crate::exposure::of(st))
+        } else {
+            String::new()
+        };
         f.render_widget(
             Paragraph::new(hud::exposure_row(&exposure, rw)),
             r.band_r[2],
@@ -8379,9 +8391,16 @@ mod tests {
         let at = beside_rig(&st);
         stand(&mut st, &mut s, home, at);
         jack_in(&mut st, &mut s);
+        // into your rig's room, then down its trunk onto your block
+        let room = crate::rigroom::room(&st).expect("the room").clone();
+        assert_eq!(player(&st), (Place::Rig, room.land));
+        assert_eq!(s.place, Place::Rig);
+        assert_eq!(last(&st), Some("jacked in · your rig"));
+        st.player.as_mut().unwrap().pos = room.trunk.step(Dir::N);
+        s.update(&mut st, &[key(KeyCode::Char('j'))]);
         assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
         assert_eq!(s.place, Place::Stratum(StratumKind::Net));
-        assert_eq!(last(&st), Some("jacked in from home"));
+        assert_eq!(last(&st), Some("the grid · your block"));
         jack_out(&mut st, &mut s);
         assert_eq!(player(&st), (home, at));
         assert_eq!(s.place, home);
@@ -14496,7 +14515,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rig_offers_landings_and_lands_at_a_gate() {
+    fn the_rig_jacks_into_its_room_and_a_backdoor_lands_at_its_gate() {
         let (mut st, mut s) = home_screen();
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
@@ -14506,27 +14525,20 @@ mod tests {
         else {
             panic!("space opens the popup")
         };
-        // jack in opens the landing list in its place
-        let ScreenCmd::Replace { to: mut list, .. } = fire_row(&mut st, &mut *popup, "Jack in")
-        else {
-            panic!("jack in replaces the popup with the landings")
-        };
-        st.tick += 40;
-        let text = draw_screen(&*list, &st, 120, 40);
+        // jack in lands you in your rig's room, with no landing list in between
+        let cmd = fire_row(&mut st, &mut *popup, "Jack in");
         assert!(
-            text.contains("JACK IN") && text.contains("your block"),
-            "{text}"
+            matches!(cmd, ScreenCmd::Pop { .. }),
+            "no list replaces the popup"
         );
-        let row = format!("{} · root · STABLE", crate::net::building_name(&st, other));
-        assert!(text.contains(&row), "{text}");
-        // land through the list
-        let cmd = fire_row(&mut st, &mut *list, &row);
-        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
-        assert!(
-            last(&st).unwrap().contains("via your backdoor"),
-            "{:?}",
-            last(&st)
-        );
+        assert_eq!(last(&st), Some("jacked in · your rig"));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Rig);
+        assert_eq!(p.body.map(|(pl, _)| pl), Some(h.place()));
+        crate::net::jack_out(&mut st).unwrap();
+        // a backdoor still lands you at its gate from the rig
+        let line = crate::net::land_at(&mut st, other).unwrap();
+        assert!(line.contains("via your backdoor"), "{line}");
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(
@@ -14567,7 +14579,10 @@ mod tests {
     fn jacking_in_at_your_block_from_the_rig_starts_an_empty_route() {
         let (mut st, _s) = home_screen();
         crate::net::jack_in_here(&mut st).unwrap();
-        assert!(st.player.as_ref().unwrap().jacked_in());
+        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert!(p.jacked_in());
+        assert_eq!(p.pos, st.home.unwrap().landing, "at your block");
         assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
         // the same at a street port starts none
         let mut st = state8();

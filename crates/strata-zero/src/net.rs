@@ -902,7 +902,8 @@ pub fn building_here(st: &AppState) -> Option<BuildingId> {
         Place::Construct(b)
         | Place::SiteNet { building: b, .. }
         | Place::Floor { building: b, .. } => Some(b),
-        Place::Stratum(_) => None,
+        // Your rig's Net is no building's construct.
+        Place::Stratum(_) | Place::Rig => None,
     }
 }
 
@@ -1621,6 +1622,8 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.character.focus = 0;
     // A dump on a rig run starts the trace home from the relay nearest you. The rig's
     // route is your body's city's: held as you left it when your Net self walked out.
+    // Inside your rig's room you're behind your own firewall: nothing traces you.
+    let in_the_room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
     let firewall = crate::rig::of(st).firewall;
     let trace = |doors: &mut crate::backdoors::Backdoors, city: Option<&City>| {
         doors.route.as_ref()?;
@@ -1633,7 +1636,9 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
             None => "trace running · straight to your door".to_string(),
         })
     };
-    let line = if st.backdoors.route.is_some() {
+    let line = if in_the_room {
+        None
+    } else if st.backdoors.route.is_some() {
         trace(&mut st.backdoors, st.city.as_ref())
     } else {
         crate::outside::body_stay_mut(st).and_then(|s| trace(&mut s.backdoors, Some(&s.city)))
@@ -1767,13 +1772,17 @@ pub fn landings(st: &AppState) -> Vec<(BuildingId, String)> {
         .collect()
 }
 
-/// Whether Space on the rig should offer the landing list rather than jack in.
-pub fn wants_landing_list(st: &AppState) -> bool {
-    jack_in_refusal(st).is_none()
-        && st
-            .home
-            .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
-        && !landings(st).is_empty()
+/// Whether you stand in your flat, where the rig is the port.
+fn at_home(st: &AppState) -> bool {
+    st.home
+        .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
+}
+
+/// Whether Space on the rig should offer the landing list rather than jack in: no
+/// longer. At home jacking in lands you in your rig's room, whose doors are your
+/// backdoors; a street terminal never offered the list.
+pub fn wants_landing_list(_st: &AppState) -> bool {
+    false
 }
 
 /// The landing list: your block, then each backdoor you hold.
@@ -2299,8 +2308,9 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             }
         }
         _ => {
-            // On the open Net your avatar goes by your Net, as in a construct.
-            let you = if place == Place::Stratum(StratumKind::Net) {
+            // On the open Net and in your rig's room your avatar goes by your Net, as in
+            // a construct.
+            let you = if matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig) {
                 game::Attribute::Net
             } else {
                 game::Attribute::Reflex
@@ -2324,10 +2334,11 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
 }
 
 /// Tiles you may walk in a turn at `place`: on foot your chrome's move counts, at
-/// least one; in a construct your avatar isn't your meat, and walks `BASE_MOVE`.
+/// least one; in a construct and in your rig's room your avatar isn't your meat, and
+/// walks `BASE_MOVE`.
 pub fn you_move(st: &AppState, place: Place) -> u8 {
     match place {
-        Place::Construct(_) | Place::SiteNet { .. } => BASE_MOVE,
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => BASE_MOVE,
         _ => {
             let moves = BASE_MOVE as i32 + st.character.move_bonus(&st.content);
             moves.clamp(1, u8::MAX as i32) as u8
@@ -3458,12 +3469,15 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
 }
 
 /// Jacks in at the terminal in reach (on a site's floor its terminal or gate switch,
-/// `sitenet::jack_in_on_floor`): the refusal when the port refuses, else the line the log
-/// reads.
+/// `sitenet::jack_in_on_floor`; at home the rig, into its own room, `rigroom::ways::enter`):
+/// the refusal when the port refuses, else the line the log reads.
 pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     // It asks the port itself.
     if on_a_sites_floor(st) {
         return crate::sitenet::jack_in_on_floor(st);
+    }
+    if at_home(st) {
+        return crate::rigroom::ways::enter(st);
     }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
@@ -3478,7 +3492,7 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
         .jack_in(city, home.as_ref(), bonus)
         .map(|port| crate::walker::jacked_in_line(city, from, port))
         .map_err(|e| e.to_string())?;
-    // From the rig, the run has a route home: empty, until you hop.
+    // A street port: the cloak goes, and the rig's route is left alone.
     after_jack_in(st, from, None);
     Ok(line)
 }
@@ -3538,7 +3552,8 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
     d <= 1 || (d <= ATTACK_RANGE && line_clear_in(k, player.pos, g.pos))
 }
 
-/// The Net tile you jacked in at: your rig's landing when the body is at home, else the
+/// The Net tile you jacked in at: your rig's landing when the body is at home (where the
+/// trunk out of your rig's room comes out, in the room or past it), else the
 /// port beside the body; in a city your Net self has walked out of, that city's port,
 /// in this frame (`outside::held_port`); off the cells every city owns, where a port of
 /// the open ground put you (`ground_port`), or the body's own cell while the Net round it

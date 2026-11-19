@@ -109,6 +109,8 @@ pub struct ConstructMap<'a> {
     pub construct: &'a Construct,
     /// The level of a site's Net you're on; none in any other construct.
     pub level: Option<i32>,
+    /// Your rig's room (`Place::Rig`), not a building's construct.
+    pub rig: bool,
 }
 
 impl TileMap for ConstructMap<'_> {
@@ -212,6 +214,7 @@ impl<'a> MapRef<'a> {
                     city,
                     construct,
                     level: None,
+                    rig: false,
                 }))
             }
             Place::SiteNet { building, level } => {
@@ -220,6 +223,16 @@ impl<'a> MapRef<'a> {
                     city,
                     construct,
                     level: Some(level),
+                    rig: false,
+                }))
+            }
+            Place::Rig => {
+                let room = constructs.rig.as_ref()?;
+                Some(MapRef::Construct(ConstructMap {
+                    city,
+                    construct: &room.construct,
+                    level: None,
+                    rig: true,
                 }))
             }
         }
@@ -232,6 +245,7 @@ impl<'a> MapRef<'a> {
                 building: m.plan.building,
                 level: m.floor.level,
             },
+            MapRef::Construct(m) if m.rig => Place::Rig,
             MapRef::Construct(m) => match m.level {
                 Some(level) => Place::SiteNet {
                     building: m.construct.building,
@@ -269,6 +283,7 @@ impl<'a> MapRef<'a> {
         match self {
             MapRef::Stratum(m) => m.stratum.label().to_string(),
             MapRef::Floor(m) => FloorPlan::label(m.floor.level),
+            MapRef::Construct(m) if m.rig => "your rig".to_string(),
             MapRef::Construct(m) => match m.level {
                 Some(level) => {
                     let role = m.construct.net_level(level).map(|l| l.name.as_str());

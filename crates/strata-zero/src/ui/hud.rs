@@ -797,6 +797,7 @@ pub fn location(city: &City, interiors: &Interiors, place: Place, pos: Pos) -> S
                 .unwrap_or_else(|| "inside".to_string());
             return format!("{name} · construct");
         }
+        Place::Rig => return crate::rigroom::PLACE_LINE.to_string(),
     };
     if stratum == StratumKind::Net {
         // The district the grid runs over, not the nearest node's owner.

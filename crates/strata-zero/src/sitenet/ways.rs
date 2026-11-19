@@ -291,6 +291,7 @@ mod tests {
         );
         stand_at_the_rig(&mut st);
         crate::net::jack_in_here(&mut st).unwrap();
+        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
         let line = crate::net::hop(&mut st, b).unwrap();
         let p = st.player.as_ref().unwrap();
         assert_eq!(

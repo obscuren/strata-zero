@@ -2,9 +2,6 @@
 //! floor's double wall, PORTS on the west, the hall with the reader's slots, SEATS on
 //! the east, the terminal and the trunk's end. Later tasks walk it, draw it and fill it.
 
-// Walked, drawn and filled by the tasks that follow.
-#![allow(dead_code)]
-
 use citygen::{BuildingId, Construct, Grid, Pos, Rect, Size, Terrain, Tile};
 
 /// What the room is laid out for.
@@ -20,6 +17,7 @@ pub struct Counts {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the parts are drawn, and walked to, by #104's next tasks
 pub struct RigRoom {
     /// Hand-built like `lot_construct`: NetWall, NetFloor, NetGate for the doors and
     /// the trunk's end.
@@ -58,11 +56,13 @@ fn tile(terrain: Terrain) -> Tile {
 }
 
 /// The tile under a box's middle, where you stand at it.
+#[allow(dead_code)] // the reader's summon stands you here (#104's next tasks)
 pub fn front(r: Rect) -> Pos {
     Pos::new(r.x + r.w / 2, r.bottom())
 }
 
 /// Within one step of the box.
+#[allow(dead_code)] // the reader's summon asks it (#104's next tasks)
 pub fn at_box(here: Pos, r: Rect) -> bool {
     here.x >= r.x - 1 && here.x <= r.right() && here.y >= r.y - 1 && here.y <= r.bottom()
 }

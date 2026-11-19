@@ -11,6 +11,11 @@ use std::collections::hash_map::Entry;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Constructs {
     made: HashMap<BuildingId, Construct>,
+    /// Your rig's room, laid out from the rig each time you jack in at home: it holds
+    /// nothing the rig doesn't, so it isn't saved, and `after_restore` lays it out again
+    /// for a run reopened inside it (`rigroom::build`).
+    #[serde(skip)]
+    pub rig: Option<crate::rigroom::RigRoom>,
 }
 
 impl Constructs {

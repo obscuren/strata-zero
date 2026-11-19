@@ -391,7 +391,7 @@ fn in_building(st: &AppState, place: Place, pos: Pos, b: BuildingId) -> bool {
                     && x.span.contains(k)
                     && x.footprint.grow(1).contains(pos)
             }),
-        Place::Construct(_) | Place::SiteNet { .. } => false,
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => false,
     }
 }
 
@@ -691,6 +691,8 @@ pub(crate) fn district_at(st: &AppState, place: Place, pos: Pos) -> Option<Strin
         Place::Floor { building, .. }
         | Place::Construct(building)
         | Place::SiteNet { building, .. } => city.building_opt(building)?.district,
+        // Your rig's Net is your home's.
+        Place::Rig => city.building_opt(st.home?.home.building)?.district,
     };
     city.district_opt(id).map(|d| d.name.clone())
 }
