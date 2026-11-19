@@ -158,6 +158,23 @@ pub fn seated(st: &AppState, i: usize) -> bool {
         || (is_yours(f) && (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place))
 }
 
+/// Turret `i` is shot at from `from`: a hostile standing one wakes hunting toward it, awake
+/// and its minute renewed; a blind one, one that's yours or a wreck changes nothing.
+pub fn shot_at(st: &mut AppState, i: usize, from: Pos) {
+    let minute = st.net.now(st);
+    let Some(f) = st.foes.get_mut(i).filter(|f| hostile(f)) else {
+        return;
+    };
+    f.mode = FoeMode::Hunting {
+        seen: from,
+        lost: 0,
+    };
+    if let Some(t) = f.turret.as_mut() {
+        t.awake = true;
+        t.since = minute;
+    }
+}
+
 /// The foe whose turret is `node`.
 pub fn of_node(st: &AppState, node: SiteNode) -> Option<usize> {
     st.foes
