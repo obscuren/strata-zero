@@ -1,4 +1,5 @@
-//! A turret's turn: it sees you, takes a seat, turns and fires.
+//! A turret's turn: it sees you, takes a seat, turns and fires. One you hold does so
+//! at the guards, in a fight on its floor; and the guards fire back (`guard_mark`).
 //!
 //! Its whole turn is one action (`Step::Nothing`, so the turn passes after it): one
 //! eighth round toward its target when its field doesn't hold it, then its gun when it
@@ -16,6 +17,8 @@ use citygen::{Dir, Pos};
 /// it then has its target to fire on.
 struct Plan {
     target: Pos,
+    /// The guard a turret you hold fires on; None for a hostile one, whose target is you.
+    mark: Option<usize>,
     turn: Option<Dir>,
     fires: bool,
 }
@@ -32,32 +35,92 @@ pub(super) fn has(st: &AppState, i: usize, facing: Dir, p: Pos) -> bool {
         .is_some_and(|m| super::field::sees(&m, f.pos, facing, p) && foes::line_clear(&m, f.pos, p))
 }
 
-/// Turret `i`'s turn, worked out: None with no target.
+/// Turret `i`'s turn, worked out: None with no target, and for one you hold with no
+/// fight on its place.
 fn plan(st: &AppState, i: usize) -> Option<Plan> {
-    let target = target(st, i)?;
     let f = st.foes.get(i)?;
     let facing = f.turret.as_ref()?.facing;
+    let mark = if super::is_yours(f) {
+        if !in_its_fight(st, i) {
+            return None;
+        }
+        Some(mark(st, i)?)
+    } else {
+        None
+    };
+    let target = match mark {
+        Some(g) => st.foes[g].pos,
+        None => target(st, i)?,
+    };
     let turn = (!in_field(f.pos, facing, target))
         .then(|| turn_toward(facing, aim(f.pos, facing, target)))
         .filter(|d| *d != facing);
-    let fires = has(st, i, turn.unwrap_or(facing), target);
+    let facing = turn.unwrap_or(facing);
+    let fires = match mark {
+        // The guard's in its field and the gun's range; `mark` saw to the line.
+        Some(_) => {
+            in_field(f.pos, facing, target) && f.pos.chebyshev(target) <= foes::weapon_range(st, f)
+        }
+        None => has(st, i, facing, target),
+    };
     Some(Plan {
         target,
+        mark,
         turn,
         fires,
     })
 }
 
-/// What turret `i` shoots at: a hostile one, you, when you're on its place. Nothing for
-/// one that is blind, wrecked, or yours.
+/// A fight is on turret `i`'s place.
+fn in_its_fight(st: &AppState, i: usize) -> bool {
+    let place = st.foes.get(i).map(|f| f.place);
+    (st.net.engaged.as_ref()).is_some_and(|e| Some(e.place) == place)
+}
+
+/// What turret `i` shoots at: a hostile one, you, when you're on its place; one you
+/// hold, its `mark`, never you. Nothing for one that is blind or wrecked.
 pub fn target(st: &AppState, i: usize) -> Option<Pos> {
     let f = st.foes.get(i)?;
+    if super::is_yours(f) {
+        return mark(st, i).map(|g| st.foes[g].pos);
+    }
     if !super::hostile(f) {
         return None;
     }
     (st.player.as_ref())
         .filter(|me| me.place == f.place)
         .map(|me| me.pos)
+}
+
+/// The guard turret `i`, yours, fires on: the nearest standing foe with a post on its
+/// place it has a clear line to, by distance then index.
+fn mark(st: &AppState, i: usize) -> Option<usize> {
+    let f = st.foes.get(i).filter(|f| super::is_yours(f))?;
+    let map = foes::map_of(st, f.place)?;
+    (foes::standing(st, f.place).into_iter())
+        .filter(|j| st.foes[*j].post.is_some())
+        .filter(|j| foes::line_clear(&map, f.pos, st.foes[*j].pos))
+        .min_by_key(|j| (f.pos.chebyshev(st.foes[*j].pos), *j))
+}
+
+/// The turret you hold that guard `i` fires on: the nearest standing one on its place
+/// within its weapon's range, with a clear line, that it sees. None for a foe with no
+/// post.
+pub fn guard_mark(st: &AppState, i: usize) -> Option<usize> {
+    let g = st
+        .foes
+        .get(i)
+        .filter(|g| g.standing() && g.post.is_some())?;
+    let map = foes::map_of(st, g.place)?;
+    let reach = foes::weapon_range(st, g);
+    (super::allies(st, g.place).into_iter())
+        .filter(|j| {
+            let p = st.foes[*j].pos;
+            g.pos.chebyshev(p) <= reach
+                && foes::line_clear(&map, g.pos, p)
+                && foes::sees(&map, g, p)
+        })
+        .min_by_key(|j| (g.pos.chebyshev(st.foes[*j].pos), *j))
 }
 
 /// Turret `i` looks: a hostile, standing, unstunned one that sees you in its own field
@@ -121,7 +184,7 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
     };
     match f.turret.as_ref().map(|t| t.hacked) {
         Some(Hacked::None) => look(st, i),
-        Some(Hacked::Yours) => (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place),
+        Some(Hacked::Yours) => in_its_fight(st, i),
         _ => false,
     }
 }
@@ -129,7 +192,8 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
 /// Turret `i`'s whole turn, one action: it turns one eighth toward its target when its
 /// field doesn't hold it, then fires when it has it (clicks with its magazine empty).
 /// A hostile one keeps its hunt: had you, it hunts on; else it counts a turn toward
-/// losing you.
+/// losing you. One you hold does the same at its guard (`mark`) in a fight on its place,
+/// and nothing outside one.
 pub fn step(st: &mut AppState, i: usize) -> Step {
     let Some(f) = st.foes.get(i) else {
         return Step::Nothing;
@@ -147,18 +211,29 @@ pub fn step(st: &mut AppState, i: usize) -> Step {
             }
         }
         let dry = (st.foes[i].turret.as_ref()).is_some_and(|t| t.rounds == 0);
+        // A hostile turret's lines warn you; one you hold only reports.
+        let tell = |st: &mut AppState, line: String| {
+            if hostile {
+                st.warn(line);
+            } else {
+                st.say(line);
+            }
+        };
         if p.fires {
             had = Some(p.target);
             if dry {
-                st.warn(match &lead {
+                let line = match &lead {
                     Some(lead) => format!("{name} {lead} › clicks dry"),
                     None => format!("{name} clicks dry"),
-                });
+                };
+                tell(st, line);
+            } else if let Some(g) = p.mark {
+                crate::combat::fire_on_foe(st, i, g, lead.as_deref());
             } else {
                 crate::combat::fire_at_you_with(st, i, lead.as_deref());
             }
         } else if let Some(lead) = lead {
-            st.warn(format!("{name} {lead}"));
+            tell(st, format!("{name} {lead}"));
         }
     }
     if hostile && st.foes.get(i).is_some_and(|f| f.standing()) {
@@ -421,6 +496,112 @@ mod tests {
         crate::foes::look_all(&mut st);
         assert!(crate::foes::hunting_on(&st, on(0)).contains(&i));
         assert!(crate::turrets::seated(&st, i));
+    }
+
+    fn yours_in_ward(st: &mut AppState, at: Pos, facing: Dir) -> usize {
+        let i = turret_in_ward(st, 0, at, facing);
+        st.foes[i].turret.as_mut().unwrap().hacked = crate::turrets::Hacked::Yours;
+        let node = st.foes[i].turret.as_ref().unwrap().node;
+        let now = st.net.now(st);
+        st.net.holds.push(crate::holds::Hold {
+            node: citygen::NetNode::Site(node),
+            owner: crate::owners::Owner::Building(WARD),
+            until: now + game::HACK_MINUTES,
+            used: Vec::new(),
+        });
+        i
+    }
+
+    #[test]
+    fn outside_a_fight_yours_does_nothing() {
+        let mut st = ward();
+        // Past the card lock, out of the guard's sight: nothing hunts you.
+        stand(&mut st, 0, Pos::new(20, 3));
+        let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::W);
+        let g = guard(&mut st, 0, 0, &[Pos::new(6, 3)]);
+        st.foes[g].post.as_mut().unwrap().round.next = u64::MAX;
+        for _ in 0..100 {
+            advance(&mut st, 1);
+            crate::turrets::tick(&mut st);
+        }
+        // Its own turn, with no fight on: no line, no shot.
+        let lines = st.log.len();
+        assert_eq!(step(&mut st, t), Step::Nothing);
+        assert_eq!(st.log.len(), lines);
+        assert_eq!(st.foes[t].turret.as_ref().unwrap().rounds, 30);
+        assert_eq!(st.foes[g].hp, 30);
+        // Nor does it start one.
+        assert!(!crate::foes::look_all(&mut st));
+        assert!(st.net.engaged.is_none());
+    }
+
+    #[test]
+    fn in_a_fight_on_its_floor_it_sits_on_your_side_and_fires_on_the_guards() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 5));
+        let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::W);
+        let g = guard(&mut st, 0, 0, &[Pos::new(6, 3)]);
+        crate::net::engage(&mut st, on(0), true);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert!(e.order.contains(&crate::net::Actor::Foe(t)));
+        let chip = |st: &AppState| {
+            crate::net::turn_view(st)
+                .unwrap()
+                .chips
+                .into_iter()
+                .find(|c| c.name == "turret")
+                .unwrap()
+        };
+        assert!(chip(&st).ours);
+        st.force_hit = Some(true);
+        step(&mut st, t);
+        assert!(logged(&st, "turret fires on guard"));
+        assert!(st.foes[g].hp < 30);
+    }
+
+    #[test]
+    fn it_never_fires_on_you() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(6, 3)); // in its field
+        let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::W);
+        crate::net::engage(&mut st, on(0), true);
+        let hp = st.character.hp;
+        step(&mut st, t);
+        assert_eq!(
+            (st.character.hp, st.foes[t].turret.as_ref().unwrap().rounds),
+            (hp, 30)
+        );
+    }
+
+    #[test]
+    fn a_guard_fires_on_your_turret_when_it_is_nearer_than_you() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 3));
+        let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::W);
+        let g = guard(&mut st, 0, 0, &[Pos::new(8, 3)]);
+        st.foes[g].mode = crate::foes::FoeMode::Hunting {
+            seen: Pos::new(2, 3),
+            lost: 0,
+        };
+        assert_eq!(guard_mark(&st, g), Some(t));
+        st.force_hit = Some(true);
+        crate::foes::step(&mut st, g, true, true);
+        assert!(logged(&st, "guard fires on turret"));
+    }
+
+    #[test]
+    fn a_guard_fires_on_you_when_you_are_nearer_and_on_the_turret_when_it_cant_reach_you() {
+        for (you, on_turret) in [(Pos::new(7, 3), false), (Pos::new(20, 3), true)] {
+            let mut st = ward();
+            stand(&mut st, 0, you);
+            let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::W);
+            let g = guard(&mut st, 0, 0, &[Pos::new(8, 3)]);
+            st.foes[g].mode = crate::foes::FoeMode::Hunting { seen: you, lost: 0 };
+            st.force_hit = Some(true);
+            crate::foes::step(&mut st, g, true, true);
+            assert_eq!(logged(&st, "guard fires on turret"), on_turret, "{you:?}");
+            assert_eq!(st.foes[t].turret.as_ref().unwrap().arm < 4, on_turret);
+        }
     }
 
     #[test]

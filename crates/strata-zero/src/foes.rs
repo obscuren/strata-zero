@@ -503,7 +503,7 @@ fn radio(st: &mut AppState, i: usize) {
 }
 
 /// The weapon a foe carries: its reach, for the turn; nothing unarmed.
-fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
+pub(crate) fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
     foe.weapon
         .as_ref()
         .and_then(|id| st.content.item(id))
@@ -540,9 +540,10 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
         .or_else(|| free.iter().copied().max_by_key(|p| ring(*p)))
 }
 
-/// One action of a foe's turn: out of a live blast's footprint first, then a shot
-/// when it hunts you in range with a clear line, else a step toward where it saw
-/// you; at that tile without sight it loses you. Outside every footprint it never
+/// One action of a foe's turn: out of a live blast's footprint first, then a guard's
+/// shot at a turret you hold (`turrets::guard_mark`) when it can't reach you or the
+/// turret is nearer, then a shot when it hunts you in range with a clear line, else a
+/// step toward where it saw you; at that tile without sight it loses you. Outside every footprint it never
 /// steps into one: it holds at the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
@@ -588,6 +589,17 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         && map
             .as_ref()
             .is_some_and(|m| line_clear(m, foe.pos, me) && sees(m, &foe, me));
+    // A guard with a turret you hold in its reach fires on that when it can't reach you,
+    // or when the turret is the nearer.
+    if let Some(j) = crate::turrets::guard_mark(st, i)
+        && (!in_reach || foe.pos.chebyshev(st.foes[j].pos) < foe.pos.chebyshev(me))
+    {
+        if can_hit {
+            crate::combat::fire_on_foe(st, i, j, None);
+            return Step::Hit;
+        }
+        return Step::Nothing;
+    }
     // In reach it fires, and with its shots gone it holds where it stands: no
     // point closing in on what it can already hit.
     if in_reach {

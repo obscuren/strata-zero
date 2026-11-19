@@ -161,9 +161,13 @@ mod tests {
             lost: 0,
         };
         crate::net::engage(&mut st, on(0), false);
-        // As a round turns, the turret that's yours takes its seat.
-        crate::net::seat_foes(&mut st);
+        // The turret that's yours takes its seat as the fight starts, on your side.
         assert_eq!(seats(&st, i), 1, "yours, it sits");
+        let chip = |st: &crate::app::AppState| {
+            let view = crate::net::turn_view(st).expect("the turn column");
+            view.chips.into_iter().find(|c| c.name == "turret")
+        };
+        assert!(chip(&st).expect("its chip").ours);
         // The hold runs out.
         crate::sitenet::testutil::pass_minutes(&mut st, 2);
         crate::holds::tick(&mut st);
@@ -184,6 +188,7 @@ mod tests {
         assert_eq!(seats(&st, i), 1, "the seat it had, no second");
         let view = crate::net::turn_view(&st).expect("the turn column");
         assert_eq!(view.chips.iter().filter(|c| c.name == "turret").count(), 1);
+        assert!(!chip(&st).expect("its chip").ours);
         assert!(crate::net::turn_readout(&st).is_some());
     }
 

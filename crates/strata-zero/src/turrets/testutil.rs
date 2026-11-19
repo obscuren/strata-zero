@@ -1,7 +1,5 @@
 //! Turrets for tests.
 
-#![allow(dead_code)]
-
 use super::{ARM_MID, Turret};
 use crate::app::AppState;
 use crate::guards::testutil::{WARD, on};

@@ -2304,9 +2304,16 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             for i in foe_seats(st, place) {
                 scored.push((st.foes[i].reflex as i32, 1 + i as u16, Actor::Foe(i)));
             }
-            // Your bots on the map, after foes of the same score.
-            for (i, (reflex, dock)) in crate::bots::seats(st, place).into_iter().enumerate() {
+            // Your bots on the map, after foes of the same score; the turrets you hold
+            // there after them.
+            let bots = crate::bots::seats(st, place);
+            let after = 1000 + bots.len() as u16;
+            for (i, (reflex, dock)) in bots.into_iter().enumerate() {
                 scored.push((reflex as i32, 1000 + i as u16, Actor::Bot(dock.0, dock.1)));
+            }
+            for (k, i) in crate::turrets::allies(st, place).into_iter().enumerate() {
+                let reflex = st.foes[i].reflex as i32;
+                scored.push((reflex, after + k as u16, Actor::Foe(i)));
             }
         }
     }
@@ -2404,7 +2411,8 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
 
 /// The foes that take a seat at `place`: each standing in your sight memory, and on a
 /// floor every standing guard or turret of it that hunts, seen or not (index order
-/// there). A turret only sits while it's `turrets::seated`.
+/// there). A turret only sits while it's `turrets::seated`; one you hold sits with your
+/// bots instead (`turrets::allies`).
 fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
     let mut seats = crate::foes::in_memory(st);
     if matches!(place, Place::Floor { .. }) {
@@ -2412,8 +2420,14 @@ fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
         seats.sort_unstable();
         seats.dedup();
     }
-    seats.retain(|i| !unseated_turret(st, *i));
+    seats.retain(|i| !unseated_turret(st, *i) && !crate::turrets::is_yours(&st.foes[*i]));
     seats
+}
+
+/// Foe `i` is only heard on turns: one you haven't seen, its chip, plan and pace not
+/// yours to read. A turret you hold you know unseen, as you know your bots.
+fn heard_only(st: &AppState, i: usize) -> bool {
+    crate::foes::unseen(st, i) && !st.foes.get(i).is_some_and(crate::turrets::is_yours)
 }
 
 /// A turret that isn't `turrets::seated` now (asleep, awake, blind, or one that lost
@@ -2426,7 +2440,8 @@ fn unseated_turret(st: &AppState, i: usize) -> bool {
 /// Every standing foe in sight memory the order does not hold yet takes its place
 /// at the end: one that came hunting mid-fight. On a floor a guard that answered the
 /// alarm to it joins first (`guards::join_fight`), every calm guard and hostile turret of
-/// it looks, and every guard or turret of it that hunts takes a seat, seen or not.
+/// it looks, and every guard or turret of it that hunts takes a seat, seen or not. Then
+/// your bots out and the turrets you hold there that have no seat yet.
 pub fn seat_foes(st: &mut AppState) {
     let Some(place) = st.net.engaged.as_ref().map(|e| e.place) else {
         return;
@@ -2441,22 +2456,23 @@ pub fn seat_foes(st: &mut AppState) {
         }
     }
     let known = foe_seats(st, place);
-    let bots = st
-        .net
-        .engaged
-        .as_ref()
-        .map(|e| crate::bots::seats(st, e.place))
-        .unwrap_or_default();
+    let bots = crate::bots::seats(st, place);
+    let allies = crate::turrets::allies(st, place);
     if let Some(e) = st.net.engaged.as_mut() {
         for i in known {
             if !e.order.contains(&Actor::Foe(i)) {
                 e.order.push(Actor::Foe(i));
             }
         }
-        // A bot that came out mid-fight sits at the end too.
+        // A bot that came out mid-fight sits at the end too, and a turret taken over.
         for (_, (site, n)) in bots {
             if !e.order.contains(&Actor::Bot(site, n)) {
                 e.order.push(Actor::Bot(site, n));
+            }
+        }
+        for i in allies {
+            if !e.order.contains(&Actor::Foe(i)) {
+                e.order.push(Actor::Foe(i));
             }
         }
     }
@@ -2729,7 +2745,7 @@ pub fn pace(st: &mut AppState) {
     if actor == Actor::You {
         return;
     }
-    let unseen = matches!(actor, Actor::Foe(i) if crate::foes::unseen(st, i));
+    let unseen = matches!(actor, Actor::Foe(i) if heard_only(st, i));
     if !unseen && st.clock_tick() < e.acting_since + PACE_TICKS {
         return;
     }
@@ -2830,6 +2846,7 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                 name: "YOU".to_string(),
                 hp: String::new(),
                 acting: actor == Actor::You,
+                ours: true,
             },
             Actor::Ice(i) => {
                 let Some((g, ice)) = k
@@ -2842,19 +2859,21 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     name: format!("{} ICE", g.label()),
                     hp: format!("{}/{}", ice.integrity, g.grade.integrity()),
                     acting: actor == *a,
+                    ours: false,
                 }
             }
             Actor::Foe(i) => {
                 // One you haven't seen isn't read out: you hear it, no more.
-                let Some(f) = (st.foes.get(i)).filter(|f| {
-                    f.standing() && !crate::foes::unseen(st, i) && !unseated_turret(st, i)
-                }) else {
+                let Some(f) = (st.foes.get(i))
+                    .filter(|f| f.standing() && !heard_only(st, i) && !unseated_turret(st, i))
+                else {
                     continue;
                 };
                 Chip {
                     name: f.name.clone(),
                     hp: f.hp.to_string(),
                     acting: actor == *a,
+                    ours: crate::turrets::is_yours(f),
                 }
             }
             Actor::Bot(site, n) => {
@@ -2865,6 +2884,7 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     name,
                     hp: String::new(),
                     acting: actor == *a,
+                    ours: true,
                 }
             }
             Actor::Seat(n) => Chip {
@@ -2890,7 +2910,7 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
     let theirs = match actor {
         Actor::You => None,
         // What an unseen foe is up to isn't yours to read.
-        Actor::Foe(i) if crate::foes::unseen(st, i) => None,
+        Actor::Foe(i) if heard_only(st, i) => None,
         // A turret's turn is its own: turn, then fire (`turrets::plan_word`).
         Actor::Foe(i) if st.foes.get(i).is_some_and(|f| f.turret.is_some()) => {
             Some(crate::turrets::plan_word(st, i))
@@ -2949,7 +2969,7 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         }
         // Nor a foe you haven't seen: you hear it, no more. Nor a turret not seated.
         if let Actor::Foe(i) = a
-            && (crate::foes::unseen(st, i) || unseated_turret(st, i))
+            && (heard_only(st, i) || unseated_turret(st, i))
         {
             continue;
         }

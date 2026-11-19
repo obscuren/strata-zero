@@ -481,40 +481,73 @@ fn volley(
     } else {
         w.damage
     };
-    let mut out = Vec::new();
-    for k in first..first + w.rounds as usize {
-        let hit = ambush || game::round_hits(roll(st), chance);
-        let turned = hit && plate && plate_turns(st, foe);
-        let impact = if hit {
-            target
-        } else {
-            foes::map_of(st, place).map_or(target, |m| miss_impact(&m, from, target, w.range))
-        };
-        if hit && !turned {
-            wound_foe(st, foe, damage);
-        }
-        play_round(
-            st,
-            place,
-            fx,
-            Round {
-                from,
-                impact,
-                hit: hit && !turned,
-                damage,
-                k,
-                tint: None,
-            },
-        );
-        out.push(if turned {
-            Shot::Turned
-        } else if hit {
-            Shot::Hit(damage)
-        } else {
-            Shot::Miss
-        });
+    let aim = AtFoe {
+        place,
+        from,
+        foe,
+        at: target,
+        range: w.range,
+        fx,
+        chance,
+        damage,
+        sure: ambush,
+        plate,
+    };
+    (first..first + w.rounds as usize)
+        .map(|k| round_at_foe(st, &aim, k))
+        .collect()
+}
+
+/// A gun's aim at a foe, for each round of a volley.
+struct AtFoe<'a> {
+    place: Place,
+    from: Pos,
+    foe: usize,
+    /// Where the foe stands.
+    at: Pos,
+    range: i32,
+    fx: &'a [Fx],
+    chance: u8,
+    damage: u8,
+    /// Every round lands (the cloak's ambush): no roll.
+    sure: bool,
+    /// The rounds are a gun's: a turret's plate meets them first.
+    plate: bool,
+}
+
+/// One round at a foe: the roll, the plate, the wound and the pictures, `k` gaps into
+/// the shot. A miss stops past the foe (`miss_impact`).
+fn round_at_foe(st: &mut AppState, a: &AtFoe, k: usize) -> Shot {
+    let hit = a.sure || game::round_hits(roll(st), a.chance);
+    let turned = hit && a.plate && plate_turns(st, a.foe);
+    let impact = if hit {
+        a.at
+    } else {
+        foes::map_of(st, a.place).map_or(a.at, |m| miss_impact(&m, a.from, a.at, a.range))
+    };
+    if hit && !turned {
+        wound_foe(st, a.foe, a.damage);
     }
-    out
+    play_round(
+        st,
+        a.place,
+        a.fx,
+        Round {
+            from: a.from,
+            impact,
+            hit: hit && !turned,
+            damage: a.damage,
+            k,
+            tint: None,
+        },
+    );
+    if turned {
+        Shot::Turned
+    } else if hit {
+        Shot::Hit(a.damage)
+    } else {
+        Shot::Miss
+    }
 }
 
 fn outcomes(rounds: &[Shot]) -> String {
@@ -688,9 +721,9 @@ pub(crate) fn fire_at_you_with(st: &mut AppState, foe: usize, lead: Option<&str>
 /// A foe fires its weapon at another foe: a turret on the guards it fights, or a guard
 /// on a turret that's turned on it. The shooter's gun, its reflex, the distance; each
 /// round that hits meets a turret target's plate first, else wounds. A turret shooter
-/// fires what its magazine holds, a round at a time. The target, if it holds a post and
-/// stands, turns to hunt the shooter. The line is led by what the shooter did first.
-#[allow(dead_code)] // a turret's turn calls it in the next task
+/// fires what its magazine holds, a round at a time; with it empty, nothing (its own
+/// turn says it clicks dry). The target, if it holds a post and stands, turns to hunt
+/// the shooter. The line is led by what the shooter did first.
 pub(crate) fn fire_on_foe(st: &mut AppState, shooter: usize, target: usize, lead: Option<&str>) {
     let (Some(s), Some(t)) = (st.foes.get(shooter), st.foes.get(target)) else {
         return;
@@ -705,46 +738,31 @@ pub(crate) fn fire_on_foe(st: &mut AppState, shooter: usize, target: usize, lead
     else {
         return;
     };
+    let rounds = (s.turret.as_ref()).map_or(w.rounds, |t| w.rounds.min(t.rounds));
+    if rounds == 0 {
+        return;
+    }
     // Its shot wakes the calm guards in earshot, toward it.
     crate::guards::hear(st, place, from, from);
-    let chance = game::hit_chance(reflex, true, from.chebyshev(at), w.range);
-    let rounds = (st.foes[shooter].turret.as_ref()).map_or(w.rounds, |t| w.rounds.min(t.rounds));
     let plate = plate_of(st, target);
+    let aim = AtFoe {
+        place,
+        from,
+        foe: target,
+        at,
+        range: w.range,
+        fx: &w.fx,
+        chance: game::hit_chance(reflex, true, from.chebyshev(at), w.range),
+        damage: w.damage,
+        sure: false,
+        plate: true,
+    };
     let mut shots = Vec::new();
     for k in 0..rounds as usize {
         if let Some(t) = st.foes[shooter].turret.as_mut() {
             t.rounds = t.rounds.saturating_sub(1);
         }
-        let hit = game::round_hits(roll(st), chance);
-        let turned = hit && plate_turns(st, target);
-        let impact = if hit {
-            at
-        } else {
-            foes::map_of(st, place).map_or(at, |m| miss_impact(&m, from, at, w.range))
-        };
-        if hit && !turned {
-            wound_foe(st, target, w.damage);
-        }
-        play_round(
-            st,
-            place,
-            &w.fx,
-            Round {
-                from,
-                impact,
-                hit: hit && !turned,
-                damage: w.damage,
-                k,
-                tint: None,
-            },
-        );
-        shots.push(if turned {
-            Shot::Turned
-        } else if hit {
-            Shot::Hit(w.damage)
-        } else {
-            Shot::Miss
-        });
+        shots.push(round_at_foe(st, &aim, k));
     }
     // A guard that stands turns on whoever fired; a turret shot at wakes as it does for you.
     if st.foes[target].turret.is_some() {
@@ -1802,6 +1820,22 @@ mod tests {
                 lost: 0
             }
         );
+    }
+
+    #[test]
+    fn a_turret_with_its_magazine_empty_fires_nothing_on_a_guard() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 5));
+        let t =
+            crate::turrets::testutil::turret_in_ward(&mut st, 0, Pos::new(10, 3), citygen::Dir::W);
+        let g = guard(&mut st, 0, 0, &[Pos::new(6, 3)]);
+        st.foes[t].turret.as_mut().unwrap().rounds = 0;
+        let lines = st.log.len();
+        fire_on_foe(&mut st, t, g, None);
+        assert_eq!(st.log.len(), lines);
+        assert_eq!(st.foes[g].hp, 30);
+        assert_eq!(st.foes[g].mode, crate::foes::FoeMode::Idle);
     }
 
     #[test]

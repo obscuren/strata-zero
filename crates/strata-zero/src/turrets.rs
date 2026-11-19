@@ -1,9 +1,6 @@
 //! Turrets: a gun on a swivel, bolted to a floor, as a foe. This is its type and its
 //! saved state; the field, the clock, the turn and the Net are built on it.
 
-// Built on by the tasks after this one; drop this once the turn and the Net use it all.
-#![allow(dead_code)]
-
 use crate::app::AppState;
 use crate::foes::{self, Foe, FoeMode};
 use citygen::{Dir, Place, Pos, SiteNode};
@@ -19,7 +16,7 @@ pub mod turn;
 
 pub use clock::{tick, told};
 pub use hack::{blind, take_over};
-pub use turn::{look, plan_word, step, turn_start};
+pub use turn::{guard_mark, look, plan_word, step, turn_start};
 
 pub const TURRET_HP: u8 = 40;
 /// Its plate at mid security, and at high.
@@ -114,6 +111,7 @@ pub fn foe(place: Place, pos: Pos, t: Turret) -> Foe {
 }
 
 /// What a turret is doing.
+#[allow(dead_code)] // its look reads it, in the next task
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurretState {
     Asleep,
@@ -125,6 +123,7 @@ pub enum TurretState {
 }
 
 /// None for a foe with no turret.
+#[allow(dead_code)] // its look reads it, in the next task
 pub fn state(f: &Foe) -> Option<TurretState> {
     let t = f.turret.as_ref()?;
     Some(if f.down {
@@ -158,6 +157,14 @@ pub fn seated(st: &AppState, i: usize) -> bool {
     };
     (hostile(f) && f.hunting())
         || (is_yours(f) && (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place))
+}
+
+/// The standing turrets you hold on `place`, by index: your side in a fight there.
+pub fn allies(st: &AppState, place: Place) -> Vec<usize> {
+    (st.foes.iter().enumerate())
+        .filter(|(_, f)| f.place == place && is_yours(f))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Turret `i` is shot at from `from`: a hostile standing one wakes hunting toward it, awake
