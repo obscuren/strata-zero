@@ -25,7 +25,10 @@ use crate::foes::{Foe, Post};
 use citygen::venue::{
     Keys, LockKind, MissionLayer, VenueFrame, VenueGraph, VenueLayout, VenuePack, WayInKind, Ways,
 };
-use citygen::{BuildingId, DoorLock, FloorPlan, LinkKind, Place, Pos, StratumKind, Terrain};
+use citygen::{
+    BuildingId, Dir, DoorLock, Floor, FloorPlan, LinkKind, Place, Pos, SiteNode, StratumKind,
+    Terrain,
+};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
@@ -393,6 +396,65 @@ pub fn guard_foes(layer: &MissionLayer, b: BuildingId) -> Vec<Foe> {
             }
         })
         .collect()
+}
+
+/// The layer's turrets as foes, one on each turret device of a level the plan keeps, asleep,
+/// plated by the site's security and facing the door of its room nearest to it.
+pub fn turret_foes(layer: &MissionLayer, b: BuildingId, plan: &FloorPlan) -> Vec<Foe> {
+    let Some(layout) = plan.venue.as_deref() else {
+        return Vec::new();
+    };
+    let arm = crate::turrets::arm_for(layer.inputs.security);
+    let mut drawn: Vec<(i32, Option<Floor>)> = Vec::new();
+    let mut foes = Vec::new();
+    for d in layer
+        .devices
+        .iter()
+        .filter(|d| d.kind == citygen::venue::DeviceKind::Turret && plan.has_level(d.level))
+    {
+        if !drawn.iter().any(|(l, _)| *l == d.level) {
+            let f = citygen::venue::draw_copy_level(layout, layer, d.level);
+            drawn.push((d.level, f));
+        }
+        let facing = drawn
+            .iter()
+            .find(|(l, _)| *l == d.level)
+            .and_then(|(_, f)| f.as_ref())
+            .map_or(Dir::S, |f| door_facing(f, d.at));
+        let node = SiteNode {
+            building: b,
+            level: d.level,
+            at: d.at,
+        };
+        let place = Place::Floor {
+            building: b,
+            level: d.level,
+        };
+        foes.push(crate::turrets::foe(
+            place,
+            d.at,
+            crate::turrets::Turret::new(node, facing, arm),
+        ));
+    }
+    foes
+}
+
+/// The way a turret at `at` faces: toward the door of its room nearest to it (a door tile
+/// on the room's ring, or the room's own door; nearest by chebyshev distance, then y, x);
+/// south for a spot in no room or a room with no door.
+pub fn door_facing(floor: &Floor, at: Pos) -> Dir {
+    let Some(room) = floor.room_at(at) else {
+        return Dir::S;
+    };
+    let ring = room.rect.grow(1).border().filter(|p| {
+        floor
+            .tiles
+            .get(*p)
+            .is_some_and(|t| t.terrain == Terrain::Door)
+    });
+    ring.chain(room.door)
+        .min_by_key(|p| ((p.x - at.x).abs().max((p.y - at.y).abs()), p.y, p.x))
+        .map_or(Dir::S, |door| crate::turrets::field::toward(at, door))
 }
 
 #[cfg(test)]

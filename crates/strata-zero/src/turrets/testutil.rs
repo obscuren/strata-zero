@@ -41,3 +41,24 @@ pub(crate) fn lot_turret(at: Pos, facing: Dir) -> AppState {
     st.character.skills.insert(game::SkillId::new("handguns"));
     st
 }
+
+/// The security at which the office copy lays a turret: the site-net start's 190 lays
+/// none (checked every 5 up to 255), the top of the scale lays one.
+pub(crate) const TURRET_SECURITY: u8 = 255;
+
+/// The high-security office copy with every kept floor drawn, and the index of its first
+/// turret foe.
+pub(crate) fn turret_copy() -> (AppState, BuildingId, usize) {
+    let (mut st, b) = crate::sitenet::testutil::office_copy(TURRET_SECURITY);
+    let city = st.city.clone().expect("a city");
+    let kept: Vec<i32> = st.interiors.plan_of(b).expect("a plan").levels().collect();
+    for level in kept {
+        st.interiors.ensure(&city, b, level);
+    }
+    let i = st
+        .foes
+        .iter()
+        .position(|f| f.turret.is_some())
+        .expect("a turret");
+    (st, b, i)
+}
