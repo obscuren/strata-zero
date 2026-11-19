@@ -58,7 +58,7 @@ The look and its rules were settled over five rounds of the mock.
   | a black credchip | nothing until MASTIFF is broken (below); then as a credchip |
   | a rig program shard (`sniff`, `keepalive`) | installs it, as sitting down with it does today, and the shard is spent; with a seat free, the rig asks which backdoor it should work on and runs it there |
   | a paydata shard or a vault dump | runs `sift` on it in a free seat |
-  | a shard with a reading at the rig (Coz's ledger) | opens that reading's HOLO card over the map; the shard stays |
+  | a shard with a reading at the rig (Coz's ledger) | opens that reading's HOLO card over the map; closing it pulls the shard into your pack, as the card's own `pull it` says |
 
 - **Cracking a locked credchip.** Stand at it and `space` runs your loaded Crack on its
   locks, one lock at a time, each a run as a lock on the Net is. The panel shows the
@@ -272,7 +272,8 @@ row is its summon (and `x Leave it`):
   it today. No free seat: the row is greyed, `every seat is busy`.
 - **A story shard**: its reading's verb (`Read`). It opens the HOLO card over the map
   pane (not the middle of the screen, so the rig's panel stays readable) and counts as
-  read at the rig. The shard stays.
+  read at the rig. Closing it (`space pull it`) pulls the shard into your pack, so the
+  story finds it where it looks for it (`Carries`, `Take`).
 - **A locked credchip**: `Crack a lock · 58%` (below).
 - **A black credchip**: `Wake MASTIFF` (below).
 
@@ -281,8 +282,8 @@ row is its summon (and `x Leave it`):
 - A locked chip has locks by its sum: under ¤500 one, under ¤2,000 two, else three. The
   copy keeps how many are cracked (`ItemCopy.cracked`, default 0).
 - `Crack a lock` runs your loaded Crack at it: a minute of game time, one roll at the
-  chance `game::chance(power(crack, lock), difficulty(tier))` where the tier rises with
-  the locks (1, 2, 3 for one, two, three locks). A hit cracks a lock (`lock 1 of 2
+  chance `game::chance(power(crack, container lock), difficulty(security))` where the
+  security behind the locks is 100, 140 or 180 for one, two or three locks. A hit cracks a lock (`lock 1 of 2
   cracked`), a miss says `the lock holds`. No Crack loaded, or no deck: refused as a run
   is on the Net.
 - No trace, no ICE, no alarm. The last lock cracked turns the chip into a `credchip` with
@@ -308,15 +309,19 @@ row is its summon (and `x Leave it`):
 - **Its turn.** Two moves, toward you inside the leash, then: if no bite is marked, it
   marks one (the 3×3 tiles beside it on your side, drawn `×` in bright red) and the
   prompt says `MASTIFF bites the × tiles next turn`; if one is marked, it bites them:
-  standing on one, you're hit as black ICE hits (Shield soaks it), and the marks clear.
+  standing on one, you take 7 to your body as a black ICE hit does (Shield soaks it; the
+  failsafe dumps you first; with the failsafe off it can kill you, as black ICE can
+  anywhere), and the marks clear.
 - **The leash.** While you're off the leash at the end of your turn, MASTIFF grows a
-  plate back (up to eight) and can't reach you.
-- **Your Attack.** One AP, your loaded Attack at MASTIFF within its reach (the Net's
-  attack reach), one roll at `game::chance(power(attack, ice), difficulty(3))`. A hit
+  plate back (up to eight) and can't reach you. Off it you're out of the fight both
+  ways: your Attack and the seats' only reach MASTIFF while you stand on the red ground.
+- **Your Attack.** One AP, your loaded Attack at MASTIFF within the Net's attack reach
+  while you stand on the leash, one roll at
+  `game::chance(power(attack, black ICE), difficulty(180))`. A hit
   breaks the plate nearest you; with no plate left it hits the core, which takes two.
   Shield and the rest of the deck work as on the Net.
-- **A seat's turn.** A free core seat runs your loaded Attack at MASTIFF at the same
-  chance, scaled by the core's speed (`chance × speed / 100`, capped at 95), and its beam
+- **A seat's turn.** While you stand on the leash, a free core seat runs your loaded
+  Attack at MASTIFF at the same chance, scaled by the core's speed (`chance × speed / 100`, capped at 95), and its beam
   draws from its box through the SEATS wall for the turn. The turn order shows it as
   `seat 2`. No Attack loaded: the seats sit out.
 - **Winning.** The core's second hit: MASTIFF goes to grit (a few `░ ▖ ▗ ·` where it
@@ -418,6 +423,20 @@ mock draws it (round 5's frame 1):
 11. No coming back into the room from the grid without jacking in again.
 12. The HOLO card over the map pane rather than the screen's middle in the room.
 13. The JACK window in the room is titled `ZENBO`, not the home block's name.
+14. A story shard read from the reader goes back to the pack when its card closes, so the
+    story's `Carries` and `Take` see it (the card's own close word at the rig is `pull
+    it`).
+15. The odds: locks behind security 100, 140 and 180, MASTIFF behind 180 (a starting
+    runner cracks one lock surely, three at 60%, and hits MASTIFF half the time); its
+    bite takes 7.
+16. Off the leash nobody fights: your Attack and the seats reach MASTIFF only while you
+    stand on the red ground, so stepping off is a retreat that costs a plate, not a safe
+    firing line.
+17. With the deck's failsafe off, MASTIFF can kill you, as black ICE can anywhere.
+18. Every standing backdoor gets a door, even past the relay's lines (lowering the
+    relay burns nothing); doors are `max(lines, standing)`.
+19. A run reopened in the room is never on turns: `after_restore` ends a saved fight
+    there.
 
 ## Left to the builder
 

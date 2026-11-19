@@ -154,7 +154,8 @@ frame).
 
 **Interfaces:**
 - Consumes: Task 3 (`lay_out`, `RigRoom`).
-- Produces: `rigroom::counts(st: &AppState) -> Counts`; `rigroom::build(st: &mut AppState)` (lays out into `st.constructs.rig`, keeping an awake MASTIFF out: always rebuilds asleep); `rigroom::room(st: &AppState) -> Option<&RigRoom>`; `rigroom::ways::enter(st: &mut AppState) -> Result<String, String>` (from the rig: body set, `Place::Rig` at `land`, `after_jack_in(st, from, None)`); `rigroom::ways::to_the_grid(st: &mut AppState) -> Result<String, String>` (onto `HomeRig.landing` on `Place::Stratum(Net)`, FOV refreshed). `rigroom::ways::step(st: &mut AppState, to: Pos) -> Option<Result<String,String>>` (called from `explore.rs`'s `door_ahead` path for `Place::Rig`: the trunk now; doors in Task 5).
+- Note: tests elsewhere that call `net::jack_in_here` at home to stand on the grid now land in the room; change them to jack in and take the trunk (`ways::to_the_grid`), keeping what they test.
+- Produces: `rigroom::counts(st: &AppState) -> Counts` (`lines` is `max(rig lines, standing backdoors)`); `rigroom::build(st: &mut AppState)` (lays out into `st.constructs.rig`, keeping an awake MASTIFF out: always rebuilds asleep); `rigroom::room(st: &AppState) -> Option<&RigRoom>`; `rigroom::ways::enter(st: &mut AppState) -> Result<String, String>` (from the rig: body set, `Place::Rig` at `land`, `after_jack_in(st, from, None)`); `rigroom::ways::to_the_grid(st: &mut AppState) -> Result<String, String>` (onto `HomeRig.landing` on `Place::Stratum(Net)`, FOV refreshed). `rigroom::ways::step(st: &mut AppState, to: Pos) -> Option<Result<String,String>>` (called from `explore.rs`'s `door_ahead` path for `Place::Rig`: the trunk now; doors in Task 5).
 - Log and labels: `jacked in · your rig`; HUD place line and footer row 1 `zenbo · your rig`; describe `in your rig's Net`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -237,7 +238,7 @@ frame).
   - `summoning_a_program_installs_it_and_offers_a_host`: `prog_keepalive` in slot 1, a free seat, one Net and one key backdoor → `Installed("keepalive", true)`, the shard gone, `programs` has it; the host popup lists the Net backdoor only; picking it starts `Keepalive(b)`.
   - `an_installed_program_runs_without_spending_the_shard`: already installed → row `Run keepalive`, the shard stays.
   - `summoning_paydata_sifts_it`: `paydata` in slot 2, a free seat → a `Sift` job, `reader[2] == None`; with every seat busy the row is refused and the shard stays.
-  - `summoning_the_ledger_opens_its_reading`: the HOLO card opens, `missions.read` has `ledger_shard`, the shard stays in its slot.
+  - `summoning_the_ledger_opens_its_reading`: the HOLO card opens, `missions.read` has `ledger_shard`; closing the card puts the shard in the pack and empties its slot (`character.count(ledger_shard) == 1`).
   - `space_away_from_the_reader_does_nothing`.
 - [ ] **Steps 2-4:** run → FAIL, implement, run → PASS; five checks.
 - [ ] **Step 5: Commit** — `"rigroom: summon what's in the reader (#104)"`
@@ -249,7 +250,7 @@ frame).
 - Modify: `rigroom/summon.rs` (the locked chip's row), `rigroom/panel.rs` (here lines), `screens/popup.rs` (`Pick::CrackChip(usize)`)
 
 **Interfaces:**
-- Produces: `pub fn locks(credits: u32) -> u8` (`< 500` → 1, `< 2000` → 2, else 3); `pub const LOCK_SECURITY: [u8; 3] = [100, 160, 200]`; `pub fn crack_chance(st: &AppState, slot: usize) -> Result<u8, String>` (`game::chance(game::power(ch, c, crack, Target::Node(NodeKind::Container)), game::difficulty(LOCK_SECURITY[locks - 1]))`); `pub fn crack(st: &mut AppState, slot: usize) -> Result<String, String>` (one minute of game time; a roll via `combat::roll`; a hit raises `copy.cracked`; at `cracked == locks` the stack becomes `credchip` with the same copy).
+- Produces: `pub fn locks(credits: u32) -> u8` (`< 500` → 1, `< 2000` → 2, else 3); `pub const LOCK_SECURITY: [u8; 3] = [100, 140, 180]`; `pub fn crack_chance(st: &AppState, slot: usize) -> Result<u8, String>` (`game::chance(game::power(ch, c, crack, Target::Node(NodeKind::Container)), game::difficulty(LOCK_SECURITY[locks - 1]))`); `pub fn crack(st: &mut AppState, slot: usize) -> Result<String, String>` (one minute of game time; a roll via `combat::roll`; a hit raises `copy.cracked`; at `cracked == locks` the stack becomes `credchip` with the same copy).
 - Copy: row `Crack a lock · 58%`; log `lock 1 of 2 cracked`, `the lock holds`, last: `the chip opens · ¤1,200`; here lines `▣ Locked credchip · ¤1,200 inside` / `2 locks · crack 58% · space`.
 
 - [ ] **Step 1: Failing tests**
@@ -289,7 +290,8 @@ frame).
   ```rust
   pub struct Mastiff { pub slot: usize, pub pos: Pos /* top-left of 3x3 */, pub plates: [bool; 8] /* true = whole, COAT order: ▛ ▀ ▜ ▐ ▟ ▄ ▙ ▌ */,
                        pub core: u8 /* hits left, starts 2 */, pub bite: Option<Rect>, pub leash: Rect }
-  pub const MASTIFF_SECURITY: u8 = 200;
+  pub const MASTIFF_SECURITY: u8 = 180;
+  pub const BITE: u32 = 7;
   pub fn wake(st: &mut AppState, slot: usize) -> Result<(), String>;   // engages Place::Rig: order You, Seat(i) per free seat, Mastiff
   pub fn turn(st: &mut AppState);                                      // two moves toward you in the leash, then mark or bite
   pub fn seat_turn(st: &mut AppState, seat: u8);                       // the seat's attack at chance × speed / 100, capped 95
@@ -298,7 +300,7 @@ frame).
   pub fn reset(st: &mut AppState);                                     // asleep and whole: room.mastiff = None, disengage
   pub fn attack_chance(st: &AppState) -> Result<u8, String>;           // chance(power(attack, Guard(Black)), difficulty(MASTIFF_SECURITY))
   ```
-  The leash is the slot's box grown by 6 each way, clipped to the hall. A bite is the 3×3 beside MASTIFF on the side facing you; biting you hits as black ICE does through `net::hit_by`'s black path (Shield soaks it, the failsafe dumps). The core's second hit: grit (kept on the room until it's rebuilt), `disengage`, the stack becomes `credchip` with its sum. No heat, no trace, no tracer anywhere in this.
+  The leash is the slot's box grown by 6 each way, clipped to the hall. A bite is the 3×3 beside MASTIFF on the side facing you; biting you takes `BITE` from your HP as black ICE does (Shield soaks it, the failsafe dumps you first, with the failsafe off it can kill: death line `MASTIFF · in your own rig`). Your Attack and the seats reach MASTIFF only while you stand on the leash; off it they refuse (`off the leash · out of reach`) and sit out. The core's second hit: grit (kept on the room until it's rebuilt), `disengage`, the stack becomes `credchip` with its sum. No heat, no trace, no tracer anywhere in this.
 
 - [ ] **Step 1: Failing tests** (`rigroom::mastiff::tests`)
   - `waking_puts_the_room_on_turns`: a black chip of 4,800 in slot 2, a free seat → `engaged` with order `[You, Seat(1), Mastiff]` (the free seat's index), MASTIFF on the tile in front of the slot.
@@ -306,10 +308,12 @@ frame).
   - `shield_soaks_the_bite`.
   - `plates_break_from_your_side_then_the_core`: hits from the west break west plates first; after eight, two core hits win: the chip is a `credchip` of 4,800, not engaged.
   - `off_the_leash_a_plate_grows_back`: two plates broken, end your turn off the leash → seven whole.
+  - `off_the_leash_nobody_hits_it`: standing off the leash, your Attack refuses without spending AP and the seat's turn does nothing.
   - `a_free_seat_attacks_and_a_busy_one_sits_out`: one seat busy with sift, one free → order has one `Seat`; the seat's forced hit breaks a plate.
   - `with_no_attack_loaded_the_seats_sit_out`: no `Seat` in the order; your Attack key refuses without spending AP.
   - `losing_resets_it`: dumped mid-fight → next wake has 8 plates and core 2.
-  - `a_restored_fight_finds_mastiff_asleep`: save mid-fight, reopen → `Place::Rig`, not engaged, `room.mastiff == None`, the chip still black.
+  - `with_the_failsafe_off_it_can_kill`: failsafe off, HP at 5, a bite → `st.net.death` set.
+  - `a_restored_fight_finds_mastiff_asleep`: save mid-fight, reopen → `Place::Rig`, not engaged (`after_restore` ends it), `room.mastiff == None`, the chip still black.
   - `no_trace_inside_your_firewall`: after a full fight, heat and trace unchanged, no tracer.
 - [ ] **Steps 2-4:** run → FAIL, implement, run → PASS; five checks.
 - [ ] **Step 5: Commit** — `"rigroom: MASTIFF, its coat, its leash and its bite, and a seat beside you (#104)"`
