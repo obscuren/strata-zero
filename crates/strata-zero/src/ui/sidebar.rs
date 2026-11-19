@@ -695,6 +695,15 @@ mod tests {
     }
 
     #[test]
+    fn your_rigs_room_gets_a_sites_here_cap() {
+        let st = crate::rigroom::testutil::in_the_room();
+        let pos = st.player.as_ref().unwrap().pos;
+        let v = view(&st, pos, citygen::Place::Rig);
+        assert!(matches!(&v.map, MapRef::Construct(m) if m.rig));
+        assert_eq!(here_cap(&v), SITE_HERE_CAP);
+    }
+
+    #[test]
     fn a_sites_net_gives_here_its_panels_rows() {
         let (mut st, b) = crate::sitenet::testutil::office_copy(190);
         crate::sitenet::testutil::on_hub(&mut st, b, 0);

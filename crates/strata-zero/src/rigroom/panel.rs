@@ -54,6 +54,16 @@ fn row(mut left: Vec<Span<'static>>, tail: Option<Span<'static>>) -> Line<'stati
     Line::from(left)
 }
 
+/// What a backdoor on `b` is called in the panel: `key`, `site` (a Net backdoor on a
+/// building with a Net of its own) or `net`.
+fn kind_word(st: &AppState, b: citygen::BuildingId, kind: &Kind) -> &'static str {
+    match kind {
+        Kind::Key { .. } => "key",
+        Kind::Net { .. } if crate::sitenet::is_site(st, b) => "site",
+        Kind::Net { .. } => "net",
+    }
+}
+
 /// The name of the sled fitted in the rack's bay of `kind`, as the panel says it.
 fn sled(st: &AppState, kind: SocketKind) -> Option<String> {
     (st.character.rig_fitted(&st.content).into_iter())
@@ -76,7 +86,7 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
     let name = rack.map_or("rack", |i| i.name.as_str());
     let bays = rack.map_or(0, |i| i.sockets.len());
     out.push(Line::from(sp(
-        format!(" {} · {bays} bays", clip(name, w - 12)),
+        format!(" {} · {bays} bays", clip(name, w.saturating_sub(12))),
         DIM,
     )));
     let mut fw = vec![sp(" ", TEXT), bold("FIREWALL", FW), sp(" ", TEXT)];
@@ -109,16 +119,12 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
             continue;
         };
         let kept = running.iter().any(|j| j.kind == JobKind::Keepalive(b));
-        let kind = match &d.kind {
-            Kind::Key { .. } => "key",
-            Kind::Net { .. } if crate::sitenet::is_site(st, b) => "site",
-            Kind::Net { .. } => "net",
-        };
+        let kind = kind_word(st, b, &d.kind);
         let tail = match kept {
             true => sp(format!("{kind} · held"), CORE),
             false => sp(format!("{kind} · {}", span(d.left(now))), DIM),
         };
-        let name = clip(&crate::net::building_name(st, b), w - 16);
+        let name = clip(&crate::net::building_name(st, b), w.saturating_sub(16));
         out.push(row(
             vec![
                 sp(" ", TEXT),
@@ -161,7 +167,7 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
             vec![
                 sp(" ", TEXT),
                 bold(glyph.to_string(), colour),
-                sp(format!(" {}", clip(name, w - 18)), TEXT),
+                sp(format!(" {}", clip(name, w.saturating_sub(18))), TEXT),
             ],
             Some(sp(reader::summon_word(st, stack), DIM)),
         ));
@@ -200,7 +206,10 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
                 sp(" ", TEXT),
                 bold("◉", CORE),
                 sp(
-                    format!(" {}", clip(&format!("{} · {on}", job.kind.name()), w - 10)),
+                    format!(
+                        " {}",
+                        clip(&format!("{} · {on}", job.kind.name()), w.saturating_sub(10))
+                    ),
                     TEXT,
                 ),
             ],
@@ -270,11 +279,7 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
                 sp(" free line", FAINT),
             ])];
         };
-        let kind = match &d.kind {
-            Kind::Key { .. } => "key",
-            Kind::Net { .. } if crate::sitenet::is_site(st, b) => "site",
-            Kind::Net { .. } => "net",
-        };
+        let kind = kind_word(st, b, &d.kind);
         let left = span(d.left(st.net.now(st)));
         return vec![
             Line::from(vec![
@@ -354,5 +359,52 @@ mod tests {
         assert_eq!(text(&here_lines(&st)), [" ▯ free line"]);
         put(&mut st, room.trunk.offset(0, -1));
         assert_eq!(text(&here_lines(&st)), [" ▸ the grid · your block"]);
+    }
+
+    #[test]
+    fn a_sites_backdoor_reads_site_in_the_lines_and_under_you() {
+        let (mut st, _) = the_mocks_rig();
+        let city = st.city.as_ref().unwrap();
+        let home = st.home.unwrap().home.building;
+        let site = (city.buildings.iter().map(|b| b.id))
+            .find(|b| {
+                *b != home
+                    && crate::sitenet::is_site(&st, *b)
+                    && crate::constructs::city_gate(city, *b).is_some()
+                    && st.backdoors.live(*b).is_none()
+            })
+            .expect("a site with a gate");
+        let seed = city.seed;
+        let now = st.net.now(&st);
+        st.backdoors.plant_net(site, 1, seed, now, 4);
+        crate::rigroom::refresh(&mut st);
+        let t = text(&panel_lines(&st));
+        let name = crate::net::building_name(&st, site);
+        let row = |t: &[String]| {
+            t.iter()
+                .find(|l| l.contains(&name) && l.contains("site"))
+                .cloned()
+        };
+        let r = row(&t).unwrap_or_default();
+        assert!(r.contains("site · 4d") && r.contains("▯"), "{t:#?}");
+        // At its door.
+        let room = room(&st).unwrap().clone();
+        let at = crate::rigroom::door_lines(&st)
+            .iter()
+            .position(|b| *b == Some(site))
+            .unwrap();
+        st.player.as_mut().unwrap().pos = room.doors[at].offset(1, 0);
+        let h = text(&here_lines(&st));
+        assert!(h[0].contains(&format!("{name} · site · 4d")), "{h:?}");
+        // Held by a keepalive.
+        crate::rig::jobs::start(&mut st, crate::rig::jobs::JobKind::Keepalive(site))
+            .or_else(|_| {
+                st.backdoors.jobs.running.pop();
+                crate::rig::jobs::start(&mut st, crate::rig::jobs::JobKind::Keepalive(site))
+            })
+            .expect("keepalive");
+        let t = text(&panel_lines(&st));
+        let r = row(&t).unwrap_or_default();
+        assert!(r.contains("site · held"), "{t:#?}");
     }
 }
