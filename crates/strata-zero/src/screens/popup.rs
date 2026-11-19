@@ -19,8 +19,6 @@ use ratatui::text::{Line, Span};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldAct {
     JackIn,
-    /// Jack in from the rig and land at this building's gate.
-    Land(citygen::BuildingId),
     JackOut,
     Up,
     Down,
@@ -407,11 +405,6 @@ impl Popup {
         (if self.subtitle.is_some() { 2 } else { 0 }) + self.body_rows(inner_w)
     }
 
-    /// Whether this is the landing list a rig offers before it jacks in.
-    pub fn is_landing(&self) -> bool {
-        self.header.as_ref().is_some_and(|h| h.name == "JACK IN")
-    }
-
     /// Applies a world act to the player and returns the transition to pop with.
     fn world(&self, st: &mut AppState, act: WorldAct) -> TransitionKind {
         if let WorldAct::Climb(up) = act {
@@ -447,10 +440,9 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        // The two jacks from here: the port in reach, or a backdoor's gate from the rig.
+        // The jack from here: the port in reach.
         let jacked = match act {
             WorldAct::JackIn => Some(crate::net::jack_in_here(st)),
-            WorldAct::Land(b) => Some(crate::net::land_at(st, b)),
             _ => None,
         };
         if let Some(result) = jacked {
@@ -484,7 +476,6 @@ impl Popup {
                 (Some(city), Some(player)) => match act {
                     // Taken above.
                     WorldAct::JackIn => Err("no terminal within reach".to_string()),
-                    WorldAct::Land(_) => Err("not from here".to_string()),
                     WorldAct::JackOut => Err("not jacked in".to_string()),
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),
@@ -603,14 +594,6 @@ impl Popup {
                     crate::missions::settle(st);
                 }
                 ScreenCmd::Pop {
-                    fx: TransitionKind::None,
-                }
-            }
-            Pick::World(WorldAct::JackIn)
-                if !self.is_landing() && crate::net::wants_landing_list(st) =>
-            {
-                ScreenCmd::Replace {
-                    to: Box::new(crate::net::landing_popup(st)),
                     fx: TransitionKind::None,
                 }
             }

@@ -1753,52 +1753,10 @@ pub fn lock_down(st: &mut AppState, b: BuildingId) {
     st.warn(line);
 }
 
-/// The not-burned backdoors as landing rows: `Hollis Court · root · STABLE`.
-pub fn landings(st: &AppState) -> Vec<(BuildingId, String)> {
-    let now = st.net.now(st);
-    st.backdoors
-        .standing()
-        .map(|d| {
-            (
-                d.building,
-                format!(
-                    "{} · {} · {}",
-                    building_name(st, d.building),
-                    d.user_label(),
-                    d.health(now).label()
-                ),
-            )
-        })
-        .collect()
-}
-
 /// Whether you stand in your flat, where the rig is the port.
 fn at_home(st: &AppState) -> bool {
     st.home
         .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
-}
-
-/// Whether Space on the rig should offer the landing list rather than jack in: no
-/// longer. At home jacking in lands you in your rig's room, whose doors are your
-/// backdoors; a street terminal never offered the list.
-pub fn wants_landing_list(_st: &AppState) -> bool {
-    false
-}
-
-/// The landing list: your block, then each backdoor you hold.
-pub fn landing_popup(st: &AppState) -> crate::screens::popup::Popup {
-    use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
-    let mut choices = vec![Choice::new(
-        'a',
-        "your block",
-        Pick::World(WorldAct::JackIn),
-    )];
-    let mut letters = "bcdefgimnoprsuvwxyz".chars();
-    for (b, label) in landings(st) {
-        let Some(k) = letters.next() else { break };
-        choices.push(Choice::new(k, label, Pick::World(WorldAct::Land(b))));
-    }
-    Popup::verbs("JACK IN", choices, st.tick)
 }
 
 /// A rig run begins: an empty route from your block, or one relay when you landed
@@ -1877,44 +1835,37 @@ impl Landing {
     }
 }
 
-/// Jack in from the rig and land at a backdoor's gate; a site's backdoor lands you on
-/// its G hub.
-pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
-    if let Some(why) = jack_in_refusal(st) {
-        return Err(why);
+/// Out of your rig's room by a backdoor's door, still jacked in: the backdoor's checks
+/// and spend, a site's `L` hub or the building's gate on the grid, and the route home
+/// starting with that backdoor as its first relay. Nothing is spent when it can't land.
+pub fn leave_by_backdoor(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let player = st.player.as_ref().ok_or("no body")?;
+    if !player.jacked_in() || player.place != Place::Rig {
+        return Err("only your rig's room has backdoors for doors".to_string());
     }
     // Everything that can stop the landing is settled before the key is used.
-    let home = st.home;
-    let city = st.city.as_ref().ok_or("no city")?;
-    let player = st.player.as_ref().ok_or("no body")?;
-    if player.jacked_in() {
-        return Err("already jacked in".to_string());
-    }
-    if !home.is_some_and(|h| h.place() == player.place) {
-        return Err("only the rig lands you at a backdoor".to_string());
-    }
-    let port = player
-        .terminal_in_reach(city, home.as_ref())
-        .ok_or("no terminal within reach")?;
-    if !city.walkable(StratumKind::Net, port) {
-        return Err("the port is dead".to_string());
-    }
     let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
-    let bonus = st.sight_bonus();
-    let city = st.city.as_ref().ok_or("no city")?;
-    let player = st.player.as_mut().ok_or("no body")?;
-    let from = player.place;
-    player
-        .jack_in(city, home.as_ref(), bonus)
-        .map_err(|e| e.to_string())?;
     let there = landing.land(st, b)?;
-    after_jack_in(st, from, Some(b));
+    if st.backdoors.route.is_none() {
+        st.backdoors.start_route(None);
+    }
+    st.backdoors.hop(b);
     st.repaint = true;
     if trap {
         spring(st, b);
     }
     Ok(format!("jacked in · {there} · via your backdoor"))
+}
+
+/// A test's way out of the rig by a backdoor from the desk: jack in, leave by its door.
+/// A refusal leaves you jacked out at the desk, as the old landing list did.
+#[cfg(test)]
+pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    jack_in_here(st)?;
+    leave_by_backdoor(st, b).inspect_err(|_| {
+        let _ = jack_out(st);
+    })
 }
 
 /// From the server of a construct you hold, onto another backdoor's gate; a site's
@@ -3490,7 +3441,7 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     let from = player.place;
     let line = player
         .jack_in(city, home.as_ref(), bonus)
-        .map(|port| crate::walker::jacked_in_line(city, from, port))
+        .map(|port| crate::walker::jacked_in_line(city, port))
         .map_err(|e| e.to_string())?;
     // A street port: the cloak goes, and the rig's route is left alone.
     after_jack_in(st, from, None);

@@ -27,12 +27,14 @@ pub(crate) fn at_the_rig() -> AppState {
     st
 }
 
-/// A Net backdoor held on the `n`th building with a gate on the grid, not the home's.
+/// A Net backdoor held on the `n`th plain building (not a site) with a gate on the
+/// grid, not the home's.
 pub(crate) fn hold_a_backdoor(st: &mut AppState, n: usize) -> BuildingId {
     let city = st.city.as_ref().unwrap();
     let home = st.home.unwrap().home.building;
     let b = (city.buildings.iter().map(|b| b.id))
         .filter(|b| *b != home && crate::constructs::city_gate(city, *b).is_some())
+        .filter(|b| !crate::sitenet::is_site(st, *b))
         .nth(n)
         .expect("a building with a gate");
     let seed = city.seed;

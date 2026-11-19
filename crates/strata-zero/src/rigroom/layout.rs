@@ -31,6 +31,9 @@ pub struct RigRoom {
     pub seats_room: Rect,
     /// A door per line in PORTS' outer wall, top to bottom.
     pub doors: Vec<Pos>,
+    /// The backdoor each door was laid out for, as the room was built (`rigroom::build`);
+    /// `None` for a free line. `rigroom::door_lines` keeps only those still standing.
+    pub door_for: Vec<Option<BuildingId>>,
     /// A 7x5 box per reader slot, left to right.
     pub slots: Vec<Rect>,
     /// A box per core seat, top to bottom.
@@ -154,6 +157,7 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
         ports,
         hall,
         seats_room,
+        door_for: vec![None; doors.len()],
         doors,
         slots,
         seats,

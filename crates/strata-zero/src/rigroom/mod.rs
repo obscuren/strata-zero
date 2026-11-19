@@ -9,6 +9,7 @@ pub mod ways;
 pub use layout::{Counts, RigRoom, lay_out};
 
 use crate::app::AppState;
+use citygen::BuildingId;
 
 /// What the HUD's place line and the footer's first row read in the room.
 pub const PLACE_LINE: &str = "zenbo · your rig";
@@ -29,7 +30,26 @@ pub fn counts(st: &AppState) -> Counts {
 /// Lays the room out afresh from the rig into `st.constructs.rig`: on the way in, and
 /// for a run reopened inside it. None without a home.
 pub fn build(st: &mut AppState) {
-    st.constructs.rig = st.home.map(|h| lay_out(counts(st), h.home.building));
+    st.constructs.rig = st.home.map(|h| {
+        let mut room = lay_out(counts(st), h.home.building);
+        // Doors take the standing backdoors in order; the lines left over stay free.
+        for (slot, d) in room.door_for.iter_mut().zip(st.backdoors.standing()) {
+            *slot = Some(d.building);
+        }
+        room
+    });
+}
+
+/// What each door leads out to, top to bottom: `Some(b)` a backdoor that still stands
+/// (the room's own, laid out in the order the backdoors are listed), `None` for a free
+/// line, or a door whose backdoor burned since you came in (it goes dark).
+pub fn door_lines(st: &AppState) -> Vec<Option<BuildingId>> {
+    let Some(room) = room(st) else {
+        return Vec::new();
+    };
+    (room.door_for.iter())
+        .map(|b| b.filter(|b| st.backdoors.live(*b).is_some()))
+        .collect()
 }
 
 /// The room as last laid out.

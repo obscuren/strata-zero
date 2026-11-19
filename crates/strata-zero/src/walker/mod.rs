@@ -331,12 +331,9 @@ impl Player {
     }
 }
 
-/// The log line for a jack-in from a body at `from`: home, or a named port.
-pub fn jacked_in_line(city: &City, from: Place, port: Pos) -> String {
-    match from {
-        Place::Floor { .. } => "jacked in from home".to_string(),
-        _ => format!("jacked in at `{}`", port_name(city, port)),
-    }
+/// The log line for a jack-in at a named port (at home the rig's room has its own).
+pub fn jacked_in_line(city: &City, port: Pos) -> String {
+    format!("jacked in at `{}`", port_name(city, port))
 }
 
 /// What a port is called in the status line: its building, else its district.
