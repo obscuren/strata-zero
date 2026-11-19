@@ -81,7 +81,6 @@ pub fn sees(map: &MapRef, at: Pos, facing: Dir, p: Pos) -> bool {
 }
 
 /// The tiles of its field it has a clear line to.
-#[allow(dead_code)] // the map draws it, in the next task
 pub fn tiles(map: &MapRef, at: Pos, facing: Dir) -> Vec<Pos> {
     cameras::cone_at(at, facing, |q| map.tile(q).is_none_or(|t| t.blocks_sight()))
 }

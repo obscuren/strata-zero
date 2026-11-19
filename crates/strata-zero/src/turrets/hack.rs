@@ -24,9 +24,11 @@ pub fn take_over(st: &mut AppState, node: SiteNode) -> Result<String, String> {
 }
 
 /// The turret of `node` on your net as `how`: calm and asleep to its own, so it neither
-/// hunts nor holds a fight open.
+/// hunts nor holds a fight open. A wreck answers nothing.
 fn hack(st: &mut AppState, node: SiteNode, how: Hacked) -> Result<(), String> {
-    let i = super::of_node(st, node).ok_or("nothing answers there")?;
+    let i = (super::of_node(st, node))
+        .filter(|i| st.foes[*i].standing())
+        .ok_or("nothing answers there")?;
     let f = &mut st.foes[i];
     f.mode = FoeMode::Idle;
     if let Some(t) = f.turret.as_mut() {
@@ -111,11 +113,51 @@ mod tests {
             crate::turrets::state(&st.foes[i]),
             Some(TurretState::Asleep)
         );
-        assert!(
-            st.log
-                .iter()
-                .any(|e| e.text.contains("turret's back on its own net"))
-        );
+        // Jacked in, its floor isn't the map you stand on: it goes back unsaid.
+        assert!(!logged(&st, "turret's back on its own net"));
+    }
+
+    #[test]
+    fn the_hold_ending_says_so_only_where_you_remember_it() {
+        for (level, said) in [(0, true), (1, false)] {
+            let mut st = ward();
+            let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+            stand(&mut st, level, Pos::new(6, 3));
+            st.foes[i].turret.as_mut().unwrap().hacked = Hacked::Blind;
+            let now = st.net.now(&st);
+            held_by_hand(&mut st, i, now + 1);
+            crate::sitenet::testutil::pass_minutes(&mut st, 2);
+            assert_eq!(
+                crate::turrets::state(&st.foes[i]),
+                Some(TurretState::Asleep)
+            );
+            assert_eq!(
+                logged(&st, "turret's back on its own net"),
+                said,
+                "you on level {level}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wreck_answers_nothing() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        let now = st.net.now(&st);
+        let node = held_by_hand(&mut st, i, now + game::HACK_MINUTES);
+        st.foes[i].down = true;
+        st.character
+            .talents
+            .insert(game::TalentId::new("turncoat"), 1);
+        for verb in [crate::turrets::blind, crate::turrets::take_over] {
+            assert_eq!(
+                verb(&mut st, node),
+                Err("nothing answers there".to_string())
+            );
+        }
+        let t = st.foes[i].turret.as_ref().unwrap();
+        assert_eq!(t.hacked, Hacked::None);
+        assert!(!logged(&st, "turret blind") && !logged(&st, "turret's yours"));
     }
 
     /// A hold on turret `i`'s node, pushed by hand, until game minute `until`.
@@ -167,7 +209,9 @@ mod tests {
             let view = crate::net::turn_view(st).expect("the turn column");
             view.chips.into_iter().find(|c| c.name == "turret")
         };
-        assert!(chip(&st).expect("its chip").ours);
+        let its = chip(&st).expect("its chip");
+        assert!(its.ours);
+        assert_eq!(its.hp, "4·40", "its plate, then its hit points");
         // The hold runs out.
         crate::sitenet::testutil::pass_minutes(&mut st, 2);
         crate::holds::tick(&mut st);
@@ -203,6 +247,8 @@ mod tests {
         crate::sitenet::testutil::pass_minutes(&mut st, 2);
         assert_eq!(crate::turrets::state(&st.foes[i]), Some(TurretState::Awake));
         assert!(logged(&st, "turret's back on its own net"));
+        // It wakes as the clock wakes one, said where you see it.
+        assert!(logged(&st, "turret wakes"));
     }
 
     #[test]

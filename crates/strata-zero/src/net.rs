@@ -2871,7 +2871,11 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                 };
                 Chip {
                     name: f.name.clone(),
-                    hp: f.hp.to_string(),
+                    hp: if f.turret.is_some() {
+                        crate::turrets::chip_figure(f)
+                    } else {
+                        f.hp.to_string()
+                    },
                     acting: actor == *a,
                     ours: crate::turrets::is_yours(f),
                 }

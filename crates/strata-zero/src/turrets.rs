@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 pub mod clock;
 pub mod field;
 pub mod hack;
+pub mod look;
 #[cfg(test)]
 pub(crate) mod testutil;
 pub mod turn;
 
 pub use clock::{tick, told};
 pub use hack::{blind, take_over};
+pub use look::{chip_figure, cones, look_line, looks, mode_word};
 pub use turn::{guard_mark, look, plan_word, step, turn_start};
 
 pub const TURRET_HP: u8 = 40;
@@ -111,7 +113,6 @@ pub fn foe(place: Place, pos: Pos, t: Turret) -> Foe {
 }
 
 /// What a turret is doing.
-#[allow(dead_code)] // its look reads it, in the next task
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurretState {
     Asleep,
@@ -123,7 +124,6 @@ pub enum TurretState {
 }
 
 /// None for a foe with no turret.
-#[allow(dead_code)] // its look reads it, in the next task
 pub fn state(f: &Foe) -> Option<TurretState> {
     let t = f.turret.as_ref()?;
     Some(if f.down {

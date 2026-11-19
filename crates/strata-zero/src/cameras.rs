@@ -296,7 +296,8 @@ pub enum ConeLook {
     Tapped,
 }
 
-/// The cones to draw on `place` (the street, or a site's floor) now, with how each looks.
+/// The cones to draw on `place` (the street, or a site's floor) now, with how each looks:
+/// the cameras', then the turrets' fields (`turrets::cones`).
 pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
@@ -307,7 +308,7 @@ pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     };
     let now = st.net.now(st);
     let seeing = seeing(st);
-    cameras_at(st, place)
+    let mut out: Vec<(Vec<Pos>, ConeLook)> = cameras_at(st, place)
         .into_iter()
         .filter_map(|c| {
             let look = if seeing.contains(&c) {
@@ -325,7 +326,9 @@ pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
             };
             Some((tiles, look))
         })
-        .collect()
+        .collect();
+    out.extend(crate::turrets::cones(st, place));
+    out
 }
 
 /// The cones as backgrounds on the street's or a floor's map.

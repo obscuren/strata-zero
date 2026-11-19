@@ -25,6 +25,7 @@ pub mod style;
 pub mod tether;
 pub mod tileset;
 pub mod turns;
+pub mod turrets;
 pub mod viewport;
 pub mod weather;
 

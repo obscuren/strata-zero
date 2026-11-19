@@ -679,6 +679,7 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     foes.into_iter()
         .map(|f| {
             let mode = match (f.hunting(), f.post.as_ref().and_then(|p| p.call.as_ref())) {
+                _ if f.turret.is_some() => crate::turrets::mode_word(f),
                 (true, _) => "hunting",
                 (false, Some(Call::Answer { .. })) => "answering",
                 (false, Some(Call::Sweep { .. })) => "sweeping",
@@ -950,6 +951,16 @@ mod tests {
         );
         assert!(lines(&st, |_| false).is_empty());
         assert!(any_hunting(&st, STREET));
+    }
+
+    #[test]
+    fn a_turrets_line_reads_its_state() {
+        let mut st = crate::guards::testutil::ward();
+        crate::turrets::testutil::turret_in_ward(&mut st, 0, Pos::new(10, 3), citygen::Dir::W);
+        assert_eq!(
+            lines(&st, |_| true),
+            vec!["▣ turret · asleep · 40/40 · 4 tiles"]
+        );
     }
 
     fn hunting_from(st: &mut AppState, seen: Pos) {
