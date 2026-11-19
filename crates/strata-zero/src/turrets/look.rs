@@ -16,21 +16,25 @@ pub fn looks(st: &AppState, place: Place) -> Vec<(Pos, Dir, TurretState)> {
         .collect()
 }
 
-/// The fields to draw on `place`: an awake or hunting turret's red, one that's yours
-/// green; asleep, blind or wrecked, none.
+/// The fields to draw on `place`: an awake or hunting turret's red where you know the
+/// turret (an unseen one's would give it away), one that's yours green always; asleep,
+/// blind or wrecked, none.
 pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     let Some(map) = crate::foes::map_of(st, place) else {
         return Vec::new();
     };
-    looks(st, place)
-        .into_iter()
-        .filter_map(|(at, facing, s)| {
-            let look = match s {
-                TurretState::Awake | TurretState::Hunting => ConeLook::Seeing,
+    (st.foes.iter().enumerate())
+        .filter(|(_, f)| f.place == place)
+        .filter_map(|(i, f)| {
+            let facing = f.turret.as_ref()?.facing;
+            let look = match state(f)? {
+                TurretState::Awake | TurretState::Hunting if !crate::foes::unseen(st, i) => {
+                    ConeLook::Seeing
+                }
                 TurretState::Yours => ConeLook::Tapped,
                 _ => return None,
             };
-            Some((field::tiles(&map, at, facing), look))
+            Some((field::tiles(&map, f.pos, facing), look))
         })
         .collect()
 }
@@ -185,6 +189,21 @@ mod tests {
         st.foes[i].turret.as_mut().unwrap().hacked = Hacked::None;
         st.foes[i].down = true;
         assert!(cones(&st, on(0)).is_empty(), "a wreck has no field");
+    }
+
+    #[test]
+    fn an_unseen_hostile_turrets_field_isnt_drawn_but_yours_is() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::W);
+        st.foes[i].turret.as_mut().unwrap().awake = true;
+        // Upstairs, its tile isn't in your sight memory: red floor would give it away.
+        stand(&mut st, 1, Pos::new(6, 3));
+        assert!(crate::foes::unseen(&st, i));
+        assert!(cones(&st, on(0)).is_empty());
+        st.foes[i].turret.as_mut().unwrap().hacked = Hacked::Yours;
+        let c = cones(&st, on(0));
+        assert_eq!(c.len(), 1, "yours, you know where it is");
+        assert_eq!(c[0].1, crate::cameras::ConeLook::Tapped);
     }
 
     #[test]

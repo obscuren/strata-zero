@@ -11,8 +11,9 @@ use citygen::{NetNode, Place, Pos};
 /// The holds read back onto turret `i`. Blind or yours, while the hold on its node lasts,
 /// it hunts nothing and holds no fight open. Once the hold has run out it is its own
 /// again: hunting you if it has you in its field with a fight on its place, awake while
-/// its building is on alert, else asleep. It says so where you remember its tile; a wreck
-/// goes back without a word.
+/// its building is on alert, else asleep. It says so where you remember its tile, or in
+/// its building or on its Net, where you'd have held it from; a wreck goes back without a
+/// word.
 pub(super) fn sync(st: &mut AppState, i: usize) {
     let Some(t) = st.foes.get(i).and_then(|f| f.turret.as_ref()) else {
         return;
@@ -37,7 +38,12 @@ pub(super) fn sync(st: &mut AppState, i: usize) {
     if down {
         return;
     }
-    if !crate::foes::unseen(st, i) {
+    let b = node.building;
+    let near = st.player.as_ref().is_some_and(|p| {
+        matches!(p.place, Place::Floor { building, .. } if building == b)
+            || p.place.construct() == Some(b)
+    });
+    if near || !crate::foes::unseen(st, i) {
         st.say("turret's back on its own net");
     }
     let fight = st.net.engaged.as_ref().is_some_and(|e| e.place == place);

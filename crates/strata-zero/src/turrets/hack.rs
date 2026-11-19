@@ -103,26 +103,49 @@ mod tests {
 
     #[test]
     fn when_the_hold_ends_it_is_its_own_again() {
-        let (mut st, _, i) = turret_copy();
-        hold_from_the_net(&mut st, i);
-        crate::holds::use_verb(&mut st, 'o').unwrap();
-        crate::sitenet::testutil::pass_minutes(&mut st, game::HACK_MINUTES + 1);
-        crate::holds::tick(&mut st);
-        crate::turrets::tick(&mut st);
-        assert_eq!(
-            crate::turrets::state(&st.foes[i]),
-            Some(TurretState::Asleep)
-        );
-        // Jacked in, its floor isn't the map you stand on: it goes back unsaid.
-        assert!(!logged(&st, "turret's back on its own net"));
+        for on_its_net in [true, false] {
+            let (mut st, _, i) = turret_copy();
+            hold_from_the_net(&mut st, i);
+            crate::holds::use_verb(&mut st, 'o').unwrap();
+            if !on_its_net {
+                // Gone home, another building: nothing reaches you.
+                let home = st.home.as_ref().expect("a home").home;
+                let p = st.player.as_mut().unwrap();
+                p.body = None;
+                let place = citygen::Place::Floor {
+                    building: home.building,
+                    level: home.level,
+                };
+                crate::constructs::land(&mut st, place, home.rect.center());
+            }
+            crate::sitenet::testutil::pass_minutes(&mut st, game::HACK_MINUTES + 1);
+            crate::holds::tick(&mut st);
+            crate::turrets::tick(&mut st);
+            assert_eq!(
+                crate::turrets::state(&st.foes[i]),
+                Some(TurretState::Asleep)
+            );
+            // Jacked into its building's Net, the runner who held it hears it go.
+            assert_eq!(
+                logged(&st, "turret's back on its own net"),
+                on_its_net,
+                "on its Net {on_its_net}"
+            );
+        }
     }
 
     #[test]
-    fn the_hold_ending_says_so_only_where_you_remember_it() {
-        for (level, said) in [(0, true), (1, false)] {
+    fn the_hold_ending_says_so_where_you_remember_it_or_in_its_building() {
+        let street = citygen::Place::Stratum(citygen::StratumKind::Street);
+        for (place, said) in [(on(0), true), (on(1), true), (street, false)] {
             let mut st = ward();
             let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
-            stand(&mut st, level, Pos::new(6, 3));
+            let at = if place == street {
+                Pos::new(6, 8)
+            } else {
+                Pos::new(6, 3)
+            };
+            crate::constructs::land(&mut st, place, at);
             st.foes[i].turret.as_mut().unwrap().hacked = Hacked::Blind;
             let now = st.net.now(&st);
             held_by_hand(&mut st, i, now + 1);
@@ -134,7 +157,7 @@ mod tests {
             assert_eq!(
                 logged(&st, "turret's back on its own net"),
                 said,
-                "you on level {level}"
+                "you on {place:?}"
             );
         }
     }
