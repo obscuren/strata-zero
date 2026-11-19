@@ -59,6 +59,9 @@ pub struct Foe {
     /// defaults: a foe they hold has none.
     #[serde(default)]
     pub post: Option<Post>,
+    /// A turret's own state: a foe saved before is no turret.
+    #[serde(default)]
+    pub turret: Option<crate::turrets::Turret>,
 }
 
 /// A guard's post in a mission's copy: whose it is, its zone (the card it carries), its
@@ -154,6 +157,7 @@ impl Foe {
             marked: false,
             ice: None,
             post: None,
+            turret: None,
         }
     }
 
@@ -177,6 +181,7 @@ impl Foe {
             marked: false,
             ice: None,
             post: None,
+            turret: None,
         }
     }
 

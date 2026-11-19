@@ -150,6 +150,7 @@ pub fn piece(grade: IceGrade, role: Role, owner: Owner, pos: Pos) -> Foe {
         marked: false,
         ice: Some(GridIce { grade, role, owner }),
         post: None,
+        turret: None,
     }
 }
 
