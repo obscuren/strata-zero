@@ -25,8 +25,9 @@ talent it's yours.
   blind, yours or wrecked.
 - Any netrunner can blind a held turret; taking one over is learned, a talent in the ICE
   tree.
-- Placement by site type and security stays as `flavor/sites.ron` already has it: none at
-  low security, 0–1 at mid, 2–4 at high, in the secure (and an office's executive) zones.
+- Placement by site type and security stays as `flavor/sites.ron` already has it: none on a
+  small job, 0–1 on a medium one and 2–4 on a large one (more as the site's security
+  rises), in the secure (and an office's executive) zones.
 
 ## Non-goals
 
