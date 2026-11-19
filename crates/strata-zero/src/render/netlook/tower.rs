@@ -1040,6 +1040,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: None,
+            rig: None,
         }
         .draw(&map, origin, area, 0, &mut buf, &st.style);
         (buf, origin)

@@ -110,7 +110,8 @@ fn you_on(st: &AppState, k: StratumKind) -> Option<Pos> {
 }
 
 /// Jacked in, where your Net self shows on the city's maps: its tile on the Net, which
-/// lies over the city tile for tile, or the gate of the construct it's in.
+/// lies over the city tile for tile, the gate of the construct it's in, or in your rig's
+/// room your block's landing.
 pub fn net_self(st: &AppState) -> Option<Pos> {
     let p = st.player.as_ref()?;
     match p.place {
@@ -118,6 +119,7 @@ pub fn net_self(st: &AppState) -> Option<Pos> {
         Place::Construct(b) | Place::SiteNet { building: b, .. } => {
             crate::constructs::city_gate(st.city.as_ref()?, b)
         }
+        Place::Rig => st.home.map(|h| h.landing),
         _ => None,
     }
 }
@@ -731,6 +733,12 @@ mod tests {
         (p.place, p.pos) = p.body.take().unwrap();
         assert_eq!(net_self(&st), None);
         assert_eq!(selves(&st, STREET), vec![(body, YOU)]);
+    }
+
+    #[test]
+    fn in_your_rigs_room_your_net_self_is_on_your_block() {
+        let st = crate::rigroom::testutil::in_the_room();
+        assert_eq!(net_self(&st), Some(st.home.unwrap().landing));
     }
 
     #[test]

@@ -48,3 +48,62 @@ pub(crate) fn in_the_room() -> AppState {
     crate::net::jack_in_here(&mut st).expect("jacked in");
     st
 }
+
+/// The mock's moment (round 5, frame 1), jacked into the room: a Civitas cabinet with a
+/// Tinman 2X core, a Switchback relay, a Longwire line and a Sandbag firewall; three
+/// backdoors held of its five lines (two Net, then a key); `sift` on a paydata shard in
+/// the first seat and `keepalive` holding the first backdoor in the second; a credchip
+/// of ¤340 in the reader's first slot. The backdoors' buildings, in the doors' order.
+pub(crate) fn the_mocks_rig() -> (AppState, [BuildingId; 3]) {
+    use crate::rig::jobs::{JobKind, start};
+    use game::{ItemId, Stack};
+    let mut st = at_the_rig();
+    let c = st.content.clone();
+    crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
+    let sleds = [
+        "sled_tinman",
+        "sled_switchback",
+        "sled_longwire",
+        "sled_sandbag",
+    ];
+    for (bay, sled) in sleds.into_iter().enumerate() {
+        let item = ItemId::new(sled);
+        let copy = Some(st.character.new_copy(&c, &item));
+        st.character.rig_copy_mut(&c).fitted[bay] = Some(Stack { item, qty: 1, copy });
+    }
+    let kiroflux = hold_a_backdoor(&mut st, 0);
+    let hextek = hold_a_backdoor(&mut st, 1);
+    let stack = {
+        let city = st.city.as_ref().unwrap();
+        let home = st.home.unwrap().home.building;
+        let b = (city.buildings.iter().map(|b| b.id))
+            .filter(|b| *b != home && crate::constructs::city_gate(city, *b).is_some())
+            .filter(|b| !crate::sitenet::is_site(&st, *b))
+            .nth(2)
+            .expect("a third building with a gate");
+        let seed = city.seed;
+        st.backdoors.plant_key(b, "ops", 100, seed, 0);
+        b
+    };
+    st.backdoors.jobs.programs.insert("keepalive".to_string());
+    st.character.give_item(&c, ItemId::new("paydata"), 1);
+    start(
+        &mut st,
+        JobKind::Sift {
+            shard: ItemId::new("paydata"),
+        },
+    )
+    .expect("sift");
+    start(&mut st, JobKind::Keepalive(kiroflux)).expect("keepalive");
+    st.character.give_item(&c, ItemId::new("credchip"), 1);
+    let chip = (st.character.inventory.iter_mut().rev())
+        .find(|s| s.item.0 == "credchip")
+        .expect("the chip");
+    chip.copy.as_mut().expect("a chip's copy").credits = 340;
+    let copy = chip.copy_id().expect("a chip's copy");
+    st.character
+        .put_in_reader(&c, 0, copy)
+        .expect("in the reader");
+    crate::net::jack_in_here(&mut st).expect("jacked in");
+    (st, [kiroflux, hextek, stack])
+}

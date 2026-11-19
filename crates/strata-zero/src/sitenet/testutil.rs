@@ -486,6 +486,7 @@ pub(crate) fn paint_grid_at(st: &AppState, at: Pos) -> ratatui::buffer::Buffer {
     let net = NetLook {
         view: &look,
         keep: None,
+        rig: None,
     };
     net.draw(&map, Pos::new(x0, y0), area, st.tick, &mut buf, &st.style);
     buf

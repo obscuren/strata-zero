@@ -182,6 +182,18 @@ fn sift_hours(shard: &ItemId) -> u64 {
     }
 }
 
+/// A sift's work at `now` on a rig of `speed`: the game minutes it has left and the
+/// minutes it takes in all. None for any other job.
+pub fn sift_left(job: &Job, speed: u16, now: u64) -> Option<(u64, u64)> {
+    let JobKind::Sift { shard } = &job.kind else {
+        return None;
+    };
+    let hour = hour_of(&job.kind, speed);
+    let all = sift_hours(shard) * hour;
+    let done = job.progress * hour + now.saturating_sub(job.last).min(hour);
+    Some((all.saturating_sub(done), all))
+}
+
 /// Starts a job in a free seat; its number.
 pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
     let now = st.net.now(st);

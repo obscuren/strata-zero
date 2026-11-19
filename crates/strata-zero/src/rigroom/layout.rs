@@ -17,7 +17,6 @@ pub struct Counts {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // the parts are drawn, and walked to, by #104's next tasks
 pub struct RigRoom {
     /// Hand-built like `lot_construct`: NetWall, NetFloor, NetGate for the doors and
     /// the trunk's end.
@@ -47,7 +46,8 @@ pub struct RigRoom {
 
 /// Rows past which doors stand 3 apart instead of 4.
 const MAX_DOOR_ROWS: usize = 40; // the door rows 4 apart may take before they go 3 apart
-const PORTS_W: i32 = 20;
+/// PORTS up to and with the hall's west divider: 18 columns inside, as the mock has it.
+const PORTS_W: i32 = 19;
 const SEATS_W: i32 = 20;
 const SLOT_W: i32 = 7;
 const SLOT_H: i32 = 5;
@@ -82,7 +82,9 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
         .into_iter()
         .max()
         .unwrap() as i32;
-    let hall_w = 27.max(9 * c.slots as i32 + 1);
+    // The divider, a free column, the slots 9 apart, a free column: a line runs down each
+    // free column past the slots (`render::netlook::rig`).
+    let hall_w = 28.max(9 * c.slots as i32 + 1);
     let fw = PORTS_W + hall_w + SEATS_W;
     let size = Size {
         w: (fw + 4) as u32,
@@ -119,7 +121,7 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
     }
 
     let slots: Vec<Rect> = (0..c.slots as i32)
-        .map(|i| Rect::new(hall.x + 1 + 9 * i, floor.y + 4, SLOT_W, SLOT_H))
+        .map(|i| Rect::new(hall.x + 2 + 9 * i, floor.y + 4, SLOT_W, SLOT_H))
         .collect();
     let seats: Vec<Rect> = (0..c.seats as i32)
         .map(|i| Rect::new(seats_room.x + 2, floor.y + 5 + 6 * i, SEAT_W, SEAT_H))
@@ -229,6 +231,14 @@ mod tests {
         assert!(r.doors.iter().all(|d| d.x == r.floor.x));
         assert_eq!((r.slots.len(), r.seats.len()), (3, 2));
         assert!(r.ring.is_some());
+        // The mock's columns: PORTS' divider, the slots, SEATS' divider, the trunk.
+        let x = |x: i32| x - r.floor.x;
+        assert_eq!(x(r.hall.x), 19);
+        let slots: Vec<i32> = r.slots.iter().map(|s| x(s.x)).collect();
+        assert_eq!(slots, [21, 30, 39]);
+        assert_eq!(x(r.seats_room.x), 47);
+        assert_eq!(r.floor.w, 67);
+        assert_eq!(x(r.trunk.x), 33);
     }
 
     #[test]

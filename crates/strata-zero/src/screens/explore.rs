@@ -1494,8 +1494,11 @@ impl MapScreen {
     /// and the trace walking home, wherever you stand.
     fn route_parts(&self, st: &AppState, jacked: bool) -> (String, Option<String>) {
         let name = |b| crate::helix::hosts::building_hostname(st, b);
+        // Your rig's room is where the route starts: no hops yet, and the room keeps the
+        // pane's every row.
+        let in_room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
         let route = match st.backdoors.route.as_ref() {
-            Some(r) if jacked => {
+            Some(r) if jacked && !in_room => {
                 let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
                 crate::backdoors::route_line(&names)
             }
@@ -2965,6 +2968,14 @@ impl MapScreen {
         {
             return crate::render::netlook::tower::bounds(k, level);
         }
+        // Your rig's room with room either side for the backdoors' lanes running out.
+        if self.place == Place::Rig
+            && let Some(room) = crate::rigroom::room(st)
+        {
+            let size = room.construct.size;
+            let lanes = crate::rigroom::LANES;
+            return TileRect::new(-lanes, 0, size.w as i32 + 2 * lanes, size.h as i32);
+        }
         let size = TileMap::size(&self.map(st, city));
         TileRect::new(0, 0, size.w as i32, size.h as i32)
     }
@@ -4156,6 +4167,10 @@ impl Screen for MapScreen {
         }
         self.last_phase = phase;
         self.refresh_placement(st);
+        // Your rig's room keeps step with the backdoors you hold before it's drawn.
+        if st.player.as_ref().is_some_and(|p| p.place == Place::Rig) {
+            crate::rigroom::refresh(st);
+        }
         // A save asked for, or five minutes of play since the last.
         crate::runs::when::frame(st);
         ScreenCmd::Stay
@@ -4299,11 +4314,19 @@ impl Screen for MapScreen {
                 false => Vec::new(),
             },
         };
+        // In your rig's room, the rig as it stands, through the same camera.
+        let rig_view = (self.place == Place::Rig)
+            .then(|| crate::rigroom::view(st))
+            .flatten()
+            .map(|v| crate::render::netlook::rig::RigView { origin, ..v });
         let net_look = crate::render::netlook::NetLook {
             view: &net_view,
             keep,
+            rig: rig_view.as_ref(),
         };
-        if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
+        if matches!(self.place, Place::Stratum(StratumKind::Net) | Place::Rig)
+            || self.place.in_construct()
+        {
             overlays.push(&net_look);
         }
         // The cord: the way back to where you jacked in (Settings can hide it), walked

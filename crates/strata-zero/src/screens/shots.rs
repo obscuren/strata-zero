@@ -3546,6 +3546,42 @@ fn net_open() {
     );
 }
 
+/// Jacked in at home: your rig's room as the mock's round 5 first draws it
+/// (`docs/superpowers/specs/2026-11-18-rig-construct-mock`): a Civitas cabinet, three
+/// backdoors held of its five lines, sift and keepalive in the seats, keepalive's line to
+/// the door it holds, a credchip in the reader; you on the landing under it.
+#[test]
+#[ignore]
+fn rig_room() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, _) = crate::rigroom::testutil::the_mocks_rig();
+    // Two hours on, as the mock has it: sift a third of the way through the shard.
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.catch_up(city, world.tick() + 2 * 60 * sim::TICKS_PER_MINUTE);
+    crate::net::tick_backdoors(&mut st);
+    // The key an hour old, as fresh as the mock's.
+    let now = st.net.now(&st);
+    for d in &mut st.backdoors.list {
+        if matches!(d.kind, crate::backdoors::Kind::Key { .. }) {
+            d.planted = now - 60;
+        }
+    }
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    // keepalive's pulse out over the reader, where the mock has it.
+    let beats = st.tick / crate::render::netlook::packets::PACKET_TICKS;
+    st.tick += (24 - beats % 24) * crate::render::netlook::packets::PACKET_TICKS;
+    let you = st.player.as_ref().unwrap().pos;
+    for (name, size) in [("rig_room", (120, 40)), ("rig_room_small", (100, 30))] {
+        // A frame to size the map's pane, then the camera on you inside it.
+        let _ = draw_stack(&st, &[&map], size);
+        map.jump_to(&st, you);
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
 /// Inside the first black construct with a vault (seed 8), standing in its first room
 /// beside the door.
 #[test]
