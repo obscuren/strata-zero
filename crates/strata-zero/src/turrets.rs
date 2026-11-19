@@ -10,6 +10,7 @@ use citygen::{Dir, Place, Pos, SiteNode};
 use game::ItemId;
 use serde::{Deserialize, Serialize};
 
+pub mod field;
 #[cfg(test)]
 pub(crate) mod testutil;
 
@@ -96,7 +97,7 @@ pub fn foe(place: Place, pos: Pos, t: Turret) -> Foe {
         stunned: 0,
         down: false,
         inert: false,
-        glyph: '▲',
+        glyph: field::glyph(t.facing),
         chrome: true,
         marked: false,
         ice: None,

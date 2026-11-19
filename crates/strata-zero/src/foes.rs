@@ -237,21 +237,24 @@ pub fn sees(map: &MapRef, foe: &Foe, to: Pos) -> bool {
     if map.floor().is_none() {
         return line_clear(map, foe.pos, to);
     }
-    let lit = |p: Pos| {
-        if map.light(p) >= GUARD_LIT {
-            citygen::lighting::tuning::LIT_SIGHT
-        } else {
-            0
-        }
-    };
     citygen::sight::sees(
         foe.pos,
         to,
         GUARD_DARK_REACH,
         |p| map.tile(p).is_none_or(blocks_sight),
-        lit,
+        |p| floor_light(map, p),
         |_| false,
     )
+}
+
+/// What a standing watcher takes from the light on a floor tile: far sight where it is
+/// lit (`GUARD_LIT`), none where it is dark.
+pub(crate) fn floor_light(map: &MapRef, p: Pos) -> u8 {
+    if map.light(p) >= GUARD_LIT {
+        citygen::lighting::tuning::LIT_SIGHT
+    } else {
+        0
+    }
 }
 
 /// Whether a foe with `post` (a guard's; None for any other foe) may step from `from`
