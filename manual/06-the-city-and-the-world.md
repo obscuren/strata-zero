@@ -95,7 +95,7 @@ An open container lists what is in it. A letter takes a line, `t` takes it all, 
 
 ### Turrets
 
-A job's secure rooms may hold **turrets**: a gun on a mount, bolted to the floor. It is a steel body with an arrowhead on it that points the way it faces: `▲ ◥ ► ◢ ▼ ◣ ◄ ◤` for north round to north-west. Looking at one (`x`) says which way it faces, its plate (`ARM`), its HP and the rounds it has left.
+A job's secure rooms may hold **turrets**: a gun on a mount, bolted to the floor. It is a steel body with an arrowhead on it that points the way it faces: `▲ ◥ ► ◢ ▼ ◣ ◄ ◤` for north round to north-west. Looking at one (`x`) while it is awake or hunting says which way it faces, its plate (`ARM`), its HP and the rounds it has left. Otherwise it reads `Turret · asleep`, `Turret · blind · 42 min` or `Turret · yours · 12 min` (the minutes left on your hold), or `Turret · wrecked`.
 
 The arrowhead's colour says what it is doing:
 
