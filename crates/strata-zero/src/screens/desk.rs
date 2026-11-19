@@ -121,7 +121,10 @@ impl Desk {
             Pick::Reader { item, copy } => {
                 timed = false;
                 let content = st.content.clone();
-                let slot = reader_slot(st, self.row).unwrap_or(usize::MAX);
+                let Some(slot) = reader_slot(st, self.row) else {
+                    self.picker = None;
+                    return;
+                };
                 match copy {
                     Some(k) => st.character.put_in_reader(&content, slot, k),
                     None => st.character.put_item_in_reader(&content, slot, &item),
@@ -1617,11 +1620,21 @@ mod tests {
     #[test]
     fn the_desk_fits_100x30() {
         let mut st = AppState::new();
-        for frame in ["rack_zenbo", "rack_halcyon"] {
+        for frame in ["rack_zenbo", "rack_halcyon", "rack_civitas"] {
             crate::rig::fit_new_rack(&mut st.character, &st.content, frame);
-            let d = Desk::open(&st);
+            let mut d = Desk::open(&st);
             for (w, h) in [(100, 30), (120, 40)] {
                 let text = drawn(&d, &st, w, h);
+                if frame == "rack_civitas" {
+                    for n in 1..=3 {
+                        let want = format!("READER {n}");
+                        assert!(text.contains(&want), "{w}x{h} {want}:\n{text}");
+                    }
+                    d.row = Desk::rows(&st) - 1;
+                    let text = drawn(&d, &st, w, h);
+                    assert!(text.contains("▸ READER 3"), "{w}x{h}:\n{text}");
+                    d.row = 1;
+                }
                 for kind in ["FRAME", "CORE", "RELAY", "LINE"] {
                     assert!(text.contains(kind), "{frame} {w}x{h} {kind}:\n{text}");
                 }

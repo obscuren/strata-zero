@@ -49,7 +49,7 @@ pub fn glyph(h: Holds) -> (char, Color) {
         Holds::Chip => ('¤', Color::Rgb(0xff, 0xb0, 0x00)),
         Holds::Locked => ('▣', Color::Rgb(0x9f, 0xe6, 0xff)),
         Holds::Black => ('◆', Color::Rgb(0xff, 0x28, 0x48)),
-        Holds::Program(_) => ('λ', Color::Rgb(0x7f, 0xff, 0xa0)),
+        Holds::Program(_) => ('λ', Color::Rgb(0x00, 0xe5, 0xff)),
         Holds::Data => ('≡', Color::Rgb(0xc8, 0x9b, 0xff)),
         Holds::Story => ('¶', Color::Rgb(0xe6, 0xf0, 0xf5)),
     }
@@ -136,7 +136,16 @@ mod tests {
             Holds::Data,
             Holds::Story,
         ];
-        for h in all {
+        let colours = [
+            (0xff, 0xb0, 0x00),
+            (0x9f, 0xe6, 0xff),
+            (0xff, 0x28, 0x48),
+            (0x00, 0xe5, 0xff),
+            (0xc8, 0x9b, 0xff),
+            (0xe6, 0xf0, 0xf5),
+        ];
+        for (h, (r, g, b)) in all.into_iter().zip(colours) {
+            assert_eq!(glyph(h).1, Color::Rgb(r, g, b), "{h:?}");
             let c = glyph(h).0;
             assert!(!"◇⬡⌗▪▮▯◈".contains(c), "{h:?}");
             assert!(c != '◆' || h == Holds::Black, "{h:?}");
