@@ -1377,7 +1377,7 @@ fn land(
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
-        // A site's camera or terminal is held by `sitenet::landed`, above.
+        // A site's camera, terminal or turret is held by `sitenet::landed`, above.
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
             HackTarget::Node(id) => crate::holds::take(
                 st,

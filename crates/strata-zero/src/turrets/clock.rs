@@ -1,15 +1,58 @@
 //! A turret on the clock: asleep until a camera's word or an alarm wakes it, then
 //! turning toward where you were, and asleep again once nothing has been seen.
 
+use super::Hacked;
 use super::field::{aim, in_field, turn_toward};
 use crate::app::AppState;
 use crate::foes::FoeMode;
 use crate::guards::GUARD_STEP_TICKS;
-use citygen::{Place, Pos};
+use citygen::{NetNode, Place, Pos};
 
-/// The holds read back onto turret `i`: a hold that has run out lets it go. Filled in by
-/// the Net verbs.
-pub(super) fn sync(_st: &mut AppState, _i: usize) {}
+/// The holds read back onto turret `i`. Blind or yours, while the hold on its node lasts,
+/// it hunts nothing and holds no fight open. Once the hold has run out it is its own
+/// again: hunting you if it has you in its field with a fight on its place, awake while
+/// its building is on alert, else asleep. A wreck goes back without a word.
+pub(super) fn sync(st: &mut AppState, i: usize) {
+    let Some(t) = st.foes.get(i).and_then(|f| f.turret.as_ref()) else {
+        return;
+    };
+    if t.hacked == Hacked::None {
+        return;
+    }
+    let (node, facing) = (t.node, t.facing);
+    let now = st.net.now(st);
+    let held = crate::holds::held(st, NetNode::Site(node), now).is_some();
+    let f = &mut st.foes[i];
+    f.mode = FoeMode::Idle;
+    if held {
+        return;
+    }
+    let (place, down) = (f.place, f.down);
+    if let Some(t) = f.turret.as_mut() {
+        t.hacked = Hacked::None;
+        t.awake = false;
+        t.told = None;
+    }
+    if down {
+        return;
+    }
+    st.say("turret's back on its own net");
+    let fight = st.net.engaged.as_ref().is_some_and(|e| e.place == place);
+    let you = (st.player.as_ref())
+        .filter(|me| me.place == place)
+        .map(|me| me.pos)
+        .filter(|you| fight && super::turn::has(st, i, facing, *you));
+    if let Some(you) = you {
+        super::has_you(st, i, you);
+    } else if st.net.alert(node.building, now) {
+        let tick = st.clock_tick();
+        if let Some(t) = st.foes[i].turret.as_mut() {
+            t.awake = true;
+            t.since = now;
+            t.next = tick + GUARD_STEP_TICKS;
+        }
+    }
+}
 
 /// Wakes turret `i` toward `told`, logging it when you remember its tile.
 pub(super) fn wake(st: &mut AppState, i: usize, told: Option<Pos>) {

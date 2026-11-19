@@ -12,11 +12,13 @@ use serde::{Deserialize, Serialize};
 
 pub mod clock;
 pub mod field;
+pub mod hack;
 #[cfg(test)]
 pub(crate) mod testutil;
 pub mod turn;
 
 pub use clock::{tick, told};
+pub use hack::{blind, take_over};
 pub use turn::{look, plan_word, step, turn_start};
 
 pub const TURRET_HP: u8 = 40;

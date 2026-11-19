@@ -22,7 +22,7 @@ struct Plan {
 
 /// Whether turret `i`, facing `facing`, has `p` to fire on: seen in its field by the
 /// floor's light, with a clear line. You, never while cloaked.
-fn has(st: &AppState, i: usize, facing: Dir, p: Pos) -> bool {
+pub(super) fn has(st: &AppState, i: usize, facing: Dir, p: Pos) -> bool {
     let f = &st.foes[i];
     let you = (st.player.as_ref()).is_some_and(|me| me.place == f.place && me.pos == p);
     if you && crate::cloak::hidden(st) {

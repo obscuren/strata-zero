@@ -62,3 +62,24 @@ pub(crate) fn turret_copy() -> (AppState, BuildingId, usize) {
         .expect("a turret");
     (st, b, i)
 }
+
+/// Turret `i`'s node cracked from the site's Net, as `sitenet::testutil::loop_from_the_net`
+/// does a camera's: your body left where you stand, you landed beside its node on its
+/// level of the site's Net, the crack run to its landing. You stay jacked in.
+pub(crate) fn hold_from_the_net(st: &mut AppState, i: usize) {
+    let n = st.foes[i].turret.as_ref().expect("a turret").node;
+    let (place, here) = st.player.as_ref().map(|p| (p.place, p.pos)).expect("you");
+    crate::sitenet::ensure_construct(st, n.building).unwrap();
+    let at = (st.constructs.site(n.building).unwrap().device(n))
+        .expect("its node")
+        .at;
+    st.player.as_mut().unwrap().body = Some((place, here));
+    let level = citygen::Place::SiteNet {
+        building: n.building,
+        level: n.level,
+    };
+    crate::constructs::land(st, level, at);
+    crate::sitenet::testutil::walk_beside(st, at);
+    st.net.beat = st.clock_tick();
+    crate::net::tests::crack_to_landing(st, game::HackTarget::Site(n));
+}
