@@ -140,8 +140,9 @@ Its pools are 1 move and 1 AP; the move is a turn of one eighth.
 
 A hostile turret's target is you. Firing is `combat::fire_at_you`'s volley: your armour
 turns rounds as today. Each round costs a round from the magazine. With the magazine
-empty it still turns and watches, and its turn reads "clicks dry". The turn column's
-"theirs" line reads `turns › fires`, `turns`, `fires` or `clicks dry`.
+empty it still turns and watches, and a turn that would fire reads "clicks dry". The
+turn column's "theirs" line reads `turns › fires`, `turns`, `fires`, `clicks dry`, or
+`watches` when its turn does nothing.
 
 ### Shooting it
 
@@ -196,8 +197,9 @@ another foe (the turret at a guard, a guard at the turret), with the target's ow
 ### Turncoat
 
 A new talent in the ICE tree, in the empty slot under Black ICE (tier 4, third column of
-`flavor/content.ron`'s ICE tiers), requiring Black ICE. The Deep end, under it, keeps
-requiring Black ICE.
+`flavor/content.ron`'s ICE tiers), requiring Black ICE. The Deep end, under it, now requires Turncoat: the tree's check
+won't let a line run through a filled slot, so Black ICE → Turncoat → The deep end is one
+line. A runner saved with The deep end and no Turncoat keeps it.
 
 ```ron
 Talent(id: "turncoat", name: "Turncoat", ranks: 1, requires: Some("black_ice"), skill: Some("hacking"),
