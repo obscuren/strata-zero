@@ -441,7 +441,9 @@ pub fn look_all(st: &mut AppState) -> bool {
 
 /// One step along the shortest path from `from` to `goal` that a foe with `post` may
 /// walk (`can_step`), never onto a tile in `avoid` (the player's, other foes') unless
-/// it is the goal itself.
+/// it is the goal itself. A goal nobody stands on (a turret's tile) is reached beside
+/// it: the way runs to its nearest neighbour the foe can walk to, and beside it there
+/// is no step.
 pub fn step_toward(
     map: &MapRef,
     from: Pos,
@@ -452,10 +454,16 @@ pub fn step_toward(
     if from == goal {
         return None;
     }
+    let beside = !map.walkable(goal);
     let path = astar(map.size(), from, goal, |p, n| {
+        if beside && n == goal {
+            return Some(1);
+        }
         (can_step(map, post, p, n) && (!avoid.contains(&n) || n == goal)).then_some(1)
     })?;
-    path.into_iter().find(|p| *p != from)
+    path.into_iter()
+        .find(|p| *p != from)
+        .filter(|p| *p != goal || !beside)
 }
 
 /// A foe's turn begins: a stun counts down and the turn passes (a guard's call to make
@@ -543,8 +551,9 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
 /// One action of a foe's turn: out of a live blast's footprint first, then a guard's
 /// shot at a turret you hold (`turrets::guard_mark`) when it can't reach you or the
 /// turret is nearer, then a shot when it hunts you in range with a clear line, else a
-/// step toward where it saw you; at that tile without sight it loses you. Outside every footprint it never
-/// steps into one: it holds at the edge, and that loses it nothing.
+/// step toward where it saw you (beside it, when nobody stands there); there without
+/// sight it loses you. Outside every footprint it never steps into one: it holds at
+/// the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
     // A turret's whole turn is one action of its own (`turrets::step`).
@@ -906,6 +915,20 @@ mod tests {
         let next = step_toward(&map, Pos::new(14, 8), me, &[me, block], None).unwrap();
         assert_ne!(next, block);
         assert_eq!(next.chebyshev(Pos::new(14, 8)), 1);
+    }
+
+    #[test]
+    fn step_toward_a_tile_nobody_stands_on_ends_beside_it() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        // The wall between the halls stands in for a turret's tile.
+        let wall = Pos::new(15, 2);
+        assert_eq!(
+            step_toward(&map, Pos::new(10, 2), wall, &[], None),
+            Some(Pos::new(11, 2))
+        );
+        assert_eq!(step_toward(&map, Pos::new(14, 2), wall, &[], None), None);
     }
 
     #[test]

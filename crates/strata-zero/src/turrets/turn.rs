@@ -373,7 +373,8 @@ mod tests {
         st.force_hit = Some(false);
         st.foes[i].turret.as_mut().unwrap().rounds = 2;
         step(&mut st, i);
-        assert!(logged(&st, "turret fires · miss · miss") && !logged(&st, "miss · miss · miss"));
+        assert!(logged(&st, "turret fires · miss · miss"));
+        assert!(!logged(&st, "miss · miss · miss"));
         assert_eq!(st.foes[i].turret.as_ref().unwrap().rounds, 0);
     }
 
@@ -602,6 +603,47 @@ mod tests {
             assert_eq!(logged(&st, "guard fires on turret"), on_turret, "{you:?}");
             assert_eq!(st.foes[t].turret.as_ref().unwrap().arm < 4, on_turret);
         }
+    }
+
+    #[test]
+    fn a_guard_out_of_sight_that_hears_a_turret_fire_comes_toward_it() {
+        // You in its field in the west hall; the guard in the dark east hall, the wall
+        // between it and you both.
+        let (mut st, t) = in_ward(Pos::new(6, 3), Pos::new(12, 3), Dir::W);
+        let g = guard(&mut st, 0, 1, &[Pos::new(20, 1)]);
+        let at = st.foes[t].pos;
+        crate::combat::fire_at_you_with(&mut st, t, None);
+        assert_eq!(
+            st.foes[g].mode,
+            crate::foes::FoeMode::Hunting { seen: at, lost: 0 }
+        );
+        assert!(st.net.engaged.is_none());
+        let start = st.foes[g].pos.chebyshev(at);
+        run_until(&mut st, 400, |st| st.foes[g].pos.chebyshev(at) <= start - 3);
+    }
+
+    #[test]
+    fn a_guard_your_turret_hits_from_out_of_its_sight_closes_in_and_fires_on_it() {
+        let mut st = ward();
+        stand(&mut st, 0, Pos::new(2, 5));
+        let t = yours_in_ward(&mut st, Pos::new(10, 3), Dir::E);
+        // In the dark east hall, the wall between it and the turret.
+        let g = guard(&mut st, 0, 1, &[Pos::new(20, 1)]);
+        crate::net::engage(&mut st, on(0), true);
+        assert!(guard_mark(&st, g).is_none());
+        crate::combat::fire_on_foe(&mut st, t, g, None);
+        let at = st.foes[t].pos;
+        assert_eq!(
+            st.foes[g].mode,
+            crate::foes::FoeMode::Hunting { seen: at, lost: 0 }
+        );
+        for _ in 0..20 {
+            if logged(&st, "guard fires on turret") {
+                break;
+            }
+            crate::foes::step(&mut st, g, true, true);
+        }
+        assert!(logged(&st, "guard fires on turret"));
     }
 
     #[test]

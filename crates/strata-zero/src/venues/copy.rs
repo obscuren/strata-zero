@@ -149,8 +149,8 @@ pub fn tick(st: &mut AppState) {
 
 /// Takes the copy: the plan cut to its floors, the floors dropped (drawn again with the
 /// layer as they're needed), the site's Net as the plain building had it dropped, the
-/// guards at their posts and turrets on their devices, the zone cards in the catalogue and those the layer leaves lying
-/// where it leaves them.
+/// guards at their posts and turrets on their devices, the zone cards in the catalogue
+/// and those the layer leaves lying where it leaves them.
 fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     let Some(plan) = st.interiors.plan_of(b) else {
         return;
