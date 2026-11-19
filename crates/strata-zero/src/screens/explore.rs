@@ -5096,6 +5096,9 @@ impl Screen for MapScreen {
                 (Place::SiteNet { building, .. }, Some(p)) if p.place == self.place => {
                     crate::sitenet::panel_lines(st, building)
                 }
+                (Place::Rig, Some(p)) if p.place == self.place => {
+                    crate::rigroom::panel::panel_lines(st)
+                }
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     crate::net::card_lines(st, b, None)
                 }

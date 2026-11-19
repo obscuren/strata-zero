@@ -2,6 +2,7 @@
 //! from the rig as it stands each time you go in and walked as a construct is.
 
 pub mod layout;
+pub mod panel;
 pub mod reader;
 #[cfg(test)]
 pub(crate) mod testutil;

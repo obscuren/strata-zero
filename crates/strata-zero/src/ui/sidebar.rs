@@ -238,7 +238,7 @@ fn separator(width: u16) -> Line<'static> {
 /// where its panel does.
 fn here_cap(v: &SidebarView) -> u16 {
     match &v.map {
-        MapRef::Construct(m) if m.level.is_some() => SITE_HERE_CAP,
+        MapRef::Construct(m) if m.level.is_some() || m.rig => SITE_HERE_CAP,
         _ if on_the_net(v) => NET_HERE_CAP,
         _ => HERE_CAP,
     }
