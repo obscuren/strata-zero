@@ -22,6 +22,16 @@ On a floor, every guard hunting you takes a turn, seen or not. One you haven't s
 
 Taking the stairs or a lift ends the fight, but the guards hunting you on that floor follow you up or down where their card lets them. You never land on a guard: you step out beside it, and when every tile at the landing is taken the log says `the landing is blocked`. No guard follows you out of the building; once you're out, they lose you.
 
+## Turrets
+
+A turret (The city and the world) takes its seat in a fight once it has you. It sits in the column with a chip like any foe's, but its figure reads `ARM·HP`: `4·40` is 4 plate and 40 HP. It has 1 move and 1 action.
+
+On its turn it turns one eighth toward you, the shorter way round, and fires if you stand in its field then. Its field is 8 deep and a quarter wide. A turn is one line in the log: `turret turns SE › fires · 5 · turned · miss · hp 31`. A shot is 3 rounds of 5, from a magazine of 30, and each round that goes off comes out of it. Out of rounds it still turns and watches, and its turn reads `clicks dry`. Its column line reads `turns › fires`, `turns`, `fires` or `clicks dry` ahead of time, and `watches` when its turn would do nothing. A turret that is out of your field for 3 turns loses you; one still awake with no sight of you goes back to sleep after a while, unless the building is on alert.
+
+Shots at a turret go through its plate first. Each round that lands wears the plate down (`you fire · … · plate 6 → 4`; it has 4 plate at middle security, 6 at high) and only what is past it takes HP. At 0 HP it is wrecked (`turret wrecked`) and stays in the way. A blast hurts it as it hurts any foe, an EMP puck hurts it in full, and a stun costs it its turn. A turret you shoot at wakes and hunts you, asleep or not.
+
+One that's yours (`turret's yours`, The Net) sits on your side of the order, in your colours, in a fight on its floor. It never fires on you: on its turn it turns on the nearest guard it has a clear line to and shoots (`turret fires on guard · …`). The guards shoot back at it, at whichever of you is nearer. A fight that ends takes your turret out of the order, and out of a fight it does nothing.
+
 ## Your turn
 
 Your turn has two halves.

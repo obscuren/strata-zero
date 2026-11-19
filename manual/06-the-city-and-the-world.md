@@ -93,6 +93,29 @@ Hotels, offices and other sites hold **containers**: a locker, a safe, a crate, 
 
 An open container lists what is in it. A letter takes a line, `t` takes it all, and what you take counts against the pack's load. What you leave stays there. Loot can be cash, items, a zone's keycard or a **credchip**. Use a credchip from the pack to cash it. A locked credchip won't cash from the pack: put it in your rig's reader and crack it there (Your rig's Net, in The Net). Guarded offices and hotels now and then keep a **black credchip** in a safe, which MASTIFF guards in the reader.
 
+### Turrets
+
+A job's secure rooms may hold **turrets**: a gun on a mount, bolted to the floor. It is a steel body with an arrowhead on it that points the way it faces: `▲ ◥ ► ◢ ▼ ◣ ◄ ◤` for north round to north-west. Looking at one (`x`) says which way it faces, its plate (`ARM`), its HP and the rounds it has left.
+
+The arrowhead's colour says what it is doing:
+
+| Colour | What it is |
+|---|---|
+| dull red | asleep |
+| bright red | awake, or hunting you |
+| grey-blue | blind, held from the Net |
+| green | yours, held with Turncoat |
+| dark grey | wrecked |
+
+A turret sleeps until it sees you, until a camera of its building sees you, or until the building's alarm goes off. An awake or hunting one shows its field, a wedge of floor in front of it, 8 tiles deep and a quarter as wide, in red (green when it's yours). Step into the field, near or in the light, with a clear line, and it has you. A sleeping, blind or wrecked turret shows no field.
+
+A turret blocks the way, standing or wrecked. The ways past it:
+
+- Go round behind it, out of its field. It turns to follow you once it's awake, so keep clear of it.
+- Shoot it down (Turns and fights covers its plate and HP).
+- Stun it, or hit it with an EMP puck.
+- Deal with it from the Net: blind it, or with Turncoat take it over (The Net).
+
 ### The field scrambler
 
 A **field scrambler** cloaks you on a cell of its own, no FOCUS spent (Turns and fights covers the cloak). It's worn on your BACK (GEAR & INVENTORY, in The deck), and while you wear it you have the Scramble ability on your ability bar; one in your pack gives you nothing. The back holds one thing: the scrambler or the Courier sling, not both. A full cell holds the cloak 20 seconds, 30 with the Stealth skill. While it runs, your XP bar becomes a `CELL` bar that counts its seconds down.
