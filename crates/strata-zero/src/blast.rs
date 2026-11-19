@@ -1128,6 +1128,7 @@ mod tests {
             None,
         );
         assert!(st.foes[0].hp < 40, "it still takes the blast");
+        assert_eq!(st.foes[0].turret.as_ref().unwrap().arm, 4, "no plate roll");
         assert_eq!(st.foes[0].mode, foes::FoeMode::Idle);
         assert!(!st.foes[0].turret.as_ref().unwrap().awake);
     }

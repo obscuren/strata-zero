@@ -1772,6 +1772,8 @@ mod tests {
             crate::turrets::state(&st.foes[0]),
             Some(crate::turrets::TurretState::Hunting)
         );
+        assert!(st.foes[0].turret.as_ref().unwrap().awake);
+        assert!(logged(&st, "turret wakes"));
     }
 
     #[test]

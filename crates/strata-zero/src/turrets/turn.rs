@@ -6,7 +6,7 @@
 //! turn column's word.
 
 use super::field::{aim, dir_word, in_field, turn_toward};
-use super::{Hacked, clock};
+use super::{Hacked, clock, has_you};
 use crate::app::AppState;
 use crate::foes::{self, FoeMode};
 use crate::net::Step;
@@ -89,17 +89,6 @@ pub fn look(st: &mut AppState, i: usize) -> bool {
     }
     has_you(st, i, you);
     true
-}
-
-/// Turret `i` has you at `you`: it hunts, awake, its minute renewed.
-fn has_you(st: &mut AppState, i: usize, you: Pos) {
-    let minute = st.net.now(st);
-    let f = &mut st.foes[i];
-    f.mode = FoeMode::Hunting { seen: you, lost: 0 };
-    if let Some(t) = f.turret.as_mut() {
-        t.awake = true;
-        t.since = minute;
-    }
 }
 
 /// Hunting turret `i` didn't have you this turn: after `net::LOST_TURNS` of them it
