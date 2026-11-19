@@ -45,7 +45,7 @@ pub struct RigRoom {
 }
 
 /// Rows past which doors stand 3 apart instead of 4.
-const TALL: usize = 40;
+const MAX_DOOR_ROWS: usize = 40; // the door rows 4 apart may take before they go 3 apart
 const PORTS_W: i32 = 20;
 const SEATS_W: i32 = 20;
 const SLOT_W: i32 = 7;
@@ -69,9 +69,13 @@ pub fn at_box(here: Pos, r: Rect) -> bool {
 
 pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
     let seats_n = c.seats as usize;
-    let step: i32 = if 5 + 4 * c.lines + 2 <= TALL { 4 } else { 3 };
+    let step: i32 = if 5 + 4 * c.lines + 2 <= MAX_DOOR_ROWS {
+        4
+    } else {
+        3
+    };
     let door_rows = 5 + step as usize * c.lines + 2;
-    let fh = [30, door_rows, 5 + 6 * seats_n + 6]
+    let fh = [27, door_rows, 5 + 6 * seats_n + 6]
         .into_iter()
         .max()
         .unwrap() as i32;
@@ -79,10 +83,10 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
     let fw = PORTS_W + hall_w + SEATS_W;
     let size = Size {
         w: (fw + 4) as u32,
-        h: (fh + 4) as u32,
+        h: (fh + 3) as u32,
     };
 
-    let floor = Rect::new(2, 2, fw, fh);
+    let floor = Rect::new(2, 1, fw, fh);
     let ports = Rect::new(floor.x, floor.y, PORTS_W, fh);
     let hall = Rect::new(ports.right(), floor.y, hall_w, fh);
     let seats_room = Rect::new(hall.right(), floor.y, SEATS_W, fh);
@@ -145,7 +149,7 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
     };
     RigRoom {
         construct,
-        ring: (c.firewall > 0).then(|| Rect::new(0, 0, fw + 4, fh + 4)),
+        ring: (c.firewall > 0).then(|| Rect::new(0, 0, fw + 4, fh + 2)),
         floor,
         ports,
         hall,
@@ -221,6 +225,17 @@ mod tests {
         assert!(r.doors.iter().all(|d| d.x == r.floor.x));
         assert_eq!((r.slots.len(), r.seats.len()), (3, 2));
         assert!(r.ring.is_some());
+    }
+
+    #[test]
+    fn the_civitas_room_fits_the_pane() {
+        let r = room(5, 2, 3);
+        assert_eq!(r.floor.h, 27);
+        assert_eq!(r.ring.unwrap().h, 29);
+        assert!(r.construct.size.h <= 30);
+        assert_eq!(r.terminal.x - r.seats_room.x, 3);
+        assert_eq!(r.terminal.y - r.floor.y, 19);
+        assert_eq!(r.trunk.y - r.floor.y, 26);
     }
 
     #[test]
