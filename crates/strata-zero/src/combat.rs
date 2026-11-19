@@ -529,6 +529,13 @@ pub(crate) fn epitaph(st: &AppState, name: &str, place: Place) -> String {
 
 /// A foe fires its weapon at you.
 pub fn fire_at_you(st: &mut AppState, foe: usize) {
+    fire_at_you_with(st, foe, None);
+}
+
+/// A foe fires its weapon at you, its line led by what it did first this action
+/// (`turret turns SE › fires · …`). A turret fires what its magazine still holds of the
+/// gun's rounds, each round one off it.
+pub(crate) fn fire_at_you_with(st: &mut AppState, foe: usize, lead: Option<&str>) {
     let Some((name, from, reflex, place)) = st
         .foes
         .get(foe)
@@ -557,9 +564,13 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
         w.damage,
         st.character.resist(&st.content, game::Harm::Kinetic),
     );
+    let rounds = (st.foes[foe].turret.as_ref()).map_or(w.rounds, |t| w.rounds.min(t.rounds));
     let mut words = Vec::new();
     let mut landed = false;
-    for k in 0..w.rounds as usize {
+    for k in 0..rounds as usize {
+        if let Some(t) = st.foes[foe].turret.as_mut() {
+            t.rounds = t.rounds.saturating_sub(1);
+        }
         let hit = game::round_hits(roll(st), chance);
         // The armour's own roll: a turned round sparks off you as a miss would.
         let turned = hit && turn > 0 && roll(st) as u32 <= turn;
@@ -594,10 +605,14 @@ pub fn fire_at_you(st: &mut AppState, foe: usize) {
         });
     }
     let words = words.join(" · ");
+    let fires = match lead {
+        Some(lead) => format!("{name} {lead} › fires"),
+        None => format!("{name} fires"),
+    };
     let line = if landed {
-        format!("{name} fires · {words} · hp {}", st.character.hp)
+        format!("{fires} · {words} · hp {}", st.character.hp)
     } else {
-        format!("{name} fires · {words}")
+        format!("{fires} · {words}")
     };
     st.warn(line);
 }

@@ -327,12 +327,15 @@ pub fn unseen(st: &AppState, i: usize) -> bool {
     !known(st, Visibility::Remembered).contains(&i)
 }
 
-/// The standing guards of `place` that hunt, by index: on a floor each takes a seat
-/// on turns, seen or not.
+/// The standing guards and hostile turrets of `place` that hunt, by index: on a floor
+/// each takes a seat on turns, seen or not.
 pub fn hunting_on(st: &AppState, place: Place) -> Vec<usize> {
     standing(st, place)
         .into_iter()
-        .filter(|i| st.foes[*i].post.is_some() && st.foes[*i].hunting())
+        .filter(|i| {
+            let f = &st.foes[*i];
+            (f.post.is_some() || crate::turrets::hostile(f)) && f.hunting()
+        })
         .collect()
 }
 
@@ -355,6 +358,10 @@ pub fn any_hunting(st: &AppState, place: Place) -> bool {
 /// where. Returns whether it hunts after looking. A stunned or down foe sees nothing,
 /// and nobody on foot sees you cloaked (`cloak::hidden`): no hunt, no spotting.
 pub fn look(st: &mut AppState, i: usize) -> bool {
+    // A turret sees only its own field (`turrets::look`).
+    if st.foes.get(i).is_some_and(|f| f.turret.is_some()) {
+        return crate::turrets::look(st, i);
+    }
     let Some(me) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
     };
@@ -470,6 +477,9 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
         st.say(format!("{name} · stunned"));
         return false;
     }
+    if foe.turret.is_some() {
+        return crate::turrets::turn_start(st, i);
+    }
     radio(st, i);
     look(st, i)
 }
@@ -536,6 +546,10 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
 /// steps into one: it holds at the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
+    // A turret's whole turn is one action of its own (`turrets::step`).
+    if st.foes.get(i).is_some_and(|f| f.turret.is_some()) {
+        return crate::turrets::step(st, i);
+    }
     let Some((me_place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return Step::Nothing;
     };

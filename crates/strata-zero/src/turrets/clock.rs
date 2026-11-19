@@ -12,7 +12,7 @@ use citygen::{Place, Pos};
 pub(super) fn sync(_st: &mut AppState, _i: usize) {}
 
 /// Wakes turret `i` toward `told`, logging it when you remember its tile.
-fn wake(st: &mut AppState, i: usize, told: Option<Pos>) {
+pub(super) fn wake(st: &mut AppState, i: usize, told: Option<Pos>) {
     let minute = st.net.now(st);
     let tick = st.clock_tick();
     let seen = !crate::foes::unseen(st, i);
@@ -194,6 +194,40 @@ mod tests {
         crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64);
         tick(&mut st);
         assert!(!st.foes[i].turret.as_ref().unwrap().awake);
+    }
+
+    #[test]
+    fn hunting_off_a_fight_with_you_gone_it_turns_awake_toward_where_it_had_you() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::W);
+        assert!(crate::foes::look_all(&mut st), "it has you at (6,3)");
+        stand(&mut st, 1, Pos::new(5, 3)); // gone upstairs, no fight
+        advance(&mut st, 1);
+        tick(&mut st);
+        let f = &st.foes[i];
+        assert_eq!(
+            crate::turrets::state(f),
+            Some(crate::turrets::TurretState::Awake)
+        );
+        assert_eq!(f.turret.as_ref().unwrap().told, Some(Pos::new(6, 3)));
+        // Awake with nothing seen, it sleeps after `LOST_TURNS` minutes.
+        crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64);
+        tick(&mut st);
+        assert!(!st.foes[i].turret.as_ref().unwrap().awake);
+    }
+
+    #[test]
+    fn awake_it_doesnt_turn_while_a_fight_holds_its_floor() {
+        let mut st = ward();
+        let i = turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::E);
+        told(&mut st, on(0), Pos::new(4, 3));
+        crate::net::engage(&mut st, on(0), true);
+        for _ in 0..=3 * crate::guards::GUARD_STEP_TICKS {
+            advance(&mut st, 1);
+            tick(&mut st);
+        }
+        let t = st.foes[i].turret.as_ref().unwrap();
+        assert_eq!((t.facing, t.awake), (Dir::E, true));
     }
 
     #[test]

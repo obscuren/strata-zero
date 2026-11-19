@@ -14,8 +14,10 @@ pub mod clock;
 pub mod field;
 #[cfg(test)]
 pub(crate) mod testutil;
+pub mod turn;
 
 pub use clock::{tick, told};
+pub use turn::{look, plan_word, step, turn_start};
 
 pub const TURRET_HP: u8 = 40;
 /// Its plate at mid security, and at high.
@@ -144,6 +146,16 @@ pub fn hostile(f: &Foe) -> bool {
 /// A standing turret you hold.
 pub fn is_yours(f: &Foe) -> bool {
     f.standing() && f.turret.as_ref().is_some_and(|t| t.hacked == Hacked::Yours)
+}
+
+/// Turret `i` takes a seat in a fight: standing, hostile and hunting, or yours with a
+/// fight on its place.
+pub fn seated(st: &AppState, i: usize) -> bool {
+    let Some(f) = st.foes.get(i) else {
+        return false;
+    };
+    (hostile(f) && f.hunting())
+        || (is_yours(f) && (st.net.engaged.as_ref()).is_some_and(|e| e.place == f.place))
 }
 
 /// The foe whose turret is `node`.
