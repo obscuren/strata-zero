@@ -51,12 +51,13 @@ pub fn to_the_grid(st: &mut AppState) -> Result<String, String> {
 /// backdoor's door out through it. A free line's door (or one whose backdoor burned) is
 /// a wall that says so. None for any other tile, which the room walks as a map.
 pub fn step(st: &mut AppState, to: Pos) -> Option<Result<String, String>> {
+    super::refresh(st);
     let room = super::room(st)?;
     if to == room.trunk {
         return Some(to_the_grid(st));
     }
     let i = room.doors.iter().position(|d| *d == to)?;
-    Some(match super::door_lines(st)[i] {
+    Some(match super::door_lines(st).get(i).copied().flatten() {
         Some(b) => crate::net::leave_by_backdoor(st, b),
         None => Err("a free line · nothing on it".to_string()),
     })
@@ -359,5 +360,59 @@ mod tests {
         assert!(to_the_grid(&mut st).is_err(), "out on the grid already");
         assert!(crate::net::leave_by_backdoor(&mut st, b).is_err());
         assert_eq!(st.backdoors.held(b).unwrap().spent, spent);
+    }
+
+    #[test]
+    fn a_backdoor_planted_in_the_room_gets_a_free_door() {
+        let mut st = in_the_room();
+        let before = crate::rigroom::door_lines(&st);
+        assert!(before.iter().all(|l| l.is_none()), "every line free");
+        let b = hold_a_backdoor(&mut st, 0);
+        let free = room(&st).unwrap().doors[0];
+        let line = step(&mut st, free).expect("a door").unwrap();
+        assert!(line.contains("via your backdoor"), "{line}");
+        assert_eq!(st.backdoors.route.as_ref().unwrap().relays, vec![b]);
+    }
+
+    #[test]
+    fn a_door_given_stays_with_its_backdoor() {
+        let mut st = in_the_room();
+        let a = hold_a_backdoor(&mut st, 0);
+        crate::rigroom::refresh(&mut st);
+        let b = hold_a_backdoor(&mut st, 1);
+        crate::rigroom::refresh(&mut st);
+        assert_eq!(&crate::rigroom::door_lines(&st)[..2], &[Some(a), Some(b)]);
+        st.backdoors
+            .list
+            .iter_mut()
+            .find(|d| d.building == a)
+            .unwrap()
+            .state = crate::backdoors::State::Burned {
+            at: 0,
+            why: crate::backdoors::Why::Decay,
+        };
+        crate::rigroom::refresh(&mut st);
+        assert_eq!(&crate::rigroom::door_lines(&st)[..2], &[None, Some(b)]);
+    }
+
+    #[test]
+    fn a_backdoor_past_the_last_door_grows_the_room() {
+        let mut st = at_the_rig();
+        let lines = crate::rig::of(&st).lines;
+        let held: Vec<_> = (0..lines).map(|n| hold_a_backdoor(&mut st, n)).collect();
+        crate::net::jack_in_here(&mut st).unwrap();
+        assert_eq!(room(&st).unwrap().doors.len(), lines);
+        let extra = hold_a_backdoor(&mut st, lines);
+        let first = room(&st).unwrap().doors[0];
+        step(&mut st, Pos::new(first.x + 1, first.y)); // not a door: just refreshes
+        let r = room(&st).unwrap();
+        assert_eq!(r.doors.len(), lines + 1, "one more door");
+        let lines_now = crate::rigroom::door_lines(&st);
+        let held: Vec<_> = held.into_iter().map(Some).collect();
+        assert_eq!(&lines_now[..lines], &held[..], "the old doors keep theirs");
+        assert_eq!(lines_now[lines], Some(extra));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Rig);
+        assert!(r.construct.tiles[p.pos].is_walkable());
     }
 }

@@ -415,20 +415,13 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
         .is_some_and(|p| p.place == citygen::Place::Rig)
     {
         crate::rigroom::build(st);
-        let land = crate::rigroom::room(st).map(|r| r.land);
-        if land.is_none() {
-            let _ = crate::net::jack_out(st);
-            st.warn("your rig is gone · jacked out");
-        } else if let Some(land) = land {
-            // A backdoor burned while you stood in the room can rebuild it smaller: if
-            // where you stood isn't a floor of this one, you're back at the landing.
-            let pos = st.player.as_ref().map(|p| p.pos);
-            let stands = crate::rigroom::room(st).zip(pos).is_some_and(|(r, pos)| {
-                r.construct.tiles.get(pos).is_some_and(|t| t.is_walkable())
-            });
-            if !stands {
-                crate::constructs::land(st, citygen::Place::Rig, land);
+        match crate::rigroom::room(st) {
+            None => {
+                let _ = crate::net::jack_out(st);
+                st.warn("your rig is gone · jacked out");
             }
+            // A backdoor burned while you stood in the room can rebuild it smaller.
+            Some(_) => crate::rigroom::keep_player(st),
         }
     }
     crate::track::refollow(st);
