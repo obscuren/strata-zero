@@ -2781,6 +2781,15 @@ mod tests {
     }
 
     #[test]
+    fn the_deep_end_without_turncoat_still_counts() {
+        let c = Content::load().unwrap();
+        let mut ch = Character::debug_runner(&c);
+        ch.talents.insert(TalentId::new("deep_end"), 1);
+        ch.talents.remove(&TalentId::new("turncoat"));
+        assert!(ch.flags(&c).contains("deep_end"));
+    }
+
+    #[test]
     fn a_character_comes_back() {
         let c = Content::load().unwrap();
         let mut ch = Character::debug_runner(&c);
