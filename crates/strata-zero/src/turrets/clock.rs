@@ -38,7 +38,7 @@ pub fn tick(st: &mut AppState) {
         }
         sync(st, i);
         let f = &st.foes[i];
-        if !super::hostile(f) || f.stunned > 0 {
+        if !super::hostile(f) {
             continue;
         }
         let (place, at) = (f.place, f.pos);
@@ -46,21 +46,30 @@ pub fn tick(st: &mut AppState) {
         let (building, awake) = (t.node.building, t.awake);
         let alert = st.net.alert(building, minute);
         let fight = st.net.engaged.as_ref().is_some_and(|e| e.place == place);
-        if !awake {
-            if alert && !f.hunting() {
-                wake(st, i, None);
+        // Hunting is awake, whatever set it (a look, a blast's noise, an arc): off a fight
+        // with you gone it loses you, stunned or not, and turns toward where it had you.
+        if let FoeMode::Hunting { seen, .. } = f.mode {
+            let lost = !fight && you != Some(place);
+            let f = &mut st.foes[i];
+            if lost {
+                f.mode = FoeMode::Idle;
+            }
+            if let Some(t) = f.turret.as_mut() {
+                t.awake = true;
+                if lost {
+                    t.told = Some(seen);
+                    t.since = minute;
+                    t.next = tick + GUARD_STEP_TICKS;
+                }
             }
             continue;
         }
-        // lose you off a fight
-        if let FoeMode::Hunting { seen, .. } = f.mode {
-            if !fight && you != Some(place) {
-                let f = &mut st.foes[i];
-                f.mode = FoeMode::Idle;
-                if let Some(t) = f.turret.as_mut() {
-                    t.told = Some(seen);
-                    t.since = minute;
-                }
+        if f.stunned > 0 {
+            continue;
+        }
+        if !awake {
+            if alert {
+                wake(st, i, None);
             }
             continue;
         }
@@ -214,6 +223,59 @@ mod tests {
         crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64);
         tick(&mut st);
         assert!(!st.foes[i].turret.as_ref().unwrap().awake);
+    }
+
+    #[test]
+    fn a_blast_wakes_it_hunting_and_off_a_fight_it_loses_you_then_sleeps() {
+        let mut st = ward();
+        // In the dark east hall facing away from you: it never sees you.
+        let i = turret_in_ward(&mut st, 0, Pos::new(20, 3), Dir::E);
+        let frag = st.content.item(&game::ItemId::new("frag")).unwrap().clone();
+        let (_, _, blast) = frag.throw().unwrap();
+        let now = st.clock_tick();
+        crate::blast::detonate(
+            &mut st,
+            on(0),
+            Pos::new(20, 3),
+            blast,
+            &frag.fx,
+            &frag.name,
+            now,
+            None,
+        );
+        assert_eq!(
+            st.foes[i].mode,
+            FoeMode::Hunting {
+                seen: Pos::new(6, 3),
+                lost: 0
+            },
+            "the bang turns it toward you"
+        );
+        advance(&mut st, 1);
+        tick(&mut st);
+        assert_eq!(
+            crate::turrets::state(&st.foes[i]),
+            Some(crate::turrets::TurretState::Hunting)
+        );
+        assert!(
+            st.foes[i].turret.as_ref().unwrap().awake,
+            "hunting is awake"
+        );
+        stand(&mut st, 1, Pos::new(5, 3)); // gone upstairs, no fight
+        advance(&mut st, 1);
+        tick(&mut st);
+        let f = &st.foes[i];
+        assert_eq!(
+            crate::turrets::state(f),
+            Some(crate::turrets::TurretState::Awake)
+        );
+        assert_eq!(f.turret.as_ref().unwrap().told, Some(Pos::new(6, 3)));
+        crate::sitenet::testutil::pass_minutes(&mut st, crate::net::LOST_TURNS as u64);
+        tick(&mut st);
+        assert_eq!(
+            crate::turrets::state(&st.foes[i]),
+            Some(crate::turrets::TurretState::Asleep)
+        );
     }
 
     #[test]

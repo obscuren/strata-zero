@@ -398,14 +398,31 @@ mod tests {
 
     #[test]
     fn asleep_or_awake_it_takes_no_seat_in_a_fight() {
-        let (mut st, i) = in_ward(Pos::new(12, 3), Pos::new(10, 3), Dir::W);
-        assert!(!crate::turrets::seated(&st, i));
-        crate::net::engage(&mut st, on(0), true);
-        let e = st.net.engaged.as_ref().unwrap();
-        assert!(!e.order.contains(&crate::net::Actor::Foe(i)));
-        let view = crate::net::turn_view(&st).unwrap();
-        assert!(view.chips.iter().all(|c| c.name != "turret"));
-        assert!(!crate::net::turn_readout(&st).unwrap().contains("turret"));
+        for awake in [false, true] {
+            let (mut st, i) = in_ward(Pos::new(12, 3), Pos::new(10, 3), Dir::W);
+            if awake {
+                crate::turrets::told(&mut st, on(0), Pos::new(4, 3));
+            }
+            let want = if awake {
+                TurretState::Awake
+            } else {
+                TurretState::Asleep
+            };
+            assert_eq!(crate::turrets::state(&st.foes[i]), Some(want));
+            assert!(!crate::turrets::seated(&st, i), "{want:?}");
+            crate::net::engage(&mut st, on(0), true);
+            crate::net::seat_foes(&mut st);
+            let e = st.net.engaged.as_mut().unwrap();
+            assert!(!e.order.contains(&crate::net::Actor::Foe(i)), "{want:?}");
+            // One still in the order (it lost you) is passed over by the column and readout.
+            e.order.push(crate::net::Actor::Foe(i));
+            let view = crate::net::turn_view(&st).unwrap();
+            assert!(view.chips.iter().all(|c| c.name != "turret"), "{want:?}");
+            assert!(
+                !crate::net::turn_readout(&st).unwrap().contains("turret"),
+                "{want:?}"
+            );
+        }
     }
 
     #[test]
