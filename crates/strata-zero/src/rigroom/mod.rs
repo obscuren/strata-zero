@@ -178,7 +178,7 @@ pub fn view(st: &AppState) -> Option<RigView<'_>> {
             let tail = match holds {
                 reader::Holds::Chip => {
                     let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
-                    format!("¤{}", crack::commas(credits))
+                    format!("¤{}", crate::ui::commas(credits))
                 }
                 reader::Holds::Program(_) => (reader::summon_word(st, stack))
                     .split_whitespace()
@@ -198,15 +198,16 @@ pub fn view(st: &AppState) -> Option<RigView<'_>> {
         })
         .collect();
     let fighting = mastiff::fighting_seats(st);
-    let odds = mastiff::seat_odds(st).map_or(String::new(), |c| format!("{c}%"));
     let seats = (0..room.seats.len())
         .map(|i| {
-            // A free seat in a fight with MASTIFF runs your Attack at it.
-            if fighting.iter().any(|n| usize::from(*n) == i) {
+            // A free seat in a fight with MASTIFF runs your Attack at it: its chance, or
+            // idle while it sits out (you off the leash).
+            if let Some(n) = fighting.iter().find(|n| usize::from(**n) == i) {
+                let word = mastiff::seat_word(st, *n);
                 return Some(SeatView {
                     job: "attack".to_string(),
                     on: "MASTIFF".to_string(),
-                    state: clip(&format!("seat {} · {odds}", i + 1), SEAT_TEXT),
+                    state: clip(&format!("seat {} · {word}", i + 1), SEAT_TEXT),
                     door: None,
                 });
             }

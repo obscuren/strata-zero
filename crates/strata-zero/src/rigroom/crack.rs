@@ -18,19 +18,6 @@ fn loaded_crack(st: &AppState) -> Option<game::Program> {
         .find(|p| p.op == Op::Crack)
 }
 
-/// A sum as the log writes it: `1,200`.
-pub fn commas(n: u32) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// The chip in `slot`: its sum and how many locks it has and has had cracked.
 fn chip(st: &AppState, slot: usize) -> Result<(u32, u8, u8), String> {
     let stack = (st.character.reader.get(slot))
@@ -90,7 +77,7 @@ pub fn crack(st: &mut AppState, slot: usize) -> Result<String, String> {
         return Ok(format!("lock {cracked} of {locks} cracked"));
     }
     stack.item = ItemId::new("credchip");
-    Ok(format!("the chip opens · ¤{}", commas(credits)))
+    Ok(format!("the chip opens · ¤{}", crate::ui::commas(credits)))
 }
 
 #[cfg(test)]

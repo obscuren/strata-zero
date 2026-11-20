@@ -3575,8 +3575,13 @@ impl MapScreen {
             if crate::rigroom::at_terminal(st) {
                 return Some(self.open_rig_shell(st));
             }
-            // By a reader slot, space summons what it holds.
+            // By a reader slot, space summons what it holds; not mid-fight, where it
+            // would cost no AP (the black chip's own popup has nothing for it either).
             if let Some(popup) = crate::rigroom::summon::interact(st) {
+                if st.net.engaged.is_some() {
+                    st.warn("not in a fight");
+                    return Some(ScreenCmd::Stay);
+                }
                 return Some(ScreenCmd::Push {
                     to: Box::new(popup),
                     fx: TransitionKind::None,

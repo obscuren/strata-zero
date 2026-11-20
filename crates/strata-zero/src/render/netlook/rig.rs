@@ -430,14 +430,9 @@ fn seats(c: &mut Canvas, view: &RigView) {
                 c.text(at(2), &s.on, TEXT, LEVEL, false);
                 c.text(at(3), &s.state, DIM, LEVEL, false);
             }
+            // A free seat's box as far as it blocks, dim.
             None => {
-                c.boxed(
-                    TileRect::new(r.x, r.y + 1, r.w, r.h - 2),
-                    ROUND,
-                    BOX,
-                    LEVEL,
-                    false,
-                );
+                c.boxed(*r, ROUND, BOX, LEVEL, false);
                 c.text(at(2), "free seat", FAINT, LEVEL, false);
             }
         }
@@ -773,6 +768,34 @@ mod tests {
         assert!(!text.contains("◉ keepalive"), "{text}");
         assert!(under(&buf, origin).trim().ends_with(" left"), "{text}");
         assert!(!ports(&buf, origin).contains('◂'), "{text}");
+    }
+
+    #[test]
+    fn a_free_seat_is_drawn_as_far_as_it_blocks() {
+        let (mut st, _) = the_mocks_rig();
+        let n = (st.backdoors.jobs.running.iter())
+            .find(|j| j.kind.name() == "keepalive")
+            .map(|j| j.n)
+            .unwrap();
+        crate::rig::jobs::kill(&mut st, n).unwrap();
+        let room = room_of(&st);
+        let free = room.seats[1];
+        let (buf, origin) = paint(&st);
+        // Its box's corners on the seat's own corners: no wall drawn as floor.
+        let corner = |p: Pos| {
+            let (x, y) = at(origin, p);
+            buf[(x, y)].symbol().to_string()
+        };
+        assert_eq!(corner(Pos::new(free.x, free.y)), "╭", "{}", text(&buf));
+        assert_eq!(corner(Pos::new(free.right() - 1, free.y)), "╮");
+        assert_eq!(corner(Pos::new(free.x, free.bottom() - 1)), "╰");
+        assert_eq!(corner(Pos::new(free.right() - 1, free.bottom() - 1)), "╯");
+        for p in free.iter() {
+            assert!(
+                !room.construct.tiles[p].is_walkable(),
+                "the seat's tiles block"
+            );
+        }
     }
 
     /// Where tile `p` lands in the pane painted from `origin`.

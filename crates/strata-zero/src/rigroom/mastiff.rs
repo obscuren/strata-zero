@@ -396,7 +396,7 @@ pub fn hit(st: &mut AppState, from: Pos) -> Option<String> {
     };
     st.say(format!(
         "MASTIFF · to grit · the chip opens · ¤{}",
-        super::crack::commas(sum)
+        crate::ui::commas(sum)
     ));
     crate::net::disengage(st);
     None
@@ -434,7 +434,7 @@ pub fn miss(st: &AppState) -> &'static str {
 
 /// A seat's chance at MASTIFF: `seat_odds`, while you stand on the leash and no job
 /// holds the seat; or why it sits out.
-fn seat_chance(st: &AppState, seat: u8) -> Result<u8, String> {
+pub fn seat_chance(st: &AppState, seat: u8) -> Result<u8, String> {
     if !on_the_leash(st) {
         return Err(OFF_THE_LEASH.to_string());
     }
@@ -444,8 +444,13 @@ fn seat_chance(st: &AppState, seat: u8) -> Result<u8, String> {
     seat_odds(st)
 }
 
+/// What a seat in the fight shows: its chance (`70%`), or `idle` while it sits out.
+pub fn seat_word(st: &AppState, seat: u8) -> String {
+    seat_chance(st, seat).map_or_else(|_| "idle".to_string(), |c| format!("{c}%"))
+}
+
 /// A free seat's odds at MASTIFF: yours, times the core's speed over 100, at most 95.
-pub fn seat_odds(st: &AppState) -> Result<u8, String> {
+fn seat_odds(st: &AppState) -> Result<u8, String> {
     let chance = u32::from(odds(st)?) * u32::from(crate::rig::of(st).speed) / 100;
     Ok(chance.min(SEAT_CAP) as u8)
 }
@@ -1282,6 +1287,94 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].enabled);
         assert!(rows[0].tail.contains("nothing in your rig hunts by sight"));
+    }
+
+    #[test]
+    fn the_reader_waits_out_the_fight() {
+        use crate::app::{Screen, ScreenCmd};
+        use crate::rigroom::testutil::chip_in_reader;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = armed();
+        chip_in_reader(&mut st, 0, "credchip_locked", 1200);
+        crate::rigroom::testutil::load(&mut st, "crack");
+        wake(&mut st, SLOT).unwrap();
+        let mut map = MapScreen::walking(&mut st);
+        let space = || [key(KeyCode::Char(' '))];
+        // Your act half, the fire cursor put away, at the locked chip: no lock cracked,
+        // no minute gone.
+        let at = front(room(&st).unwrap().slots[0]);
+        stand(&mut st, at);
+        map.update(&mut st, &space());
+        assert_eq!(
+            st.net.engaged.as_ref().unwrap().phase,
+            crate::net::Phase::Act
+        );
+        map.update(&mut st, &[key(KeyCode::Esc)]);
+        let (now, left) = (st.net.now(&st), ap(&st));
+        let cmd = map.update(&mut st, &space());
+        assert!(matches!(cmd, ScreenCmd::Stay), "no popup");
+        assert_eq!(st.log.latest().unwrap().text, "not in a fight");
+        assert_eq!((st.net.now(&st), ap(&st)), (now, left));
+        // Another's turn, at the black chip: its popup waits too.
+        crate::net::end_turn(&mut st);
+        assert_ne!(st.net.engaged.as_ref().unwrap().actor(), Actor::You);
+        let by = Pos::new(mastiff(&st).pos.x - 1, mastiff(&st).pos.y);
+        stand(&mut st, by);
+        assert!(
+            crate::rigroom::summon::interact(&mut st).is_some(),
+            "by the slot"
+        );
+        let cmd = map.update(&mut st, &space());
+        assert!(matches!(cmd, ScreenCmd::Stay), "no popup");
+        assert_eq!(st.log.latest().unwrap().text, "not in a fight");
+        // Over, the reader answers again.
+        reset(&mut st);
+        let cmd = map.update(&mut st, &space());
+        assert!(matches!(cmd, ScreenCmd::Push { .. }), "the chip's popup");
+    }
+
+    #[test]
+    fn the_doors_and_the_trunk_hold_you_in_the_fight() {
+        use crate::app::Screen;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = armed();
+        let held = crate::rigroom::testutil::hold_a_backdoor(&mut st, 0);
+        crate::rigroom::refresh(&mut st);
+        let lines = crate::rigroom::door_lines(&st);
+        let i = lines
+            .iter()
+            .position(|b| *b == Some(held))
+            .expect("a lit door");
+        let (door, trunk) = (room(&st).unwrap().doors[i], room(&st).unwrap().trunk);
+        wake(&mut st, SLOT).unwrap();
+        let mut map = MapScreen::walking(&mut st);
+        for (from, dir) in [
+            (Pos::new(door.x + 1, door.y), KeyCode::Char('h')),
+            (Pos::new(trunk.x, trunk.y - 1), KeyCode::Char('j')),
+        ] {
+            stand(&mut st, from);
+            let moves = st.net.engaged.as_ref().unwrap().moves;
+            map.update(&mut st, &[key(dir)]);
+            let p = st.player.as_ref().unwrap();
+            assert_eq!((p.place, p.pos), (Place::Rig, from), "still in the room");
+            assert_eq!(st.log.latest().unwrap().text, "not in a fight");
+            assert_eq!(
+                st.net.engaged.as_ref().unwrap().moves,
+                moves,
+                "no move spent"
+            );
+            assert!(awake(&st));
+        }
+        assert!(
+            st.backdoors
+                .route
+                .as_ref()
+                .is_some_and(|r| r.relays.is_empty())
+        );
     }
 
     #[test]

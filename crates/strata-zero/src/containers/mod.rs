@@ -337,15 +337,7 @@ pub fn open(st: &mut AppState, c: &Container, how: Opened) {
 
 /// `1250` as `"1,250 cr"`.
 pub fn cr(n: u32) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    format!("{out} cr")
+    format!("{} cr", crate::ui::commas(n))
 }
 
 /// The black credchip: its sum opens only at a rig.

@@ -70,7 +70,7 @@ pub fn summon_word(st: &AppState, stack: &Stack) -> String {
     let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
     match holds(st, &stack.item) {
         None => String::new(),
-        Some(Holds::Chip) => format!("+¤{}", super::crack::commas(credits)),
+        Some(Holds::Chip) => format!("+¤{}", crate::ui::commas(credits)),
         Some(Holds::Locked) => {
             let cracked = stack.copy.as_ref().map_or(0, |k| k.cracked);
             let left = locks(credits).saturating_sub(cracked);

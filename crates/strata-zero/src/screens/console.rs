@@ -75,7 +75,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                         Ok(format!(
                             "spawned {qty}× `{}` of ¤{}",
                             item.name,
-                            crate::rigroom::crack::commas(sum)
+                            crate::ui::commas(sum)
                         ))
                     }
                     None => {

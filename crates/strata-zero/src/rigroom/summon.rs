@@ -72,7 +72,8 @@ fn rows(st: &AppState, i: usize, holds: Holds, stack: &game::Stack) -> Vec<Choic
     match holds {
         Holds::Chip => {
             let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
-            vec![Choice::new('s', "Summon", summon).tail(format!(" · +¤{credits}"))]
+            let sum = crate::ui::commas(credits);
+            vec![Choice::new('s', "Summon", summon).tail(format!(" · +¤{sum}"))]
         }
         Holds::Program(p) => {
             let installed = st.backdoors.jobs.programs.contains(p);
@@ -158,13 +159,14 @@ pub fn summon(st: &mut AppState, slot: usize) -> Result<Summoned, String> {
             let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
             st.character.reader[slot] = None;
             st.character.credits = st.character.credits.saturating_add(credits);
+            let sum = crate::ui::commas(credits);
             st.say(format!(
-                "summoned ¤{credits} · you carry ¤{}",
-                st.character.credits
+                "summoned ¤{sum} · you carry ¤{}",
+                crate::ui::commas(st.character.credits)
             ));
             if let Some(at) = st.player.as_ref().map(|p| p.pos) {
                 let started = st.tick;
-                crate::net::number(st, at, format!("+¤{credits}"), Some(AMBER), started);
+                crate::net::number(st, at, format!("+¤{sum}"), Some(AMBER), started);
             }
             Ok(Summoned::Cash(credits))
         }
@@ -331,6 +333,19 @@ mod tests {
         assert_eq!(st.fx.len(), fx + 1, "a number rises");
         let said = st.log.latest().unwrap().text.clone();
         assert_eq!(said, "summoned ¤340 · you carry ¤660");
+    }
+
+    #[test]
+    fn a_big_sum_reads_grouped() {
+        let mut st = in_the_room();
+        st.character.credits = 1200;
+        load(&mut st, 0, "credchip", 4800);
+        stand_at(&mut st, 0);
+        let popup = interact(&mut st).expect("a popup at the slot");
+        assert_eq!(rows_of(&popup), ["Summon · +¤4,800", "Leave it"]);
+        assert_eq!(summon(&mut st, 0), Ok(Summoned::Cash(4800)));
+        let said = st.log.latest().unwrap().text.clone();
+        assert_eq!(said, "summoned ¤4,800 · you carry ¤6,000");
     }
 
     #[test]

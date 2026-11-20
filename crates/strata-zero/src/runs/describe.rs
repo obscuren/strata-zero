@@ -152,15 +152,7 @@ pub fn lasted(minutes: u64) -> String {
 
 /// Money: `¤ 1,240`.
 pub fn credits(n: u32) -> String {
-    let digits = n.to_string();
-    let mut out = String::from("¤ ");
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+    format!("¤ {}", crate::ui::commas(n))
 }
 
 /// When a run was saved, against `now` (both Unix seconds): `today 10:44` on the same

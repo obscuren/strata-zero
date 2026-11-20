@@ -227,15 +227,14 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
             Some(sp(tail, DIM)),
         ));
     }
-    let odds = mastiff::seat_odds(st).map_or(String::new(), |c| format!("{c}%"));
-    for _ in &fighting {
+    for n in &fighting {
         out.push(row(
             vec![
                 sp(" ", TEXT),
                 bold("◉", CORE),
                 sp(" attack · MASTIFF", TEXT),
             ],
-            Some(sp(odds.clone(), DIM)),
+            Some(sp(mastiff::seat_word(st, *n), DIM)),
         ));
     }
     out.push(rule());
@@ -320,7 +319,7 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
         let word = match reader::holds(st, &stack.item) {
             Some(reader::Holds::Chip) => {
                 let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
-                format!("¤{}", super::crack::commas(credits))
+                format!("¤{}", crate::ui::commas(credits))
             }
             _ => reader::summon_word(st, stack),
         };
@@ -337,7 +336,7 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
                     sp(" ", TEXT),
                     bold(glyph.to_string(), colour),
                     sp(format!(" {name}"), TEXT),
-                    sp(format!(" · ¤{} inside", super::crack::commas(credits)), DIM),
+                    sp(format!(" · ¤{} inside", crate::ui::commas(credits)), DIM),
                 ]),
                 Line::from(sp(
                     format!(
@@ -503,6 +502,45 @@ mod tests {
         assert!(black.trim_end().ends_with("awake"), "{p:#?}");
         assert!(p.iter().any(|l| l.contains("SEATS 2/2")), "{p:#?}");
         assert!(p.iter().any(|l| l.contains("◉ attack · MASTIFF")), "{p:#?}");
+    }
+
+    #[test]
+    fn off_the_leash_the_seats_read_idle() {
+        use crate::rigroom::mastiff;
+        use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip};
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let seat_rows = |st: &AppState| -> Vec<String> {
+            (text(&panel_lines(st)).into_iter())
+                .filter(|l| l.contains("◉ attack · MASTIFF"))
+                .collect()
+        };
+        let box_lines = |st: &AppState| -> Vec<String> {
+            let v = crate::rigroom::view(st).unwrap();
+            (v.seats.iter().flatten())
+                .filter(|s| s.on == "MASTIFF")
+                .map(|s| s.state.clone())
+                .collect()
+        };
+        // On the leash: the seat's chance, as its beam rolls it.
+        let odds = mastiff::seat_chance(&st, 0).expect("a shot");
+        assert_eq!(box_lines(&st)[0], format!("seat 1 · {odds}%"));
+        assert!(seat_rows(&st)[0].trim_end().ends_with(&format!("{odds}%")));
+        // Off it the seats sit out, and say so.
+        let r = room(&st).unwrap().clone();
+        let leash = r.mastiff.as_ref().unwrap().leash;
+        let away = (r.hall.iter())
+            .find(|p| !leash.contains(*p) && r.construct.tiles[*p].is_walkable())
+            .unwrap();
+        st.player.as_mut().unwrap().pos = away;
+        assert!(mastiff::seat_chance(&st, 0).is_err());
+        assert_eq!(box_lines(&st), ["seat 1 · idle", "seat 2 · idle"]);
+        let rows = seat_rows(&st);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter().all(|l| l.trim_end().ends_with("idle")),
+            "{rows:#?}"
+        );
     }
 
     #[test]
