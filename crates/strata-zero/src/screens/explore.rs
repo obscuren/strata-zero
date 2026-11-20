@@ -4971,11 +4971,16 @@ impl Screen for MapScreen {
                 && let Some((sx, sy)) = tile_to_screen(map_area, origin, p.pos)
             {
                 // On the Net and in a construct you are blue on a blue glow, apart
-                // from the greens and cyans around you; elsewhere white.
+                // from the greens and cyans around you (in your rig's room on the red of
+                // MASTIFF's marks when you stand on one); elsewhere white.
+                let glow = match crate::rigroom::room(st).filter(|_| p.place == Place::Rig) {
+                    Some(room) => crate::render::netlook::rig::you_glow(room, p.pos),
+                    None => crate::render::netlook::YOU_GLOW,
+                };
                 let style = if p.sees_all() {
                     Style::default()
                         .fg(crate::render::netlook::YOU.to_color())
-                        .bg(crate::render::netlook::YOU_GLOW.to_color())
+                        .bg(glow.to_color())
                 } else {
                     Style::default().fg(Color::Rgb(255, 255, 255))
                 };
@@ -8695,6 +8700,17 @@ mod tests {
         assert!(room.contains("free seat"), "{room}");
     }
 
+    /// The ground under your `@` as the room's screen draws it.
+    fn your_ground(st: &AppState, s: &MapScreen) -> Color {
+        let buf = crate::screens::shots::draw_stack(st, &[s], (120, 40));
+        let mut at = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .filter(|&p| buf[p].symbol() == "@");
+        let p = at.next().expect("your @");
+        assert_eq!(at.next(), None, "one @");
+        buf[p].bg
+    }
+
     /// MASTIFF awake in the room with Crack, Attack and Shield loaded, in that order.
     fn mastiff_awake() -> (AppState, MapScreen) {
         use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip, load};
@@ -8711,17 +8727,29 @@ mod tests {
     #[test]
     fn the_rooms_fight_prompts_its_bite_with_the_decks_keys() {
         let (mut st, mut s) = mastiff_awake();
+        let glow = crate::render::netlook::YOU_GLOW.to_color();
         let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
             !drawn.contains("MASTIFF bites"),
             "no bite marked yet: {drawn}"
         );
+        assert_eq!(your_ground(&st, &s), glow);
         crate::rigroom::mastiff::turn(&mut st);
         let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
             drawn.contains("▸ MASTIFF bites the × tiles next turn"),
             "{drawn}"
         );
+        // You on a mark: your `@` on the bite's red ground; off the marks, your glow.
+        let bite = (crate::rigroom::room(&st))
+            .and_then(|r| r.mastiff.as_ref()?.bite)
+            .expect("a bite marked");
+        assert!(bite.contains(st.player.as_ref().unwrap().pos));
+        assert_eq!(your_ground(&st, &s), Color::Rgb(0x4a, 0x0c, 0x18));
+        let you = st.player.as_ref().unwrap().pos;
+        st.player.as_mut().unwrap().pos = Pos::new(bite.x - 1, bite.y + 1);
+        assert_eq!(your_ground(&st, &s), glow);
+        st.player.as_mut().unwrap().pos = you;
         // The move half: only what works while you move.
         assert!(drawn.contains("move off them · space to stay"), "{drawn}");
         assert!(!drawn.contains("shield ·"), "{drawn}");

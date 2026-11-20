@@ -182,12 +182,17 @@ pub fn draw(buf: &mut Buffer, area: Rect, view: &RigView) {
     seats(&mut c, view);
     jobs_lines(&mut c, view);
     mastiff(&mut c, view);
+    c.put(view.you, '@', YOU, you_glow(room, view.you), true);
+}
+
+/// The ground under you at `you` in the room: the bite's red on one of MASTIFF's marks,
+/// else the Net's glow. The map draws your `@` with it too.
+pub fn you_glow(room: &RigRoom, you: Pos) -> Rgb {
     let bitten = (room.mastiff.as_ref())
         .filter(|m| m.core > 0)
         .and_then(|m| m.bite)
-        .is_some_and(|b| b.contains(view.you));
-    let glow = if bitten { BITE_BG } else { YOU_GLOW };
-    c.put(view.you, '@', YOU, glow, true);
+        .is_some_and(|b| b.contains(you));
+    if bitten { BITE_BG } else { YOU_GLOW }
 }
 
 /// MASTIFF, as the mock's round 3 draws it. Asleep: coiled round each black chip, its
