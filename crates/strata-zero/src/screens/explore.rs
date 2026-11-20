@@ -114,11 +114,12 @@ pub struct WhichWay {
 }
 
 /// Something the fire cursor can point at: a foe on foot, a piece of ICE in a
-/// construct.
+/// construct, MASTIFF awake in your rig's room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Enemy {
     Foe(usize),
     Ice(usize),
+    Mastiff,
 }
 
 /// One entry of the act half's `ACT` list: an ability to fire or a throwable to arm.
@@ -332,8 +333,14 @@ fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
             walked_map(st, city, place, beyond.as_ref()).walkable(to)
         }
         Place::Floor { .. } => crate::foes::map_of(st, place).is_some_and(|m| m.walkable(to)),
-        // On the Net's inside maps, your rig's room too, steps are the Net's own.
-        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => false,
+        // On the Net's inside maps steps are the Net's own.
+        Place::Construct(_) | Place::SiteNet { .. } => false,
+        // Your rig's room on turns is stepped as on foot: its floor, round MASTIFF.
+        Place::Rig => {
+            (crate::rigroom::room(st))
+                .is_some_and(|r| r.construct.tiles.get(to).is_some_and(|t| t.is_walkable()))
+                && crate::rigroom::mastiff::blocks(st, to).is_none()
+        }
     }
 }
 
@@ -464,6 +471,12 @@ fn say_why_not(st: &mut AppState, dir: Dir) {
         return;
     };
     let to = p.pos.step(dir);
+    if p.place == Place::Rig {
+        if let Some(why) = crate::rigroom::mastiff::blocks(st, to) {
+            st.warn(why);
+        }
+        return;
+    }
     if !p.place.is_street() || p.jacked_in() {
         return;
     }
@@ -1012,6 +1025,13 @@ impl MapScreen {
                 out.sort_by_key(|(_, at)| at.chebyshev(p.pos));
                 out
             }
+            // Your rig's room is all in view: MASTIFF, while it's awake.
+            Place::Rig => (crate::rigroom::room(st))
+                .and_then(|r| r.mastiff.as_ref())
+                .filter(|_| crate::rigroom::mastiff::awake(st))
+                .map(|m| (Enemy::Mastiff, crate::rigroom::mastiff::nearest(m, p.pos)))
+                .into_iter()
+                .collect(),
             _ => crate::foes::in_sight(st)
                 .into_iter()
                 .map(|i| (Enemy::Foe(i), st.foes[i].pos))
@@ -1028,6 +1048,10 @@ impl MapScreen {
                 .get(b)
                 .and_then(|k| k.guard_at(at))
                 .map(Enemy::Ice),
+            Place::Rig => (crate::rigroom::room(st))
+                .and_then(|r| r.mastiff.as_ref())
+                .filter(|m| m.body().contains(at) && crate::rigroom::mastiff::awake(st))
+                .map(|_| Enemy::Mastiff),
             place => crate::foes::foe_at(st, place, at).map(Enemy::Foe),
         }
     }
@@ -1042,6 +1066,7 @@ impl MapScreen {
                 .and_then(|p| st.net.ice.get(&p.place.construct()?))
                 .and_then(|states| states.get(i))
                 .is_some_and(|ice| matches!(ice.mode, crate::net::IceMode::Awake { .. })),
+            Enemy::Mastiff => crate::rigroom::mastiff::awake(st),
         }
     }
 
@@ -1096,6 +1121,19 @@ impl MapScreen {
                     Err(why) => why,
                 };
                 let text = format!(" {name} · {left} · {} tiles · {odds} ", me.chebyshev(at));
+                (text, None)
+            }
+            Enemy::Mastiff => {
+                let Some(m) = crate::rigroom::room(st).and_then(|r| r.mastiff.as_ref()) else {
+                    return (String::new(), None);
+                };
+                let odds = match crate::rigroom::mastiff::attack_chance(st) {
+                    Ok(c) => format!("{c}%"),
+                    Err(why) => why,
+                };
+                let at = crate::rigroom::mastiff::nearest(m, me);
+                let coat = crate::rigroom::mastiff::coat_line(st);
+                let text = format!(" MASTIFF · {coat} · {} tiles · {odds} ", me.chebyshev(at));
                 (text, None)
             }
         }
@@ -1362,6 +1400,14 @@ impl MapScreen {
                             Err(why) => st.warn(why),
                         }
                     }
+                    // MASTIFF takes the deck's attack.
+                    Some(Enemy::Mastiff) => {
+                        self.last_enemy = Some(Enemy::Mastiff);
+                        match crate::combat::attack_mastiff(st) {
+                            Ok(slot) => self.program_flash = Some((slot, st.tick)),
+                            Err(why) => st.warn(why),
+                        }
+                    }
                     // In a construct space keeps its other jobs: a run in flight
                     // rolls, a node opens.
                     None if Self::net_place(place) => return None,
@@ -1419,6 +1465,8 @@ impl MapScreen {
                 self.last_enemy = enemy;
                 crate::casts::mark(st, id, foe)
             }
+            // MASTIFF is the deck's to fight.
+            (_, Some(Enemy::Mastiff), _) => Err("not in here".to_string()),
             _ => Err("pick a target".to_string()),
         };
         if let Err(why) = result {
@@ -1761,6 +1809,8 @@ impl MapScreen {
                     .unwrap_or_else(|| "BOT".to_string());
                 (format!("YOUR {name} MOVES"), "wait".to_string())
             }
+            Actor::Seat(n) => (format!("SEAT {} ATTACKS", n + 1), "wait".to_string()),
+            Actor::Mastiff => ("MASTIFF ACTS".to_string(), "wait".to_string()),
         })
     }
 
@@ -2172,6 +2222,19 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
+        // In your rig's room the Attack's key runs at MASTIFF while it's awake.
+        if place == Place::Rig && crate::rigroom::mastiff::awake(st) {
+            let attack = (st.character.loaded.get(n - 1))
+                .and_then(|id| st.content.item(id)?.program)
+                .is_some_and(|p| p.op == game::Op::Attack);
+            if attack {
+                match crate::combat::attack_mastiff(st) {
+                    Ok(slot) => self.program_flash = Some((slot, st.tick)),
+                    Err(why) => st.warn(why),
+                }
+                return ScreenCmd::Stay;
+            }
+        }
         let Some(scene) = crate::net::scene_of(place) else {
             st.warn("programs run on the Net");
             return ScreenCmd::Stay;

@@ -119,6 +119,9 @@ pub enum Pick {
     Summon(usize),
     /// Runs your loaded Crack at a locked chip in the rig's reader slot: one try.
     CrackChip(usize),
+    /// Wakes the MASTIFF guarding the black chip in the rig's reader slot: the room goes
+    /// on turns.
+    WakeMastiff(usize),
     /// Starts a program of the rig on a backdoor.
     RunOn {
         prog: &'static str,
@@ -746,6 +749,14 @@ impl Popup {
                     None => ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     },
+                }
+            }
+            Pick::WakeMastiff(slot) => {
+                if let Err(why) = crate::rigroom::mastiff::wake(st, slot) {
+                    st.warn(why);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
                 }
             }
             Pick::RunOn { prog, b } => {

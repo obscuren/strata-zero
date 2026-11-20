@@ -304,7 +304,8 @@ pub fn detonate(
 /// The engagement lets you act: your turn, the act half, an action point left.
 fn throw_allowed(st: &AppState) -> Result<(), String> {
     match st.net.engaged.as_ref() {
-        Some(e) if !e.place.in_construct() => {
+        // Nothing is thrown on the Net: a construct, your rig's room.
+        Some(e) if !e.place.in_construct() && e.place != Place::Rig => {
             if e.actor() != crate::net::Actor::You {
                 Err("not your turn".into())
             } else if e.phase == crate::net::Phase::Move {

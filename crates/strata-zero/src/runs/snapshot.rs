@@ -408,13 +408,15 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
         }
     }
     // Your rig's room isn't saved: a run reopened in it has it laid out again from the
-    // rig, as jacking in does (`Constructs.rig`).
+    // rig, as jacking in does (`Constructs.rig`). A fight with MASTIFF isn't either: the
+    // room is never on turns reopened, MASTIFF asleep and whole round its chip.
     if st
         .player
         .as_ref()
         .is_some_and(|p| p.place == citygen::Place::Rig)
     {
         crate::rigroom::build(st);
+        crate::rigroom::mastiff::reset(st);
         match crate::rigroom::room(st) {
             None => {
                 let _ = crate::net::jack_out(st);

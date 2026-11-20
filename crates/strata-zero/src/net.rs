@@ -77,6 +77,10 @@ pub enum Actor {
     Foe(usize),
     /// A bot out with you, by the site and socket it docks in.
     Bot(game::Site, usize),
+    /// MASTIFF, awake in your rig's room.
+    Mastiff,
+    /// A free core seat of your rig, by its index, running your Attack at MASTIFF.
+    Seat(u8),
 }
 
 /// Your turn in two halves: you move (or stay), then you act.
@@ -1616,6 +1620,8 @@ pub fn dump(st: &mut AppState, why: &str) {
 /// Dumped, with the deck cooling for a given stretch.
 pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.engaged = None;
+    // MASTIFF goes back to sleep whole: the fight is lost.
+    crate::rigroom::mastiff::reset(st);
     let now = st.net.now(st);
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
@@ -1732,6 +1738,8 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     }
     st.net.mask = 0;
     st.backdoors.end_route();
+    // Out of your rig's room: MASTIFF asleep and whole again, the fight over.
+    crate::rigroom::mastiff::reset(st);
     Ok(())
 }
 
@@ -2234,10 +2242,12 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
 /// The order of an engagement. In a construct: you by your Net, each standing
 /// piece by its grade (on a site's Net, each of your level's). On foot: you by your
 /// Reflex, each standing foe in your sight memory by its own. Higher first, ties to
-/// you, then by index.
+/// you, then by index. In your rig's room: you, the free seats, MASTIFF
+/// (`rigroom::mastiff::order`).
 pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     let mut scored: Vec<(i32, u16, Actor)> = Vec::new();
     match place {
+        Place::Rig => return crate::rigroom::mastiff::order(st),
         Place::Construct(b) | Place::SiteNet { building: b, .. } => {
             scored.push((
                 st.character.attribute(&st.content, game::Attribute::Net) as i32,
@@ -2259,9 +2269,8 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             }
         }
         _ => {
-            // On the open Net and in your rig's room your avatar goes by your Net, as in
-            // a construct.
-            let you = if matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig) {
+            // On the open Net your avatar goes by your Net, as in a construct.
+            let you = if place == Place::Stratum(StratumKind::Net) {
                 game::Attribute::Net
             } else {
                 game::Attribute::Reflex
@@ -2312,6 +2321,9 @@ fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
             None => (crate::foes::GOON_MOVE, crate::foes::GOON_AP),
         },
         (Actor::Bot(site, n), _) => (crate::bots::moves(st, (site, n)), 0),
+        // MASTIFF walks and then marks or bites; a seat fires once.
+        (Actor::Mastiff, _) => (crate::rigroom::mastiff::MOVES, 1),
+        (Actor::Seat(_), _) => (0, 1),
     }
 }
 
@@ -2347,6 +2359,8 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     });
     let line = if manual {
         "engaged".to_string()
+    } else if place == Place::Rig {
+        "ENGAGED · MASTIFF wakes".to_string()
     } else if place.in_construct() {
         "ENGAGED · the ICE is on you".to_string()
     } else {
@@ -2415,10 +2429,11 @@ pub fn seat_foes(st: &mut AppState) {
 }
 
 /// Something still hunts you on the map on turns: awake ICE in a construct, a
-/// hunting foe on foot.
+/// hunting foe on foot, MASTIFF awake in your rig's room.
 pub fn hunting(st: &AppState) -> bool {
     match st.net.engaged.as_ref().map(|e| e.place) {
         Some(place) if place.in_construct() => any_awake(st, place),
+        Some(Place::Rig) => crate::rigroom::mastiff::awake(st),
         Some(place) => crate::foes::any_hunting(st, place),
         None => false,
     }
@@ -2582,6 +2597,10 @@ pub fn end_turn(st: &mut AppState) {
     if leaving == Actor::You && st.cloak.as_ref().is_some_and(|c| c.waiting) {
         crate::cloak::end(st, crate::cloak::End::Fight);
     }
+    // In your rig's room, off MASTIFF's leash, a plate grows back.
+    if leaving == Actor::You && place == Place::Rig {
+        crate::rigroom::mastiff::end_of_your_turn(st);
+    }
     let mut turn = turn + 1;
     let mut round = round;
     if turn >= len {
@@ -2598,6 +2617,8 @@ pub fn end_turn(st: &mut AppState) {
                 seat_foes(st);
                 mask_wears_outside(st);
             }
+            // Your rig's room seats nobody new mid-fight.
+            Place::Rig => {}
             _ => seat_foes(st),
         }
         if st.net.engaged.is_none() {
@@ -2654,6 +2675,7 @@ fn start_turn(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
         (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
+        (Actor::Mastiff | Actor::Seat(_), _) => true,
         (Actor::Ice(_), _) => false,
         (Actor::You, _) => return,
     };
@@ -2684,6 +2706,15 @@ pub fn pace(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
         (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
+        // MASTIFF's and a seat's turn is one action, then the next actor's.
+        (Actor::Mastiff, _) => {
+            crate::rigroom::mastiff::turn(st);
+            Step::Nothing
+        }
+        (Actor::Seat(n), _) => {
+            crate::rigroom::mastiff::seat_turn(st, n);
+            Step::Nothing
+        }
         _ => Step::Nothing,
     };
     let now = st.clock_tick();
@@ -2804,6 +2835,16 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     acting: actor == *a,
                 }
             }
+            Actor::Seat(n) => Chip {
+                name: format!("seat {}", n + 1),
+                hp: String::new(),
+                acting: actor == *a,
+            },
+            Actor::Mastiff => Chip {
+                name: "MASTIFF".to_string(),
+                hp: crate::rigroom::mastiff::coat_line(st),
+                acting: actor == *a,
+            },
         };
         chips.push(chip);
     }
@@ -2818,11 +2859,11 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
         Actor::You => None,
         // What an unseen foe is up to isn't yours to read.
         Actor::Foe(i) if crate::foes::unseen(st, i) => None,
-        Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) => {
-            let verb = if matches!(actor, Actor::Ice(_)) {
-                "hits"
-            } else {
-                "fires"
+        Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) | Actor::Mastiff | Actor::Seat(_) => {
+            let verb = match actor {
+                Actor::Ice(_) => "hits",
+                Actor::Mastiff => "bites",
+                _ => "fires",
             };
             Some(match (e.moves, e.ap) {
                 (0, 0) => "done".to_string(),
@@ -2858,6 +2899,8 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         Actor::Bot(site, n) => {
             crate::bots::name(st, (site, n)).unwrap_or_else(|| "bot".to_string())
         }
+        Actor::Seat(n) => format!("seat {}", n + 1),
+        Actor::Mastiff => "MASTIFF".to_string(),
     };
     let mut parts = Vec::new();
     for n in 0..e.order.len() {
@@ -2877,14 +2920,19 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         let mut s = name(a);
         if n == 0 {
             match a {
-                Actor::Ice(_) => {
+                Actor::Ice(_) | Actor::Mastiff => {
+                    let verb = if a == Actor::Mastiff {
+                        " bites"
+                    } else {
+                        " hits"
+                    };
                     if e.moves > 0 {
                         s.push_str(&format!(" moves {}", e.moves));
                     } else if e.ap > 0 {
-                        s.push_str(" hits");
+                        s.push_str(verb);
                     }
                 }
-                Actor::Foe(_) => {
+                Actor::Foe(_) | Actor::Seat(_) => {
                     if e.moves > 0 {
                         s.push_str(&format!(" moves {}", e.moves));
                     } else if e.ap > 0 {
@@ -2928,20 +2976,12 @@ pub(crate) fn hit_by(
     from: Pos,
     owner: crate::owners::Owner,
 ) {
-    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
-        let colour = if grade == IceGrade::Black {
-            BOLT_BLACK
-        } else {
-            BOLT_HIT
-        };
-        bolt(st, from, me, colour, ROLL_TICKS);
-        if st.net.shield > 0 {
-            mark(st, me, MARK_SHIELD, MARK_TICKS);
-        }
-    }
-    if st.net.shield > 0 {
-        st.net.shield -= 1;
-        st.say("shield absorbs the hit");
+    let colour = if grade == IceGrade::Black {
+        BOLT_BLACK
+    } else {
+        BOLT_HIT
+    };
+    if soaked(st, from, colour) {
         return;
     }
     let armour = st
@@ -2954,11 +2994,6 @@ pub(crate) fn hit_by(
     // The number lifts off you when the bolt lands, in its colour.
     let me = st.player.as_ref().map(|p| p.pos);
     let landed = st.tick + ROLL_TICKS;
-    let colour = if grade == IceGrade::Black {
-        BOLT_BLACK
-    } else {
-        BOLT_HIT
-    };
     match grade {
         IceGrade::White => {
             let heat = crate::owners::heat(st, owner).saturating_add(5);
@@ -2991,40 +3026,86 @@ pub(crate) fn hit_by(
             }
         }
         IceGrade::Black => {
-            // The deep end: half the damage through the jack, a failsafe that waits
-            // for an eighth, and a short cooling after.
-            let deep = st.character.flags(&st.content).contains("deep_end");
-            let mut damage = game::resisted(
-                (6 + security.saturating_sub(230) as u32 / 5)
-                    .saturating_sub(armour)
-                    .max(1),
-                feedback,
+            let death = format!("black ICE at {}", crate::owners::name(st, owner));
+            black_through(
+                st,
+                6 + security.saturating_sub(230) as u32 / 5,
+                "black ICE hits",
+                &death,
             );
-            if deep {
-                damage = (damage / 2).max(1);
-            }
-            st.character.hp = st.character.hp.saturating_sub(damage);
-            let hp = st.character.hp;
-            st.warn(format!("black ICE hits · hp {hp}"));
-            if let Some(me) = me {
-                number(st, me, format!("-{damage}"), Some(colour), landed);
-            }
-            let hp_max = st.character.hp_max(&st.content);
-            let line = if deep { hp_max / 8 } else { hp_max / 4 };
-            let cooling = if deep {
-                DEEP_END_COOLING
-            } else {
-                FAILSAFE_COOLING
-            };
-            if st.net.failsafe {
-                if hp <= line {
-                    dump_for(st, "the failsafe pulled you out", cooling);
-                }
-            } else if hp == 0 {
-                st.net.run = None;
-                st.net.death = Some(format!("black ICE at {}", crate::owners::name(st, owner)));
-            }
         }
+    }
+}
+
+/// The hit's bolt from `from` to you, in `colour`; a shield charge soaks it, marked on
+/// you. Whether it was soaked.
+fn soaked(st: &mut AppState, from: Pos, colour: (u8, u8, u8)) -> bool {
+    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
+        bolt(st, from, me, colour, ROLL_TICKS);
+        if st.net.shield > 0 {
+            mark(st, me, MARK_SHIELD, MARK_TICKS);
+        }
+    }
+    if st.net.shield > 0 {
+        st.net.shield -= 1;
+        st.say("shield absorbs the hit");
+        return true;
+    }
+    false
+}
+
+/// What a black ICE hit of `base` takes from your HP: the deck's rating off it, then your
+/// feedback resistance, halved in the deep end; never below 1.
+pub(crate) fn black_damage(st: &AppState, base: u32) -> u32 {
+    let armour = st
+        .character
+        .deck(&st.content)
+        .map(|(_, d)| d.rating as u32)
+        .unwrap_or(0);
+    let feedback = st.character.resist(&st.content, game::Harm::Feedback);
+    let damage = game::resisted(base.saturating_sub(armour).max(1), feedback);
+    if st.character.flags(&st.content).contains("deep_end") {
+        (damage / 2).max(1)
+    } else {
+        damage
+    }
+}
+
+/// A black ICE hit that isn't a piece's, `base` from `from`: MASTIFF's bite. Shield
+/// soaks it, and the rest goes as a piece's black hit does (`black_through`).
+pub(crate) fn black_hit(st: &mut AppState, base: u32, from: Pos, what: &str, death: &str) {
+    if !soaked(st, from, BOLT_BLACK) {
+        black_through(st, base, what, death);
+    }
+}
+
+/// A black ICE hit of `base` through the jack (`black_damage`), logged as `what` and
+/// your HP left: the failsafe pulls you out at a quarter of your HP (an eighth in the
+/// deep end, with a short cooling); with it off, at nothing left `death` killed you.
+fn black_through(st: &mut AppState, base: u32, what: &str, death: &str) {
+    let deep = st.character.flags(&st.content).contains("deep_end");
+    let damage = black_damage(st, base);
+    st.character.hp = st.character.hp.saturating_sub(damage);
+    let hp = st.character.hp;
+    st.warn(format!("{what} · hp {hp}"));
+    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
+        let landed = st.tick + ROLL_TICKS;
+        number(st, me, format!("-{damage}"), Some(BOLT_BLACK), landed);
+    }
+    let hp_max = st.character.hp_max(&st.content);
+    let line = if deep { hp_max / 8 } else { hp_max / 4 };
+    let cooling = if deep {
+        DEEP_END_COOLING
+    } else {
+        FAILSAFE_COOLING
+    };
+    if st.net.failsafe {
+        if hp <= line {
+            dump_for(st, "the failsafe pulled you out", cooling);
+        }
+    } else if hp == 0 {
+        st.net.run = None;
+        st.net.death = Some(death.to_string());
     }
 }
 

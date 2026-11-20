@@ -3,6 +3,7 @@
 
 pub mod crack;
 pub mod layout;
+pub mod mastiff;
 pub mod panel;
 pub mod reader;
 pub mod summon;
@@ -56,7 +57,8 @@ pub fn counts(st: &AppState) -> Counts {
 }
 
 /// Lays the room out afresh from the rig into `st.constructs.rig`: on the way in, and
-/// for a run reopened inside it. None without a home.
+/// for a run reopened inside it. None without a home. MASTIFF is asleep in the new room
+/// (its grit, a fight's, gone with the old one).
 pub fn build(st: &mut AppState) {
     st.constructs.rig = st.home.map(|h| {
         let mut room = lay_out(counts(st), h.home.building);
@@ -93,20 +95,23 @@ pub fn door_lines(st: &AppState) -> Vec<Option<BuildingId>> {
 /// Brings the room in step with the backdoors you hold, as it is about to be walked or
 /// drawn: a backdoor planted since you came in takes a free door and keeps it; with
 /// more backdoors than doors the room is laid out again with one for each, you left
-/// where you stand if that is still floor, else on the landing.
+/// where you stand if that is still floor, else on the landing. Not while the room is on
+/// turns: a fight keeps the room it started in, and the new doors wait for it to end.
 pub fn refresh(st: &mut AppState) {
     let Some(doors) = room(st).map(|r| r.doors.len()) else {
         return;
     };
     let lines = door_lines(st);
-    if st.backdoors.standing().count() > doors {
+    let fighting = (st.net.engaged.as_ref()).is_some_and(|e| e.place == citygen::Place::Rig);
+    if st.backdoors.standing().count() > doors && !fighting {
         let old = lines;
         build(st);
         if let Some(room) = st.constructs.rig.as_mut() {
             // The doors you knew keep their backdoors; the new ones take the rest.
             let standing: Vec<BuildingId> = st.backdoors.standing().map(|d| d.building).collect();
             let mut slots = vec![None; room.doors.len()];
-            slots[..old.len()].copy_from_slice(&old);
+            let kept = old.len().min(slots.len());
+            slots[..kept].copy_from_slice(&old[..kept]);
             fill(&mut slots, &standing);
             room.door_for = slots;
         }

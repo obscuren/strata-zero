@@ -42,6 +42,9 @@ pub struct RigRoom {
     pub trunk: Pos,
     /// Where you land: in the hall, under the slots.
     pub land: Pos,
+    /// MASTIFF out of its slot: awake, or grit once its core broke. None while it
+    /// sleeps coiled round its chip, and in every room as it is laid out.
+    pub mastiff: Option<super::mastiff::Mastiff>,
 }
 
 /// Rows past which doors stand 3 apart instead of 4.
@@ -59,7 +62,6 @@ fn tile(terrain: Terrain) -> Tile {
 }
 
 /// The tile under a box's middle, where you stand at it.
-#[cfg_attr(not(test), allow(dead_code))] // the tests stand you here
 pub fn front(r: Rect) -> Pos {
     Pos::new(r.x + r.w / 2, r.bottom())
 }
@@ -165,6 +167,7 @@ pub fn lay_out(c: Counts, building: BuildingId) -> RigRoom {
         terminal,
         trunk,
         land,
+        mastiff: None,
     }
 }
 

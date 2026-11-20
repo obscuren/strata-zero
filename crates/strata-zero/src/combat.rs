@@ -241,7 +241,7 @@ pub fn play_shot(
 }
 
 /// The attack program loaded in the jacked deck, and its slot.
-fn loaded_attack(st: &AppState) -> Option<(ItemId, usize)> {
+pub(crate) fn loaded_attack(st: &AppState) -> Option<(ItemId, usize)> {
     st.character
         .loaded
         .iter()
@@ -310,6 +310,39 @@ pub fn attack_ice(st: &mut AppState, b: citygen::BuildingId, i: usize) -> Result
             Err(why)
         }
     }
+}
+
+/// Your loaded attack at MASTIFF in your rig's room: one action point, one roll at
+/// `rigroom::mastiff::attack_chance`, the plate nearest you broken on a hit (or its core,
+/// the coat gone). Refused off its leash, out of reach or with nothing to run it, nothing
+/// spent. The program's slot, for the strip's flash.
+pub fn attack_mastiff(st: &mut AppState) -> Result<usize, String> {
+    let chance = crate::rigroom::mastiff::attack_chance(st)?;
+    let (_, slot) = loaded_attack(st).ok_or_else(|| "no attack loaded".to_string())?;
+    let me = st.player.as_ref().map(|p| p.pos).ok_or("no body")?;
+    let at = (crate::rigroom::room(st))
+        .and_then(|r| r.mastiff.as_ref())
+        .map(|m| crate::rigroom::mastiff::nearest(m, me))
+        .ok_or("nothing there")?;
+    crate::net::spend_ap(st)?;
+    let hit = game::round_hits(roll(st), chance);
+    play_shot(
+        st,
+        Place::Rig,
+        &crate::net::ATTACK_FX,
+        me,
+        at,
+        hit,
+        1,
+        Some(crate::net::ATTACK_TINT),
+    );
+    let line = if hit {
+        crate::rigroom::mastiff::hit(st, me)
+    } else {
+        "MASTIFF · the coat holds".to_string()
+    };
+    st.say(line);
+    Ok(slot)
 }
 
 /// The deck's loaded attack at a piece of ICE on the open Net: an action point, the
@@ -775,7 +808,8 @@ pub fn strike(st: &mut AppState, id: &AbilityId, foe: usize) -> Result<(), Strin
     else {
         return Err(format!("{} is not a strike", ability.name));
     };
-    if st.player.as_ref().is_some_and(|p| p.place.in_construct()) {
+    // Inside the Net (your rig's room too) the deck fights, not your fists.
+    if (st.player.as_ref()).is_some_and(|p| p.place.in_construct() || p.place == Place::Rig) {
         return Err("not in here".to_string());
     }
     let chance = strike_chance(st, id, foe)?;

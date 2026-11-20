@@ -1,6 +1,6 @@
 //! `space` at a reader slot: a popup headed with what the slot holds, whose first row
-//! is its summon (cash a chip, install or run a program, sift data, read a story shard)
-//! and `x Leave it`. The rows go through the rig's own job runner, so `run` and `ps` in
+//! is its summon (cash a chip, install or run a program, sift data, read a story shard,
+//! crack a lock, wake MASTIFF) and `x Leave it`. The rows go through the rig's own job runner, so `run` and `ps` in
 //! its shell see the same jobs.
 
 use super::layout::at_box;
@@ -114,8 +114,13 @@ fn rows(st: &AppState, i: usize, holds: Holds, stack: &game::Stack) -> Vec<Choic
                 Err(why) => Choice::disabled('s', "Crack a lock").tail(format!(" · {why}")),
             }]
         }
-        // Waking MASTIFF adds its row here.
-        Holds::Black => Vec::new(),
+        Holds::Black => {
+            let label = "Wake MASTIFF";
+            vec![match super::mastiff::refusal(st, i) {
+                None => Choice::new('s', label, Pick::WakeMastiff(i)),
+                Some(why) => Choice::disabled('s', label).tail(format!(" · {why}")),
+            }]
+        }
     }
 }
 
