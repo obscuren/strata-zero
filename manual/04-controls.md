@@ -16,6 +16,7 @@ These are the keys on the map. The `?` key list shows the same ones while you pl
 | `1-5` | fire the ability in that slot; jacked in, pick a program |
 | `a` | every ability you have, and whether it's ready |
 | `J` | jack out (it asks first) |
+| `r` | in your rig's Net, open the rig's shell |
 | `e` | go to turns now; again to go back |
 | `.` | end your turn; jacked in, hurry the beat |
 | `g` | on turns, aim a walk; `enter` walks it |

@@ -42,6 +42,7 @@ pub(crate) const WALK: &[(&str, &str)] = &[
     ("1-5", "fire an ability · jacked in: pick a program"),
     ("a", "abilities: the full list"),
     ("J", "jacked in: jack out (asks first)"),
+    ("r", "jacked in at your rig: open its shell"),
     ("e", "turns by hand · again: back to real time"),
     (".", "end your turn · jacked in: hurry the beat"),
     ("g", "on turns: aim a walk · enter walks · esc drops"),
