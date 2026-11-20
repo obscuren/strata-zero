@@ -4,6 +4,7 @@
 pub mod layout;
 pub mod panel;
 pub mod reader;
+pub mod summon;
 #[cfg(test)]
 pub(crate) mod testutil;
 pub mod ways;

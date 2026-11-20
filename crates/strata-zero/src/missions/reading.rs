@@ -60,6 +60,10 @@ pub struct ReadCard {
     head: String,
     lines: Vec<Line<'static>>,
     close: String,
+    /// Read from the rig's reader: the slot the shard came from, and the card is laid
+    /// over the map pane so the rig's panel stays readable. Closing it pulls the shard
+    /// into the pack.
+    from_slot: Option<usize>,
 }
 
 impl ReadCard {
@@ -78,11 +82,19 @@ impl ReadCard {
             head: fill(st, &r.head),
             lines: r.rows.iter().flat_map(|row| lines(st, item, row)).collect(),
             close: fill(st, &r.close),
+            from_slot: None,
         };
         if tells {
             st.missions.read.insert(item.0.clone());
         }
         Some(card)
+    }
+
+    /// The card of a shard read in the rig's reader slot `slot`: over the map pane, and
+    /// closing it puts the shard in the pack.
+    pub fn read_in_reader(mut self, slot: usize) -> ReadCard {
+        self.from_slot = Some(slot);
+        self
     }
 
     /// The card's box in `frame`: sized to its rows, at most `MAX_W` wide, centred two
@@ -208,11 +220,15 @@ fn grouped(n: u64) -> String {
 }
 
 impl Screen for ReadCard {
-    fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+    fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         if keys
             .iter()
             .any(|k| matches!(k.code, KeyCode::Char(' ') | KeyCode::Esc))
         {
+            if let Some(slot) = self.from_slot.take() {
+                // The story finds the shard in the pack, where it looks for it.
+                let _ = st.character.pull_from_reader(slot);
+            }
             return ScreenCmd::Pop {
                 fx: TransitionKind::None,
             };
@@ -221,7 +237,11 @@ impl Screen for ReadCard {
     }
 
     fn draw(&self, st: &AppState, f: &mut Frame) {
-        let r = self.area(f.area());
+        let frame = match self.from_slot {
+            Some(_) => crate::screens::explore::layout(f.area(), false).map,
+            None => f.area(),
+        };
+        let r = self.area(frame);
         if r.width < 24 || r.height < CHROME_H {
             return;
         }

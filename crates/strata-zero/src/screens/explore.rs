@@ -3434,6 +3434,13 @@ impl MapScreen {
                 }
                 return Some(ScreenCmd::Stay);
             }
+            // In your rig's room, by a reader slot, space summons what it holds.
+            if let Some(popup) = crate::rigroom::summon::interact(st) {
+                return Some(ScreenCmd::Push {
+                    to: Box::new(popup),
+                    fx: TransitionKind::None,
+                });
+            }
             // By another city's node jacked in, space is still this city's window (your
             // tile's Jack out and Look, the verbs held): the look cursor and a program
             // are what act on that node, and they say it's out of your body's reach.
@@ -8403,6 +8410,36 @@ mod tests {
             "{drawn}"
         );
         assert!(drawn.contains("SUBJECT  A FAVOUR"), "{drawn}");
+    }
+
+    #[test]
+    fn space_at_the_reader_in_the_room_opens_the_slots_popup() {
+        let mut st = state_home();
+        let c = st.content.clone();
+        st.character.give_item(&c, game::ItemId::new("credchip"), 1);
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        let copy = (st.character.inventory.iter())
+            .find(|x| x.item.0 == "credchip")
+            .and_then(|x| x.copy_id())
+            .unwrap();
+        st.character.put_in_reader(&c, 0, copy).unwrap();
+        let slot = crate::rigroom::room(&st).unwrap().slots[0];
+        let front = crate::rigroom::layout::front(slot);
+        st.player.as_mut().unwrap().pos = front;
+        let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let ScreenCmd::Push { to, .. } = cmd else {
+            panic!("space at the slot opens its popup")
+        };
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("Credchip"), "{drawn}");
     }
 
     #[test]

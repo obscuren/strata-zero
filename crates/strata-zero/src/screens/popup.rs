@@ -114,6 +114,14 @@ pub enum Pick {
         item: game::ItemId,
         at: crate::missions::ReadAt,
     },
+    /// Summons what the rig's reader slot holds: cashes a chip, installs or runs a
+    /// program shard, sifts data, opens a story shard's card.
+    Summon(usize),
+    /// Starts a program of the rig on a backdoor.
+    RunOn {
+        prog: &'static str,
+        b: citygen::BuildingId,
+    },
     /// Takes the story's tray's piece at this index, on the tab; held out from a
     /// chair, then sits in it.
     Tray {
@@ -689,6 +697,42 @@ impl Popup {
                     None => ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     },
+                }
+            }
+            Pick::Summon(slot) => match crate::rigroom::summon::summon(st, slot) {
+                Ok(crate::rigroom::summon::Summoned::Installed(prog, true)) => ScreenCmd::Replace {
+                    to: Box::new(crate::rigroom::summon::host_popup(st, prog)),
+                    fx: TransitionKind::None,
+                },
+                Ok(crate::rigroom::summon::Summoned::Read(item)) => {
+                    match crate::rigroom::summon::card(st, slot, &item) {
+                        Some(card) => {
+                            crate::missions::settle(st);
+                            ScreenCmd::Replace {
+                                to: Box::new(card),
+                                fx: TransitionKind::None,
+                            }
+                        }
+                        None => ScreenCmd::Pop {
+                            fx: TransitionKind::None,
+                        },
+                    }
+                }
+                Ok(_) => ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                },
+                Err(why) => {
+                    st.warn(why);
+                    ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    }
+                }
+            },
+            Pick::RunOn { prog, b } => {
+                let result = crate::rigroom::summon::run_on(st, prog, b);
+                report(st, result);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
                 }
             }
             Pick::Chair { building, level } => sit(st, building, level),

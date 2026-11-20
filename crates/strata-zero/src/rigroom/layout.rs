@@ -59,13 +59,12 @@ fn tile(terrain: Terrain) -> Tile {
 }
 
 /// The tile under a box's middle, where you stand at it.
-#[allow(dead_code)] // the reader's summon stands you here (#104's next tasks)
+#[cfg_attr(not(test), allow(dead_code))] // the tests stand you here
 pub fn front(r: Rect) -> Pos {
     Pos::new(r.x + r.w / 2, r.bottom())
 }
 
 /// Within one step of the box.
-#[allow(dead_code)] // the reader's summon asks it (#104's next tasks)
 pub fn at_box(here: Pos, r: Rect) -> bool {
     here.x >= r.x - 1 && here.x <= r.right() && here.y >= r.y - 1 && here.y <= r.bottom()
 }

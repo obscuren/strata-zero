@@ -147,6 +147,23 @@ pub fn target(st: &AppState, kind: &JobKind) -> String {
     }
 }
 
+/// What a job just started says it does on `on`, and the noise it makes, if any: the
+/// rest of `2 · keepalive on <host> · its hold stays full while it runs`.
+pub fn begun(kind: &JobKind, on: &str) -> (String, Option<&'static str>) {
+    match kind {
+        JobKind::Sniff(_) => (
+            format!("sniff on {on} · listening for door codes"),
+            Some("noise: high · every hour leaves a line in their auth.log"),
+        ),
+        JobKind::Keepalive(_) => (
+            format!("keepalive on {on} · its hold stays full while it runs"),
+            Some("noise: low · their admins read the logs on Sundays"),
+        ),
+        JobKind::Sift { .. } => (format!("sift on {on} · digging"), None),
+        JobKind::Rent => (format!("rent on {on} · selling them by the hour"), None),
+    }
+}
+
 /// `sniff · hollis-court`: how the report heads a job's lines.
 pub fn head(st: &AppState, kind: &JobKind) -> String {
     format!("{} · {}", kind.name(), target(st, kind))
