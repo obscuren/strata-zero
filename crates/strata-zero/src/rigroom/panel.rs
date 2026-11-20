@@ -256,6 +256,30 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
             }
             _ => reader::summon_word(st, stack),
         };
+        if reader::holds(st, &stack.item) == Some(reader::Holds::Locked) {
+            let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
+            let cracked = stack.copy.as_ref().map_or(0, |k| k.cracked);
+            let left = reader::locks(credits).saturating_sub(cracked);
+            let chance = match super::crack::crack_chance(st, i) {
+                Ok(c) => format!("crack {c}%"),
+                Err(why) => why,
+            };
+            return vec![
+                Line::from(vec![
+                    sp(" ", TEXT),
+                    bold(glyph.to_string(), colour),
+                    sp(format!(" {name}"), TEXT),
+                    sp(format!(" · ¤{} inside", super::crack::commas(credits)), DIM),
+                ]),
+                Line::from(sp(
+                    format!(
+                        "   {left} {} · {chance} · space",
+                        if left == 1 { "lock" } else { "locks" }
+                    ),
+                    DIM,
+                )),
+            ];
+        }
         return vec![
             Line::from(vec![
                 sp(" ", TEXT),

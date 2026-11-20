@@ -1,6 +1,7 @@
 //! Your rig's own Net: the room you land in jacking in at home (`Place::Rig`), laid out
 //! from the rig as it stands each time you go in and walked as a construct is.
 
+pub mod crack;
 pub mod layout;
 pub mod panel;
 pub mod reader;

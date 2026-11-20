@@ -117,6 +117,8 @@ pub enum Pick {
     /// Summons what the rig's reader slot holds: cashes a chip, installs or runs a
     /// program shard, sifts data, opens a story shard's card.
     Summon(usize),
+    /// Runs your loaded Crack at a locked chip in the rig's reader slot: one try.
+    CrackChip(usize),
     /// Starts a program of the rig on a backdoor.
     RunOn {
         prog: &'static str,
@@ -728,6 +730,24 @@ impl Popup {
                     }
                 }
             },
+            Pick::CrackChip(slot) => {
+                let result = crate::rigroom::crack::crack(st, slot);
+                let opened = (st.character.reader.get(slot))
+                    .and_then(|s| s.as_ref())
+                    .is_some_and(|s| s.item.0 == "credchip_locked");
+                let failed = result.is_err();
+                report(st, result);
+                // A lock left: the popup comes back with the locks and chance as they stand.
+                match crate::rigroom::summon::interact(st).filter(|_| opened && !failed) {
+                    Some(again) => ScreenCmd::Replace {
+                        to: Box::new(again),
+                        fx: TransitionKind::None,
+                    },
+                    None => ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    },
+                }
+            }
             Pick::RunOn { prog, b } => {
                 let result = crate::rigroom::summon::run_on(st, prog, b);
                 report(st, result);

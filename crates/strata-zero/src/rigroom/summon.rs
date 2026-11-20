@@ -108,8 +108,15 @@ fn rows(st: &AppState, i: usize, holds: Holds, stack: &game::Stack) -> Vec<Choic
                 .unwrap_or_else(|| "Read".into());
             vec![Choice::new('s', verb, summon)]
         }
-        // Cracking a locked chip and waking MASTIFF each add their row here.
-        Holds::Locked | Holds::Black => Vec::new(),
+        Holds::Locked => {
+            let crack = Pick::CrackChip(i);
+            vec![match super::crack::crack_chance(st, i) {
+                Ok(chance) => Choice::new('s', "Crack a lock", crack).tail(format!(" · {chance}%")),
+                Err(why) => Choice::disabled('s', "Crack a lock").tail(format!(" · {why}")),
+            }]
+        }
+        // Waking MASTIFF adds its row here.
+        Holds::Black => Vec::new(),
     }
 }
 
