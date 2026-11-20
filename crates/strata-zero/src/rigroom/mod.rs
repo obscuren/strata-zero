@@ -137,8 +137,10 @@ pub fn keep_player(st: &mut AppState) {
 }
 
 /// The room as it stands this frame, for drawing: each door's backdoor and its clock,
-/// what each reader slot holds, the job in each seat, and the sleds' names. Nothing in
-/// it is kept: a job run or killed, a door burned, a slot filled shows next frame.
+/// what each reader slot holds (and MASTIFF coiled round a black chip), the job in each
+/// seat (or MASTIFF in a free one's sights), the beam of the seat on its turn, and the
+/// sleds' names. Nothing in it is kept: a job run or killed, a door burned, a slot filled
+/// shows next frame.
 pub fn view(st: &AppState) -> Option<RigView<'_>> {
     use crate::rig::jobs::{HEAT_PATCH, JobKind, RENT_PER_HOUR, sift_left};
     let room = room(st)?;
@@ -172,15 +174,18 @@ pub fn view(st: &AppState) -> Option<RigView<'_>> {
             let name = (st.content.item(&stack.item))
                 .and_then(|it| it.name.split_whitespace().next().map(str::to_string))
                 .unwrap_or_else(|| stack.item.0.clone());
+            let awake = mastiff::awake_on(st, i);
             let tail = match holds {
                 reader::Holds::Chip => {
-                    format!("¤{}", stack.copy.as_ref().map_or(0, |k| k.credits))
+                    let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
+                    format!("¤{}", crack::commas(credits))
                 }
                 reader::Holds::Program(_) => (reader::summon_word(st, stack))
                     .split_whitespace()
                     .next()
                     .unwrap_or_default()
                     .to_string(),
+                reader::Holds::Black if awake => "awake".to_string(),
                 _ => reader::summon_word(st, stack),
             };
             Some(SlotView {
@@ -188,11 +193,23 @@ pub fn view(st: &AppState) -> Option<RigView<'_>> {
                 colour,
                 name: clip(&name, SLOT_WORD),
                 tail: clip(&tail, SLOT_WORD),
+                coiled: holds == reader::Holds::Black && !awake,
             })
         })
         .collect();
+    let fighting = mastiff::fighting_seats(st);
+    let odds = mastiff::seat_odds(st).map_or(String::new(), |c| format!("{c}%"));
     let seats = (0..room.seats.len())
         .map(|i| {
+            // A free seat in a fight with MASTIFF runs your Attack at it.
+            if fighting.iter().any(|n| usize::from(*n) == i) {
+                return Some(SeatView {
+                    job: "attack".to_string(),
+                    on: "MASTIFF".to_string(),
+                    state: clip(&format!("seat {} · {odds}", i + 1), SEAT_TEXT),
+                    door: None,
+                });
+            }
             let job = running.get(i)?;
             let (on, state) = match &job.kind {
                 JobKind::Sift { shard } => {
@@ -240,6 +257,7 @@ pub fn view(st: &AppState) -> Option<RigView<'_>> {
             .map_or(room.land, |p| p.pos),
         origin: Pos::new(0, 0),
         tick: st.tick,
+        beam: mastiff::beam(st).map(usize::from),
         firewall: (one(SocketKind::Firewall, "").to_lowercase(), rig.firewall),
         relay: format!("{} · {}", one(SocketKind::Relay, "no relay"), rig.lines),
         core,

@@ -339,7 +339,7 @@ pub fn attack_mastiff(st: &mut AppState) -> Result<usize, String> {
     let line = if hit {
         crate::rigroom::mastiff::hit(st, me)
     } else {
-        "MASTIFF · the coat holds".to_string()
+        format!("MASTIFF · {}", crate::rigroom::mastiff::miss(st))
     };
     st.say(line);
     Ok(slot)

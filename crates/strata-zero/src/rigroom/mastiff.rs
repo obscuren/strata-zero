@@ -7,9 +7,9 @@
 //! no tracer.
 
 use super::layout::front;
-use super::room;
+use super::{RigRoom, room};
 use crate::app::AppState;
-use crate::net::Actor;
+use crate::net::{Actor, Step};
 use citygen::{Construct, Dir, IceGrade, Place, Pos, Rect};
 use game::{ItemId, Target};
 
@@ -56,7 +56,7 @@ const LEASH: i32 = 6;
 /// The best a seat's beam does, in percent.
 const SEAT_CAP: u32 = 95;
 /// Each plate's tile in its 3x3, in the coat's order.
-const PLATE_AT: [(i32, i32); 8] = [
+pub const PLATE_AT: [(i32, i32); 8] = [
     (0, 0),
     (1, 0),
     (2, 0),
@@ -83,6 +83,33 @@ fn up_mut(st: &mut AppState) -> Option<&mut Mastiff> {
 /// MASTIFF is awake: out of its slot, its core unbroken, the room on its turns.
 pub fn awake(st: &AppState) -> bool {
     up(st).is_some() && (st.net.engaged.as_ref()).is_some_and(|e| e.place == Place::Rig)
+}
+
+/// MASTIFF is awake off the chip in reader slot `slot`.
+pub fn awake_on(st: &AppState, slot: usize) -> bool {
+    awake(st) && up(st).is_some_and(|m| m.slot == slot)
+}
+
+/// The free core seats in the fight, in seat order: each runs your Attack at MASTIFF on
+/// its turn.
+pub fn fighting_seats(st: &AppState) -> Vec<u8> {
+    let Some(e) = st.net.engaged.as_ref().filter(|_| awake(st)) else {
+        return Vec::new();
+    };
+    (e.order.iter())
+        .filter_map(|a| match a {
+            Actor::Seat(n) => Some(*n),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The seat whose beam is out this frame: on its turn, when it has a shot at MASTIFF.
+pub fn beam(st: &AppState) -> Option<u8> {
+    match st.net.engaged.as_ref()?.actor() {
+        Actor::Seat(n) if awake(st) && seat_chance(st, n).is_ok() => Some(n),
+        _ => None,
+    }
 }
 
 /// Where you stand in the room.
@@ -129,19 +156,26 @@ pub fn wake(st: &mut AppState, slot: usize) -> Result<(), String> {
         return Err(why.to_string());
     }
     let room = st.constructs.rig.as_mut().ok_or("no rig here")?;
-    let r = room.slots[slot];
-    let at = front(r);
+    let leash = leash_of(room, slot).ok_or("no black chip there")?;
+    let at = front(room.slots[slot]);
     room.mastiff = Some(Mastiff {
         slot,
         pos: Pos::new(at.x - 1, at.y),
         plates: [true; 8],
         core: CORE,
         bite: None,
-        leash: r.grow(LEASH).intersection(room.hall).unwrap_or(r),
+        leash,
     });
     step_aside(st);
     crate::net::engage(st, Place::Rig, false);
     Ok(())
+}
+
+/// The ground MASTIFF of slot `slot` keeps to, asleep or awake: the slot's box grown by
+/// `LEASH`, clipped to the hall.
+pub fn leash_of(room: &RigRoom, slot: usize) -> Option<Rect> {
+    let r = *room.slots.get(slot)?;
+    Some(r.grow(LEASH).intersection(room.hall).unwrap_or(r))
 }
 
 /// You out from under MASTIFF where it lands: onto the nearest floor beside it.
@@ -183,26 +217,28 @@ pub fn order(st: &AppState) -> Vec<Actor> {
     out
 }
 
-/// MASTIFF's turn: two tiles toward you, keeping to its leash, then a bite marked (the
-/// 3x3 beside it on your side) or, with one marked, bitten: on its tiles you take `BITE`
-/// as a black ICE hit (`net::black_hit`: Shield soaks it, the failsafe pulls you out
-/// first, with it off it can kill you), and the marks clear.
-pub fn turn(st: &mut AppState) {
+/// One action of MASTIFF's turn, paced as a piece of ICE's (`net::pace`): a tile toward
+/// you while it has moves and a step closer keeps it on its leash; else, with its action
+/// left, a bite marked (the 3x3 beside it on your side) or, with one marked, bitten: on
+/// its tiles you take `BITE` as a black ICE hit (`net::black_hit`: Shield soaks it, the
+/// failsafe pulls you out first, with it off it can kill you), and the marks clear.
+pub fn step(st: &mut AppState, can_move: bool, can_act: bool) -> Step {
     let Some(me) = you(st) else {
-        return;
+        return Step::Nothing;
     };
     let Some(room) = st.constructs.rig.as_mut() else {
-        return;
+        return Step::Nothing;
     };
     let k = &room.construct;
     let Some(m) = room.mastiff.as_mut().filter(|m| m.core > 0) else {
-        return;
+        return Step::Nothing;
     };
-    for _ in 0..MOVES {
-        match step_toward(k, m, me) {
-            Some(to) => m.pos = to,
-            None => break,
-        }
+    if can_move && let Some(to) = step_toward(k, m, me) {
+        m.pos = to;
+        return Step::Moved(to);
+    }
+    if !can_act {
+        return Step::Nothing;
     }
     let from = m.body().center();
     match m.bite.take() {
@@ -216,6 +252,23 @@ pub fn turn(st: &mut AppState) {
             crate::net::black_hit(st, BITE, from, "MASTIFF bites", DEATH);
         }
         Some(_) => st.say("MASTIFF bites · nothing there"),
+    }
+    Step::Hit
+}
+
+/// MASTIFF's whole turn at once: its steps, then its mark or bite.
+#[cfg(test)]
+pub(crate) fn turn(st: &mut AppState) {
+    let (mut moves, mut act) = (MOVES, true);
+    loop {
+        match step(st, moves > 0, act) {
+            Step::Moved(_) => moves -= 1,
+            Step::Hit => act = false,
+            Step::Nothing => return,
+        }
+        if moves == 0 && !act {
+            return;
+        }
     }
 }
 
@@ -324,13 +377,21 @@ pub fn seat_turn(st: &mut AppState, seat: u8) {
     let line = if game::round_hits(crate::combat::roll(st), chance) {
         hit(st, from)
     } else {
-        "the coat holds".to_string()
+        miss(st).to_string()
     };
     st.say(format!("seat {} · {line}", seat + 1));
 }
 
-/// A seat's chance at MASTIFF: yours, times the core's speed over 100, at most 95; or
-/// why it sits out.
+/// What a miss at MASTIFF says: its coat holds, or with the coat gone its core.
+pub fn miss(st: &AppState) -> &'static str {
+    match up(st) {
+        Some(m) if m.coat() == 0 => "the core holds",
+        _ => "the coat holds",
+    }
+}
+
+/// A seat's chance at MASTIFF: `seat_odds`, while you stand on the leash and no job
+/// holds the seat; or why it sits out.
 fn seat_chance(st: &AppState, seat: u8) -> Result<u8, String> {
     if !on_the_leash(st) {
         return Err(OFF_THE_LEASH.to_string());
@@ -338,6 +399,11 @@ fn seat_chance(st: &AppState, seat: u8) -> Result<u8, String> {
     if st.backdoors.jobs.running.len() > usize::from(seat) {
         return Err("the seat is busy".to_string());
     }
+    seat_odds(st)
+}
+
+/// A free seat's odds at MASTIFF: yours, times the core's speed over 100, at most 95.
+pub fn seat_odds(st: &AppState) -> Result<u8, String> {
     let chance = u32::from(odds(st)?) * u32::from(crate::rig::of(st).speed) / 100;
     Ok(chance.min(SEAT_CAP) as u8)
 }
@@ -428,6 +494,23 @@ pub fn blocks(st: &AppState, to: Pos) -> Option<&'static str> {
     (out && st.net.engaged.is_some()).then_some("not in a fight")
 }
 
+/// MASTIFF's line in the footer's ICE list while it's awake, as a foe's reads:
+/// `▣ MASTIFF · black ICE · coat 5/8 · 3 tiles`, its core's hits once the coat is gone.
+pub fn ice_line(st: &AppState) -> Option<String> {
+    let me = you(st)?;
+    let m = up(st).filter(|_| awake(st))?;
+    let left = match m.coat() {
+        0 => format!(
+            "core {} {}",
+            m.core,
+            if m.core == 1 { "hit" } else { "hits" }
+        ),
+        n => format!("coat {n}/8"),
+    };
+    let tiles = me.chebyshev(nearest(m, me));
+    Some(format!("▣ MASTIFF · black ICE · {left} · {tiles} tiles"))
+}
+
 /// MASTIFF in a word for the turn column: its coat (`5/8`), then its core.
 pub fn coat_line(st: &AppState) -> String {
     match up(st) {
@@ -445,53 +528,15 @@ mod tests {
     use crate::rig::jobs::{self, JobKind};
     use crate::rigroom::layout::front;
     use crate::rigroom::room;
-    use crate::rigroom::testutil::at_the_rig;
+    use crate::rigroom::testutil::{BLACK_SLOT as SLOT, BLACK_SUM as SUM, a_black_chip};
     use citygen::Place;
-    use game::{ItemId, Stack};
-
-    /// The chip's sum.
-    const SUM: u32 = 4800;
-    /// Its reader slot.
-    const SLOT: usize = 2;
+    use game::ItemId;
 
     /// A starting runner (Vex) with a deck and Attack loaded, a Civitas cabinet (three
-    /// reader slots) with a Tinman 2X core (two seats), a black chip of ¤4,800 in slot 2, jacked into the room
-    /// and standing at the front of slot 2.
+    /// reader slots) with a Tinman 2X core (two seats), a black chip of ¤4,800 in slot 2,
+    /// jacked into the room and standing at the front of slot 2.
     fn armed() -> AppState {
-        let mut st = at_the_rig();
-        let c = st.content.clone();
-        if st.character.deck(&c).is_none() {
-            let deck = ItemId::new("pawnshop_deck");
-            let copy = st.character.new_copy(&c, &deck);
-            st.character.wear(game::BodyPart::Waist, deck, Some(copy));
-        }
-        let attack = ItemId::new("attack");
-        if !st.character.loaded.contains(&attack) {
-            st.character.give(attack.clone(), 1);
-            st.character.loaded.push(attack);
-        }
-        crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
-        let core = ItemId::new("sled_tinman");
-        let copy = Some(st.character.new_copy(&c, &core));
-        st.character.rig_copy_mut(&c).fitted[0] = Some(Stack {
-            item: core,
-            qty: 1,
-            copy,
-        });
-        let id = ItemId::new("credchip_black");
-        let mut chip = Stack::new(id.clone(), 1);
-        let mut copy = st.character.new_copy(&c, &id);
-        copy.credits = SUM;
-        let copy_id = copy.id;
-        chip.copy = Some(copy);
-        st.character.inventory.push(chip);
-        st.character
-            .put_in_reader(&c, SLOT, copy_id)
-            .expect("in the reader");
-        crate::net::jack_in_here(&mut st).expect("jacked in");
-        let at = front(room(&st).unwrap().slots[SLOT]);
-        stand(&mut st, at);
-        st
+        a_black_chip()
     }
 
     fn stand(st: &mut AppState, at: Pos) {
@@ -616,6 +661,82 @@ mod tests {
         turn(&mut st);
         assert_eq!(st.character.hp, hp);
         assert!(mastiff(&st).bite.is_none());
+    }
+
+    #[test]
+    fn its_turn_plays_out_a_step_at_a_time() {
+        use crate::guards::testutil::pace_once;
+        let mut st = armed();
+        st.force_hit = Some(false);
+        wake(&mut st, SLOT).unwrap();
+        let from = mastiff(&st).pos;
+        // You five west of it, on the leash: two steps for it to come.
+        stand(&mut st, Pos::new(from.x - 5, from.y + 1));
+        assert!(mastiff(&st).leash.contains(here(&st)));
+        crate::net::end_turn(&mut st);
+        for _ in 0..10 {
+            if st.net.engaged.as_ref().unwrap().actor() == Actor::Mastiff {
+                break;
+            }
+            pace_once(&mut st);
+        }
+        assert_eq!(st.net.engaged.as_ref().unwrap().actor(), Actor::Mastiff);
+        pace_once(&mut st);
+        let one = mastiff(&st).pos;
+        assert_eq!(one.chebyshev(from), 1, "a step a beat");
+        assert!(mastiff(&st).bite.is_none(), "the mark waits for its steps");
+        pace_once(&mut st);
+        let two = mastiff(&st).pos;
+        assert_eq!(two.chebyshev(one), 1);
+        assert!(mastiff(&st).bite.is_none());
+        pace_once(&mut st);
+        assert_eq!(mastiff(&st).pos, two);
+        assert!(mastiff(&st).bite.is_some(), "then it marks");
+        assert!(crate::net::your_turn(&st), "and the turn comes round");
+    }
+
+    #[test]
+    fn with_the_coat_gone_a_miss_is_the_cores() {
+        let mut st = armed();
+        wake(&mut st, SLOT).unwrap();
+        let west = Pos::new(mastiff(&st).pos.x - 3, mastiff(&st).pos.y + 1);
+        hit(&mut st, west);
+        st.force_hit = Some(false);
+        act(&mut st);
+        crate::combat::attack_mastiff(&mut st).expect("a roll");
+        assert_eq!(st.log.latest().unwrap().text, "MASTIFF · the coat holds");
+        for _ in 0..7 {
+            hit(&mut st, west);
+        }
+        assert_eq!(whole(&st), 0);
+        crate::combat::attack_mastiff(&mut st).expect("a roll");
+        assert_eq!(st.log.latest().unwrap().text, "MASTIFF · the core holds");
+        seat_turn(&mut st, 0);
+        assert_eq!(st.log.latest().unwrap().text, "seat 1 · the core holds");
+    }
+
+    #[test]
+    fn its_line_in_the_ice_list() {
+        let mut st = armed();
+        assert_eq!(ice_line(&st), None, "asleep it isn't hunting you");
+        wake(&mut st, SLOT).unwrap();
+        let m = mastiff(&st).clone();
+        let west = Pos::new(m.pos.x - 3, m.pos.y + 1);
+        for _ in 0..3 {
+            hit(&mut st, west);
+        }
+        stand(&mut st, Pos::new(m.pos.x - 3, m.pos.y + 1));
+        assert_eq!(
+            ice_line(&st).as_deref(),
+            Some("▣ MASTIFF · black ICE · coat 5/8 · 3 tiles")
+        );
+        for _ in 0..5 {
+            hit(&mut st, west);
+        }
+        assert_eq!(
+            ice_line(&st).as_deref(),
+            Some("▣ MASTIFF · black ICE · core 2 hits · 3 tiles")
+        );
     }
 
     #[test]

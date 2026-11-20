@@ -107,3 +107,89 @@ pub(crate) fn the_mocks_rig() -> (AppState, [BuildingId; 3]) {
     crate::net::jack_in_here(&mut st).expect("jacked in");
     (st, [kiroflux, hextek, stack])
 }
+
+/// The black chip's reader slot in `a_black_chip`, and its sum.
+pub(crate) const BLACK_SLOT: usize = 2;
+pub(crate) const BLACK_SUM: u32 = 4800;
+
+/// A chip of `id` holding `credits` from the pack into reader slot `slot`.
+pub(crate) fn chip_in_reader(st: &mut AppState, slot: usize, id: &str, credits: u32) {
+    use game::{ItemId, Stack};
+    let c = st.content.clone();
+    let id = ItemId::new(id);
+    let mut chip = Stack::new(id.clone(), 1);
+    let mut copy = st.character.new_copy(&c, &id);
+    copy.credits = credits;
+    let copy_id = copy.id;
+    chip.copy = Some(copy);
+    st.character.inventory.push(chip);
+    st.character
+        .put_in_reader(&c, slot, copy_id)
+        .expect("in the reader");
+}
+
+/// `id` loaded in the deck, after what is loaded already.
+pub(crate) fn load(st: &mut AppState, id: &str) {
+    let id = game::ItemId::new(id);
+    if !st.character.loaded.contains(&id) {
+        st.character.give(id.clone(), 1);
+        st.character.loaded.push(id);
+    }
+}
+
+/// A starting runner with a deck and Attack loaded, a Civitas cabinet (three reader
+/// slots) with a Tinman 2X core (two seats), a black chip of ¤4,800 in slot 2, jacked
+/// into the room and standing at the front of slot 2.
+pub(crate) fn a_black_chip() -> AppState {
+    use game::{ItemId, Stack};
+    let mut st = at_the_rig();
+    let c = st.content.clone();
+    if st.character.deck(&c).is_none() {
+        let deck = ItemId::new("pawnshop_deck");
+        let copy = st.character.new_copy(&c, &deck);
+        st.character.wear(game::BodyPart::Waist, deck, Some(copy));
+    }
+    load(&mut st, "attack");
+    crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
+    let core = ItemId::new("sled_tinman");
+    let copy = Some(st.character.new_copy(&c, &core));
+    st.character.rig_copy_mut(&c).fitted[0] = Some(Stack {
+        item: core,
+        qty: 1,
+        copy,
+    });
+    chip_in_reader(&mut st, BLACK_SLOT, "credchip_black", BLACK_SUM);
+    crate::net::jack_in_here(&mut st).expect("jacked in");
+    let at = super::layout::front(super::room(&st).unwrap().slots[BLACK_SLOT]);
+    st.player.as_mut().unwrap().pos = at;
+    st
+}
+
+/// The mock's round 3 (`rig-construct-round3.html`, frame 1), jacked into the room: the
+/// round 5 rig with `sift` alone in the seats, a deck with Crack, Attack and Shield
+/// loaded, and in the reader a credchip of ¤340, a locked one of ¤1,200 (2 locks) and a
+/// black one of ¤4,800 with MASTIFF coiled round it; you at the locked chip.
+pub(crate) fn the_round_three_rig() -> AppState {
+    use game::ItemId;
+    let (mut st, _) = the_mocks_rig();
+    let c = st.content.clone();
+    if st.character.deck(&c).is_none() {
+        let deck = ItemId::new("pawnshop_deck");
+        let copy = st.character.new_copy(&c, &deck);
+        st.character.wear(game::BodyPart::Waist, deck, Some(copy));
+    }
+    st.character.loaded.clear();
+    for id in ["crack", "attack", "shield"] {
+        load(&mut st, id);
+    }
+    let keepalive = (st.backdoors.jobs.running.iter())
+        .find(|j| j.kind.name() == "keepalive")
+        .map(|j| j.n)
+        .expect("keepalive in the second seat");
+    crate::rig::jobs::kill(&mut st, keepalive).expect("killed");
+    chip_in_reader(&mut st, 1, "credchip_locked", 1200);
+    chip_in_reader(&mut st, BLACK_SLOT, "credchip_black", BLACK_SUM);
+    let at = super::layout::front(super::room(&st).unwrap().slots[1]);
+    st.player.as_mut().unwrap().pos = at;
+    st
+}

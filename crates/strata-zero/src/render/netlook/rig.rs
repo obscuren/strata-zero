@@ -40,6 +40,26 @@ const EMPTY_BOX: Rgb = Rgb(0x0b, 0x3a, 0x40);
 const RULE: Rgb = Rgb(0x0b, 0x3a, 0x35);
 /// A terminal you hold, as the grid grounds it (`holds::HELD_BG`).
 const HELD: Rgb = Rgb(0x0f, 0x3a, 0x1f);
+/// MASTIFF's ground, a broken plate of its coat, its leash's tint and dashed edge, the
+/// tiles it bites.
+const ICE_BG: Rgb = Rgb(0x2a, 0x07, 0x10);
+const BROKEN: Rgb = Rgb(0x8a, 0x22, 0x36);
+const TINT: Rgb = Rgb(0x16, 0x08, 0x0c);
+const LEASH: Rgb = Rgb(0x6a, 0x1a, 0x28);
+const BITE: Rgb = Rgb(0xff, 0x40, 0x60);
+const BITE_BG: Rgb = Rgb(0x4a, 0x0c, 0x18);
+/// MASTIFF's coat, a plate a cell round its core, in `mastiff::PLATE_AT`'s order.
+const COAT: [char; 8] = ['▛', '▀', '▜', '▐', '▟', '▄', '▙', '▌'];
+/// What MASTIFF leaves where its core broke, by its 3x3's top-left.
+const GRIT: [(i32, i32, char); 7] = [
+    (0, 0, '▝'),
+    (2, 0, '░'),
+    (1, 1, '·'),
+    (0, 2, '▖'),
+    (2, 2, '▗'),
+    (3, 1, '·'),
+    (-1, 1, '·'),
+];
 
 const LIGHT: [char; 6] = ['┌', '┐', '└', '┘', '─', '│'];
 const DOUBLE: [char; 6] = ['╔', '╗', '╚', '╝', '═', '║'];
@@ -69,6 +89,8 @@ pub struct RigView<'a> {
     pub origin: Pos,
     /// The clock the Net's animations run on (`st.tick`).
     pub tick: u64,
+    /// The seat whose beam is out at MASTIFF: its turn in the fight.
+    pub beam: Option<usize>,
     /// The firewall sled's word (`sandbag`) and its tier, 0 for none.
     pub firewall: (String, u8),
     /// Under PORTS: the relay and its lines (`Switchback · 5`).
@@ -101,6 +123,8 @@ pub struct SlotView {
     pub name: String,
     /// Under that: what summoning it does (`¤340`, `2 locks`).
     pub tail: String,
+    /// A black chip with MASTIFF asleep round it.
+    pub coiled: bool,
 }
 
 /// A job in a core seat.
@@ -157,7 +181,154 @@ pub fn draw(buf: &mut Buffer, area: Rect, view: &RigView) {
     hall(&mut c, view);
     seats(&mut c, view);
     jobs_lines(&mut c, view);
-    c.put(view.you, '@', YOU, YOU_GLOW, true);
+    mastiff(&mut c, view);
+    let bitten = (room.mastiff.as_ref())
+        .filter(|m| m.core > 0)
+        .and_then(|m| m.bite)
+        .is_some_and(|b| b.contains(view.you));
+    let glow = if bitten { BITE_BG } else { YOU_GLOW };
+    c.put(view.you, '@', YOU, glow, true);
+}
+
+/// MASTIFF, as the mock's round 3 draws it. Asleep: coiled round each black chip, its
+/// leash tinted round the slot. Awake: its leash tinted with its open sides dashed, a
+/// chain down from its slot, its coat round its core (a broken plate dim grit), the
+/// tiles it bites next turn and the beam of the seat on its turn. Broken: grit.
+fn mastiff(c: &mut Canvas, view: &RigView) {
+    let room = view.room;
+    for (i, (r, slot)) in room.slots.iter().zip(&view.slots).enumerate() {
+        if !slot.as_ref().is_some_and(|s| s.coiled) {
+            continue;
+        }
+        if let Some(leash) = crate::rigroom::mastiff::leash_of(room, i) {
+            tint(c, room, leash);
+        }
+        coat(
+            c,
+            Pos::new(r.x + r.w / 2 - 1, r.y + r.h / 2 - 1),
+            &[true; 8],
+        );
+    }
+    let Some(m) = room.mastiff.as_ref() else {
+        return;
+    };
+    if m.core == 0 {
+        for (dx, dy, ch) in GRIT {
+            let p = m.pos.offset(dx, dy);
+            if floor(room, p) && c.blank(p) {
+                c.put(p, ch, BROKEN, LEVEL, false);
+            }
+        }
+        return;
+    }
+    tint(c, room, m.leash);
+    leash_edge(c, room, m.leash);
+    // The chain to the slot it came off, while it stands under it.
+    if let Some(r) = room.slots.get(m.slot) {
+        let x = r.x + r.w / 2;
+        if (m.pos.x..m.pos.x + 3).contains(&x) {
+            for y in r.bottom() + 2..m.pos.y {
+                c.put(Pos::new(x, y), '┇', FW, TINT, true);
+            }
+        }
+    }
+    if let Some(bite) = m.bite {
+        for p in bite.iter().filter(|p| floor(room, *p)) {
+            c.put(p, '×', BITE, BITE_BG, false);
+        }
+    }
+    coat(c, m.pos, &m.plates);
+    if let Some(n) = view.beam {
+        beam(c, room, m, n);
+    }
+}
+
+/// MASTIFF's 3x3 at `at`: its coat's whole plates red, the broken ones dim grit, its core
+/// white.
+fn coat(c: &mut Canvas, at: Pos, plates: &[bool; 8]) {
+    for (i, (dx, dy)) in crate::rigroom::mastiff::PLATE_AT.iter().enumerate() {
+        let p = at.offset(*dx, *dy);
+        match plates[i] {
+            true => c.put(p, COAT[i], FW, ICE_BG, true),
+            false => c.put(p, '░', BROKEN, ICE_BG, false),
+        }
+    }
+    c.put(at.offset(1, 1), '◆', WHITE, ICE_BG, true);
+}
+
+/// The leash's red over the floor in `r` and what stands on it, not the dividers' walls.
+fn tint(c: &mut Canvas, room: &RigRoom, r: TileRect) {
+    for p in r.iter() {
+        let divider = (p.x == room.hall.x || p.x == room.seats_room.x) && wall(room, p);
+        if !divider {
+            c.retint(p, LEVEL, TINT);
+        }
+    }
+}
+
+/// The leash's dashed edge: on each blank floor cell of `r` beside open floor off it, a
+/// side's dash or a corner where two sides meet.
+fn leash_edge(c: &mut Canvas, room: &RigRoom, r: TileRect) {
+    let open = |p: Pos| !r.contains(p) && floor(room, p);
+    for p in r.iter().filter(|p| floor(room, *p)) {
+        if !c.blank(p) {
+            continue;
+        }
+        let [n, e, s, w] =
+            [(0, -1), (1, 0), (0, 1), (-1, 0)].map(|(dx, dy)| open(p.offset(dx, dy)));
+        let ch = match (w || e, n || s) {
+            (false, false) => continue,
+            (true, false) => '┆',
+            (false, true) => '┄',
+            (true, true) => match (w, s) {
+                (true, true) => '└',
+                (false, true) => '┘',
+                (true, false) => '┌',
+                (false, false) => '┐',
+            },
+        };
+        c.put(p, ch, LEASH, TINT, false);
+    }
+}
+
+/// Seat `n`'s beam at MASTIFF: out of its box's west side, through the SEATS wall along
+/// the box's middle row, turning up or down to MASTIFF's nearest row, to its tip by
+/// MASTIFF's east side.
+fn beam(c: &mut Canvas, room: &RigRoom, m: &crate::rigroom::mastiff::Mastiff, n: usize) {
+    let Some(s) = room.seats.get(n) else {
+        return;
+    };
+    let row = s.y + s.h / 2;
+    let to = row.clamp(m.pos.y, m.pos.y + 2);
+    let tip = Pos::new(m.pos.x + 3, to);
+    c.over(Pos::new(s.x, row), '┤', CORE, false);
+    if to == row {
+        for x in tip.x + 1..s.x {
+            c.over(Pos::new(x, row), '━', CORE, false);
+        }
+    } else {
+        // The turn, a column east of the tip.
+        let x = tip.x + 1;
+        for bx in x + 1..s.x {
+            c.over(Pos::new(bx, row), '━', CORE, false);
+        }
+        let (from_row, to_row) = if to < row {
+            ('┗', '┓')
+        } else {
+            ('┏', '┛')
+        };
+        c.over(Pos::new(x, row), from_row, CORE, false);
+        for y in to.min(row) + 1..to.max(row) {
+            c.over(Pos::new(x, y), '┃', CORE, false);
+        }
+        c.over(Pos::new(x, to), to_row, CORE, false);
+    }
+    c.over(tip, '◂', CORE, true);
+}
+
+/// A floor tile of the room: what you and MASTIFF walk.
+fn floor(room: &RigRoom, p: Pos) -> bool {
+    (room.construct.tiles.get(p)).is_some_and(|t| t.is_walkable())
 }
 
 /// PORTS: a door per line, a lit one named with its clock and its lane out through the
@@ -434,6 +605,33 @@ impl Canvas<'_> {
         }
     }
 
+    /// `ch` at `p` over the ground already there.
+    fn over(&mut self, p: Pos, ch: char, fg: Rgb, bold: bool) {
+        if let Some((sx, sy)) = tile_to_screen(self.area, self.origin, p) {
+            let bg = match self.buf[(sx, sy)].bg {
+                Color::Rgb(r, g, b) => Rgb(r, g, b),
+                _ => LEVEL,
+            };
+            put(self.buf, sx, sy, ch, fg, bg, bold);
+        }
+    }
+
+    /// Nothing drawn at `p` but its ground.
+    fn blank(&self, p: Pos) -> bool {
+        tile_to_screen(self.area, self.origin, p)
+            .is_some_and(|(sx, sy)| self.buf[(sx, sy)].symbol() == " ")
+    }
+
+    /// `p`'s ground from `from` to `to`, what stands on it kept.
+    fn retint(&mut self, p: Pos, from: Rgb, to: Rgb) {
+        if let Some((sx, sy)) = tile_to_screen(self.area, self.origin, p) {
+            let cell = &mut self.buf[(sx, sy)];
+            if cell.bg == from.to_color() {
+                cell.set_bg(to.to_color());
+            }
+        }
+    }
+
     fn text(&mut self, p: Pos, s: &str, fg: Rgb, bg: Rgb, bold: bool) {
         for (i, ch) in s.chars().enumerate() {
             self.put(p.offset(i as i32, 0), ch, fg, bg, bold);
@@ -475,7 +673,8 @@ impl Canvas<'_> {
 mod tests {
     use super::*;
     use crate::app::AppState;
-    use crate::rigroom::testutil::the_mocks_rig;
+    use crate::rigroom::mastiff::{self, Mastiff};
+    use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip, the_mocks_rig};
 
     /// The mock's map pane: 79 by 30.
     const PANE: Rect = Rect::new(0, 0, 79, 30);
@@ -571,5 +770,197 @@ mod tests {
         assert!(!text.contains("◉ keepalive"), "{text}");
         assert!(under(&buf, origin).trim().ends_with(" left"), "{text}");
         assert!(!ports(&buf, origin).contains('◂'), "{text}");
+    }
+
+    /// Where tile `p` lands in the pane painted from `origin`.
+    fn at(origin: Pos, p: Pos) -> (u16, u16) {
+        ((p.x - origin.x) as u16, (p.y - origin.y) as u16)
+    }
+
+    fn room_of(st: &AppState) -> RigRoom {
+        crate::rigroom::room(st).expect("the room").clone()
+    }
+
+    fn mastiff_of(st: &AppState) -> Mastiff {
+        room_of(st).mastiff.expect("MASTIFF out")
+    }
+
+    /// The three rows of MASTIFF's 3x3 as drawn, top to bottom.
+    fn body(buf: &Buffer, origin: Pos, m: &Mastiff) -> String {
+        (0..3)
+            .map(|dy| {
+                let (x, y) = at(origin, m.pos.offset(0, dy));
+                row(buf, y, x..x + 3)
+            })
+            .collect()
+    }
+
+    const RED: Color = Color::Rgb(0xff, 0x28, 0x48);
+
+    #[test]
+    fn asleep_it_coils_round_the_chip() {
+        let st = a_black_chip();
+        let (buf, origin) = paint(&st);
+        let slot = room_of(&st).slots[BLACK_SLOT];
+        let (x, y) = at(origin, Pos::new(slot.x + slot.w / 2, slot.y + slot.h / 2));
+        assert_eq!(row(&buf, y - 1, x - 1..x + 2), "▛▀▜", "{}", text(&buf));
+        assert_eq!(row(&buf, y, x - 1..x + 2), "▌◆▐");
+        assert_eq!(row(&buf, y + 1, x - 1..x + 2), "▙▄▟");
+        for dx in 0..3 {
+            assert_eq!(buf[(x - 1 + dx, y - 1)].fg, RED);
+        }
+        assert_eq!(
+            buf[(x, y)].fg,
+            Color::Rgb(0xe6, 0xf0, 0xf5),
+            "the core white"
+        );
+        // Its tail under the box names it, in red; the ground round it is tinted.
+        let (tx, ty) = at(origin, Pos::new(slot.x, slot.bottom() + 1));
+        assert_eq!(row(&buf, ty, tx..tx + 7).trim(), "MASTIFF");
+        assert_eq!(buf[(x, ty)].fg, RED);
+        let (gx, gy) = at(origin, Pos::new(slot.x - 1, slot.bottom() + 3));
+        assert_eq!(
+            buf[(gx, gy)].bg,
+            Color::Rgb(0x16, 0x08, 0x0c),
+            "its leash tinted"
+        );
+    }
+
+    /// MASTIFF moved to `to`, as its steps would take it; you beside it on the west.
+    fn walked_to(st: &mut AppState, to: Pos) {
+        let room = st.constructs.rig.as_mut().unwrap();
+        room.mastiff.as_mut().expect("MASTIFF out").pos = to;
+        st.player.as_mut().unwrap().pos = to.offset(-1, 1);
+    }
+
+    #[test]
+    fn the_fight_draws_its_board() {
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        // Off its slot, where the mock's turn 4 has it.
+        let to = mastiff_of(&st).pos.offset(0, 3);
+        walked_to(&mut st, to);
+        let west = Pos::new(to.x - 3, to.y + 1);
+        for _ in 0..3 {
+            mastiff::hit(&mut st, west);
+        }
+        mastiff::turn(&mut st);
+        let m = mastiff_of(&st);
+        assert_eq!(m.pos, to, "beside you it doesn't step");
+        let bite = m.bite.expect("a bite marked");
+        // You step off the marks, still on the leash.
+        st.player.as_mut().unwrap().pos = Pos::new(bite.x - 1, bite.y + 1);
+        assert!(m.leash.contains(Pos::new(bite.x - 1, bite.y + 1)));
+        let (buf, origin) = paint(&st);
+        let drawn = body(&buf, origin, &m);
+        assert_eq!(drawn.matches('░').count(), 3, "{drawn}");
+        assert_eq!(drawn, "░▀▜░◆▐░▄▟", "the west side's plates broken");
+        let (x, y) = at(origin, m.pos);
+        assert_eq!(
+            buf[(x, y)].fg,
+            Color::Rgb(0x8a, 0x22, 0x36),
+            "a broken plate dim"
+        );
+        assert_eq!(buf[(x + 1, y)].fg, RED);
+        let text = text(&buf);
+        assert_eq!(text.matches('×').count(), 9, "{text}");
+        assert!(text.contains("awake"), "the slot's tail: {text}");
+        assert!(
+            text.contains("◉ attack"),
+            "a free seat in the fight: {text}"
+        );
+        // The footer reads the fight.
+        let map = crate::screens::explore::MapScreen::walking(&mut st);
+        let screen = crate::screens::testutil::buffer_text(&crate::screens::shots::draw_stack(
+            &st,
+            &[&map],
+            (120, 40),
+        ));
+        for want in ["ENGAGED", "seat 2", "MASTIFF · black ICE · coat 5/8"] {
+            assert!(screen.contains(want), "{want}\n{screen}");
+        }
+    }
+
+    #[test]
+    fn a_seats_beam_draws_on_its_turn() {
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let seat = room_of(&st).seats[1];
+        let (_, origin) = paint(&st);
+        let (x, y) = at(origin, Pos::new(seat.x, seat.y + seat.h / 2));
+        let (buf, _) = paint(&st);
+        assert_ne!(row(&buf, y, x..x + 1), "┤", "not on your turn");
+        let e = st.net.engaged.as_mut().unwrap();
+        e.turn = (e.order.iter())
+            .position(|a| *a == crate::net::Actor::Seat(1))
+            .expect("seat 2 in the fight");
+        let (buf, _) = paint(&st);
+        assert_eq!(row(&buf, y, x..x + 1), "┤", "{}", text(&buf));
+        let m = mastiff_of(&st);
+        let line = row(&buf, y, 0..x);
+        assert!(line.trim_end().ends_with('━'), "{line}");
+        assert!(text(&buf).contains('◂'), "its tip at MASTIFF");
+        let (mx, _) = at(origin, Pos::new(m.pos.x + 3, m.pos.y));
+        let tip = (0..buf.area.height).find(|ty| row(&buf, *ty, mx..mx + 1) == "◂");
+        assert!(tip.is_some(), "the tip beside MASTIFF's east side");
+    }
+
+    #[test]
+    fn its_grit_stays_where_it_broke() {
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let to = mastiff_of(&st).pos.offset(0, 3);
+        walked_to(&mut st, to);
+        let m = mastiff_of(&st);
+        let west = Pos::new(m.pos.x - 3, m.pos.y + 1);
+        for _ in 0..10 {
+            mastiff::hit(&mut st, west);
+        }
+        assert!(st.net.engaged.is_none(), "the fight is won");
+        st.player.as_mut().unwrap().pos = Pos::new(m.pos.x - 3, m.pos.y);
+        let (buf, origin) = paint(&st);
+        let drawn = body(&buf, origin, &m);
+        for grit in ['▝', '░', '▖', '▗', '·'] {
+            assert!(drawn.contains(grit), "{grit} in {drawn}");
+        }
+        assert!(!drawn.contains('◆'), "{drawn}");
+        let text = text(&buf);
+        assert!(!text.contains('×') && !text.contains('┆'), "{text}");
+        let slot = room_of(&st).slots[BLACK_SLOT];
+        let (x, y) = at(origin, Pos::new(slot.x + slot.w / 2, slot.y + slot.h / 2));
+        assert_eq!(row(&buf, y, x..x + 1), "¤", "a plain credchip now");
+        let (tx, ty) = at(origin, Pos::new(slot.x, slot.bottom() + 1));
+        assert_eq!(row(&buf, ty, tx..tx + 7).trim(), "¤4,800");
+    }
+
+    #[test]
+    fn a_leash_through_the_divider_tints_its_doorway_not_its_wall() {
+        let mut st = a_black_chip();
+        st.character.reader.swap(0, BLACK_SLOT);
+        let r = room_of(&st);
+        st.player.as_mut().unwrap().pos = crate::rigroom::layout::front(r.slots[0]);
+        mastiff::wake(&mut st, 0).unwrap();
+        let m = mastiff_of(&st);
+        assert_eq!(m.leash.x, r.hall.x, "the leash takes in the west divider");
+        let (buf, origin) = paint(&st);
+        let tint = Color::Rgb(0x16, 0x08, 0x0c);
+        let floor = |p: Pos| r.construct.tiles.get(p).is_some_and(|t| t.is_walkable());
+        let mut doorway = 0;
+        for y in m.leash.y + 1..m.leash.bottom() {
+            let p = Pos::new(r.hall.x, y);
+            let (sx, sy) = at(origin, p);
+            let cell = &buf[(sx, sy)];
+            if floor(p) {
+                doorway += 1;
+                assert_eq!((cell.symbol(), cell.bg), ("┆", tint), "{p:?}");
+            } else {
+                assert_eq!(cell.symbol(), "│", "{p:?}");
+                assert_ne!(cell.bg, tint, "no tint on the divider's wall: {p:?}");
+            }
+        }
+        assert!(doorway > 0, "the doorway is on the leash");
+        // Its open south side dashed.
+        let (sx, sy) = at(origin, Pos::new(m.leash.x + 3, m.leash.bottom() - 1));
+        assert_eq!(row(&buf, sy, sx..sx + 1), "┄", "{}", text(&buf));
     }
 }

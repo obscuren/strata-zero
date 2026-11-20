@@ -2727,11 +2727,8 @@ pub fn pace(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
         (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
-        // MASTIFF's and a seat's turn is one action, then the next actor's.
-        (Actor::Mastiff, _) => {
-            crate::rigroom::mastiff::turn(st);
-            Step::Nothing
-        }
+        // MASTIFF walks a tile a beat, then marks or bites; a seat's turn is one shot.
+        (Actor::Mastiff, _) => crate::rigroom::mastiff::step(st, moves > 0, ap > 0),
         (Actor::Seat(n), _) => {
             crate::rigroom::mastiff::seat_turn(st, n);
             Step::Nothing

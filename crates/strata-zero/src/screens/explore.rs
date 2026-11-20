@@ -1153,10 +1153,12 @@ impl MapScreen {
     /// What the act half offers, in key order: the fight's abilities (strikes,
     /// boosts, marks, Vanish; content order), then the throwables in the pack; at most ten,
     /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
-    /// does not push, a boost), and no throwables.
+    /// does not push, a boost), and no throwables; in your rig's room no strike either,
+    /// as your Attack and the seats are what fight MASTIFF.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
         let net = Self::in_net(st);
+        let room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
         let owned = st.character.abilities(&st.content);
         let mut out: Vec<Act> = st
             .content
@@ -1164,7 +1166,7 @@ impl MapScreen {
             .iter()
             .filter(|a| owned.iter().any(|(id, _)| *id == a.id))
             .filter(|a| match a.kind {
-                Active(A::Strike { push, .. }) => !net || push == 0,
+                Active(A::Strike { push, .. }) => !room && (!net || push == 0),
                 Active(A::Boost { .. }) => true,
                 Active(A::Mark { .. }) => !net,
                 Active(A::Vanish) => !net,
@@ -1652,6 +1654,7 @@ impl MapScreen {
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
                 }
+                Place::Rig => crate::rigroom::mastiff::ice_line(st).into_iter().collect(),
                 _ => Vec::new(),
             },
             (false, Some(p)) => {
@@ -1743,7 +1746,16 @@ impl MapScreen {
             ));
         }
         let e = st.net.engaged.as_ref()?;
-        let on_foot = crate::net::engaged_on_foot(st);
+        if e.actor() == Actor::You
+            && let Some(bite) = Self::bite_prompt(st, e.phase)
+        {
+            return Some(bite);
+        }
+        // In your rig's room you step as on foot and act as on the Net.
+        let on_foot = match e.place {
+            Place::Rig => e.phase == Phase::Move,
+            _ => crate::net::engaged_on_foot(st),
+        };
         Some(match e.actor() {
             Actor::You if on_foot => match e.phase {
                 Phase::Move => (
@@ -1814,6 +1826,42 @@ impl MapScreen {
             Actor::Seat(n) => (format!("SEAT {} ATTACKS", n + 1), "wait".to_string()),
             Actor::Mastiff => ("MASTIFF ACTS".to_string(), "wait".to_string()),
         })
+    }
+
+    /// Your turn in your rig's room with MASTIFF's bite marked: where it lands, and what
+    /// answers it: stepping off (on the move half) and the deck's Shield and Attack by
+    /// their keys (`3 shield · 2 attack`), the turn's end on the act half.
+    fn bite_prompt(st: &AppState, phase: crate::net::Phase) -> Option<(String, String)> {
+        use crate::net::Phase;
+        crate::rigroom::room(st)
+            .and_then(|r| r.mastiff.as_ref())
+            .filter(|m| m.bite.is_some() && crate::rigroom::mastiff::awake(st))?;
+        let mut keys: Vec<String> = Vec::new();
+        if phase == Phase::Move {
+            keys.push("move off them".to_string());
+        }
+        for (op, word) in [(game::Op::Shield, "shield"), (game::Op::Attack, "attack")] {
+            if let Some(k) = Self::key_for_op(st, op) {
+                keys.push(format!("{k} {word}"));
+            }
+        }
+        if phase == Phase::Act {
+            keys.push(". end turn".to_string());
+        }
+        Some((
+            "MASTIFF bites the × tiles next turn".to_string(),
+            keys.join(" · "),
+        ))
+    }
+
+    /// The number key of the first loaded program that does `op`.
+    fn key_for_op(st: &AppState, op: game::Op) -> Option<char> {
+        let i = (st.character.loaded.iter().take(hud::SLOTS)).position(|id| {
+            (st.content.item(id))
+                .and_then(|i| i.program)
+                .is_some_and(|p| p.op == op)
+        })?;
+        char::from_digit(i as u32 + 1, 10)
     }
 
     /// The strip's slots: the deck's programs while jacked in, abilities otherwise.
@@ -8646,6 +8694,73 @@ mod tests {
         let room = draw_screen(&s, &st, 180, 50);
         assert!(!room.contains("◉ rent"), "{room}");
         assert!(room.contains("free seat"), "{room}");
+    }
+
+    /// MASTIFF awake in the room with Crack, Attack and Shield loaded, in that order.
+    fn mastiff_awake() -> (AppState, MapScreen) {
+        use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip, load};
+        let mut st = a_black_chip();
+        st.character.loaded.clear();
+        for id in ["crack", "attack", "shield"] {
+            load(&mut st, id);
+        }
+        crate::rigroom::mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let s = MapScreen::walking(&mut st);
+        (st, s)
+    }
+
+    #[test]
+    fn the_rooms_fight_prompts_its_bite_with_the_decks_keys() {
+        let (mut st, mut s) = mastiff_awake();
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            !drawn.contains("MASTIFF bites"),
+            "no bite marked yet: {drawn}"
+        );
+        crate::rigroom::mastiff::turn(&mut st);
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            drawn.contains("▸ MASTIFF bites the × tiles next turn"),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("move off them · 3 shield · 2 attack"),
+            "{drawn}"
+        );
+        // The act half: the deck's keys, and the turn's end.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            drawn.contains("3 shield · 2 attack · . end turn"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+    }
+
+    #[test]
+    fn the_rooms_act_half_says_programs_not_acts() {
+        let (mut st, mut s) = mastiff_awake();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+        assert!(drawn.contains("1-5 program"), "{drawn}");
+    }
+
+    #[test]
+    fn strikes_stay_out_of_the_rooms_act_list() {
+        let (mut st, _) = mastiff_awake();
+        for a in ["static", "redline"] {
+            st.character.abilities.push(game::AbilityId::new(a));
+        }
+        let list = MapScreen::act_list(&st);
+        let ability = |s: &str| Act::Ability(game::AbilityId::new(s));
+        assert!(!list.contains(&ability("static")), "{list:?}");
+        assert!(
+            list.contains(&ability("redline")),
+            "a boost still: {list:?}"
+        );
     }
 
     #[test]

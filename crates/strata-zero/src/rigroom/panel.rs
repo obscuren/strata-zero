@@ -2,7 +2,7 @@
 //! firewall, the lines and what each holds, the reader's slots, the seats' jobs, what is
 //! under you and where your body is.
 
-use super::{clip, reader, room, sled_name, span};
+use super::{clip, mastiff, reader, room, sled_name, span};
 use crate::app::AppState;
 use crate::backdoors::Kind;
 use crate::rig::jobs::{JobKind, sift_left, target, up_label};
@@ -152,33 +152,44 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
             TEXT,
         ),
     ]));
-    for stack in stacks {
+    for (i, stack) in stacks.into_iter().enumerate() {
         let Some(stack) = stack else {
             out.push(Line::from(sp(" · free slot", FAINT)));
             continue;
         };
-        let (glyph, colour) = match reader::holds(st, &stack.item) {
+        let holds = reader::holds(st, &stack.item);
+        let (glyph, colour) = match holds {
             Some(h) => reader::glyph(h),
             None => ('·', DIM),
         };
         let item = st.content.item(&stack.item);
         let name = item.map_or(stack.item.0.as_str(), |i| i.name.as_str());
+        // The black chip's tail is its ICE, in red: asleep, or awake off it.
+        let tail = match holds {
+            Some(reader::Holds::Black) if mastiff::awake_on(st, i) => sp("awake", FW),
+            Some(reader::Holds::Black) => sp(reader::summon_word(st, stack), FW),
+            _ => sp(reader::summon_word(st, stack), DIM),
+        };
         out.push(row(
             vec![
                 sp(" ", TEXT),
                 bold(glyph.to_string(), colour),
                 sp(format!(" {}", clip(name, w.saturating_sub(18))), TEXT),
             ],
-            Some(sp(reader::summon_word(st, stack), DIM)),
+            Some(tail),
         ));
     }
     out.push(rule());
-    // The seats.
+    // The seats: the jobs in them, and each free one in a fight with MASTIFF.
+    let fighting = mastiff::fighting_seats(st);
     let core = sled(st, SocketKind::Core);
     let mut head = vec![
         sp(" ", TEXT),
         bold("SEATS", LABEL),
-        sp(format!(" {}/{}", running.len(), rig.seats), TEXT),
+        sp(
+            format!(" {}/{}", running.len() + fighting.len(), rig.seats),
+            TEXT,
+        ),
     ];
     if let Some(core) = core {
         head.push(sp(format!(" · {core}"), DIM));
@@ -216,19 +227,75 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
             Some(sp(tail, DIM)),
         ));
     }
+    let odds = mastiff::seat_odds(st).map_or(String::new(), |c| format!("{c}%"));
+    for _ in &fighting {
+        out.push(row(
+            vec![
+                sp(" ", TEXT),
+                bold("◉", CORE),
+                sp(" attack · MASTIFF", TEXT),
+            ],
+            Some(sp(odds.clone(), DIM)),
+        ));
+    }
     out.push(rule());
     out.extend(here_lines(st));
-    out.push(Line::from(vec![
-        sp(" ", TEXT),
-        bold("BODY", LABEL),
-        sp(" at home", DIM),
-    ]));
+    // Your body back home, and what the bites have cost it.
+    let mut body = vec![sp(" ", TEXT), bold("BODY", LABEL), sp(" at home", DIM)];
+    let (hp, max) = (st.character.hp, st.character.hp_max(&st.content));
+    if hp < max {
+        body.push(sp(" · ", DIM));
+        body.push(sp(format!("HP {hp}/{max}"), TEXT));
+    }
+    out.push(Line::from(body));
     out
 }
 
-/// What is under you: a slot's thing and what summoning does, a door's way out, the
-/// trunk, the terminal. Nothing when you stand at none.
+/// MASTIFF awake, as the panel reads it under you wherever you stand in the room: its
+/// coat plate by plate, its core, the bite it has marked, its leash.
+fn fight_lines(st: &AppState) -> Option<Vec<Line<'static>>> {
+    let m = room(st)?.mastiff.as_ref().filter(|_| mastiff::awake(st))?;
+    let coat = m.coat();
+    let core = match coat {
+        0 => sp(
+            format!("{} {}", m.core, if m.core == 1 { "hit" } else { "hits" }),
+            TEXT,
+        ),
+        _ => sp("sealed under the coat", DIM),
+    };
+    let mut out = vec![
+        Line::from(vec![
+            sp(" ", TEXT),
+            bold("◆ MASTIFF", FW),
+            sp(" · black ICE", DIM),
+        ]),
+        Line::from(vec![
+            sp("   COAT  ", LABEL),
+            sp("▮".repeat(coat), FW),
+            sp("▯".repeat(8 - coat), FAINT),
+            sp(format!(" {coat}/8"), TEXT),
+        ]),
+        Line::from(vec![sp("   CORE  ", LABEL), core]),
+    ];
+    if m.bite.is_some() {
+        out.push(Line::from(vec![
+            sp("   BITE  ", LABEL),
+            sp("next turn · the × tiles", TEXT),
+        ]));
+    }
+    out.push(Line::from(vec![
+        sp("   LEASH ", LABEL),
+        sp("the red ground", DIM),
+    ]));
+    Some(out)
+}
+
+/// What is under you: MASTIFF while it's awake; a slot's thing and what summoning does,
+/// a door's way out, the trunk, the terminal. Nothing when you stand at none.
 pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
+    if let Some(fight) = fight_lines(st) {
+        return fight;
+    }
     let (Some(room), Some(p)) = (room(st), st.player.as_ref()) else {
         return Vec::new();
     };
@@ -252,7 +319,8 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
             .map_or(stack.item.0.clone(), |i| i.name.clone());
         let word = match reader::holds(st, &stack.item) {
             Some(reader::Holds::Chip) => {
-                format!("¤{}", stack.copy.as_ref().map_or(0, |k| k.credits))
+                let credits = stack.copy.as_ref().map_or(0, |k| k.credits);
+                format!("¤{}", super::crack::commas(credits))
             }
             _ => reader::summon_word(st, stack),
         };
@@ -394,6 +462,59 @@ mod tests {
         assert_eq!(text(&here_lines(&st)), [" ▯ free line"]);
         put(&mut st, room.trunk.offset(0, -1));
         assert_eq!(text(&here_lines(&st)), [" ▸ the grid · your block"]);
+    }
+
+    #[test]
+    fn the_fight_reads_under_you() {
+        use crate::rigroom::mastiff;
+        use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip};
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let m = room(&st).unwrap().mastiff.clone().unwrap();
+        let west = citygen::Pos::new(m.pos.x - 3, m.pos.y + 1);
+        for _ in 0..3 {
+            mastiff::hit(&mut st, west);
+        }
+        assert_eq!(
+            text(&here_lines(&st)),
+            [
+                " ◆ MASTIFF · black ICE",
+                "   COAT  ▮▮▮▮▮▯▯▯ 5/8",
+                "   CORE  sealed under the coat",
+                "   LEASH the red ground",
+            ]
+        );
+        mastiff::turn(&mut st);
+        let t = text(&here_lines(&st));
+        assert_eq!(t[3], "   BITE  next turn · the × tiles", "{t:?}");
+        assert_eq!(t[4], "   LEASH the red ground");
+        // The coat gone, the core's hits.
+        for _ in 0..5 {
+            mastiff::hit(&mut st, west);
+        }
+        let t = text(&here_lines(&st));
+        assert_eq!(t[1], "   COAT  ▯▯▯▯▯▯▯▯ 0/8");
+        assert_eq!(t[2], "   CORE  2 hits");
+        // The reader's row and the seats say the fight.
+        let p = text(&panel_lines(&st));
+        let black = (p.iter())
+            .find(|l| l.contains("Black credchip"))
+            .expect("the black chip's row");
+        assert!(black.trim_end().ends_with("awake"), "{p:#?}");
+        assert!(p.iter().any(|l| l.contains("SEATS 2/2")), "{p:#?}");
+        assert!(p.iter().any(|l| l.contains("◉ attack · MASTIFF")), "{p:#?}");
+    }
+
+    #[test]
+    fn a_bite_shows_on_the_body_line() {
+        let (mut st, _) = the_mocks_rig();
+        let t = text(&panel_lines(&st));
+        assert!(t.last().unwrap().ends_with("BODY at home"), "{t:#?}");
+        let max = st.character.hp_max(&st.content);
+        st.character.hp = max - 14;
+        let t = text(&panel_lines(&st));
+        let want = format!("BODY at home · HP {}/{max}", max - 14);
+        assert!(t.last().unwrap().contains(&want), "{t:#?}");
     }
 
     #[test]
