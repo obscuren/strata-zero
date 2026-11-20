@@ -1828,30 +1828,28 @@ impl MapScreen {
         })
     }
 
-    /// Your turn in your rig's room with MASTIFF's bite marked: where it lands, and what
-    /// answers it: stepping off (on the move half) and the deck's Shield and Attack by
-    /// their keys (`3 shield · 2 attack`), the turn's end on the act half.
+    /// Your turn in your rig's room with MASTIFF's bite marked: where it lands, and the
+    /// keys that answer it in the half you're in: stepping off or staying while you move,
+    /// the deck's Shield and Attack by their keys (`3 shield · 2 attack`) once you act.
     fn bite_prompt(st: &AppState, phase: crate::net::Phase) -> Option<(String, String)> {
         use crate::net::Phase;
         crate::rigroom::room(st)
             .and_then(|r| r.mastiff.as_ref())
             .filter(|m| m.bite.is_some() && crate::rigroom::mastiff::awake(st))?;
-        let mut keys: Vec<String> = Vec::new();
-        if phase == Phase::Move {
-            keys.push("move off them".to_string());
-        }
-        for (op, word) in [(game::Op::Shield, "shield"), (game::Op::Attack, "attack")] {
-            if let Some(k) = Self::key_for_op(st, op) {
-                keys.push(format!("{k} {word}"));
+        let keys = match phase {
+            Phase::Move => "move off them · space to stay".to_string(),
+            Phase::Act => {
+                let ops = [(game::Op::Shield, "shield"), (game::Op::Attack, "attack")];
+                let keys: Vec<String> = (ops.into_iter())
+                    .filter_map(|(op, word)| Some(format!("{} {word}", Self::key_for_op(st, op)?)))
+                    .collect();
+                match keys.is_empty() {
+                    true => ". end turn".to_string(),
+                    false => keys.join(" · "),
+                }
             }
-        }
-        if phase == Phase::Act {
-            keys.push(". end turn".to_string());
-        }
-        Some((
-            "MASTIFF bites the × tiles next turn".to_string(),
-            keys.join(" · "),
-        ))
+        };
+        Some(("MASTIFF bites the × tiles next turn".to_string(), keys))
     }
 
     /// The number key of the first loaded program that does `op`.
@@ -4785,12 +4783,13 @@ impl Screen for MapScreen {
         if !looked.is_empty() {
             overlays.push(&look_block);
         }
-        // The turn column, on the map that is on turns.
+        // The turn column, on the map that is on turns; not in your rig's room, whose
+        // SEATS header it would cover: the footer's turn row reads the order there.
         let turns = st
             .net
             .engaged
             .as_ref()
-            .filter(|e| e.place == self.place)
+            .filter(|e| e.place == self.place && e.place != Place::Rig)
             .and_then(|_| crate::net::turn_view(st));
         let turn_overlay = turns
             .as_ref()
@@ -8723,19 +8722,33 @@ mod tests {
             drawn.contains("▸ MASTIFF bites the × tiles next turn"),
             "{drawn}"
         );
-        assert!(
-            drawn.contains("move off them · 3 shield · 2 attack"),
-            "{drawn}"
-        );
-        // The act half: the deck's keys, and the turn's end.
+        // The move half: only what works while you move.
+        assert!(drawn.contains("move off them · space to stay"), "{drawn}");
+        assert!(!drawn.contains("shield ·"), "{drawn}");
+        // The act half: the deck's Shield and Attack by their keys.
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
         let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
-            drawn.contains("3 shield · 2 attack · . end turn"),
+            drawn.contains("▸ MASTIFF bites the × tiles next turn"),
             "{drawn}"
         );
+        assert!(drawn.contains("3 shield · 2 attack"), "{drawn}");
+        assert!(!drawn.contains("move off them"), "{drawn}");
         assert!(!drawn.contains("1-9 act"), "{drawn}");
+    }
+
+    #[test]
+    fn the_rooms_fight_has_no_turn_column() {
+        let (st, s) = mastiff_awake();
+        let drawn = draw_screen(&s, &st, 120, 40);
+        // The footer's turn row carries the order; the SEATS header stays readable.
+        assert_eq!(drawn.matches("TURN 1").count(), 1, "{drawn}");
+        assert!(
+            drawn.contains("TURN 1  YOU › seat 1 › seat 2 › MASTIFF"),
+            "{drawn}"
+        );
+        assert!(drawn.contains("Tinman 2X · 2"), "{drawn}");
     }
 
     #[test]

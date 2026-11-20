@@ -336,12 +336,14 @@ pub fn attack_mastiff(st: &mut AppState) -> Result<usize, String> {
         1,
         Some(crate::net::ATTACK_TINT),
     );
-    let line = if hit {
-        crate::rigroom::mastiff::hit(st, me)
-    } else {
-        format!("MASTIFF · {}", crate::rigroom::mastiff::miss(st))
+    // The winning hit says its own line.
+    let line = match hit {
+        true => crate::rigroom::mastiff::hit(st, me),
+        false => Some(format!("MASTIFF · {}", crate::rigroom::mastiff::miss(st))),
     };
-    st.say(line);
+    if let Some(line) = line {
+        st.say(line);
+    }
     Ok(slot)
 }
 

@@ -266,26 +266,24 @@ fn tint(c: &mut Canvas, room: &RigRoom, r: TileRect) {
     }
 }
 
-/// The leash's dashed edge: on each blank floor cell of `r` beside open floor off it, a
-/// side's dash or a corner where two sides meet.
+/// The leash's dashed edge, as the mock draws it: on each blank floor cell of `r` whose
+/// west, east or south neighbour off the leash is the hall (its floor, a doorway, the
+/// next slot's box), a side's dash, or a corner where the south meets a side. Against a
+/// divider's wall it stays undashed, and its north runs up to the reader undashed.
 fn leash_edge(c: &mut Canvas, room: &RigRoom, r: TileRect) {
-    let open = |p: Pos| !r.contains(p) && floor(room, p);
+    let open =
+        |p: Pos| !r.contains(p) && (floor(room, p) || room.slots.iter().any(|b| b.contains(p)));
     for p in r.iter().filter(|p| floor(room, *p)) {
         if !c.blank(p) {
             continue;
         }
-        let [n, e, s, w] =
-            [(0, -1), (1, 0), (0, 1), (-1, 0)].map(|(dx, dy)| open(p.offset(dx, dy)));
-        let ch = match (w || e, n || s) {
-            (false, false) => continue,
-            (true, false) => '┆',
-            (false, true) => '┄',
-            (true, true) => match (w, s) {
-                (true, true) => '└',
-                (false, true) => '┘',
-                (true, false) => '┌',
-                (false, false) => '┐',
-            },
+        let [e, s, w] = [(1, 0), (0, 1), (-1, 0)].map(|(dx, dy)| open(p.offset(dx, dy)));
+        let ch = match (w, e, s) {
+            (false, false, false) => continue,
+            (true, _, true) => '└',
+            (false, true, true) => '┘',
+            (_, _, true) => '┄',
+            _ => '┆',
         };
         c.put(p, ch, LEASH, TINT, false);
     }
@@ -931,6 +929,39 @@ mod tests {
         assert_eq!(row(&buf, y, x..x + 1), "¤", "a plain credchip now");
         let (tx, ty) = at(origin, Pos::new(slot.x, slot.bottom() + 1));
         assert_eq!(row(&buf, ty, tx..tx + 7).trim(), "¤4,800");
+    }
+
+    #[test]
+    fn the_leash_is_dashed_as_the_mock_draws_it() {
+        let mut st = a_black_chip();
+        mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let r = room_of(&st);
+        let leash = mastiff_of(&st).leash;
+        let (buf, origin) = paint(&st);
+        let cell = |p: Pos| {
+            let (x, y) = at(origin, p);
+            (buf[(x, y)].symbol().to_string(), buf[(x, y)].bg)
+        };
+        let tint = Color::Rgb(0x16, 0x08, 0x0c);
+        let (x0, y1) = (leash.x, leash.bottom() - 1);
+        // The west side dashed from the top, the south along the bottom.
+        for y in leash.y..y1 {
+            assert_eq!(cell(Pos::new(x0, y)), ("┆".into(), tint), "west at {y}");
+        }
+        assert_eq!(cell(Pos::new(x0, y1)).0, "└");
+        for x in x0 + 1..leash.right() {
+            assert_eq!(cell(Pos::new(x, y1)).0, "┄", "south at {x}");
+        }
+        // The north runs up to the reader undashed; the READER title stays untinted.
+        assert_eq!(cell(Pos::new(x0 + 1, leash.y)), (" ".into(), tint));
+        for x in r.hall.x + 1..r.hall.right() {
+            assert_ne!(cell(Pos::new(x, r.floor.y + 1)).1, tint, "title row at {x}");
+        }
+        // The next slot's box is off the leash.
+        let next = r.slots[BLACK_SLOT - 1];
+        for p in next.iter() {
+            assert_ne!(cell(p).1, tint, "{p:?}");
+        }
     }
 
     #[test]

@@ -304,8 +304,11 @@ row is its summon (and `x Leave it`):
   front of it. One MASTIFF awake at a time; a second chip's row is refused while a fight
   is on.
 - **The board.** MASTIFF is three cells square: eight plates round its core, a broken
-  plate drawn as `░` in a dim red. Its leash is a rectangle round its slot (six cells
-  out each way, clipped to the hall), tinted, with a dashed edge on its open sides.
+  plate drawn as `░` in a dim red. Its leash is a strip in front of its slot: from two
+  cells west of the slot's box to one east of it, from two rows above the box to ten rows
+  below it, clipped to the hall; it never takes in another slot's box or the READER
+  title. It is tinted, with a dashed edge on its open west, east and south sides (the
+  north runs up to the reader, undashed).
 - **Its turn.** Two moves, toward you inside the leash, then: if no bite is marked, it
   marks one (the 3×3 tiles beside it on your side, drawn `×` in bright red) and the
   prompt says `MASTIFF bites the × tiles next turn`; if one is marked, it bites them:
@@ -413,9 +416,9 @@ mock draws it (round 5's frame 1):
    Crack per minute; the cracked count rides on the chip's copy.
 6. The black credchip is a new item from guarded office and hotel safes; MASTIFF guards
    every black chip, and nothing else.
-7. MASTIFF alternates marking a bite and biting; its leash reaches six cells round its
-   slot; its core takes two hits; plates grow back one a turn while you're off the
-   leash.
+7. MASTIFF alternates marking a bite and biting; its leash is the strip in front of its
+   slot (two cells west of the box, one east, two rows above, ten below); its core takes
+   two hits; plates grow back one a turn while you're off the leash.
 8. A seat attacks at your Attack's chance scaled by the core's speed, capped at 95.
 9. The JACK IN list goes; the doors and the trunk replace it.
 10. The room isn't saved; a fight isn't either, and a run reopened mid-fight finds

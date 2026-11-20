@@ -3677,11 +3677,14 @@ fn rig_mastiff_after() {
         if st.net.engaged.is_none() {
             break;
         }
-        let line = crate::rigroom::mastiff::hit(&mut st, at.offset(-3, 1));
-        st.say(line);
+        if let Some(line) = crate::rigroom::mastiff::hit(&mut st, at.offset(-3, 1)) {
+            st.say(line);
+        }
     }
     assert!(st.net.engaged.is_none(), "the fight is won");
     st.player.as_mut().unwrap().pos = at.offset(1, -1);
+    // The log's newest line typed out.
+    pass(&mut st, 20);
     map.update(&mut st, &[]);
     room_shot(&dir, "rig_mastiff_after", &st, &mut map, &[]);
 }

@@ -27,7 +27,7 @@ pub struct Mastiff {
     pub core: u8,
     /// The 3x3 it bites on its next turn, once marked.
     pub bite: Option<Rect>,
-    /// The ground it keeps to: its slot's box grown by `LEASH`, clipped to the hall.
+    /// The ground it keeps to: the strip in front of its slot (`leash_of`).
     pub leash: Rect,
 }
 
@@ -51,8 +51,12 @@ pub const BITE: u32 = 7;
 const CORE: u8 = 2;
 /// Tiles it walks a turn, toward you.
 pub const MOVES: u8 = 2;
-/// Cells its leash reaches past its slot's box each way.
-const LEASH: i32 = 6;
+/// Cells its leash reaches past its slot's box: west and east (short of the next slots'
+/// boxes, 2 columns off), above it (short of the READER title) and below it.
+const LEASH_WEST: i32 = 2;
+const LEASH_EAST: i32 = 1;
+const LEASH_NORTH: i32 = 2;
+const LEASH_SOUTH: i32 = 10;
 /// The best a seat's beam does, in percent.
 const SEAT_CAP: u32 = 95;
 /// Each plate's tile in its 3x3, in the coat's order.
@@ -171,11 +175,19 @@ pub fn wake(st: &mut AppState, slot: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// The ground MASTIFF of slot `slot` keeps to, asleep or awake: the slot's box grown by
-/// `LEASH`, clipped to the hall.
+/// The ground MASTIFF of slot `slot` keeps to, asleep or awake, as the mock draws it: a
+/// strip in front of its slot, from 2 columns west of the box to 1 east and from 2 rows
+/// above it to 10 below, clipped to the hall. The slots stand 2 columns apart, so it
+/// never takes in another slot's box.
 pub fn leash_of(room: &RigRoom, slot: usize) -> Option<Rect> {
     let r = *room.slots.get(slot)?;
-    Some(r.grow(LEASH).intersection(room.hall).unwrap_or(r))
+    let strip = Rect::new(
+        r.x - LEASH_WEST,
+        r.y - LEASH_NORTH,
+        r.w + LEASH_WEST + LEASH_EAST,
+        r.h + LEASH_NORTH + LEASH_SOUTH,
+    );
+    Some(strip.intersection(room.hall).unwrap_or(r))
 }
 
 /// You out from under MASTIFF where it lands: onto the nearest floor beside it.
@@ -325,11 +337,13 @@ fn beside(m: &Mastiff, me: Pos) -> Option<Rect> {
 }
 
 /// A hit on MASTIFF from `from`: the whole plate nearest it breaks, or with the coat gone
-/// its core takes one. The core's second leaves grit where it stood, ends the turns and
-/// opens the chip it guarded into a `credchip` with its sum. The line it makes.
-pub fn hit(st: &mut AppState, from: Pos) -> String {
+/// its core takes one. The line it makes, for the one who hit it to say. The core's
+/// second says its own (`MASTIFF · to grit · the chip opens · ¤4,800`, as a cracked
+/// chip's last lock does), leaves grit where it stood, opens the chip it guarded into a
+/// `credchip` with its sum and ends the turns: none then.
+pub fn hit(st: &mut AppState, from: Pos) -> Option<String> {
     let Some(m) = up_mut(st) else {
-        return "nothing there".to_string();
+        return Some("nothing there".to_string());
     };
     let pos = m.pos;
     let plate = (0..PLATE_AT.len())
@@ -340,15 +354,14 @@ pub fn hit(st: &mut AppState, from: Pos) -> String {
         });
     if let Some(i) = plate {
         m.plates[i] = false;
-        return format!("MASTIFF · a plate breaks · coat {}/8", m.coat());
+        return Some(format!("MASTIFF · a plate breaks · coat {}/8", m.coat()));
     }
     m.core -= 1;
     if m.core > 0 {
-        return format!("MASTIFF · its core cracks · {} hit left", m.core);
+        return Some(format!("MASTIFF · its core cracks · {} hit left", m.core));
     }
     m.bite = None;
     let slot = m.slot;
-    crate::net::disengage(st);
     let sum = match st.character.reader.get_mut(slot).and_then(|s| s.as_mut()) {
         Some(chip) if chip.item.0 == "credchip_black" => {
             chip.item = ItemId::new("credchip");
@@ -356,10 +369,12 @@ pub fn hit(st: &mut AppState, from: Pos) -> String {
         }
         _ => 0,
     };
-    format!(
-        "MASTIFF goes to grit · the chip opens · ¤{}",
+    st.say(format!(
+        "MASTIFF · to grit · the chip opens · ¤{}",
         super::crack::commas(sum)
-    )
+    ));
+    crate::net::disengage(st);
+    None
 }
 
 /// A free core seat's turn: your loaded Attack at MASTIFF from the seat's box, at your
@@ -377,9 +392,11 @@ pub fn seat_turn(st: &mut AppState, seat: u8) {
     let line = if game::round_hits(crate::combat::roll(st), chance) {
         hit(st, from)
     } else {
-        miss(st).to_string()
+        Some(miss(st).to_string())
     };
-    st.say(format!("seat {} · {line}", seat + 1));
+    if let Some(line) = line {
+        st.say(format!("seat {} · {line}", seat + 1));
+    }
 }
 
 /// What a miss at MASTIFF says: its coat holds, or with the coat gone its core.
@@ -507,8 +524,9 @@ pub fn ice_line(st: &AppState) -> Option<String> {
         ),
         n => format!("coat {n}/8"),
     };
-    let tiles = me.chebyshev(nearest(m, me));
-    Some(format!("▣ MASTIFF · black ICE · {left} · {tiles} tiles"))
+    let n = me.chebyshev(nearest(m, me));
+    let tiles = if n == 1 { "tile" } else { "tiles" };
+    Some(format!("▣ MASTIFF · black ICE · {left} · {n} {tiles}"))
 }
 
 /// MASTIFF in a word for the turn column: its coat (`5/8`), then its core.
@@ -670,8 +688,8 @@ mod tests {
         st.force_hit = Some(false);
         wake(&mut st, SLOT).unwrap();
         let from = mastiff(&st).pos;
-        // You five west of it, on the leash: two steps for it to come.
-        stand(&mut st, Pos::new(from.x - 5, from.y + 1));
+        // You on the leash's west edge: two steps for it to come.
+        stand(&mut st, Pos::new(from.x - 4, from.y + 1));
         assert!(mastiff(&st).leash.contains(here(&st)));
         crate::net::end_turn(&mut st);
         for _ in 0..10 {
@@ -773,15 +791,83 @@ mod tests {
         }
         assert_eq!(whole(&st), 0);
         assert_eq!(mastiff(&st).core, 2, "the coat first");
-        assert!(hit(&mut st, west).contains("1 hit left"));
+        assert_eq!(
+            hit(&mut st, west).as_deref(),
+            Some("MASTIFF · its core cracks · 1 hit left")
+        );
         assert!(st.net.engaged.is_some());
-        let line = hit(&mut st, west);
-        assert!(line.contains("¤4,800"), "{line}");
+        assert_eq!(hit(&mut st, west), None, "the last hit says its own line");
+        assert!(logged(&st, "MASTIFF · to grit · the chip opens · ¤4,800"));
         assert!(st.net.engaged.is_none(), "the turns end");
         let chip = st.character.reader[SLOT].as_ref().unwrap();
         assert_eq!(chip.item.0, "credchip");
         assert_eq!(chip.copy.as_ref().unwrap().credits, SUM);
         assert_eq!(mastiff(&st).core, 0, "grit where it stood");
+    }
+
+    #[test]
+    fn the_winning_hit_says_the_chip_opens() {
+        // Your Attack's, then a seat's: the line once, before the calm.
+        for by_seat in [false, true] {
+            let mut st = armed();
+            wake(&mut st, SLOT).unwrap();
+            let west = Pos::new(mastiff(&st).pos.x - 3, mastiff(&st).pos.y + 1);
+            for _ in 0..9 {
+                hit(&mut st, west);
+            }
+            assert_eq!(mastiff(&st).core, 1);
+            st.force_hit = Some(true);
+            if by_seat {
+                seat_turn(&mut st, 0);
+            } else {
+                act(&mut st);
+                crate::combat::attack_mastiff(&mut st).expect("the last hit");
+            }
+            let last: Vec<&str> = (st.log.iter().rev().take(2))
+                .map(|e| e.text.as_str())
+                .collect();
+            assert_eq!(
+                last,
+                ["calm", "MASTIFF · to grit · the chip opens · ¤4,800"],
+                "by a seat: {by_seat}"
+            );
+            let said = (st.log.iter())
+                .filter(|e| e.text.contains("to grit"))
+                .count();
+            assert_eq!(said, 1, "by a seat: {by_seat}");
+        }
+    }
+
+    #[test]
+    fn the_leash_is_the_strip_in_front_of_its_slot() {
+        use crate::rigroom::layout::{Counts, lay_out};
+        for slots in 1..=6 {
+            let counts = Counts {
+                lines: 5,
+                seats: 2,
+                slots,
+                firewall: 1,
+            };
+            let room = lay_out(counts, citygen::BuildingId(7));
+            for (i, r) in room.slots.iter().enumerate() {
+                let leash = leash_of(&room, i).unwrap();
+                // The mock's: 2 west of the box, 1 east, 2 above, 10 below.
+                let want = Rect::new(r.x - 2, r.y - 2, r.w + 3, r.h + 12);
+                assert_eq!(leash, want, "slot {i} of {slots}");
+                assert_eq!(
+                    leash.intersection(room.hall),
+                    Some(leash),
+                    "inside the hall"
+                );
+                assert!(leash.y > room.floor.y + 1, "short of the READER title");
+                for (j, other) in room.slots.iter().enumerate() {
+                    assert!(
+                        i == j || leash.intersection(*other).is_none(),
+                        "slot {i}'s leash over slot {j} of {slots}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
