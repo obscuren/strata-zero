@@ -29,6 +29,8 @@ pub struct Mastiff {
     pub bite: Option<Rect>,
     /// The ground it keeps to: the strip in front of its slot (`leash_of`).
     pub leash: Rect,
+    /// Its turns left stunned by a strike, as a piece of ICE's: each passes it by.
+    pub stunned: u8,
 }
 
 impl Mastiff {
@@ -169,6 +171,7 @@ pub fn wake(st: &mut AppState, slot: usize) -> Result<(), String> {
         core: CORE,
         bite: None,
         leash,
+        stunned: 0,
     });
     step_aside(st);
     crate::net::engage(st, Place::Rig, false);
@@ -479,6 +482,14 @@ fn odds(st: &AppState) -> Result<u8, String> {
 /// to run it, off its leash, or past the Net's attack reach.
 pub fn attack_chance(st: &AppState) -> Result<u8, String> {
     let chance = odds(st)?;
+    reach(st)?;
+    Ok(chance)
+}
+
+/// Where your Attack or a strike lands on MASTIFF: its tile nearest you, while you stand
+/// on its leash within the Net's attack reach of it (beside it, or a clear line
+/// `ATTACK_RANGE` long, as a piece of ICE is reached); else why not.
+pub fn reach(st: &AppState) -> Result<Pos, String> {
     let (Some(m), Some(me)) = (up(st), you(st)) else {
         return Err("MASTIFF sleeps".to_string());
     };
@@ -491,7 +502,31 @@ pub fn attack_chance(st: &AppState) -> Result<u8, String> {
     if d > 1 && !(d <= crate::net::ATTACK_RANGE && clear) {
         return Err("out of reach".to_string());
     }
-    Ok(chance)
+    Ok(at)
+}
+
+/// A strike's stun on MASTIFF: it stands `turns` of its turns, as a piece of ICE does.
+/// Whether it took.
+pub fn stun(st: &mut AppState, turns: u8) -> bool {
+    match up_mut(st) {
+        Some(m) if turns > 0 => {
+            m.stunned = m.stunned.max(turns);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// MASTIFF's turn begins: stunned, it passes (a turn of the stun spent); else it acts.
+pub fn turn_start(st: &mut AppState) -> bool {
+    let Some(m) = up_mut(st) else {
+        return false;
+    };
+    if m.stunned > 0 {
+        m.stunned -= 1;
+        return false;
+    }
+    true
 }
 
 /// MASTIFF's tile nearest `p`: where an attack from there lands.
@@ -541,8 +576,10 @@ pub fn blocks(st: &AppState, to: Pos) -> Option<&'static str> {
     (out && st.net.engaged.is_some()).then_some("not in a fight")
 }
 
-/// MASTIFF's line in the footer's ICE list while it's awake, as a foe's reads:
-/// `▣ MASTIFF · black ICE · coat 5/8 · 3 tiles`, its core's hits once the coat is gone.
+/// MASTIFF's line in the footer's ICE list while it's awake, as a piece of ICE's reads:
+/// `▣ MASTIFF · black ICE · coat 5/8 · 3 tiles`, its core's hits once the coat is gone;
+/// the bite it has marked where a piece's mode goes (`· bites × next turn ·`), its stun
+/// at the end.
 pub fn ice_line(st: &AppState) -> Option<String> {
     let me = you(st)?;
     let m = up(st).filter(|_| awake(st))?;
@@ -556,7 +593,16 @@ pub fn ice_line(st: &AppState) -> Option<String> {
     };
     let n = me.chebyshev(nearest(m, me));
     let tiles = if n == 1 { "tile" } else { "tiles" };
-    Some(format!("▣ MASTIFF · black ICE · {left} · {n} {tiles}"))
+    let bites = if m.bite.is_some() {
+        "bites × next turn · "
+    } else {
+        ""
+    };
+    let mut line = format!("▣ MASTIFF · black ICE · {bites}{left} · {n} {tiles}");
+    if m.stunned > 0 {
+        line.push_str(&format!(" · stunned {}", m.stunned));
+    }
+    Some(line)
 }
 
 /// MASTIFF in a word for the turn column: its coat (`5/8`), then its core.
@@ -688,6 +734,11 @@ mod tests {
         assert!(mastiff(&st).bite.is_some(), "the first turn marks");
         assert_eq!(st.character.hp, hp, "a mark takes nothing");
         assert!(logged(&st, "MASTIFF bites the × tiles next turn"));
+        assert!(
+            ice_line(&st)
+                .unwrap()
+                .contains("· black ICE · bites × next turn · coat")
+        );
         let at = in_the_bite(&st);
         stand(&mut st, at);
         // A black ICE hit of 7: the deck's rating off it, then your feedback resistance.
@@ -733,6 +784,7 @@ mod tests {
                     core: CORE,
                     bite: None,
                     leash,
+                    stunned: 0,
                 };
                 // For a tile it woke on, it comes from the far end of its strip.
                 let far = Pos::new(woke.pos.x, leash.bottom() - 3);
@@ -1333,6 +1385,96 @@ mod tests {
         reset(&mut st);
         let cmd = map.update(&mut st, &space());
         assert!(matches!(cmd, ScreenCmd::Push { .. }), "the chip's popup");
+    }
+
+    /// `id` among your abilities, its cooldown clear.
+    fn learn(st: &mut AppState, id: &str) -> game::AbilityId {
+        let id = game::AbilityId::new(id);
+        st.character.abilities.push(id.clone());
+        id
+    }
+
+    #[test]
+    fn a_strike_breaks_a_plate_and_stuns_it() {
+        let mut st = armed();
+        let fx = learn(&mut st, "static");
+        wake(&mut st, SLOT).unwrap();
+        act(&mut st);
+        st.force_hit = Some(true);
+        let traces = st.net.traces.clone();
+        crate::casts::strike_mastiff(&mut st, &fx).expect("a strike");
+        assert_eq!(whole(&st), 7, "a plate, from your side");
+        assert!(!mastiff(&st).plates[0], "▛, nearest you at its west");
+        assert!(logged(&st, "static · MASTIFF · a plate breaks · coat 7/8"));
+        assert!(logged(&st, "MASTIFF stunned"));
+        assert_eq!(ap(&st), 0, "static's two AP");
+        assert_eq!(st.net.traces, traces, "no heat behind your firewall");
+        assert!(ice_line(&st).unwrap().contains("· stunned 1"));
+        // Its turn passes it by: no steps, no mark; then your turn again.
+        let at = mastiff(&st).pos;
+        st.force_hit = Some(false);
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        assert!(crate::net::your_turn(&st));
+        assert_eq!((mastiff(&st).pos, mastiff(&st).bite), (at, None));
+        assert_eq!(mastiff(&st).stunned, 0);
+        // The next turn it acts.
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        assert!(mastiff(&st).bite.is_some(), "it marks");
+    }
+
+    #[test]
+    fn a_strike_on_the_core_is_a_core_hit() {
+        let mut st = armed();
+        let fx = learn(&mut st, "static");
+        wake(&mut st, SLOT).unwrap();
+        let west = Pos::new(mastiff(&st).pos.x - 3, mastiff(&st).pos.y + 1);
+        for _ in 0..8 {
+            hit(&mut st, west);
+        }
+        act(&mut st);
+        st.force_hit = Some(true);
+        crate::casts::strike_mastiff(&mut st, &fx).expect("a strike");
+        assert_eq!(mastiff(&st).core, 1);
+        assert!(logged(
+            &st,
+            "static · MASTIFF · its core cracks · 1 hit left"
+        ));
+        // A miss reads as the core's (the seats miss too).
+        st.force_hit = Some(false);
+        crate::net::end_turn(&mut st);
+        settle(&mut st);
+        act(&mut st);
+        st.tick += 10_000;
+        crate::casts::strike_mastiff(&mut st, &fx).expect("a strike");
+        assert_eq!(
+            st.log.latest().unwrap().text,
+            "static · MASTIFF · the core holds"
+        );
+    }
+
+    #[test]
+    fn off_the_leash_a_strike_refuses() {
+        let mut st = armed();
+        let fx = learn(&mut st, "static");
+        let shove = learn(&mut st, "shove");
+        wake(&mut st, SLOT).unwrap();
+        act(&mut st);
+        assert_eq!(
+            crate::casts::strike_mastiff(&mut st, &shove),
+            Err("not in here".to_string()),
+            "a push has no place in the Net"
+        );
+        let away = off_the_leash(&st);
+        stand(&mut st, away);
+        let left = ap(&st);
+        assert_eq!(
+            crate::casts::strike_mastiff(&mut st, &fx),
+            Err("off the leash · out of reach".to_string())
+        );
+        assert_eq!(ap(&st), left, "no AP spent");
+        assert_eq!(whole(&st), 8);
     }
 
     #[test]

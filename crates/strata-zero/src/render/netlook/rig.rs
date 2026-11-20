@@ -902,7 +902,8 @@ mod tests {
             &[&map],
             (120, 40),
         ));
-        for want in ["ENGAGED", "seat 2", "MASTIFF · black ICE · coat 5/8"] {
+        let ice = "MASTIFF · black ICE · bites × next turn · coat 5/8";
+        for want in ["ENGAGED", "seat 2", ice] {
             assert!(screen.contains(want), "{want}\n{screen}");
         }
     }

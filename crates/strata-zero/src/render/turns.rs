@@ -12,6 +12,12 @@ use ratatui::style::{Color, Modifier};
 
 /// The column's width in cells.
 pub const WIDTH: u16 = 18;
+
+/// The most rows the column takes for `view`: the round, a row per actor, and your two
+/// pools under you (more than the one row of what an enemy is up to).
+pub fn rows(view: &TurnView) -> u16 {
+    1 + view.chips.len() as u16 + 2
+}
 const BLACK: Color = Color::Rgb(10, 11, 16);
 const DIM: Color = Color::Rgb(110, 110, 110);
 const TEXT: Color = Color::Rgb(200, 200, 200);

@@ -1152,13 +1152,11 @@ impl MapScreen {
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
     /// boosts, marks, Vanish; content order), then the throwables in the pack; at most ten,
-    /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
-    /// does not push, a boost), and no throwables; in your rig's room no strike either,
-    /// as your Attack and the seats are what fight MASTIFF.
+    /// for `1`-`9` and `0`. In the Net (a construct, the open Net, your rig's room) only
+    /// what works there (a strike that does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
         let net = Self::in_net(st);
-        let room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
         let owned = st.character.abilities(&st.content);
         let mut out: Vec<Act> = st
             .content
@@ -1166,7 +1164,7 @@ impl MapScreen {
             .iter()
             .filter(|a| owned.iter().any(|(id, _)| *id == a.id))
             .filter(|a| match a.kind {
-                Active(A::Strike { push, .. }) => !room && (!net || push == 0),
+                Active(A::Strike { push, .. }) => !net || push == 0,
                 Active(A::Boost { .. }) => true,
                 Active(A::Mark { .. }) => !net,
                 Active(A::Vanish) => !net,
@@ -1463,12 +1461,15 @@ impl MapScreen {
                 self.last_enemy = enemy;
                 crate::casts::strike_ice(st, id, b, i)
             }
+            // MASTIFF takes a strike as a piece of ICE does, through its coat.
+            (Active(A::Strike { .. }), Some(Enemy::Mastiff), Place::Rig) => {
+                self.last_enemy = enemy;
+                crate::casts::strike_mastiff(st, id)
+            }
             (Active(A::Mark { .. }), Some(Enemy::Foe(foe)), _) => {
                 self.last_enemy = enemy;
                 crate::casts::mark(st, id, foe)
             }
-            // MASTIFF is the deck's to fight.
-            (_, Some(Enemy::Mastiff), _) => Err("not in here".to_string()),
             _ => Err("pick a target".to_string()),
         };
         if let Err(why) = result {
@@ -1746,40 +1747,29 @@ impl MapScreen {
             ));
         }
         let e = st.net.engaged.as_ref()?;
-        if e.actor() == Actor::You
-            && let Some(bite) = Self::bite_prompt(st, e.phase)
-        {
-            return Some(bite);
-        }
-        // In your rig's room you step as on foot and act as on the Net.
-        let on_foot = match e.place {
-            Place::Rig => e.phase == Phase::Move,
-            _ => crate::net::engaged_on_foot(st),
-        };
+        // Off a construct's map (the street, a floor, the open Net, your rig's room) you
+        // step a tile a key; in a construct you aim and walk. Jacked in, the number keys
+        // are the deck's programs and space attacks with it; in the meat they're the ACT
+        // list and space fires.
+        let on_foot = crate::net::engaged_on_foot(st);
         Some(match e.actor() {
-            Actor::You if on_foot => match e.phase {
-                Phase::Move => (
+            Actor::You => match e.phase {
+                Phase::Move if on_foot => (
                     "YOUR TURN · MOVE".to_string(),
                     "hjkl step · g aims a path · enter walks it · space stays".to_string(),
+                ),
+                Phase::Move => (
+                    "YOUR TURN · MOVE".to_string(),
+                    "arrows aim · space or enter walks · space on yourself stays".to_string(),
                 ),
                 Phase::Act if self.armed.is_some() => (
                     "THROW".to_string(),
                     "hjkl aim · space throw · esc back".to_string(),
                 ),
-                Phase::Act => (
-                    "AIM".to_string(),
-                    "hjkl target · t next · space fire · 1-9 act · . end turn".to_string(),
-                ),
-            },
-            Actor::You => match e.phase {
-                Phase::Move => (
-                    "YOUR TURN · MOVE".to_string(),
-                    "arrows aim · space or enter walks · space on yourself stays".to_string(),
-                ),
-                // Act: the cursor on a piece and space attacks it; a program's key
-                // picks a program (and a target when several fit) and space runs
-                // it, an action point each; `.` ends the turn.
-                Phase::Act => (
+                // In the Net: the cursor on a piece and space attacks it; a program's key
+                // picks a program (and a target when several fit) and space runs it, an
+                // action point each; `.` ends the turn.
+                Phase::Act if Self::in_net(st) => (
                     "AIM".to_string(),
                     match st
                         .net
@@ -1794,6 +1784,10 @@ impl MapScreen {
                         None => "hjkl target · t next · space attack · 1-5 program · . end turn"
                             .to_string(),
                     },
+                ),
+                Phase::Act => (
+                    "AIM".to_string(),
+                    "hjkl target · t next · space fire · 1-9 act · . end turn".to_string(),
                 ),
             },
             Actor::Ice(i) => {
@@ -1826,40 +1820,6 @@ impl MapScreen {
             Actor::Seat(n) => (format!("SEAT {} ATTACKS", n + 1), "wait".to_string()),
             Actor::Mastiff => ("MASTIFF ACTS".to_string(), "wait".to_string()),
         })
-    }
-
-    /// Your turn in your rig's room with MASTIFF's bite marked: where it lands, and the
-    /// keys that answer it in the half you're in: stepping off or staying while you move,
-    /// the deck's Shield and Attack by their keys (`3 shield · 2 attack`) once you act.
-    fn bite_prompt(st: &AppState, phase: crate::net::Phase) -> Option<(String, String)> {
-        use crate::net::Phase;
-        crate::rigroom::room(st)
-            .and_then(|r| r.mastiff.as_ref())
-            .filter(|m| m.bite.is_some() && crate::rigroom::mastiff::awake(st))?;
-        let keys = match phase {
-            Phase::Move => "move off them · space to stay".to_string(),
-            Phase::Act => {
-                let ops = [(game::Op::Shield, "shield"), (game::Op::Attack, "attack")];
-                let keys: Vec<String> = (ops.into_iter())
-                    .filter_map(|(op, word)| Some(format!("{} {word}", Self::key_for_op(st, op)?)))
-                    .collect();
-                match keys.is_empty() {
-                    true => ". end turn".to_string(),
-                    false => keys.join(" · "),
-                }
-            }
-        };
-        Some(("MASTIFF bites the × tiles next turn".to_string(), keys))
-    }
-
-    /// The number key of the first loaded program that does `op`.
-    fn key_for_op(st: &AppState, op: game::Op) -> Option<char> {
-        let i = (st.character.loaded.iter().take(hud::SLOTS)).position(|id| {
-            (st.content.item(id))
-                .and_then(|i| i.program)
-                .is_some_and(|p| p.op == op)
-        })?;
-        char::from_digit(i as u32 + 1, 10)
     }
 
     /// The strip's slots: the deck's programs while jacked in, abilities otherwise.
@@ -3078,6 +3038,7 @@ impl MapScreen {
         if let Some(city) = st.city.as_ref() {
             let view = self.last_map.get();
             if view.width > 0 && view.height > 0 {
+                self.room_under_the_column(st, view.height);
                 if !carries_on(st, self.place) {
                     self.cam
                         .clamp_to(self.cam_bounds(st, city), view.width, view.height);
@@ -3085,6 +3046,29 @@ impl MapScreen {
                 self.cam.settle();
             }
         }
+    }
+
+    /// The rows the turn column takes over your rig's room while it's on turns; none
+    /// elsewhere and in calm.
+    fn column_over_the_room(&self, st: &AppState) -> Option<i32> {
+        let fight = (st.net.engaged.as_ref()).is_some_and(|e| e.place == Place::Rig);
+        if self.place != Place::Rig || !fight {
+            return None;
+        }
+        crate::net::turn_view(st).map(|v| i32::from(crate::render::turns::rows(&v)))
+    }
+
+    /// Your rig's room on turns sits under the turn column: the camera holds the void
+    /// above the room under it, not the room's top (the SEATS header), as long as you
+    /// stay a sixth of the view off its bottom; past that it follows you down.
+    fn room_under_the_column(&mut self, st: &AppState, view_h: u16) {
+        let (Some(rows), Some(p)) = (self.column_over_the_room(st), st.player.as_ref()) else {
+            return;
+        };
+        let (h, half) = (i32::from(view_h), i32::from(view_h) / 2);
+        let top = half - rows;
+        let low = p.pos.y + 1 + (h / 6).max(1) - (h - half);
+        self.cam.ty = top.max(low);
     }
 
     /// What the camera keeps the view inside on this place: on a site's Net the open
@@ -3102,7 +3086,10 @@ impl MapScreen {
         {
             let size = room.construct.size;
             let lanes = crate::rigroom::LANES;
-            return TileRect::new(-lanes, 0, size.w as i32 + 2 * lanes, size.h as i32);
+            // On turns, the void above it for the turn column (`room_under_the_column`).
+            let up = self.column_over_the_room(st).unwrap_or(0);
+            let (w, h) = (size.w as i32 + 2 * lanes, size.h as i32 + up);
+            return TileRect::new(-lanes, -up, w, h);
         }
         let size = TileMap::size(&self.map(st, city));
         TileRect::new(0, 0, size.w as i32, size.h as i32)
@@ -4139,7 +4126,10 @@ impl Screen for MapScreen {
         match (self.mode, &st.player, crate::missions::scene::camera(st)) {
             // A scene holding a tile of this map: the camera centres on it.
             (Mode::Walk, _, Some((place, pos))) if place == self.place => self.cam.target(pos),
-            (Mode::Walk, Some(p), _) => self.cam.follow(p.pos, map.width, map.height),
+            (Mode::Walk, Some(p), _) => {
+                self.cam.follow(p.pos, map.width, map.height);
+                self.room_under_the_column(st, map.height);
+            }
             _ => self.cam.follow(self.cursor, map.width, map.height),
         }
         // The camera is bound by the map it shows, not the city: a floor or a construct
@@ -4788,13 +4778,12 @@ impl Screen for MapScreen {
         if !looked.is_empty() {
             overlays.push(&look_block);
         }
-        // The turn column, on the map that is on turns; not in your rig's room, whose
-        // SEATS header it would cover: the footer's turn row reads the order there.
+        // The turn column, on the map that is on turns.
         let turns = st
             .net
             .engaged
             .as_ref()
-            .filter(|e| e.place == self.place && e.place != Place::Rig)
+            .filter(|e| e.place == self.place)
             .and_then(|_| crate::net::turn_view(st));
         let turn_overlay = turns
             .as_ref()
@@ -8730,19 +8719,21 @@ mod tests {
     }
 
     #[test]
-    fn the_rooms_fight_prompts_its_bite_with_the_decks_keys() {
+    fn the_rooms_fight_prompts_as_the_nets_and_lists_the_bite_with_the_ice() {
         let (mut st, mut s) = mastiff_awake();
         let glow = crate::render::netlook::YOU_GLOW.to_color();
         let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
-            !drawn.contains("MASTIFF bites"),
-            "no bite marked yet: {drawn}"
+            drawn.contains("▣ MASTIFF · black ICE · coat 8/8"),
+            "{drawn}"
         );
+        assert!(!drawn.contains("bites ×"), "no bite marked yet: {drawn}");
         assert_eq!(your_ground(&st, &s), glow);
         crate::rigroom::mastiff::turn(&mut st);
         let drawn = draw_screen(&s, &st, 120, 40);
+        // The bite where a piece of ICE reads what it's up to: its line in the ICE list.
         assert!(
-            drawn.contains("▸ MASTIFF bites the × tiles next turn"),
+            drawn.contains("▣ MASTIFF · black ICE · bites × next turn · coat 8/8"),
             "{drawn}"
         );
         // You on a mark: your `@` on the bite's red ground; off the marks, your glow.
@@ -8755,33 +8746,76 @@ mod tests {
         st.player.as_mut().unwrap().pos = Pos::new(bite.x - 1, bite.y + 1);
         assert_eq!(your_ground(&st, &s), glow);
         st.player.as_mut().unwrap().pos = you;
-        // The move half: only what works while you move.
-        assert!(drawn.contains("move off them · space to stay"), "{drawn}");
-        assert!(!drawn.contains("shield ·"), "{drawn}");
-        // The act half: the deck's Shield and Attack by their keys.
+        // The Net's prompt as the open Net reads it: stepping on the move half...
+        assert!(
+            drawn.contains(
+                "YOUR TURN · MOVE   hjkl step · g aims a path · enter walks it · space stays"
+            ),
+            "{drawn}"
+        );
+        // ...the deck's keys on the act half.
         s.update(&mut st, &[key(KeyCode::Char(' '))]);
         assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
         let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
-            drawn.contains("▸ MASTIFF bites the × tiles next turn"),
+            drawn.contains("AIM   hjkl target · t next · space attack · 1-5 program · . end turn"),
             "{drawn}"
         );
-        assert!(drawn.contains("3 shield · 2 attack"), "{drawn}");
-        assert!(!drawn.contains("move off them"), "{drawn}");
         assert!(!drawn.contains("1-9 act"), "{drawn}");
     }
 
     #[test]
-    fn the_rooms_fight_has_no_turn_column() {
-        let (st, s) = mastiff_awake();
+    fn the_open_nets_fight_prompts_programs_not_acts() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
+        s.update(&mut st, &[]);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Net), true);
         let drawn = draw_screen(&s, &st, 120, 40);
-        // The footer's turn row carries the order; the SEATS header stays readable.
-        assert_eq!(drawn.matches("TURN 1").count(), 1, "{drawn}");
+        assert!(drawn.contains("YOUR TURN · MOVE   hjkl step"), "{drawn}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
         assert!(
-            drawn.contains("TURN 1  YOU › seat 1 › seat 2 › MASTIFF"),
+            drawn.contains("AIM   hjkl target · t next · space attack · 1-5 program · . end turn"),
             "{drawn}"
         );
-        assert!(drawn.contains("Tinman 2X · 2"), "{drawn}");
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+    }
+
+    #[test]
+    fn the_rooms_fight_draws_the_turn_column() {
+        let (mut st, mut s) = mastiff_awake();
+        for (w, h) in [(120, 40), (100, 30)] {
+            // A frame to size the pane, then the camera settles as frames go by.
+            let _ = draw_screen(&s, &st, w, h);
+            for _ in 0..40 {
+                s.update(&mut st, &[]);
+            }
+            let drawn = draw_screen(&s, &st, w, h);
+            // The column, as a site's fight draws it, and the footer's turn row.
+            assert!(drawn.contains(" TURN 1 "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains(" ▶ YOU            "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   seat 1         "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   seat 2         "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   MASTIFF    8/8 "), "{w}x{h}: {drawn}");
+            assert!(
+                drawn.contains("TURN 1  YOU › seat 1 › seat 2 › MASTIFF"),
+                "{w}x{h}: {drawn}"
+            );
+            // The room's SEATS header still reads, out from under it.
+            assert!(drawn.contains("SEATS"), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("Tinman 2X · 2"), "{w}x{h}: {drawn}");
+        }
     }
 
     #[test]
@@ -8795,18 +8829,32 @@ mod tests {
     }
 
     #[test]
-    fn strikes_stay_out_of_the_rooms_act_list() {
-        let (mut st, _) = mastiff_awake();
-        for a in ["static", "redline"] {
+    fn strikes_in_the_rooms_act_list_land_on_mastiff() {
+        let (mut st, mut s) = mastiff_awake();
+        for a in ["static", "redline", "shove"] {
             st.character.abilities.push(game::AbilityId::new(a));
         }
         let list = MapScreen::act_list(&st);
         let ability = |s: &str| Act::Ability(game::AbilityId::new(s));
-        assert!(!list.contains(&ability("static")), "{list:?}");
+        assert!(list.contains(&ability("static")), "{list:?}");
+        assert!(list.contains(&ability("redline")), "a boost: {list:?}");
         assert!(
-            list.contains(&ability("redline")),
-            "a boost still: {list:?}"
+            !list.contains(&ability("shove")),
+            "no push in the Net: {list:?}"
         );
+        // The act half, the cursor on MASTIFF: the strike's key strikes it.
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let n = list.iter().position(|a| *a == ability("static")).unwrap() as u32;
+        let digit = char::from_digit((MapScreen::act_base(&st) + n) % 10, 10).unwrap();
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(drawn.contains(&format!("{digit} static")), "{drawn}");
+        s.update(&mut st, &[key(KeyCode::Char(digit))]);
+        let m = crate::rigroom::room(&st).unwrap().mastiff.clone().unwrap();
+        assert_eq!(m.coat(), 7, "{:?}", last(&st));
+        assert_eq!(last(&st), Some("MASTIFF stunned"));
+        assert!(logged(&st, "static · MASTIFF · a plate breaks · coat 7/8"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0, "static costs two");
     }
 
     #[test]

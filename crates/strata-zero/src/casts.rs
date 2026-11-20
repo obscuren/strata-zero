@@ -314,6 +314,65 @@ pub fn strike_ice(
     Ok(())
 }
 
+/// You strike MASTIFF in your rig's room as you strike a piece of ICE: the strike's AP and
+/// cooldown, within the Net's attack reach while you stand on its leash, rolled on the
+/// strike's attribute and skill. A hit breaks through its coat from your side (a plate,
+/// then the core: `mastiff::hit`), and a strike that stuns ICE stuns it: it passes its
+/// next turn. Inside your own firewall it makes no heat. Shove and its like are refused.
+pub fn strike_mastiff(st: &mut AppState, id: &AbilityId) -> Result<(), String> {
+    use crate::rigroom::mastiff;
+    let ability = st
+        .character
+        .ability(&st.content, id)
+        .ok_or_else(|| format!("unknown ability {id}"))?;
+    let AbilityKind::Active(Active::Strike {
+        range,
+        stun,
+        skill,
+        ap,
+        attribute,
+        push,
+        ..
+    }) = ability.kind.clone()
+    else {
+        return Err(format!("{} is not a strike", ability.name));
+    };
+    let room = (st.player.as_ref()).is_some_and(|p| p.place == Place::Rig);
+    if push != 0 || !room {
+        return Err("not in here".to_string());
+    }
+    let at = mastiff::reach(st)?;
+    can_act(st, ap)?;
+    book(st, id)?;
+    for _ in 0..ap {
+        net::spend_ap(st)?;
+    }
+    let me = st.player.as_ref().map(|p| p.pos).unwrap_or_default();
+    let chance = game::hit_chance(
+        st.character.attribute(&st.content, attribute),
+        st.character.has_skill(&skill),
+        me.chebyshev(at),
+        range,
+    );
+    let hit = game::round_hits(combat::roll(st), chance);
+    // A plate a hit, as your Attack's: the number that lifts says one.
+    shoot_piece(st, Place::Rig, &ability.fx, me, at, hit, 1, st.tick);
+    let name = ability.name.to_lowercase();
+    if !hit {
+        net::mark(st, at, net::ATTACK_TINT, net::MARK_TICKS);
+        st.say(format!("{name} · MASTIFF · {}", mastiff::miss(st)));
+        return Ok(());
+    }
+    // The winning hit says its own line and ends the fight: nothing left to stun.
+    if let Some(line) = mastiff::hit(st, me) {
+        st.say(format!("{name} · {line}"));
+        if stun > 0 && mastiff::stun(st, stun) {
+            st.say("MASTIFF stunned");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

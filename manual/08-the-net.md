@@ -163,13 +163,13 @@ A locked credchip has locks by its sum: 1 under ¤500, 2 under ¤2,000, 3 above.
 
 ### MASTIFF
 
-**MASTIFF** is the black ICE that guards a black credchip, found now and then in the safes of guarded offices and hotels. Asleep it lies coiled round the chip and does nothing. `Wake MASTIFF` puts the room on turns: you, each free seat, then MASTIFF.
+**MASTIFF** is the black ICE that guards a black credchip, found now and then in the safes of guarded offices and hotels. Asleep it lies coiled round the chip and does nothing. `Wake MASTIFF` puts the room on turns, as any fight on the Net: you, each free seat, then MASTIFF, down the turn column. You step a tile a key, as on the open grid; on the act half the number keys are your programs and your strikes.
 
 - **The coat.** MASTIFF is a 3×3 with 8 plates round a core that takes 2 hits. Your Attack breaks the plate nearest you, then the core.
 - **The leash.** The red ground in front of its slot is as far as it reaches. Off the leash you're out of the fight both ways: your Attack and your seats refuse with `off the leash · out of reach`, and at the end of your turn off it, MASTIFF grows a plate back.
-- **The bite.** On its turn MASTIFF takes two steps toward you, then marks the tiles beside it with `×`. Where it can't get beside you, on the red ground beside or above its slot, it lunges and marks the tiles round you instead. Next turn it bites the marked tiles as a black ICE hit does: 7, less your deck's rating and your feedback resistance. A shield soaks it. The failsafe dumps you; with the failsafe off, it can kill you.
+- **The bite.** On its turn MASTIFF takes two steps toward you, then marks the tiles beside it with `×`. Where it can't get beside you, on the red ground beside or above its slot, it lunges and marks the tiles round you instead. Its line in the ICE list reads `bites × next turn` while they're marked. Next turn it bites the marked tiles as a black ICE hit does: 7, less your deck's rating and your feedback resistance. A shield soaks it. The failsafe dumps you; with the failsafe off, it can kill you.
 - **Your seats.** A free seat runs your Attack at MASTIFF while you're on the leash, at your chance scaled by the core's speed, up to 95%: it breaks a plate, then the core, as yours does. Off the leash a seat sits out and reads `idle`; with no Attack loaded the seats sit out of the turns.
-- **Programs.** Shield works in the room. Mask refuses, since nothing in your rig hunts by sight, and so does any program with nothing to run against. There are no strikes at MASTIFF.
+- **Programs and strikes.** Shield works in the room. Mask refuses, since nothing in your rig hunts by sight, and so does any program with nothing to run against. A strike lands on MASTIFF as on a piece of ICE, from the leash and within reach: a hit breaks a plate, then the core, and one that stuns ICE stuns MASTIFF, which passes its next turn.
 - **Doors, the trunk and the reader** refuse while it's awake (`not in a fight`), and so does the terminal. Jacking out, or being dumped, ends the fight and MASTIFF is whole again next time.
 
 Break the core and MASTIFF goes to grit, and the chip opens to a credchip with its sum. A run saved mid-fight reopens with MASTIFF asleep and whole.

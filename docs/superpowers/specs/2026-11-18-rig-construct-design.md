@@ -310,11 +310,12 @@ row is its summon (and `x Leave it`):
   title. It is tinted, with a dashed edge on its open west, east and south sides (the
   north runs up to the reader, undashed).
 - **Its turn.** Two moves, toward you inside the leash, then: if no bite is marked, it
-  marks one (the 3×3 tiles beside it on your side, drawn `×` in bright red) and the
-  prompt says `MASTIFF bites the × tiles next turn`. When it can't get beside you (you on
-  its leash where no ground its 3×3 fits on puts you in that bite: beside or above its
-  slot's box) it lunges: it marks the 3×3 round you instead, on its leash, with the same
-  prompt and bite. If one is marked, it bites them:
+  marks one (the 3×3 tiles beside it on your side, drawn `×` in bright red), the log
+  warns `MASTIFF bites the × tiles next turn` and its ICE line reads `bites × next turn`
+  where a piece of ICE's mode goes. When it can't get beside you (you on its leash where
+  no ground its 3×3 fits on puts you in that bite: beside or above its slot's box) it
+  lunges: it marks the 3×3 round you instead, on its leash, with the same warning and
+  bite. If one is marked, it bites them:
   standing on one, you take 7 to your body as a black ICE hit does (Shield soaks it; the
   failsafe dumps you first; with the failsafe off it can kill you, as black ICE can
   anywhere), and the marks clear.
@@ -326,6 +327,12 @@ row is its summon (and `x Leave it`):
   `game::chance(power(attack, black ICE), difficulty(180))`. A hit
   breaks the plate nearest you; with no plate left it hits the core, which takes two.
   Shield and the rest of the deck work as on the Net.
+- **Strikes.** A strike that doesn't push lands on MASTIFF as on a piece of ICE
+  (`casts::strike_mastiff`): its AP and cooldown, the Net's attack reach from the leash,
+  the strike's roll on its attribute and skill; a hit breaks through the coat from your
+  side as your Attack does (a plate, then the core), and a strike's stun holds MASTIFF
+  for its turns as it holds ICE. No heat inside your firewall. Off the leash it refuses
+  as your Attack does.
 - **A seat's turn.** While you stand on the leash, a free core seat runs your loaded
   Attack at MASTIFF at the same chance, scaled by the core's speed (`chance × speed / 100`, capped at 95), and its beam
   draws from its box through the SEATS wall for the turn. The turn order shows it as
@@ -337,9 +344,12 @@ row is its summon (and `x Leave it`):
   whole again next time.
 - **Inside your firewall**: TRACE stays 0, nothing calls a tracer, no alarm.
 - The fight is not saved: a run reopened mid-fight finds MASTIFF asleep and whole.
-- The footer's fight rows are the Net's: `ENGAGED`, the prompt and keys, `TURN 4  YOU ›
-  seat 2 › MASTIFF`, the ICE list (`▣ MASTIFF · black ICE · coat 5/8`), the PROGRAMS and
-  the pools. The panel's HERE lines: `◆ MASTIFF · black ICE`, `COAT ▮▮▮▮▮▯▯▯ 5/8`, `CORE
+- The fight is the Net's, with no room-only fight UI: the turn column at the map's top
+  right (`YOU`, `seat 2`, `MASTIFF 5/8`; the camera keeps the void above the room under
+  it, not the SEATS header, while you're in view), the Net's prompt (stepping a tile a
+  key as on the open grid; `1-5 program` on the act half), and the footer's rows:
+  `ENGAGED`, `TURN 4  YOU › seat 2 › MASTIFF`, the ICE list (`▣ MASTIFF · black ICE ·
+  coat 5/8`), the PROGRAMS, the ACT list (strikes, boosts) and the pools. The panel's HERE lines: `◆ MASTIFF · black ICE`, `COAT ▮▮▮▮▮▯▯▯ 5/8`, `CORE
   sealed under the coat` (or `CORE 2 hits`), `BITE next turn · the × tiles` when marked,
   `LEASH the red ground`.
 

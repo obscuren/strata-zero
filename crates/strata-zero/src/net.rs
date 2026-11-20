@@ -2696,7 +2696,8 @@ fn start_turn(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
         (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
-        (Actor::Mastiff | Actor::Seat(_), _) => true,
+        (Actor::Mastiff, _) => crate::rigroom::mastiff::turn_start(st),
+        (Actor::Seat(_), _) => true,
         (Actor::Ice(_), _) => false,
         (Actor::You, _) => return,
     };
