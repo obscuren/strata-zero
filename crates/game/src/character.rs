@@ -1297,8 +1297,8 @@ impl Character {
     /// `c` lacks, as a run saved by a build that had them comes back in one that
     /// doesn't. A worn item, an installed piece or a fitted one goes with its copy, and
     /// what that copy held that `c` has (its fitted pieces, its stickers) comes out
-    /// into the pack; the rig's rack likewise, leaving the stock rig. A line for each
-    /// thing gone, naming its id.
+    /// into the pack; the rig's rack likewise, leaving the stock rig, and the reader's
+    /// slots past the rack's go to the pack. A line for each thing gone, naming its id.
     pub fn forget_unknown(&mut self, c: &Content) -> Vec<String> {
         let mut lost = Vec::new();
         // What comes out of the pieces taken away, for the pack.
@@ -1355,6 +1355,17 @@ impl Character {
                     self.frame = frame;
                 }
             }
+        }
+        // The reader: an item `c` lacks leaves its slot, and what's past the rack's slots
+        // (a rack it lacks left the stock one) goes to the pack.
+        for slot in &mut self.reader {
+            if let Some(s) = slot.take() {
+                *slot = s.sift(c, &mut lost, &mut out);
+            }
+        }
+        let slots = self.reader_slots(c);
+        if self.reader.len() > slots {
+            out.extend(self.reader.split_off(slots).into_iter().flatten());
         }
         for s in out {
             self.stow(s);
@@ -4045,6 +4056,45 @@ mod tests {
         for sled in STOCK_SLEDS {
             assert_eq!(ch.count(&ItemId::new(sled)), 1, "{sled} in the pack");
         }
+    }
+
+    #[test]
+    fn the_reader_forgets_what_a_build_lacks_and_fits_the_stock_rack() {
+        let c = Content::load().unwrap();
+        let mut ch = vex(&c);
+        fit_new_frame(&mut ch, &c, "rack_civitas");
+        let chip = ItemId::new("credchip");
+        for (slot, sum) in [(0, 100), (2, 300)] {
+            let k = ch.give_credchip(&c, &chip, sum);
+            ch.put_in_reader(&c, slot, k).unwrap();
+        }
+        let shard = ItemId::new("prog_keepalive");
+        ch.give(shard.clone(), 1);
+        ch.put_item_in_reader(&c, 1, &shard).unwrap();
+        let mut less = c.clone();
+        less.items
+            .retain(|i| i.id.0 != "rack_civitas" && i.id.0 != "prog_keepalive");
+        let lost = ch.forget_unknown(&less);
+        assert!(
+            lost.contains(&"an item (prog_keepalive)".to_string()),
+            "{lost:?}"
+        );
+        assert!(
+            lost.contains(&"an item (rack_civitas)".to_string()),
+            "{lost:?}"
+        );
+        // The stock rack's one slot keeps the first chip; the one past it is in the pack.
+        assert_eq!(ch.reader_slots(&less), 1);
+        assert_eq!(ch.reader.len(), 1);
+        let credits = |s: &Stack| s.copy.as_ref().map_or(0, |k| k.credits);
+        assert_eq!(ch.reader[0].as_ref().map(credits), Some(100));
+        let pack: Vec<u32> = (ch.inventory.iter())
+            .filter(|s| s.item == chip)
+            .map(credits)
+            .collect();
+        assert_eq!(pack, [300]);
+        assert_eq!(ch.count(&shard), 0, "the unknown shard is gone");
+        assert!(ch.forget_unknown(&less).is_empty(), "once");
     }
 
     #[test]
