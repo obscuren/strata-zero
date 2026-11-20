@@ -50,7 +50,6 @@ pub fn interact(st: &mut AppState) -> Option<Popup> {
             let r = room.slots[*i];
             pos.chebyshev(citygen::Pos::new(r.x + r.w / 2, r.y + r.h / 2))
         });
-    // The terminal's glyph (#104's later task) is found here, beside the slots.
     let i = i?;
     let stack = st.character.reader.get(i)?.as_ref()?;
     let holds = reader::holds(st, &stack.item)?;

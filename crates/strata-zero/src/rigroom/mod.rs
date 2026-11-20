@@ -19,6 +19,25 @@ use game::SocketKind;
 /// What the HUD's place line and the footer's first row read in the room.
 pub const PLACE_LINE: &str = "zenbo · your rig";
 
+/// Whether you stand within a step of the room's terminal.
+pub fn at_terminal(st: &AppState) -> bool {
+    let (Some(room), Some(p)) = (room(st), st.player.as_ref()) else {
+        return false;
+    };
+    p.place == citygen::Place::Rig && p.pos.chebyshev(room.terminal) <= 1
+}
+
+/// The rig's shell, from the room's terminal: the same one the desk opens, on the
+/// jack window. What it runs and kills is read by the room from the same state.
+pub fn open_shell(st: &mut AppState) -> Box<dyn crate::app::Screen> {
+    let at = room(st).map_or(citygen::Pos::new(0, 0), |r| r.terminal);
+    Box::new(crate::screens::terminal::Terminal::open(
+        st,
+        crate::helix::shell::HostId::Rig,
+        (citygen::Place::Rig, at),
+    ))
+}
+
 /// Columns of the Net's void the camera keeps either side of the room, where the held
 /// backdoors' lanes run out.
 pub const LANES: i32 = 4;

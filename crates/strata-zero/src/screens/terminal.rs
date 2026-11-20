@@ -139,9 +139,24 @@ impl Terminal {
 
     /// The jack window's edges: the host's place, and who you are there with the hold's
     /// time left when a held terminal seats you.
-    fn jack_labels(&self, st: &AppState) -> (String, String) {
+    fn jack_labels(&self, st: &AppState) -> (String, String, String) {
         let host = self.shell.host;
-        let place = access::place_label(st, host);
+        // Your rig's own room: the rig's maker on the edge, and the way back is its door.
+        let in_room = host == HostId::Rig
+            && st
+                .player
+                .as_ref()
+                .is_some_and(|p| p.place == citygen::Place::Rig);
+        let place = if in_room {
+            "ZENBO".to_string()
+        } else {
+            access::place_label(st, host)
+        };
+        let back = if in_room {
+            "esc · back to your rig"
+        } else {
+            "esc · back to the grid"
+        };
         let owner = match host {
             HostId::Building(b) => Some(crate::owners::Owner::Building(b)),
             HostId::District(d) => Some(crate::owners::Owner::District(d)),
@@ -161,7 +176,7 @@ impl Terminal {
             Some(m) => format!("{} · HELD {}m", self.shell.user, m.max(1)),
             None => self.shell.user.clone(),
         };
-        (place, right)
+        (place, right, back.to_string())
     }
 
     /// Powers on with a given look: logged in on `origin` as your standing allows.
@@ -530,7 +545,9 @@ impl Screen for Terminal {
         let jack = self.jacked().then(|| self.jack_labels(st));
         let buf = f.buffer_mut();
         let screen = match &jack {
-            Some((title, right)) => device::jack(buf, r, title, right, led, &self.look),
+            Some((title, right, back)) => {
+                device::jack(buf, r, (title, right, back), led, &self.look)
+            }
             None => device::crt(buf, r, &self.badge(), led, &self.look),
         };
         // nano or HELIX mail owns the glass while open; the bezel, LED and scanlines stay.

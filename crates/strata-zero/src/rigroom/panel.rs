@@ -323,7 +323,18 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
             sp(" · your block", DIM),
         ])];
     }
-    // The terminal's lines arrive with the shell (Task 10): `if near(room.terminal)`.
+    if near(room.terminal) {
+        return vec![
+            Line::from(vec![
+                sp(" ", TEXT),
+                bold("◇", RELAY),
+                sp(" TERMINAL", TEXT),
+                sp(" · your rig's shell", DIM),
+            ]),
+            Line::from(sp("   r opens it from anywhere here", DIM)),
+            Line::from(sp("   yours: no crack, no hold to run out", DIM)),
+        ];
+    }
     Vec::new()
 }
 

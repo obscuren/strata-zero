@@ -2142,6 +2142,18 @@ impl MapScreen {
         })
     }
 
+    /// The rig's shell from its room's terminal; not while the room is on turns.
+    fn open_rig_shell(&mut self, st: &mut AppState) -> ScreenCmd {
+        if st.net.engaged.is_some() {
+            st.warn("not in a fight");
+            return ScreenCmd::Stay;
+        }
+        ScreenCmd::Push {
+            to: crate::rigroom::open_shell(st),
+            fx: TransitionKind::None,
+        }
+    }
+
     /// A verb key jacked in: a line logged, the hijack's picker, or a held terminal's
     /// shell; out of reach or spent, a warning.
     fn verb_key(st: &mut AppState, c: char) -> ScreenCmd {
@@ -3434,7 +3446,11 @@ impl MapScreen {
                 }
                 return Some(ScreenCmd::Stay);
             }
-            // In your rig's room, by a reader slot, space summons what it holds.
+            // In your rig's room, by the terminal, space opens the rig's shell.
+            if crate::rigroom::at_terminal(st) {
+                return Some(self.open_rig_shell(st));
+            }
+            // By a reader slot, space summons what it holds.
             if let Some(popup) = crate::rigroom::summon::interact(st) {
                 return Some(ScreenCmd::Push {
                     to: Box::new(popup),
@@ -3529,6 +3545,11 @@ impl MapScreen {
                 None => st.warn(format!("nothing in slot {n}")),
             }
             return Some(ScreenCmd::Stay);
+        }
+        // In your rig's room `r` is its terminal's shell, from anywhere in it.
+        if k.code == KeyCode::Char('r') && st.player.as_ref().is_some_and(|p| p.place == Place::Rig)
+        {
+            return Some(self.open_rig_shell(st));
         }
         // A verb key on the Net: the verb of the held node nearest you.
         if jacked
@@ -8440,6 +8461,108 @@ mod tests {
         };
         let drawn = draw_screen(&*to, &st, 120, 40);
         assert!(drawn.contains("Credchip"), "{drawn}");
+    }
+
+    /// The home's room jacked into, on a rack of seats and a reader, with its screen.
+    fn the_room() -> (AppState, MapScreen) {
+        let mut st = state_home();
+        let c = st.content.clone();
+        crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        (st, s)
+    }
+
+    /// `r` in the room: the pushed shell, powered on and past its boot.
+    fn shell_from_the_room(st: &mut AppState, s: &mut MapScreen) -> Box<dyn Screen> {
+        let ScreenCmd::Push { mut to, .. } = s.update(st, &[key(KeyCode::Char('r'))]) else {
+            panic!("r opens the shell")
+        };
+        st.tick += 10_000;
+        to.update(st, &[]);
+        to
+    }
+
+    fn say_in(term: &mut dyn Screen, st: &mut AppState, line: &str) {
+        let keys: Vec<_> = line
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain(std::iter::once(key(KeyCode::Enter)))
+            .collect();
+        term.update(st, &keys);
+        st.tick += 10_000;
+        term.update(st, &[]);
+    }
+
+    #[test]
+    fn r_opens_the_rigs_shell_anywhere_in_the_room() {
+        let (mut st, mut s) = the_room();
+        let room = crate::rigroom::room(&st).unwrap().clone();
+        assert!(!crate::rigroom::at_terminal(&st), "the landing is far off");
+        assert_ne!(room.land, room.terminal);
+        let term = shell_from_the_room(&mut st, &mut s);
+        let drawn = draw_screen(&*term, &st, 120, 40);
+        assert!(drawn.contains("◇ JACK · ZENBO"), "{drawn}");
+        assert!(drawn.contains("esc · back to your rig"), "{drawn}");
+        assert!(drawn.contains("@zenbo:~$ "), "{drawn}");
+    }
+
+    #[test]
+    fn space_at_the_terminal_opens_it_too() {
+        let (mut st, mut s) = the_room();
+        let at = crate::rigroom::room(&st).unwrap().terminal;
+        st.player.as_mut().unwrap().pos = at.step(Dir::S);
+        let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space at the terminal opens the shell")
+        };
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("◇ JACK · ZENBO"), "{drawn}");
+        let here = crate::rigroom::panel::here_lines(&st);
+        let here: Vec<String> = here.iter().map(|l| l.to_string()).collect();
+        assert!(here[0].contains("TERMINAL · your rig's shell"), "{here:?}");
+        assert!(
+            here[1].contains("r opens it from anywhere here"),
+            "{here:?}"
+        );
+        assert!(
+            here[2].contains("yours: no crack, no hold to run out"),
+            "{here:?}"
+        );
+    }
+
+    #[test]
+    fn the_shell_installs_from_the_pack_as_the_desk_does() {
+        let (mut st, mut s) = the_room();
+        let c = st.content.clone();
+        st.character
+            .give_item(&c, game::ItemId::new("prog_sniff"), 1);
+        let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Char('r'))]) else {
+            panic!("r opens the shell")
+        };
+        st.tick += 100_000;
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("INSTALLED sniff FROM SHARD"), "{drawn}");
+        assert!(st.backdoors.jobs.programs.contains("sniff"));
+    }
+
+    #[test]
+    fn run_and_kill_show_in_the_room() {
+        let (mut st, mut s) = the_room();
+        let mut term = shell_from_the_room(&mut st, &mut s);
+        say_in(&mut *term, &mut st, "run rent");
+        let room = draw_screen(&s, &st, 180, 50);
+        assert!(room.contains("◉ rent"), "{room}");
+        say_in(&mut *term, &mut st, "kill 1");
+        let room = draw_screen(&s, &st, 180, 50);
+        assert!(!room.contains("◉ rent"), "{room}");
+        assert!(room.contains("free seat"), "{room}");
     }
 
     #[test]
