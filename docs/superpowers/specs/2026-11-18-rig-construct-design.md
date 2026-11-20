@@ -311,7 +311,10 @@ row is its summon (and `x Leave it`):
   north runs up to the reader, undashed).
 - **Its turn.** Two moves, toward you inside the leash, then: if no bite is marked, it
   marks one (the 3×3 tiles beside it on your side, drawn `×` in bright red) and the
-  prompt says `MASTIFF bites the × tiles next turn`; if one is marked, it bites them:
+  prompt says `MASTIFF bites the × tiles next turn`. When it can't get beside you (you on
+  its leash where no ground its 3×3 fits on puts you in that bite: beside or above its
+  slot's box) it lunges: it marks the 3×3 round you instead, on its leash, with the same
+  prompt and bite. If one is marked, it bites them:
   standing on one, you take 7 to your body as a black ICE hit does (Shield soaks it; the
   failsafe dumps you first; with the failsafe off it can kill you, as black ICE can
   anywhere), and the marks clear.

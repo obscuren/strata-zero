@@ -231,7 +231,8 @@ pub fn order(st: &AppState) -> Vec<Actor> {
 
 /// One action of MASTIFF's turn, paced as a piece of ICE's (`net::pace`): a tile toward
 /// you while it has moves and a step closer keeps it on its leash; else, with its action
-/// left, a bite marked (the 3x3 beside it on your side) or, with one marked, bitten: on
+/// left, a bite marked (the 3x3 beside it on your side, or round you where it can't get
+/// beside you: `mark`) or, with one marked, bitten: on
 /// its tiles you take `BITE` as a black ICE hit (`net::black_hit`: Shield soaks it, the
 /// failsafe pulls you out first, with it off it can kill you), and the marks clear.
 pub fn step(st: &mut AppState, can_move: bool, can_act: bool) -> Step {
@@ -255,7 +256,7 @@ pub fn step(st: &mut AppState, can_move: bool, can_act: bool) -> Step {
     let from = m.body().center();
     match m.bite.take() {
         None => {
-            m.bite = beside(m, me);
+            m.bite = mark(k, m, me);
             if m.bite.is_some() {
                 st.warn("MASTIFF bites the × tiles next turn");
             }
@@ -318,8 +319,32 @@ fn gap(r: Rect, p: Pos) -> i32 {
     dx.max(dy)
 }
 
-/// The 3x3 beside MASTIFF on your side, on its leash: what it marks to bite.
-fn beside(m: &Mastiff, me: Pos) -> Option<Rect> {
+/// What MASTIFF marks to bite with you at `me`: the 3x3 beside it on your side, on its
+/// leash. With you on its leash where no ground it can stand on puts you in that (beside
+/// or above its slot's box, where its 3x3 doesn't fit), it lunges: the 3x3 round you, on
+/// its leash.
+fn mark(k: &Construct, m: &Mastiff, me: Pos) -> Option<Rect> {
+    if m.leash.contains(me) && !in_reach(k, m.leash, me) {
+        return Rect::new(me.x - 1, me.y - 1, 3, 3).intersection(m.leash);
+    }
+    beside(m.pos, m.leash, me)
+}
+
+/// Some ground on `leash` MASTIFF can stand on (its 3x3 on the leash and the floor, off
+/// you) puts you at `me` in the bite it marks beside it.
+fn in_reach(k: &Construct, leash: Rect, me: Pos) -> bool {
+    let xs = leash.x..=leash.right() - 3;
+    let ys = leash.y..=leash.bottom() - 3;
+    ys.flat_map(|y| xs.clone().map(move |x| Pos::new(x, y)))
+        .filter(|p| {
+            let r = Rect::new(p.x, p.y, 3, 3);
+            !r.contains(me) && r.iter().all(|q| floor(k, q))
+        })
+        .any(|p| beside(p, leash, me).is_some_and(|b| b.contains(me)))
+}
+
+/// The 3x3 beside MASTIFF's 3x3 at `pos` on your side, on its leash.
+fn beside(pos: Pos, leash: Rect, me: Pos) -> Option<Rect> {
     let side = |lo: i32, at: i32| {
         if at < lo {
             -1
@@ -329,11 +354,11 @@ fn beside(m: &Mastiff, me: Pos) -> Option<Rect> {
             0
         }
     };
-    let (dx, dy) = (side(m.pos.x, me.x), side(m.pos.y, me.y));
+    let (dx, dy) = (side(pos.x, me.x), side(pos.y, me.y));
     if (dx, dy) == (0, 0) {
         return None;
     }
-    Rect::new(m.pos.x + 3 * dx, m.pos.y + 3 * dy, 3, 3).intersection(m.leash)
+    Rect::new(pos.x + 3 * dx, pos.y + 3 * dy, 3, 3).intersection(leash)
 }
 
 /// A hit on MASTIFF from `from`: the whole plate nearest it breaks, or with the coat gone
@@ -679,6 +704,74 @@ mod tests {
         turn(&mut st);
         assert_eq!(st.character.hp, hp);
         assert!(mastiff(&st).bite.is_none());
+    }
+
+    #[test]
+    fn every_tile_of_its_leash_can_be_bitten() {
+        use crate::rigroom::layout::{Counts, lay_out};
+        for slots in 1..=6 {
+            let counts = Counts {
+                lines: 5,
+                seats: 2,
+                slots,
+                firewall: 1,
+            };
+            let room = lay_out(counts, citygen::BuildingId(7));
+            let k = &room.construct;
+            for (slot, r) in room.slots.iter().enumerate() {
+                let leash = leash_of(&room, slot).unwrap();
+                let at = front(*r);
+                let woke = Mastiff {
+                    slot,
+                    pos: Pos::new(at.x - 1, at.y),
+                    plates: [true; 8],
+                    core: CORE,
+                    bite: None,
+                    leash,
+                };
+                // For a tile it woke on, it comes from the far end of its strip.
+                let far = Pos::new(woke.pos.x, leash.bottom() - 3);
+                for me in leash.iter().filter(|p| floor(k, *p)) {
+                    let mut m = woke.clone();
+                    if m.body().contains(me) {
+                        m.pos = far;
+                    }
+                    assert!(!m.body().contains(me));
+                    // Its best ground: as near you as its steps take it.
+                    while let Some(to) = step_toward(k, &m, me) {
+                        m.pos = to;
+                    }
+                    let bite = mark(k, &m, me);
+                    assert!(
+                        bite.is_some_and(|b| b.contains(me)),
+                        "slot {slot} of {slots}: you at {me:?}, it at {:?}, marks {bite:?}",
+                        m.pos
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn beside_its_box_it_lunges() {
+        let mut st = armed();
+        wake(&mut st, SLOT).unwrap();
+        let slot = room(&st).unwrap().slots[SLOT];
+        // Two west of the box, a row down: no ground it stands on puts you beside it.
+        let at = Pos::new(slot.x - 2, slot.y + 1);
+        stand(&mut st, at);
+        let leash = mastiff(&st).leash;
+        assert!(walkable(&st, at) && leash.contains(at));
+        let hp = st.character.hp;
+        turn(&mut st);
+        let bite = mastiff(&st).bite.expect("a bite marked");
+        let round = Rect::new(at.x - 1, at.y - 1, 3, 3).intersection(leash);
+        assert_eq!(Some(bite), round, "the 3x3 round you, on its leash");
+        assert!(logged(&st, "MASTIFF bites the × tiles next turn"));
+        turn(&mut st);
+        assert!(st.character.hp < hp, "the bite lands");
+        assert!(logged(&st, "MASTIFF bites · hp"));
+        assert!(mastiff(&st).bite.is_none(), "the marks clear");
     }
 
     #[test]

@@ -167,7 +167,7 @@ A locked credchip has locks by its sum: 1 under ¤500, 2 under ¤2,000, 3 above.
 
 - **The coat.** MASTIFF is a 3×3 with 8 plates round a core that takes 2 hits. Your Attack breaks the plate nearest you, then the core.
 - **The leash.** The red ground in front of its slot is as far as it reaches. Off the leash you're out of the fight both ways: your Attack and your seats refuse with `off the leash · out of reach`, and at the end of your turn off it, MASTIFF grows a plate back.
-- **The bite.** On its turn MASTIFF takes two steps toward you, then marks the tiles beside it with `×`. Next turn it bites them for 7 as a black ICE hit. A shield soaks it. The failsafe dumps you; with the failsafe off, it can kill you.
+- **The bite.** On its turn MASTIFF takes two steps toward you, then marks the tiles beside it with `×`. Where it can't get beside you, on the red ground beside or above its slot, it lunges and marks the tiles round you instead. Next turn it bites the marked tiles as a black ICE hit does: 7, less your deck's rating and your feedback resistance. A shield soaks it. The failsafe dumps you; with the failsafe off, it can kill you.
 - **Your seats.** A free seat runs your Attack at the core while you're on the leash, at your chance scaled by the core's speed, up to 95%. With no Attack loaded a seat sits out.
 - **Programs.** Shield works in the room. Mask refuses, since nothing in your rig hunts by sight, and so does any program with nothing to run against. There are no strikes at MASTIFF.
 - **Doors and the trunk** refuse while it's awake. Jacking out, or being dumped, ends the fight and MASTIFF is whole again next time.
