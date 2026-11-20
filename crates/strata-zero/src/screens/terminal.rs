@@ -435,7 +435,7 @@ fn rig_news(st: &mut AppState) -> Vec<String> {
         let shard = game::ItemId::new(&format!("prog_{prog}"));
         if st.character.count(&shard) > 0 && !st.backdoors.jobs.programs.contains(prog) {
             game::remove_from_pack(&mut st.character, &shard, 1);
-            st.backdoors.jobs.programs.insert(prog.to_string());
+            crate::rig::jobs::install(st, prog);
             out.push(format!("INSTALLED {prog} FROM SHARD"));
         }
     }
@@ -823,6 +823,31 @@ mod tests {
         assert!(st.backdoors.jobs.programs.contains("sniff"));
         let again = Terminal::open(&mut st, HostId::Rig, KEY_B);
         assert!(!again.text(st.tick).join("\n").contains("INSTALLED"));
+    }
+
+    #[test]
+    fn a_shard_installed_at_boot_is_in_opt_jobs() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A shell seen before, so the host and its `/opt/jobs` are already there.
+        let mut t = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        say(&mut t, &mut st, "ls /opt/jobs");
+        assert!(!reply(&t, &st, "ls /opt/jobs").contains("keepalive"));
+        st.character
+            .give_item(&st.content, game::ItemId::new("prog_keepalive"), 1);
+        for key in [KEY_A, KEY_B] {
+            let mut t = Terminal::open(&mut st, HostId::Rig, key);
+            // In step as it installs, before the shell looks.
+            let fs = &st.helix.hosts[&HostId::Rig].fs;
+            assert!(
+                fs.resolve("/", "/", "/opt/jobs/keepalive").is_ok(),
+                "{key:?}"
+            );
+            say(&mut t, &mut st, "ls /opt/jobs");
+            let ls = reply(&t, &st, "ls /opt/jobs");
+            assert!(ls.contains("keepalive"), "{key:?}: {ls}");
+        }
+        let text = (st.log.iter().map(|e| e.text.clone())).collect::<Vec<_>>();
+        assert!(st.backdoors.jobs.programs.contains("keepalive"), "{text:?}");
     }
 
     #[test]

@@ -211,6 +211,13 @@ pub fn sift_left(job: &Job, speed: u16, now: u64) -> Option<(u64, u64)> {
     Some((all.saturating_sub(done), all))
 }
 
+/// Installs `prog` in the rig: `run` takes it, and `/opt/jobs` lists it at once. The
+/// boot's shards in the pack and the reader's summon both install through here.
+pub fn install(st: &mut AppState, prog: &str) {
+    st.backdoors.jobs.programs.insert(prog.to_string());
+    crate::helix::hosts::sync_rig_jobs(st);
+}
+
 /// Starts a job in a free seat; its number.
 pub fn start(st: &mut AppState, kind: JobKind) -> Result<u32, String> {
     let now = st.net.now(st);

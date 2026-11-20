@@ -180,7 +180,7 @@ pub fn summon(st: &mut AppState, slot: usize) -> Result<Summoned, String> {
                 }
             } else {
                 st.character.reader[slot] = None;
-                st.backdoors.jobs.programs.insert(p.to_string());
+                jobs::install(st, p);
                 st.say(format!("INSTALLED {p} FROM SHARD"));
             }
             Ok(Summoned::Installed(p, wants))
@@ -333,6 +333,43 @@ mod tests {
         assert_eq!(st.fx.len(), fx + 1, "a number rises");
         let said = st.log.latest().unwrap().text.clone();
         assert_eq!(said, "summoned ¤340 · you carry ¤660");
+    }
+
+    #[test]
+    fn a_program_installed_from_the_reader_is_in_opt_jobs() {
+        use crate::screens::explore::MapScreen;
+        let mut st = in_the_room();
+        // The rig's shell seen before, so its host and `/opt/jobs` are already there.
+        let _ = crate::helix::hosts::ensure_host(&mut st, crate::helix::shell::HostId::Rig);
+        load(&mut st, 1, "prog_keepalive", 0);
+        stand_at(&mut st, 1);
+        assert_eq!(
+            summon(&mut st, 1),
+            Ok(Summoned::Installed("keepalive", false))
+        );
+        // In step as it installs, before the shell looks.
+        let fs = &st.helix.hosts[&crate::helix::shell::HostId::Rig].fs;
+        assert!(fs.resolve("/", "/", "/opt/jobs/keepalive").is_ok());
+        let mut map = MapScreen::walking(&mut st);
+        let ScreenCmd::Push { to: mut shell, .. } = map.update(&mut st, &[key(KeyCode::Char('r'))])
+        else {
+            panic!("r opens the rig's shell");
+        };
+        st.tick += 100_000;
+        shell.update(&mut st, &[]);
+        let mut keys: Vec<_> = "ls /opt/jobs"
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .collect();
+        keys.push(key(KeyCode::Enter));
+        shell.update(&mut st, &keys);
+        st.tick += 100_000;
+        shell.update(&mut st, &[]);
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| shell.draw(&st, f)).unwrap();
+        let text = crate::screens::testutil::buffer_text(term.backend().buffer());
+        let after = text.split("ls /opt/jobs").nth(1).expect("the line typed");
+        assert!(after.contains("keepalive"), "{text}");
     }
 
     #[test]
