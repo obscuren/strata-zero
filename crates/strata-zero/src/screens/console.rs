@@ -41,7 +41,11 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
     let args: Vec<&str> = words.collect();
     match cmd {
         "spawn" | "drop" => {
-            let usage = format!("{cmd} <item> [qty]");
+            let usage = if cmd == "spawn" {
+                "spawn <item> [qty] [sum]".to_string()
+            } else {
+                "drop <item> [qty]".to_string()
+            };
             let id = args.first().ok_or_else(|| usage.clone())?;
             let item = st
                 .content
@@ -56,8 +60,29 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 return Err(usage);
             }
             if cmd == "spawn" {
-                st.character.give_item(&st.content, item.id.clone(), qty);
-                Ok(format!("spawned {qty}× `{}`", item.name))
+                // A credchip's sum, set on each copy.
+                let sum: Option<u32> = match args.get(2) {
+                    Some(n) => Some(n.parse().map_err(|_| usage.clone())?),
+                    None => None,
+                };
+                let cash = matches!(item.on_use, Some(game::Use::Cash { .. }));
+                match sum {
+                    Some(_) if !cash => Err("a sum is only for a credchip".to_string()),
+                    Some(sum) => {
+                        for _ in 0..qty {
+                            st.character.give_credchip(&st.content, &item.id, sum);
+                        }
+                        Ok(format!(
+                            "spawned {qty}× `{}` of ¤{}",
+                            item.name,
+                            crate::rigroom::crack::commas(sum)
+                        ))
+                    }
+                    None => {
+                        st.character.give_item(&st.content, item.id.clone(), qty);
+                        Ok(format!("spawned {qty}× `{}`", item.name))
+                    }
+                }
             } else {
                 let lies = st.city.as_ref().is_some_and(|c| {
                     crate::render::map::MapRef::for_place(c, &st.interiors, &st.constructs, focus.place, st.minute_of_day())
@@ -680,7 +705,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · site <type> [size] [objective] [security] [seed] | end · clear · help"
+            "spawn <item> [qty] [sum] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · site <type> [size] [objective] [security] [seed] | end · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),
@@ -1094,6 +1119,38 @@ mod tests {
                 left: game::FULL_CELL,
                 burned: false
             })
+        );
+    }
+
+    #[test]
+    fn spawn_takes_a_credchips_sum() {
+        let (mut st, at) = setup();
+        let sums = |st: &AppState, id: &str| -> Vec<u32> {
+            (st.character.inventory.iter())
+                .filter(|s| s.item.0 == id)
+                .map(|s| s.copy.as_ref().map_or(0, |k| k.credits))
+                .collect()
+        };
+        assert_eq!(
+            run(&mut st, at, "spawn credchip_black 2 4800"),
+            Ok("spawned 2× `Black credchip` of ¤4,800".to_string())
+        );
+        assert_eq!(sums(&st, "credchip_black"), [4800, 4800]);
+        // Without one a chip holds nothing, as ever.
+        run(&mut st, at, "spawn credchip_locked").unwrap();
+        assert_eq!(sums(&st, "credchip_locked"), [0]);
+        assert_eq!(
+            run(&mut st, at, "spawn copper_coil 1 500"),
+            Err("a sum is only for a credchip".to_string())
+        );
+        assert_eq!(
+            run(&mut st, at, "spawn credchip 1 lots"),
+            Err("spawn <item> [qty] [sum]".to_string())
+        );
+        assert!(
+            run(&mut st, at, "help")
+                .unwrap()
+                .contains("spawn <item> [qty] [sum]")
         );
     }
 
