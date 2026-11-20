@@ -60,12 +60,12 @@ The stock rig is a Zenbo half-rack with a ZB-8 core (1 seat), an R-3 relay (3 li
 
 | Key | What it does |
 |---|---|
-| `↑↓` | move between the frame and the bays |
+| `↑↓` | move between the frame, the bays and the reader |
 | `space` | what fits here; in the list, fit it |
 | `x` | pull the sled into your pack |
 | `esc` | back, then stand up |
 
-The rows under the bays, `READER 1` and on, are the reader's slots. `space` on one lists what the reader takes from your pack: a credchip, a locked or black credchip, a rig program shard, paydata or a vault dump, a story shard. A filled row shows its glyph and what `space` there does in your rig's Net (Your rig's Net, in The Net); `x` pulls it back to your pack. The slots come with the rack.
+The rows under the bays, `READER 1` and on, are the reader's slots. On a small screen the rows the desk has no room for come into view as you move down to them, with `↓` where there are more. `space` on one lists what the reader takes from your pack: a credchip, a locked or black credchip, a rig program shard, paydata or a vault dump, a story shard. A filled row shows its glyph and what `space` there does in your rig's Net (Your rig's Net, in The Net); `x` pulls it back to your pack. The slots come with the rack.
 
 Fitting or pulling takes ten minutes. A swap puts the old sled in your pack. Pull a core, or swap to one with fewer seats, and the newest jobs over the new count are killed; the log says which. Lowering your lines burns nothing, but you can't plant until you're under.
 

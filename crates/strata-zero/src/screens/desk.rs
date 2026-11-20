@@ -49,7 +49,7 @@ const STAGE_MIN: u16 = 50;
 /// Cells a typed-out card shows a tick.
 const TYPE_RATE: u64 = 3;
 /// What the bottom row says.
-const STATUS: &str = " at your rig · ↑↓ bays · space what fits · x pull · esc stand up";
+const STATUS: &str = " at your rig · ↑↓ bays and reader · space what fits · x pull · esc stand up";
 
 /// What can go in the picked row: a rack in your pack (row 0), a sled in it, or for a
 /// reader slot what the reader takes (a stack with no copy of its own has none).
@@ -612,27 +612,60 @@ fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) -> Drawn {
     if label_y < rows[0] {
         put(buf, x + 2, label_y, "BAYS", AMBER_DIM, WALL, true, list_end);
     }
-    let mut lines: Vec<(String, String, bool)> =
-        vec![("FRAME".into(), rack_word(st, &frame), true)];
-    for (kind, sled) in &bays {
+    // Each line: its row in the list, the row it stands on, its words and whether it
+    // holds something, and an arrow where the reader's rows go on out of sight.
+    let mut lines: Vec<(usize, u16, String, String, bool, Option<char>)> = vec![(
+        0,
+        rows[0],
+        "FRAME".into(),
+        rack_word(st, &frame),
+        true,
+        None,
+    )];
+    for (i, (kind, sled)) in bays.iter().enumerate() {
         let model = sled
             .as_ref()
             .map(|id| rack::model(&name(st, id)))
             .unwrap_or_else(|| "empty".to_string());
-        lines.push((kind.label().to_uppercase(), model, sled.is_some()));
+        let y = rows[i + 1];
+        lines.push((
+            i + 1,
+            y,
+            kind.label().to_uppercase(),
+            model,
+            sled.is_some(),
+            None,
+        ));
     }
-    // The reader's slots under the bays, a line apart from them.
-    let mut ys = rows.clone();
-    let below = rows.last().copied().unwrap_or(top) + 2;
-    for slot in 0..st.character.reader_slots(&st.content) {
+    // The reader's slots under the bays: a line apart from them where there's room for
+    // that, else right under them; with more slots than rows above the desk, the rows
+    // round the pick, `↑` and `↓` saying there are more.
+    let slots = st.character.reader_slots(&st.content);
+    let last = rows.last().copied().unwrap_or(top);
+    let gap = u16::from(desk_y.saturating_sub(last + 1) > slots as u16);
+    let below = last + 1 + gap;
+    let fit = usize::from(desk_y.saturating_sub(below)).min(slots);
+    let picked_slot = d.row.checked_sub(1 + bays.len());
+    let first = picked_slot
+        .map_or(0, |s| (s + 1).saturating_sub(fit))
+        .min(slots - fit);
+    for (n, slot) in (first..first + fit).enumerate() {
         let held = slot_stack(st, slot);
         let word = held.map_or_else(|| "empty".to_string(), |s| name(st, &s.item));
-        lines.push((format!("READER {}", slot + 1), word, held.is_some()));
-        ys.push(below + slot as u16);
+        let arrow = if n == 0 && first > 0 {
+            Some('↑')
+        } else if n + 1 == fit && first + fit < slots {
+            Some('↓')
+        } else {
+            None
+        };
+        let (i, y) = (1 + bays.len() + slot, below + n as u16);
+        let label = format!("READER {}", slot + 1);
+        lines.push((i, y, label, word, held.is_some(), arrow));
     }
     let mut end = label_y;
-    for (i, (kind, model, held)) in lines.iter().enumerate() {
-        let y = ys[i];
+    for (i, y, kind, model, held, arrow) in &lines {
+        let (i, y) = (*i, *y);
         if y >= desk_y {
             break;
         }
@@ -644,7 +677,7 @@ fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) -> Drawn {
         let fg = if picked { AMBER } else { AMBER2 };
         let label = format!("{mark}{kind}");
         put(buf, x + 2, y, &label, fg, bg, picked, list_end);
-        let mfg = match (picked, held) {
+        let mfg = match (picked, *held) {
             (true, _) => AMBER,
             (false, true) => AMBER_DIM,
             (false, false) => AMBER_FAINT,
@@ -662,6 +695,10 @@ fn draw_desk(d: &Desk, st: &AppState, buf: &mut Buffer, map: Rect) -> Drawn {
                 }
                 None => put(buf, x + 13, y, model, mfg, bg, false, list_end),
             }
+        }
+        if let Some(a) = arrow {
+            let at = list_end.saturating_sub(1);
+            put(buf, at, y, &a.to_string(), AMBER, bg, true, list_end);
         }
     }
     // No firewall bay: the list says so under its rows, where there is room.
@@ -1623,18 +1660,39 @@ mod tests {
         for frame in ["rack_zenbo", "rack_halcyon", "rack_civitas"] {
             crate::rig::fit_new_rack(&mut st.character, &st.content, frame);
             let mut d = Desk::open(&st);
+            let slots = st.character.reader_slots(&st.content);
+            let bays = st.character.rig_fitted(&st.content).len();
             for (w, h) in [(100, 30), (120, 40)] {
-                let text = drawn(&d, &st, w, h);
-                if frame == "rack_civitas" {
-                    for n in 1..=3 {
-                        let want = format!("READER {n}");
-                        assert!(text.contains(&want), "{w}x{h} {want}:\n{text}");
+                // The cursor seen on every READER row; the rows out of sight said with
+                // an arrow, and every row drawn with the cursor on it or near it. At
+                // 120x40 they all fit at once.
+                let mut seen = std::collections::BTreeSet::new();
+                for slot in 0..slots {
+                    let row = 1 + bays + slot;
+                    let (buf, drawn_at, map) = pane(&st, row, (w, h));
+                    let list: String = (map.y..map.bottom())
+                        .map(|y| {
+                            let cells = map.x..drawn_at.list_end;
+                            cells.map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n"
+                        })
+                        .collect();
+                    let at = format!("{frame} {w}x{h} cursor on READER {}", slot + 1);
+                    let want = format!("▸ READER {}", slot + 1);
+                    assert!(list.contains(&want), "{at}:\n{list}");
+                    let now: Vec<usize> = (1..=slots)
+                        .filter(|n| list.contains(&format!("READER {n}")))
+                        .collect();
+                    if now.len() < slots {
+                        assert!(list.contains('↑') || list.contains('↓'), "{at}:\n{list}");
                     }
-                    d.row = Desk::rows(&st) - 1;
-                    let text = drawn(&d, &st, w, h);
-                    assert!(text.contains("▸ READER 3"), "{w}x{h}:\n{text}");
-                    d.row = 1;
+                    if (w, h) == (120, 40) {
+                        assert_eq!(now.len(), slots, "{at}:\n{list}");
+                    }
+                    seen.extend(now);
                 }
+                assert_eq!(seen.len(), slots, "{frame} {w}x{h}");
+                d.row = 1;
+                let text = drawn(&d, &st, w, h);
                 for kind in ["FRAME", "CORE", "RELAY", "LINE"] {
                     assert!(text.contains(kind), "{frame} {w}x{h} {kind}:\n{text}");
                 }
@@ -1645,7 +1703,7 @@ mod tests {
                 assert!(text.contains("BAYS"), "{frame} {w}x{h}");
                 assert!(
                     text.contains(
-                        "at your rig · ↑↓ bays · space what fits · x pull · esc stand up"
+                        "at your rig · ↑↓ bays and reader · space what fits · x pull · esc stand up"
                     ),
                     "{frame} {w}x{h}:\n{text}"
                 );
