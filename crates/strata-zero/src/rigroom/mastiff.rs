@@ -896,6 +896,132 @@ mod tests {
         assert_eq!(whole(&st), 6);
     }
 
+    /// `id` loaded in the deck; its number key.
+    fn load_program(st: &mut AppState, id: &str) -> char {
+        let id = ItemId::new(id);
+        if !st.character.loaded.contains(&id) {
+            st.character.give(id.clone(), 1);
+            st.character.loaded.push(id.clone());
+        }
+        let n = st.character.loaded.iter().position(|l| *l == id).unwrap();
+        assert!(n < crate::ui::hud::SLOTS, "a number key reaches it");
+        char::from_digit(n as u32 + 1, 10).unwrap()
+    }
+
+    #[test]
+    fn shield_runs_in_the_fight_and_soaks_the_bite() {
+        use crate::app::Screen;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = armed();
+        let shield = load_program(&mut st, "shield");
+        let traces = st.net.traces.clone();
+        wake(&mut st, SLOT).unwrap();
+        let mut map = MapScreen::walking(&mut st);
+        map.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let left = ap(&st);
+        // The Shield's key picks you; space runs it, an action point, and it lands.
+        map.update(&mut st, &[key(KeyCode::Char(shield))]);
+        map.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(st.net.shield, 1, "{:?}", st.log.latest());
+        assert!(logged(&st, "shield raised · 1 charge"));
+        assert_eq!(ap(&st), left - 1);
+        assert_eq!(st.net.traces, traces, "no heat behind your firewall");
+        // MASTIFF marks, you stand in it, and the shield takes the bite.
+        turn(&mut st);
+        let at = in_the_bite(&st);
+        stand(&mut st, at);
+        let hp = st.character.hp;
+        turn(&mut st);
+        assert_eq!(st.character.hp, hp);
+        assert_eq!(st.net.shield, 0);
+        assert!(logged(&st, "shield absorbs the hit"));
+    }
+
+    #[test]
+    fn what_means_nothing_in_the_room_says_why() {
+        use crate::app::Screen;
+        use crate::net::Scene;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = armed();
+        let mask = load_program(&mut st, "mask");
+        let crack = load_program(&mut st, "crack");
+        wake(&mut st, SLOT).unwrap();
+        let mut map = MapScreen::walking(&mut st);
+        map.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let left = ap(&st);
+        // A Mask hides you from eyes: MASTIFF knows where you are.
+        map.update(&mut st, &[key(KeyCode::Char(mask))]);
+        assert_eq!(
+            st.log.latest().unwrap().text,
+            "mask · nothing in your rig hunts by sight"
+        );
+        assert_eq!(
+            crate::net::start_run(&mut st, ItemId::new("mask"), game::HackTarget::Deck),
+            Err("mask · nothing in your rig hunts by sight".to_string())
+        );
+        // A Crack has no node here to work on.
+        map.update(&mut st, &[key(KeyCode::Char(crack))]);
+        assert_eq!(
+            st.log.latest().unwrap().text,
+            "crack · nothing to run it against"
+        );
+        assert_eq!((ap(&st), st.net.mask), (left, 0), "nothing spent, no mask");
+        assert!(st.net.run.is_none());
+        // Space's list of programs greys it with the same reason.
+        let rows = crate::interact::run_rows_at(
+            &st,
+            Scene::Rig,
+            here(&st),
+            Some(&ItemId::new("mask")),
+            &mut "abc".chars(),
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].enabled);
+        assert!(rows[0].tail.contains("nothing in your rig hunts by sight"));
+    }
+
+    #[test]
+    fn g_aims_a_walk_round_it() {
+        use crate::app::Screen;
+        use crate::screens::explore::MapScreen;
+        use crate::screens::testutil::key;
+        use crossterm::event::KeyCode;
+        let mut st = armed();
+        wake(&mut st, SLOT).unwrap();
+        let mut map = MapScreen::walking(&mut st);
+        let at = here(&st);
+        let moves = st.net.engaged.as_ref().unwrap().moves;
+        // Into MASTIFF the aim doesn't go.
+        map.update(&mut st, &[key(KeyCode::Char('g')), key(KeyCode::Char('l'))]);
+        assert_eq!(
+            map.aim_path(&st).map(|(p, _)| p.len()),
+            Some(0),
+            "the aim stays on you"
+        );
+        // Two west, and enter walks it.
+        map.update(
+            &mut st,
+            &[
+                key(KeyCode::Char('h')),
+                key(KeyCode::Char('h')),
+                key(KeyCode::Enter),
+            ],
+        );
+        for _ in 0..40 {
+            if here(&st) == Pos::new(at.x - 2, at.y) {
+                break;
+            }
+            advance(&mut st, 1);
+            map.update(&mut st, &[]);
+        }
+        assert_eq!(here(&st), Pos::new(at.x - 2, at.y));
+        assert_eq!(st.net.engaged.as_ref().unwrap().moves, moves - 2);
+    }
+
     #[test]
     fn a_fight_keeps_its_room() {
         use crate::rigroom::testutil::hold_a_backdoor;

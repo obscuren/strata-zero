@@ -214,30 +214,42 @@ impl TryFrom<EchoRead> for RollEcho {
     }
 }
 
-/// Where a run is worked: inside a construct, or out on the open Net.
+/// Where a run is worked: inside a construct, out on the open Net, or in your rig's room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Scene {
     Inside(BuildingId),
     Outside,
+    /// Your rig's own room, behind your firewall: nobody's trace, no noise. It holds no
+    /// node: a program there runs on yourself (MASTIFF takes the deck's Attack alone).
+    Rig,
 }
 
 /// The scene of a place: a construct's inside (a site's Net is its building's), the open
-/// Net; none off the Net.
+/// Net, your rig's room; none off the Net.
 pub fn scene_of(place: Place) -> Option<Scene> {
     match place {
         Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(Scene::Inside(b)),
         Place::Stratum(StratumKind::Net) => Some(Scene::Outside),
+        Place::Rig => Some(Scene::Rig),
         _ => None,
     }
 }
 
 /// What a program can run against where you stand: in a construct, its nodes beside
-/// you and its ICE in reach; on the open Net, the nodes on your tile or beside it.
+/// you and its ICE in reach; on the open Net, the nodes on your tile or beside it; in
+/// your rig's room, yourself.
 pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, String)> {
     match scene {
         Scene::Inside(b) => targets_near(st, b, pos),
         Scene::Outside => targets_outside(st, pos),
+        Scene::Rig => vec![(HackTarget::Deck, "yourself".to_string())],
     }
+}
+
+/// Why a program `op` does nothing in `scene`, when it isn't for want of a target: in
+/// your rig's room a Mask, as nothing there hunts by sight (MASTIFF knows where you are).
+pub fn refusal_in(scene: Scene, op: Op) -> Option<&'static str> {
+    (scene == Scene::Rig && op == Op::Mask).then_some("nothing in your rig hunts by sight")
 }
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
@@ -365,6 +377,7 @@ pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target
             }
             HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
+        Scene::Rig => (target == HackTarget::Deck).then_some(Target::Deck),
     }
 }
 
@@ -385,6 +398,9 @@ pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
             }
             HackTarget::Guard { .. } => None,
         },
+        Scene::Rig => (target == HackTarget::Deck)
+            .then(|| st.player.as_ref().map(|p| p.pos))
+            .flatten(),
     }
 }
 
@@ -400,6 +416,8 @@ pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate
             Some(crate::owners::Owner::Building(n.building))
         }
         (Scene::Outside, _) => None,
+        // Behind your own firewall nothing traces you.
+        (Scene::Rig, _) => None,
     }
 }
 
@@ -407,7 +425,7 @@ pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate
 pub fn odds_at(st: &AppState, scene: Scene, run: &Run) -> Option<u8> {
     match scene {
         Scene::Inside(b) => run_odds(st, b, run),
-        Scene::Outside => {
+        Scene::Outside | Scene::Rig => {
             let spec = st.content.item(&run.program)?.program?;
             let kind = kind_at(st, scene, run.target)?;
             if kind == Target::Deck {
@@ -975,6 +993,9 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     }
     if !applies(spec.op, kind) {
         return Err(format!("{} does nothing there", item.name));
+    }
+    if let Some(why) = refusal_in(scene, spec.op) {
+        return Err(format!("{} · {why}", spec.op.label()));
     }
     let now = st.net.now(st);
     if spec.op == Op::Copy && st.net.copied(target, now) {
@@ -3401,7 +3422,7 @@ pub fn tether_view(st: &AppState, place: Place) -> Option<crate::render::tether:
     let vis = p.vis();
     let inside = match scene {
         Scene::Inside(b) => st.constructs.get(b),
-        Scene::Outside => None,
+        Scene::Outside | Scene::Rig => None,
     };
     let keep = inside
         .map(|k| {

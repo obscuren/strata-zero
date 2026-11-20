@@ -776,7 +776,8 @@ pub fn run_rows(
 
 /// `run_rows` where you stand on the Net: in a construct its nodes and ICE in reach
 /// (and the hops off a backdoored server); out on the grid the nodes on or beside your
-/// tile and the ICE in reach, at the open Net's noise.
+/// tile and the ICE in reach, at the open Net's noise; in your rig's room yourself, at
+/// none.
 pub fn run_rows_at(
     st: &AppState,
     scene: crate::net::Scene,
@@ -816,6 +817,13 @@ pub fn run_rows_at(
                 choices.push(c);
                 continue;
             }
+            if let Some(why) = crate::net::refusal_in(scene, spec.op) {
+                let mut c = Choice::on(key, verb, what.clone(), colour, Pick::Close)
+                    .tail(format!(" · {why}"));
+                c.enabled = false;
+                choices.push(c);
+                continue;
+            }
             if spec.op == game::Op::Backdoor
                 && let Scene::Inside(b) = scene
                 && let Some(why) = crate::net::plant_net_refusal(st, b)
@@ -836,6 +844,8 @@ pub fn run_rows_at(
             let noise = match scene {
                 Scene::Inside(_) => spec.noise,
                 Scene::Outside => crate::owners::outside_noise(spec.noise),
+                // Behind your own firewall: nobody hears it.
+                Scene::Rig => 0,
             };
             choices.push(
                 Choice::on(

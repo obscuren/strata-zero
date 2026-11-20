@@ -1636,8 +1636,10 @@ impl MapScreen {
             {
                 crate::net::run_readout(st, b, run)
             }
-            (true, Some(run), Some(Place::Stratum(StratumKind::Net))) if !tethered => {
-                crate::net::run_readout_at(st, crate::net::Scene::Outside, run)
+            (true, Some(run), Some(place @ (Place::Stratum(StratumKind::Net) | Place::Rig)))
+                if !tethered =>
+            {
+                (crate::net::scene_of(place)).and_then(|s| crate::net::run_readout_at(st, s, run))
             }
             _ => None,
         };
@@ -2250,6 +2252,11 @@ impl MapScreen {
         let Some(spec) = st.content.item(&id).and_then(|i| i.program) else {
             return ScreenCmd::Stay;
         };
+        // A program that means nothing here says why (a Mask in your rig's room).
+        if let Some(why) = crate::net::refusal_in(scene, spec.op) {
+            st.warn(format!("{} · {why}", spec.op.label()));
+            return ScreenCmd::Stay;
+        }
         // Your turn's move half: programs wait for the act half.
         if crate::net::phase(st) == Some(crate::net::Phase::Move) {
             st.warn("move first · space to stay");
@@ -3127,17 +3134,25 @@ impl MapScreen {
     /// The path from the player to the aim and how many tiles the moves left cover;
     /// `None` when nothing reaches the aim. An aim off the map past the entry is
     /// the gate: the path runs to the entry and one tile out.
-    /// The tiles you would walk over a stratum or a floor from `from` to `to`, after
-    /// your own: the shortest way over walkable tiles round standing foes; on a floor
-    /// never onto an exit or a door shut to you (`route::shut_to_you`).
+    /// The tiles you would walk over a stratum, a floor or your rig's room from `from` to
+    /// `to`, after your own: the shortest way over walkable tiles round standing foes; on
+    /// a floor never onto an exit or a door shut to you (`route::shut_to_you`); in your
+    /// rig's room round MASTIFF and short of its doors (`open_at`).
     fn street_path(&self, st: &AppState, from: Pos, to: Pos) -> Option<Vec<Pos>> {
         let city = st.city.as_ref()?;
         let place = st.player.as_ref()?.place;
-        if !matches!(place, Place::Stratum(_) | Place::Floor { .. }) {
+        if !matches!(place, Place::Stratum(_) | Place::Floor { .. } | Place::Rig) {
             return None;
         }
         if from == to {
             return Some(Vec::new());
+        }
+        // Your rig's room on turns: over its floor, round MASTIFF, short of the doors.
+        if place == Place::Rig {
+            let size = crate::rigroom::room(st)?.construct.size;
+            let path =
+                citygen::pathing::astar(size, from, to, |_, n| open_at(st, place, n).then_some(1))?;
+            return Some(path.into_iter().filter(|p| *p != from).collect());
         }
         if let Place::Floor { .. } = place {
             let map = crate::foes::map_of(st, place)?;
@@ -3217,8 +3232,8 @@ impl MapScreen {
         ScreenCmd::Stay
     }
 
-    /// One tile of an aimed walk over a stratum or a floor: a move spent, sight
-    /// refreshed, the act half opening on the last move.
+    /// One tile of an aimed walk over a stratum, a floor or your rig's room: a move
+    /// spent, sight refreshed, the act half opening on the last move.
     fn street_walk_step(&mut self, st: &mut AppState, next: Pos) {
         let Some((place, here)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             self.walking = None;
@@ -3299,11 +3314,12 @@ impl MapScreen {
             self.walking = None;
             return;
         };
-        if st
-            .player
-            .as_ref()
-            .is_some_and(|p| matches!(p.place, Place::Stratum(_) | Place::Floor { .. }))
-        {
+        if (st.player.as_ref()).is_some_and(|p| {
+            matches!(
+                p.place,
+                Place::Stratum(_) | Place::Floor { .. } | Place::Rig
+            )
+        }) {
             self.street_walk_step(st, next);
             return;
         }
@@ -4188,9 +4204,10 @@ impl Screen for MapScreen {
             if st.net.engaged.is_some() {
                 crate::net::pace(st);
             } else {
-                // Calm: a fuse burns down on every beat; on the open Net, a run in
-                // flight rolls on it.
-                let rolling = st.net.run.is_some() && place == Place::Stratum(StratumKind::Net);
+                // Calm: a fuse burns down on every beat; on the open Net and in your
+                // rig's room, a run in flight rolls on it.
+                let rolling = st.net.run.is_some()
+                    && matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig);
                 if (!st.live.is_empty() || rolling)
                     && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS
                 {
@@ -4216,7 +4233,10 @@ impl Screen for MapScreen {
             st.say("the walk stops");
         }
         if inside.is_none() {
-            self.targeting = None;
+            // A program's pick waits for space in a construct and in your rig's room.
+            if st.player.as_ref().is_none_or(|p| p.place != Place::Rig) {
+                self.targeting = None;
+            }
             if !crate::net::engaged_on_foot(st) {
                 self.aim = None;
                 self.walking = None;
