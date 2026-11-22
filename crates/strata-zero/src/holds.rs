@@ -291,6 +291,10 @@ pub fn node_pos(st: &AppState, place: Place, node: NetNode) -> Option<Pos> {
                 {
                     st.constructs.site(building)?.device(n).map(|d| d.at)
                 }
+                // A construct with no levels that carries the device (the turret lot's).
+                Place::Construct(building) if building == n.building => {
+                    st.constructs.get(building)?.device(n).map(|d| d.at)
+                }
                 _ => None,
             };
         }

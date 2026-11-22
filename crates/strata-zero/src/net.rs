@@ -2817,8 +2817,14 @@ pub fn ice_card(st: &AppState, b: BuildingId, i: usize) -> Option<(String, Strin
 /// landed on the gate.
 pub fn start_in_net_lot(st: &mut AppState) -> Result<String, String> {
     let k = citygen::lot_construct();
-    let (b, entry) = (k.building, k.entry);
+    let b = k.building;
     st.constructs.insert(k);
+    onto_the_lots_net(st, b)
+}
+
+/// Into the lot's construct `b` at its gate, the body left where it stands.
+fn onto_the_lots_net(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let entry = st.constructs.get(b).ok_or("no Net on the lot")?.entry;
     if let Some(k) = st.constructs.get(b) {
         st.net.ice_of(k);
     }
@@ -3576,6 +3582,16 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
+    }
+    // A lot has no city Net: its terminal opens onto the lot's own construct.
+    let lot = crate::turrets::lot::LOT;
+    let on_a_lot = (st.city.as_ref()).filter(|c| c.is_lot()).is_some_and(|c| {
+        st.player
+            .as_ref()
+            .is_some_and(|p| !p.jacked_in() && p.terminal_in_reach(c, None).is_some())
+    });
+    if on_a_lot && st.constructs.get(lot).is_some() {
+        return onto_the_lots_net(st, lot);
     }
     let bonus = st.sight_bonus();
     let home = st.home;

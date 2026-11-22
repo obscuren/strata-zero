@@ -11,6 +11,7 @@ pub mod clock;
 pub mod field;
 pub mod hack;
 pub mod look;
+pub mod lot;
 #[cfg(test)]
 pub(crate) mod testutil;
 pub mod turn;

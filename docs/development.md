@@ -159,8 +159,12 @@ The title's test starts:
     city's Net with a lock broken) are the `#[ignore]` test `site_net_shots`
     (`screens/shots.rs`); `sitenet::tests::what_done_looks_like` walks the same start
     through the spec's "What done looks like";
-  - COMBAT, `←` `→` picking NET (jacked into a construct with grey ICE on patrol) or
-    STREET (on the lot at dusk with a goon and a dummy);
+  - COMBAT, `←` `→` picking NET (jacked into a construct with grey ICE on patrol),
+    STREET (on the lot at dusk with a goon and a dummy) or TURRET (the lot with a street
+    terminal in its bottom-left corner, a turret awake in its top-left and a goon in its
+    top-right; the lot stays on alert all night so the turret keeps sweeping, and the
+    terminal jacks into the lot's small Net, the turret's node on it to crack, blind and
+    take over; `turrets::lot`, shots in the `#[ignore]` test `turret_lot`);
   - LOAD CITY: a saved city from `cities/`, a run started over in it.
 
 The `:` console's `site <type> [size] [objective] [security] [seed]`, standing at a

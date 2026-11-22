@@ -109,6 +109,50 @@ pub fn lot_construct() -> Construct {
     }
 }
 
+/// The turret lot's small Net, for practice on a turret: one room with the gate on its
+/// west wall and the lot's turret, `turret`, as its one device at the far end. No ICE.
+pub fn turret_lot_construct(turret: SiteNode) -> Construct {
+    let size = Size { w: 21, h: 9 };
+    let wall = Tile {
+        terrain: Terrain::NetWall,
+        feature: None,
+        district: None,
+        building: None,
+        variant: 0,
+    };
+    let mut tiles = Grid::filled(size, wall);
+    let floor = Tile {
+        terrain: Terrain::NetFloor,
+        ..wall
+    };
+    tiles.fill_rect(Rect::new(1, 1, 19, 7), floor);
+    let entry = Pos::new(0, 4);
+    tiles[entry] = Tile {
+        terrain: Terrain::NetGate,
+        ..wall
+    };
+    let at = Pos::new(16, 4);
+    tiles[at].feature = Some(Feature::Node(NodeKind::Turret));
+    Construct {
+        building: turret.building,
+        security: 128,
+        size,
+        tiles,
+        light: Grid::filled(size, 255),
+        entry,
+        rooms: Vec::new(),
+        nodes: Vec::new(),
+        guards: Vec::new(),
+        levels: Vec::new(),
+        devices: vec![NetDevice {
+            node: turret,
+            kind: NodeKind::Turret,
+            at,
+            name: "turret".to_string(),
+        }],
+    }
+}
+
 /// A level of a site's construct: where its floor stands in the grid, and what it holds.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NetLevel {
@@ -572,6 +616,35 @@ mod tests {
         assert_eq!(k.guard_at(Pos::new(6, 3)), Some(1));
         assert!(k.nodes.is_empty() && k.rooms.is_empty());
         assert_eq!(k.security, 200);
+    }
+
+    #[test]
+    fn the_turret_lots_net_is_a_room_with_its_turret_and_no_ice() {
+        use super::*;
+        let node = SiteNode {
+            building: BuildingId(0),
+            level: 0,
+            at: Pos::new(2, 2),
+        };
+        let k = turret_lot_construct(node);
+        assert!(
+            validate_construct(&k).is_ok(),
+            "{:?}",
+            validate_construct(&k)
+        );
+        assert_eq!(k.building, BuildingId(0));
+        assert_eq!(k.tiles[k.entry].terrain, Terrain::NetGate);
+        assert!(k.guards.is_empty());
+        assert_eq!(k.devices.len(), 1);
+        let d = &k.devices[0];
+        assert_eq!(
+            (d.node, d.kind, d.name.as_str()),
+            (node, NodeKind::Turret, "turret")
+        );
+        assert_eq!(k.tiles[d.at].feature, Some(Feature::Node(NodeKind::Turret)));
+        assert_eq!(k.device_at(d.at), Some(d));
+        // A walk from the gate reaches the tile beside it.
+        assert!(d.at.x - k.entry.x > 4 && k.tiles[Pos::new(d.at.x - 1, d.at.y)].is_walkable());
     }
 
     use super::*;

@@ -220,6 +220,50 @@ fn drone_on_the_lot() {
     }
 }
 
+/// COMBAT on TURRET (dev mode): the lot a beat in, then jacked in at its terminal with
+/// space and `j`, on the lot's Net with the turret's node.
+#[test]
+#[ignore]
+fn turret_lot() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    st.unlock_dev();
+    let crate::app::ScreenCmd::Switch { to: mut map, .. } =
+        crate::screens::title::combat_start(&mut st, CombatMap::Turret)
+    else {
+        panic!("straight to the lot")
+    };
+    let beat = |st: &mut AppState, map: &mut Box<dyn Screen>| {
+        for _ in 0..60 {
+            st.tick += 1;
+            map.update(st, &[]);
+        }
+    };
+    beat(&mut st, &mut map);
+    for (w, h) in [(120, 40), (100, 30)] {
+        let buf = draw_stack(&st, &[&*map], (w, h));
+        write_svg(&dir, &format!("turret_lot_{w}x{h}"), &st, &buf, false);
+    }
+    // Space by the terminal opens its window; `j` jacks in.
+    let crate::app::ScreenCmd::Push { to: mut w, .. } =
+        map.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens the terminal's window")
+    };
+    w.update(&mut st, &[key(KeyCode::Char('j'))]);
+    beat(&mut st, &mut map);
+    assert_eq!(
+        st.player.as_ref().map(|p| p.place),
+        Some(Place::Construct(crate::turrets::lot::LOT))
+    );
+    for (w, h) in [(120, 40), (100, 30)] {
+        let buf = draw_stack(&st, &[&*map], (w, h));
+        write_svg(&dir, &format!("turret_lot_net_{w}x{h}"), &st, &buf, false);
+    }
+}
+
 /// The COMBAT start on the Net (dev mode): jacked into a construct, a beat in.
 #[test]
 #[ignore]
