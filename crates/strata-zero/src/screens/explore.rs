@@ -4101,12 +4101,18 @@ impl Screen for MapScreen {
             self.aim = None;
             st.say("the walk stops");
         }
-        if inside.is_none() {
+        // Off the Net a program's pick no longer points anywhere; on the open Net it
+        // stays up for space as it does in a construct.
+        if st
+            .player
+            .as_ref()
+            .is_none_or(|p| crate::net::scene_of(p.place).is_none())
+        {
             self.targeting = None;
-            if !crate::net::engaged_on_foot(st) {
-                self.aim = None;
-                self.walking = None;
-            }
+        }
+        if inside.is_none() && !crate::net::engaged_on_foot(st) {
+            self.aim = None;
+            self.walking = None;
         }
         // The turn left you while you were picking: nothing to confirm now.
         if self.targeting.is_some() && !crate::net::your_turn(st) {
@@ -11931,6 +11937,66 @@ mod tests {
             s.update(&mut st, &[]);
         }
         assert_eq!(st.net.mask, 0, "the mask wore off");
+    }
+
+    #[test]
+    fn a_program_keys_pick_stays_up_on_the_open_net() {
+        let (mut st, _) = crate::net::tests::under_kiroflux();
+        let mut s = MapScreen::explore(0);
+        let city = st.city.clone().unwrap();
+        // A wall camera and a tile beside it that reaches it.
+        let (cam, cam_at, here) = city
+            .net
+            .nodes
+            .iter()
+            .filter(|n| n.kind == citygen::NodeKind::Camera && n.building.is_some())
+            .find_map(|n| {
+                n.cyber.neighbors8().find_map(|q| {
+                    crate::net::targets_outside(&st, q)
+                        .iter()
+                        .any(|(t, _)| *t == game::HackTarget::Node(n.id))
+                        .then_some((n.id, n.cyber, q))
+                })
+            })
+            .expect("a wall camera with a tile beside it");
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
+        st.net.force_roll = Some(10);
+        // The key picks; the frames after it keep the pick up until space.
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[]);
+        let t = s.targeting.as_ref().expect("the pick stays up");
+        assert!(
+            t.candidates
+                .iter()
+                .any(|(target, at, _)| *target == game::HackTarget::Node(cam) && *at == cam_at),
+            "the camera beside you is a pick"
+        );
+        assert!(st.net.run.is_none(), "nothing runs until space");
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("CRACK › "), "{text}");
+        assert!(text.contains("space runs it"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(s.targeting.is_none());
+        assert!(st.net.run.is_some(), "space runs it: {:?}", last(&st));
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("crack ")),
+            "{:?}",
+            last(&st)
+        );
+    }
+
+    #[test]
+    fn a_pick_goes_when_you_leave_the_net() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (_, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(s.targeting.is_some(), "the pick is up");
+        // Carried out of the Net with the pick up: it no longer points anywhere.
+        let at = player(&st).1;
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        s.update(&mut st, &[]);
+        assert!(s.targeting.is_none(), "no pick off the Net");
     }
 
     #[test]
