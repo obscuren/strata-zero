@@ -407,6 +407,8 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
             st.warn(format!("lost in the update · {line}"));
         }
     }
+    // Your block's construct saved before your rig's line ran through it gets the line.
+    crate::rigroom::ways::lay_your_line(st);
     // Your rig's room isn't saved: a run reopened in it has it laid out again from the
     // rig, as jacking in does (`Constructs.rig`). A fight with MASTIFF isn't either: the
     // room is never on turns reopened, MASTIFF asleep and whole round its chip.

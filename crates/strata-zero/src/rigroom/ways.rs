@@ -3,13 +3,99 @@
 //! line's door there takes you back up.
 
 use crate::app::AppState;
-use citygen::{Construct, Place, Pos, StratumKind};
+use citygen::{Construct, Feature, NodeKind, Place, Pos, Rect, StratumKind, Terrain};
 
-/// Your line's door in your block's construct: the wall under the lane, a step in from
-/// the gate. A generated construct's side rooms start two columns in, so it's always
-/// wall, and only your own block's construct has the door.
-pub fn your_line(k: &Construct) -> Pos {
-    k.entry.offset(1, 1)
+/// What the line reads past its door, in the void beside its end.
+pub const LINE_LABEL: &str = "your rig's line";
+
+/// Your rig's line in your block's construct: a corridor you walk straight out of the
+/// server's room (the end room's, in a block without a server) to its door on the
+/// construct's edge. Worked out from the construct alone, so a construct saved before
+/// it has the same line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YourLine {
+    /// From the room's outer wall out to the tile beside the door, in order.
+    pub tiles: Vec<Pos>,
+    /// On the construct's edge.
+    pub door: Pos,
+    /// Where the trunk lets you out: the line's tile beside the door, or the room's own
+    /// floor where the room touches the edge.
+    pub landing: Pos,
+    /// Which way the line runs out of the room: 1 down, -1 up.
+    pub dy: i32,
+}
+
+impl YourLine {
+    /// Whether `p` is the line or its door.
+    pub fn holds(&self, p: Pos) -> bool {
+        p == self.door || self.tiles.contains(&p)
+    }
+}
+
+/// Your rig's line in construct `k`: out of the server's room's outer wall, down from a
+/// room under the lane or the end room, up from a room over it, to the edge. It runs in
+/// the server's column, or the nearest one whose tile inside the wall holds no node, so
+/// nothing stands in its mouth. Beyond a room's outer wall a generated construct is only
+/// wall. None for a construct with no rooms.
+pub fn your_line(k: &Construct) -> Option<YourLine> {
+    let server = k.nodes.iter().map(|(_, p)| *p).find(|p| {
+        (k.tiles.get(*p)).is_some_and(|t| t.feature == Some(Feature::Node(NodeKind::Server)))
+    });
+    let room: Rect = server
+        .and_then(|s| k.rooms.iter().find(|r| r.contains(s)))
+        .or(k.rooms.last())
+        .copied()?;
+    let up = room.bottom() <= k.entry.y;
+    let inside = if up { room.y } else { room.bottom() - 1 };
+    let from = server
+        .filter(|s| room.contains(*s))
+        .map_or(room.x + room.w / 2, |s| s.x);
+    let x = (0..room.w)
+        .flat_map(|d| [from - d, from + d])
+        .filter(|x| (room.x..room.right()).contains(x))
+        .find(|x| k.node_at(Pos::new(*x, inside)).is_none())
+        .unwrap_or(from);
+    let h = k.size.h as i32;
+    let (dy, door, tiles): (i32, Pos, Vec<Pos>) = if up {
+        let up = (1..room.y).rev().map(|y| Pos::new(x, y));
+        (-1, Pos::new(x, 0), up.collect())
+    } else {
+        let down = (room.bottom()..h - 1).map(|y| Pos::new(x, y));
+        (1, Pos::new(x, h - 1), down.collect())
+    };
+    let landing = tiles.last().copied().unwrap_or(Pos::new(x, door.y - dy));
+    Some(YourLine {
+        tiles,
+        door,
+        landing,
+        dy,
+    })
+}
+
+/// Your block's construct, if it's made and isn't a site's, and your line in it.
+fn your_block(st: &AppState) -> Option<(citygen::BuildingId, YourLine)> {
+    let block = st.home?.home.building;
+    if crate::sitenet::is_site(st, block) {
+        return None;
+    }
+    Some((block, your_line(st.constructs.get(block)?)?))
+}
+
+/// Carves your line into your block's construct, once it's made: its tiles a lane you
+/// walk, lit as a lane is. The door stays wall: a step onto it takes you up, and
+/// nothing stands on it. Called as you come in (the gate, the trunk) and for a run
+/// reopened; carving it again changes nothing.
+pub fn lay_your_line(st: &mut AppState) {
+    let Some((block, line)) = your_block(st) else {
+        return;
+    };
+    let Some(k) = st.constructs.get_mut(block) else {
+        return;
+    };
+    for p in line.tiles {
+        k.tiles[p].terrain = Terrain::NetLane;
+        k.light[p] = citygen::lighting::tuning::NET_LANE_LIGHT;
+    }
 }
 
 /// Jacks in at the rig: the body stays at the desk, and you're in the room, laid out
@@ -40,9 +126,9 @@ pub fn enter(st: &mut AppState) -> Result<String, String> {
 }
 
 /// Out of the room down the LINE trunk, still jacked in: into your block's construct on
-/// the lane over your line's door, its gate a step west. Your block on alert closes its
-/// gate, not your line. With no construct for your block, out onto the grid beside its
-/// gate (`HomeRig.landing`).
+/// your line beside its door, to walk up it into the server's room and along the lane to
+/// the gate. Your block on alert closes its gate, not your line. With no construct for
+/// your block, out onto the grid beside its gate (`HomeRig.landing`).
 pub fn down_the_line(st: &mut AppState) -> Result<String, String> {
     let player = st.player.as_ref().ok_or("no body")?;
     if !player.jacked_in() || player.place != Place::Rig {
@@ -50,18 +136,18 @@ pub fn down_the_line(st: &mut AppState) -> Result<String, String> {
     }
     let home = st.home.ok_or("no rig here")?;
     let block = home.home.building;
-    let site = crate::sitenet::is_site(st, block);
-    let city = st.city.as_ref().ok_or("no city")?;
-    let lane = (!site)
-        .then(|| st.constructs.ensure(city, block))
-        .flatten()
-        .map(|k| your_line(k).offset(0, -1));
-    if let Some(lane) = lane {
+    if !crate::sitenet::is_site(st, block) {
+        let city = st.city.as_ref().ok_or("no city")?;
+        st.constructs.ensure(city, block);
+    }
+    lay_your_line(st);
+    if let Some((block, line)) = your_block(st) {
         // The first beat falls a full beat after you come in, as through the gate.
         st.net.beat = st.clock_tick();
-        crate::constructs::land(st, Place::Construct(block), lane);
+        crate::constructs::land(st, Place::Construct(block), line.landing);
         return Ok("down the line · your block".to_string());
     }
+    let city = st.city.as_ref().ok_or("no city")?;
     if !city.walkable(StratumKind::Net, home.landing) {
         return Err("the line is dead".to_string());
     }
@@ -92,11 +178,8 @@ pub fn up_the_line(st: &mut AppState) -> Result<String, String> {
 /// A step in your block's construct onto your line's door: up into your rig's room.
 /// None for any other step, and in any other construct, where that tile is wall.
 pub fn door_step(st: &mut AppState, to: Pos) -> Option<Result<String, String>> {
-    let block = st.home?.home.building;
-    if st.player.as_ref()?.place != Place::Construct(block) {
-        return None;
-    }
-    if to != your_line(st.constructs.get(block)?) {
+    let (block, line) = your_block(st)?;
+    if st.player.as_ref()?.place != Place::Construct(block) || to != line.door {
         return None;
     }
     Some(up_the_line(st))
@@ -168,29 +251,43 @@ mod tests {
         assert_eq!(room(&st).unwrap().doors.len(), lines + 2);
     }
 
-    /// Your block's building and the lane tile over your line's door in its construct.
-    fn your_block(st: &AppState) -> (citygen::BuildingId, Pos) {
+    /// Your block's building and your rig's line in its construct.
+    fn your_block(st: &AppState) -> (citygen::BuildingId, YourLine) {
         let block = st.home.unwrap().home.building;
         let k = st.constructs.get(block).expect("your block's construct");
-        (block, your_line(k).offset(0, -1))
+        (block, your_line(k).expect("your line"))
+    }
+
+    /// The key that steps `dy` rows: down for 1, up for -1.
+    fn row_key(dy: i32) -> KeyCode {
+        if dy > 0 { KeyCode::Down } else { KeyCode::Up }
     }
 
     #[test]
-    fn the_trunk_lands_in_your_block_over_your_line() {
+    fn the_trunk_lands_on_your_line_beside_its_door() {
         let mut st = in_the_room();
         let trunk = room(&st).unwrap().trunk;
         // the room's own floor is walked as any map
         assert!(step(&mut st, Pos::new(trunk.x, trunk.y - 2)).is_none());
         assert_eq!(st.player.as_ref().unwrap().place, Place::Rig);
-        let line = step(&mut st, trunk).expect("the trunk leads out").unwrap();
-        assert_eq!(line, "down the line · your block");
-        let (block, lane) = your_block(&st);
-        let k = st.constructs.get(block).unwrap();
-        assert_eq!(lane, k.entry.offset(1, 0), "a step in from the gate");
+        let said = step(&mut st, trunk).expect("the trunk leads out").unwrap();
+        assert_eq!(said, "down the line · your block");
+        let (block, line) = your_block(&st);
+        assert_eq!(
+            line.landing,
+            line.door.offset(0, -line.dy),
+            "beside the door"
+        );
         let p = st.player.as_ref().unwrap();
-        assert_eq!((p.place, p.pos), (Place::Construct(block), lane));
+        assert_eq!((p.place, p.pos), (Place::Construct(block), line.landing));
         assert!(p.jacked_in(), "still jacked in");
         assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
+        // the line is carved, a lane you walk; its door stays wall
+        let k = st.constructs.get(block).unwrap();
+        for p in &line.tiles {
+            assert_eq!(k.tiles[*p].terrain, Terrain::NetLane, "{p:?}");
+        }
+        assert_eq!(k.tiles[line.door].terrain, Terrain::NetWall);
     }
 
     #[test]
@@ -200,21 +297,38 @@ mod tests {
         let trunk = room(&st).unwrap().trunk;
         st.player.as_mut().unwrap().pos = Pos::new(trunk.x, trunk.y - 1);
         map.update(&mut st, &[key(KeyCode::Down)]);
-        let (block, lane) = your_block(&st);
+        let (block, line) = your_block(&st);
         let p = st.player.as_ref().unwrap();
-        assert_eq!((p.place, p.pos), (Place::Construct(block), lane));
+        assert_eq!((p.place, p.pos), (Place::Construct(block), line.landing));
     }
 
     #[test]
-    fn your_lines_door_takes_you_back_up() {
+    fn you_walk_your_line_between_the_server_room_and_its_door() {
         let mut st = in_the_room();
         let mut map = MapScreen::walking(&mut st);
         let trunk = room(&st).unwrap().trunk;
         down_the_line(&mut st).unwrap();
+        let (block, line) = your_block(&st);
+        // up the line into the server's room
+        for _ in 0..line.tiles.len() {
+            map.update(&mut st, &[key(row_key(-line.dy))]);
+        }
+        let at = st.player.as_ref().unwrap().pos;
+        let k = st.constructs.get(block).unwrap();
+        let server = (k.nodes.iter().map(|(_, p)| *p))
+            .find(|p| k.tiles[*p].feature == Some(Feature::Node(NodeKind::Server)))
+            .expect("your block has a server");
+        assert!(
+            k.rooms.iter().any(|r| r.contains(at) && r.contains(server)),
+            "in the server's room: {at:?}"
+        );
         // out by a backdoor and round to your block: the route home has a relay
         let b = hold_a_backdoor(&mut st, 0);
         st.backdoors.start_route(Some(b));
-        map.update(&mut st, &[key(KeyCode::Down)]);
+        // back down the line, and its door takes you up into the room
+        for _ in 0..=line.tiles.len() {
+            map.update(&mut st, &[key(row_key(line.dy))]);
+        }
         let p = st.player.as_ref().unwrap();
         assert_eq!((p.place, p.pos), (Place::Rig, trunk.offset(0, -1)));
         assert!(p.jacked_in());
@@ -230,10 +344,8 @@ mod tests {
         );
         // and down again: the trunk still leads out
         map.update(&mut st, &[key(KeyCode::Down)]);
-        assert_eq!(
-            st.player.as_ref().unwrap().place,
-            Place::Construct(your_block(&st).0)
-        );
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Construct(block), line.landing));
     }
 
     #[test]
@@ -241,11 +353,12 @@ mod tests {
         let mut st = in_the_room();
         down_the_line(&mut st).unwrap();
         st.constructs.rig = None;
-        let (block, lane) = your_block(&st);
-        let door = lane.offset(0, 1);
+        let (block, line) = your_block(&st);
         assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(block));
-        let line = door_step(&mut st, door).expect("your line's door").unwrap();
-        assert_eq!(line, "up the line · your rig");
+        let said = door_step(&mut st, line.door)
+            .expect("your line's door")
+            .unwrap();
+        assert_eq!(said, "up the line · your rig");
         let trunk = room(&st).expect("laid out again").trunk;
         let p = st.player.as_ref().unwrap();
         assert_eq!((p.place, p.pos), (Place::Rig, trunk.offset(0, -1)));
@@ -255,7 +368,7 @@ mod tests {
     fn your_line_is_shut_unless_you_jacked_in_at_your_rig() {
         let mut st = in_the_room();
         down_the_line(&mut st).unwrap();
-        let (_, lane) = your_block(&st);
+        let (_, line) = your_block(&st);
         let here = st.player.as_ref().map(|p| (p.place, p.pos));
         // the body jacked in somewhere else: on the street by your block
         let street = (
@@ -263,7 +376,7 @@ mod tests {
             st.home.unwrap().landing,
         );
         st.player.as_mut().unwrap().body = Some(street);
-        let refused = door_step(&mut st, lane.offset(0, 1)).expect("your line's door");
+        let refused = door_step(&mut st, line.door).expect("your line's door");
         assert_eq!(
             refused,
             Err("your line · your rig isn't jacked in".to_string())
@@ -274,21 +387,48 @@ mod tests {
     #[test]
     fn only_your_block_has_your_line() {
         let mut st = in_the_room();
-        // in your own, only the door tile is it
+        // in your own, only the door is it
         down_the_line(&mut st).unwrap();
-        let (_, lane) = your_block(&st);
-        assert!(door_step(&mut st, lane.offset(1, 0)).is_none());
+        let (_, line) = your_block(&st);
+        assert!(door_step(&mut st, line.landing).is_none());
         // in another block's, that tile is wall
         let b = hold_a_backdoor(&mut st, 0);
         let city = st.city.clone().unwrap();
         let k = st.constructs.ensure(&city, b).unwrap();
-        let (lane, door) = (k.entry.offset(1, 0), your_line(k));
-        crate::constructs::land(&mut st, Place::Construct(b), lane);
+        let (entry, door) = (k.entry, your_line(k).unwrap().door);
+        crate::constructs::land(&mut st, Place::Construct(b), entry);
         assert!(door_step(&mut st, door).is_none(), "another block's wall");
+        assert_eq!(
+            st.constructs.get(b).unwrap().tiles[door].terrain,
+            Terrain::NetWall
+        );
     }
 
     #[test]
-    fn every_constructs_line_tile_is_wall_under_its_lane() {
+    fn your_line_is_carved_through_the_gate_and_into_an_older_save() {
+        let mut st = at_the_rig();
+        let block = st.home.unwrap().home.building;
+        let city = st.city.clone().unwrap();
+        // a save from before the line holds your block's construct without it
+        st.constructs.ensure(&city, block);
+        let (_, line) = your_block(&st);
+        let carved = |st: &AppState| {
+            let k = st.constructs.get(block).unwrap();
+            line.tiles
+                .iter()
+                .all(|p| k.tiles[*p].terrain == Terrain::NetLane)
+        };
+        assert!(!line.tiles.is_empty() && !carved(&st));
+        crate::runs::snapshot::after_restore(&mut st, Vec::new());
+        assert!(carved(&st), "a run reopened");
+        // and made afresh, the gate carves it
+        st.constructs.drop(block);
+        crate::constructs::enter_construct(&mut st, block).unwrap();
+        assert!(carved(&st), "through the gate");
+    }
+
+    #[test]
+    fn every_constructs_line_runs_through_wall_to_its_edge() {
         let st = at_the_rig();
         let city = st.city.as_ref().unwrap();
         let mut seen = 0;
@@ -296,17 +436,26 @@ mod tests {
             let Some(k) = citygen::construct::generate_construct(city, b.id) else {
                 continue;
             };
-            let door = your_line(&k);
-            let lane = k.tiles[k.entry.offset(1, 0)].terrain;
-            assert_eq!(lane, citygen::Terrain::NetLane, "{:?}", b.id);
-            let wall = k.tiles.get(door).map(|t| t.terrain);
-            assert_eq!(wall, Some(citygen::Terrain::NetWall), "{:?}", b.id);
-            assert!(
-                door.y < k.size.h as i32 - 1,
-                "inside the border: {:?}",
-                b.id
+            let line = your_line(&k).expect("a line");
+            let (w, h) = (k.size.w as i32, k.size.h as i32);
+            let id = b.id;
+            assert!(line.door.y == 0 || line.door.y == h - 1, "{id:?}");
+            assert!((1..w - 1).contains(&line.door.x), "{id:?}");
+            assert_eq!(k.tiles[line.door].terrain, Terrain::NetWall, "{id:?}");
+            // a straight run of wall from the room to the door
+            let mouth = line.tiles.first().copied().unwrap_or(line.door);
+            let inside = mouth.offset(0, -line.dy);
+            assert!(k.rooms.iter().any(|r| r.contains(inside)), "{id:?}");
+            assert!(k.node_at(inside).is_none(), "nothing in its mouth: {id:?}");
+            for (i, p) in line.tiles.iter().enumerate() {
+                assert_eq!(*p, mouth.offset(0, line.dy * i as i32), "{id:?}");
+                assert_eq!(k.tiles[*p].terrain, Terrain::NetWall, "{id:?} {p:?}");
+                assert!(k.node_at(*p).is_none() && k.guard_at(*p).is_none());
+            }
+            assert_eq!(
+                line.door,
+                mouth.offset(0, line.dy * line.tiles.len() as i32)
             );
-            assert!(k.node_at(door).is_none() && k.guard_at(door).is_none());
             seen += 1;
         }
         assert!(seen > 10, "{seen}");

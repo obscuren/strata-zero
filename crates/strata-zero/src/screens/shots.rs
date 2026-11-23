@@ -3572,9 +3572,9 @@ fn rig_room() {
     }
 }
 
-/// Down the LINE trunk from the mock's rig: your block's construct, you on its lane a
-/// step in from the gate, your line's door under you and the line running down out of
-/// the block.
+/// Down the LINE trunk from the mock's rig: your block's construct, you at the end of
+/// your rig's line beside its door on the edge, the line running back up into the
+/// server's room, its label past the door.
 #[test]
 #[ignore]
 fn rig_your_line() {

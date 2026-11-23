@@ -242,28 +242,33 @@ to jack out and in again. Your block's gate leads into its own construct, as eve
 block's does, and stays that way.
 
 - **Where.** In your block's construct (`Place::Construct` of the home building), your
-  line's door is the wall tile one step in from the gate and one row under the lane
-  (`entry + (1, 1)`). That tile is always wall in a generated construct: side rooms start
-  two columns in, so it never holds a room, a door, a node or ICE. The gate guard's post
-  is `entry + (2, 0)`.
-- **Look.** It's drawn as the trunk is in the room: `▯` in the trunk's ice blue, with
-  `║` under it down through the wall to the construct's edge. Only your own block's
+  line leaves the server's room: the room holding the block's server node (`◆`), or the
+  end room if the block has none. It runs straight out from the room's outer wall (down
+  from the end room or a room under the lane, up from a room over it) in the server's
+  column, to the construct's edge. Your line's door is where it meets the edge.
+  Generated constructs have only wall there: no room, door, node or ICE lies beyond a
+  room's outer wall.
+- **Walked.** The line is a corridor you walk, from the server's room to the door. Its
+  tiles and the door are carved into your block's construct (lane and gate) whenever you
+  come in: through its gate, down the trunk, or a run reopened. A construct saved before
+  this is carved the same way the next time.
+- **Look.** The line is drawn as the trunk is in the room: `║` in the trunk's ice blue
+  down the corridor, and the door a `▯` in that blue on the edge. `your rig's line` is
+  written in the void past the door, beside the line's end. Only your own block's
   construct has it.
-- **In.** A step onto it from the lane takes you up your line into the room, onto the
+- **In.** A step onto the door from the line takes you up into the room, onto the
   hall's floor over the trunk's end (`trunk + (0, -1)`), logged `up the line · your rig`.
   It's a step like the gate's, under the same rules. The room is laid out again only if
   it's gone (a run reopened outside it). Otherwise it's the room you left, MASTIFF as you
   left it. The route home empties, since you're home.
-- **Out.** The trunk lands you on the lane tile above the door (`entry + (1, 0)`),
-  between the gate and the gate guard's post, logged `down the line · your block`. The
-  gate is a step west.
+- **Out.** The trunk lands you on the line beside the door, logged
+  `down the line · your block`. You walk up the line into the server's room and along
+  the lane to the gate.
 - **Only from your rig.** The door opens only while you're jacked in at your rig, with
   your body at its desk. Jacked in anywhere else, it's shut:
   `your line · your rig isn't jacked in`.
 - **Alert.** Your block on alert closes its gate but not your line. The trunk still
   lands you inside, and the door still takes you up.
-- **Saves.** Nothing new is saved. The door is a position worked out from the construct,
-  so a construct saved before this has the door too.
 
 Approaches considered:
 
@@ -275,6 +280,13 @@ Approaches considered:
 - **A residents' subnet.** Your block's construct gets a hall of its residents' lines,
   yours open and your neighbours' locked. There's nothing to put behind the neighbours'
   doors yet, and your door can become that hall's door later.
+
+Where in the block (a second round, after play): first the door was the wall under the
+lane a step in from the gate, with the line drawn down from it to the edge. It read as
+one more room door, and the line led nowhere. Two places were weighed for a line you
+walk: off the middle of the lane, or from the server's room. The server's room was
+chosen because it says what the line is, your flat's line plugged into your block's
+server, and every block has one. It costs the longer walk along the whole lane.
 
 ### The reader
 
@@ -449,8 +461,8 @@ mock draws it (round 5's frame 1):
   slots, seats and the terminal on their tiles, the room walkable from where you land to
   every door, slot, seat front and the trunk); jacking in at home lands in `Place::Rig`;
   each door leaves as `land_at` did (a site's hub, a gate, a refused key); the trunk
-  lands beside your line's door in your block's construct, and the door takes you back
-  up; summon for each kind; crack odds and lock counts; MASTIFF's turn (mark, then
+  lands on your line beside its door in your block's construct, and the door takes you
+  back up; summon for each kind; crack odds and lock counts; MASTIFF's turn (mark, then
   bite), the leash regrowth, plates broken from your side, the core's two hits, a seat's
   attack, losing resets; the terminal opens the JACK window on the rig;
   `run`/`kill` in it show in the room's drawing; a save inside reopens inside.
@@ -480,7 +492,9 @@ mock draws it (round 5's frame 1):
 10. The room isn't saved; a fight isn't either, and a run reopened mid-fight finds
     MASTIFF asleep and whole.
 11. Back into the room through your line's door in your block's construct, and only
-    while you're jacked in at your rig; the trunk comes out at that door.
+    while you're jacked in at your rig. Your line is a corridor you walk from the
+    block's server room to the door at the construct's edge, labelled
+    `your rig's line`, and the trunk comes out on it beside the door.
 12. The HOLO card over the map pane rather than the screen's middle in the room.
 13. The JACK window in the room is titled `ZENBO`, not the home block's name.
 14. A story shard read from the reader goes back to the pack when its card closes, so the

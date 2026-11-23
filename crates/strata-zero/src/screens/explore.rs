@@ -8894,12 +8894,13 @@ mod tests {
             .constructs
             .get(rig.home.building)
             .expect("your block's construct");
-        let door = crate::rigroom::ways::your_line(k);
-        assert_eq!(player(&st), (block, door.step(Dir::N)));
+        let line = crate::rigroom::ways::your_line(k).expect("your line");
+        assert_eq!(player(&st), (block, line.landing));
         assert_eq!(s.place, block);
         assert_eq!(last(&st), Some("down the line · your block"));
-        // and back up your line's door under you
-        s.update(&mut st, &[key(KeyCode::Char('j'))]);
+        // and back up through your line's door beside you
+        let toward = if line.dy > 0 { 'j' } else { 'k' };
+        s.update(&mut st, &[key(KeyCode::Char(toward))]);
         assert_eq!(player(&st), (Place::Rig, room.trunk.step(Dir::N)));
         assert_eq!(s.place, Place::Rig);
         assert_eq!(last(&st), Some("up the line · your rig"));

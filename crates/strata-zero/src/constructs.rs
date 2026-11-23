@@ -122,6 +122,8 @@ pub fn enter_construct(st: &mut AppState, b: BuildingId) -> Result<String, Strin
         .ok_or("that construct has no inside")?
         .entry;
     let name = building_name(city, b);
+    // Your own block's has your rig's line in it.
+    crate::rigroom::ways::lay_your_line(st);
     land(st, Place::Construct(b), entry);
     Ok(format!("Entering `{name}`"))
 }
