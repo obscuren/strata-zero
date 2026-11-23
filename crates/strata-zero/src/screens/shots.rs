@@ -3572,6 +3572,22 @@ fn rig_room() {
     }
 }
 
+/// Down the LINE trunk from the mock's rig: your block's construct, you on its lane a
+/// step in from the gate, your line's door under you and the line running down out of
+/// the block.
+#[test]
+#[ignore]
+fn rig_your_line() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, _) = crate::rigroom::testutil::the_mocks_rig();
+    crate::rigroom::ways::down_the_line(&mut st).unwrap();
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    room_shot(&dir, "rig_your_line", &st, &mut map, &[]);
+}
+
 /// Two hours on in the mock's rig: sift a third of the way through its shard, and the key
 /// an hour old, as fresh as the mock's.
 fn two_hours_on(st: &mut AppState) {

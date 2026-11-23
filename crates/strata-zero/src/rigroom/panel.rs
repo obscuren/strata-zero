@@ -135,8 +135,8 @@ pub fn panel_lines(st: &AppState) -> Vec<Line<'static>> {
         ));
     }
     out.push(row(
-        vec![sp(" ", TEXT), bold("▸", ICE_BLUE), sp(" the grid", TEXT)],
-        Some(sp("your block", DIM)),
+        vec![sp(" ", TEXT), bold("▸", ICE_BLUE), sp(" your block", TEXT)],
+        None,
     ));
     out.push(rule());
     // The reader.
@@ -383,12 +383,14 @@ pub fn here_lines(st: &AppState) -> Vec<Line<'static>> {
         ];
     }
     if near(room.trunk) {
-        return vec![Line::from(vec![
-            sp(" ", TEXT),
-            bold("▸", ICE_BLUE),
-            sp(" the grid", TEXT),
-            sp(" · your block", DIM),
-        ])];
+        return vec![
+            Line::from(vec![
+                sp(" ", TEXT),
+                bold("▸", ICE_BLUE),
+                sp(" your block", TEXT),
+            ]),
+            Line::from(sp("   step down your line", DIM)),
+        ];
     }
     if near(room.terminal) {
         return vec![
@@ -427,7 +429,7 @@ mod tests {
         assert!(has("net · "), "{t:#?}");
         assert!(has("key · "), "{t:#?}");
         assert_eq!(t.iter().filter(|l| l.contains("free line")).count(), 2);
-        assert!(has("the grid") && has("your block"), "{t:#?}");
+        assert!(has("▸ your block") && !has("the grid"), "{t:#?}");
         assert!(has("READER 1/3"), "{t:#?}");
         assert!(has("Credchip") && has("+¤340"), "{t:#?}");
         assert_eq!(t.iter().filter(|l| l.contains("free slot")).count(), 2);
@@ -460,7 +462,10 @@ mod tests {
         put(&mut st, room.doors[3].offset(1, 0));
         assert_eq!(text(&here_lines(&st)), [" ▯ free line"]);
         put(&mut st, room.trunk.offset(0, -1));
-        assert_eq!(text(&here_lines(&st)), [" ▸ the grid · your block"]);
+        assert_eq!(
+            text(&here_lines(&st)),
+            [" ▸ your block", "   step down your line"]
+        );
     }
 
     #[test]

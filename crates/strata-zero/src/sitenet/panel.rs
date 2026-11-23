@@ -522,7 +522,7 @@ mod tests {
         assert!(body_lines(&st).is_empty(), "not jacked in");
         stand_at_the_rig(&mut st);
         crate::net::jack_in_here(&mut st).unwrap();
-        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
+        crate::rigroom::ways::down_the_line(&mut st).unwrap();
         assert_eq!(body_lines(&st), vec!["home · at the rig".to_string()]);
         crate::net::jack_out(&mut st).unwrap();
         // Beside a street Jack.

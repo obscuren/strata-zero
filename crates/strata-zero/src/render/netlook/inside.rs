@@ -2,7 +2,9 @@
 //! lit by what they hold (the vault amber), the spine a beam, the ICE in its own
 //! colours and the stretch of spine each piece watches tinted.
 
-use super::{AMBER, NetLookView, ROOM, TERMINAL, Tier, VOID, WHITE, ice_colour, node_colour, put};
+use super::{
+    AMBER, ICE_BLUE, NetLookView, ROOM, TERMINAL, Tier, VOID, WHITE, ice_colour, node_colour, put,
+};
 use crate::render::Rgb;
 use crate::render::map::ConstructMap;
 use crate::render::overlay::SIGNAL;
@@ -64,6 +66,10 @@ pub(super) fn draw(
     let tier = Tier::of(k.security);
     let body = tier.colour();
     let vault = k.vault_room();
+    // In your own block's, your line's door, drawn as the trunk in your rig's room is,
+    // and the line running down from it out of the construct's edge.
+    let line =
+        (view.home == Some(k.building) && !k.is_site()).then(|| crate::rigroom::ways::your_line(k));
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
@@ -130,6 +136,12 @@ pub(super) fn draw(
                     bold = true;
                 }
                 _ => {}
+            }
+            if let Some(door) = line
+                && p.x == door.x
+                && p.y >= door.y
+            {
+                (ch, fg, bold) = (if p == door { '▯' } else { '║' }, ICE_BLUE, p == door);
             }
             if let Some(grade) = view.watch.get(&p)
                 && !matches!(t.feature, Some(Feature::Ice(_)))
@@ -242,6 +254,30 @@ mod tests {
         assert_eq!(cell(&buf, floor).bg, VOID.mix(AMBER, 0.16).to_color());
         let piece = k.guards[1].pos;
         assert_eq!(cell(&buf, piece).symbol(), "◈");
+    }
+
+    #[test]
+    fn your_blocks_construct_draws_your_line() {
+        let c = city();
+        let home = citygen::home(c).expect("a home").building;
+        let k = citygen::construct::generate_construct(c, home).expect("your block's construct");
+        let door = crate::rigroom::ways::your_line(&k);
+        let view = NetLookView {
+            home: Some(home),
+            ..NetLookView::default()
+        };
+        let buf = paint(c, &k, &view);
+        assert_eq!(cell(&buf, door).symbol(), "▯");
+        assert_eq!(cell(&buf, door).fg, ICE_BLUE.to_color());
+        // the line runs down through the wall and out of the construct's edge
+        for y in door.y + 1..k.size.h as i32 {
+            let p = Pos::new(door.x, y);
+            assert_eq!(cell(&buf, p).symbol(), "║", "{p:?}");
+            assert_eq!(cell(&buf, p).fg, ICE_BLUE.to_color(), "{p:?}");
+        }
+        // drawn as anyone's block, it's wall
+        let plain = paint(c, &k, &NetLookView::default());
+        assert_ne!(cell(&plain, door).symbol(), "▯");
     }
 
     #[test]

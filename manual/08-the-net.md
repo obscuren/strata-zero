@@ -142,7 +142,7 @@ Jack in at your rig and you land in the rig's own Net, a room of its own; the HU
 ### Ports, the trunk and the seats
 
 - **PORTS**, the relay, is the room down the west side. Each standing backdoor is a lit door, named for its building with the time it has left. Step onto it and you land at that building's gate, or on the hub of a hotel's or office's `L`, as a hop does. A door whose backdoor burned, sprang or ran out goes dark and is a free line again, named `free line`; stepping onto a free line's door goes nowhere and says `a free line · nothing on it`.
-- **The trunk**, the line sled, ends in the floor of the room. Step onto its end and you go out to the grid at your own block.
+- **The trunk**, the line sled, ends in the floor of the room. Step onto its end and you go down your line into your own block's Net, on its lane a step in from the gate. Your line's door is just under you there, a `▯` in the trunk's blue with the line running down out of the block. Step onto it and you're back up in your rig's room. It only opens while you're jacked in at your rig.
 - **SEATS**, the core, is the room down the east side, a seat for each of the core's seats. A running job sits in one with its name and what it works on, drawn with `◉`; a free seat is dim.
 - **The terminal** (`◇ TERMINAL`) sits in the SEATS room. `r` anywhere in the room, or `space` beside it, opens your rig's shell, titled `◇ JACK · ZENBO`; `esc` goes back to your rig. A `run` or `kill` there shows in the seats at once. It won't open while MASTIFF is awake.
 

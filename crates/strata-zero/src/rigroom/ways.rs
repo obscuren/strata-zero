@@ -1,8 +1,16 @@
-//! The ways in and out of your rig's room: jacking in at home lands you in it, and the
-//! LINE trunk at the foot of the hall takes you out onto your block on the grid.
+//! The ways in and out of your rig's room: jacking in at home lands you in it, the LINE
+//! trunk at the foot of the hall takes you down into your block's construct, and your
+//! line's door there takes you back up.
 
 use crate::app::AppState;
-use citygen::{Place, Pos, StratumKind};
+use citygen::{Construct, Place, Pos, StratumKind};
+
+/// Your line's door in your block's construct: the wall under the lane, a step in from
+/// the gate. A generated construct's side rooms start two columns in, so it's always
+/// wall, and only your own block's construct has the door.
+pub fn your_line(k: &Construct) -> Pos {
+    k.entry.offset(1, 1)
+}
 
 /// Jacks in at the rig: the body stays at the desk, and you're in the room, laid out
 /// afresh, on the hall's floor under the reader. A rig run starts: its route home is
@@ -31,30 +39,77 @@ pub fn enter(st: &mut AppState) -> Result<String, String> {
     Ok("jacked in · your rig".to_string())
 }
 
-/// Out of the room along the LINE trunk, onto your block on the grid (`HomeRig.landing`),
-/// still jacked in.
-pub fn to_the_grid(st: &mut AppState) -> Result<String, String> {
+/// Out of the room down the LINE trunk, still jacked in: into your block's construct on
+/// the lane over your line's door, its gate a step west. Your block on alert closes its
+/// gate, not your line. With no construct for your block, out onto the grid beside its
+/// gate (`HomeRig.landing`).
+pub fn down_the_line(st: &mut AppState) -> Result<String, String> {
     let player = st.player.as_ref().ok_or("no body")?;
     if !player.jacked_in() || player.place != Place::Rig {
         return Err("the line starts in your rig's room".to_string());
     }
-    let landing = st.home.ok_or("no rig here")?.landing;
+    let home = st.home.ok_or("no rig here")?;
+    let block = home.home.building;
+    let site = crate::sitenet::is_site(st, block);
     let city = st.city.as_ref().ok_or("no city")?;
-    if !city.walkable(StratumKind::Net, landing) {
+    let lane = (!site)
+        .then(|| st.constructs.ensure(city, block))
+        .flatten()
+        .map(|k| your_line(k).offset(0, -1));
+    if let Some(lane) = lane {
+        // The first beat falls a full beat after you come in, as through the gate.
+        st.net.beat = st.clock_tick();
+        crate::constructs::land(st, Place::Construct(block), lane);
+        return Ok("down the line · your block".to_string());
+    }
+    if !city.walkable(StratumKind::Net, home.landing) {
         return Err("the line is dead".to_string());
     }
-    crate::constructs::land(st, Place::Stratum(StratumKind::Net), landing);
-    Ok("the grid · your block".to_string())
+    crate::constructs::land(st, Place::Stratum(StratumKind::Net), home.landing);
+    Ok("down the line · your block".to_string())
 }
 
-/// A step in the room onto `to` that leaves it: the trunk's end out to the grid, or a
-/// backdoor's door out through it. A free line's door (or one whose backdoor burned) is
-/// a wall that says so. None for any other tile, which the room walks as a map.
+/// Up your line from its door into your rig's room, onto the hall's floor over the
+/// trunk's end: the room you left, laid out again only if it's gone (a run reopened
+/// outside it). Only while you're jacked in at your rig. You're home, so the route home
+/// empties.
+pub fn up_the_line(st: &mut AppState) -> Result<String, String> {
+    let home = st.home.ok_or("no rig here")?;
+    let player = st.player.as_ref().ok_or("no body")?;
+    if !player.jacked_in() || player.body.map(|(place, _)| place) != Some(home.place()) {
+        return Err("your line · your rig isn't jacked in".to_string());
+    }
+    if super::room(st).is_none() {
+        super::build(st);
+    }
+    let trunk = super::room(st).ok_or("no rig here")?.trunk;
+    crate::constructs::land(st, Place::Rig, trunk.offset(0, -1));
+    super::refresh(st);
+    st.backdoors.start_route(None);
+    Ok("up the line · your rig".to_string())
+}
+
+/// A step in your block's construct onto your line's door: up into your rig's room.
+/// None for any other step, and in any other construct, where that tile is wall.
+pub fn door_step(st: &mut AppState, to: Pos) -> Option<Result<String, String>> {
+    let block = st.home?.home.building;
+    if st.player.as_ref()?.place != Place::Construct(block) {
+        return None;
+    }
+    if to != your_line(st.constructs.get(block)?) {
+        return None;
+    }
+    Some(up_the_line(st))
+}
+
+/// A step in the room onto `to` that leaves it: the trunk's end down into your block,
+/// or a backdoor's door out through it. A free line's door (or one whose backdoor burned)
+/// is a wall that says so. None for any other tile, which the room walks as a map.
 pub fn step(st: &mut AppState, to: Pos) -> Option<Result<String, String>> {
     super::refresh(st);
     let room = super::room(st)?;
     if to == room.trunk {
-        return Some(to_the_grid(st));
+        return Some(down_the_line(st));
     }
     let i = room.doors.iter().position(|d| *d == to)?;
     Some(match super::door_lines(st).get(i).copied().flatten() {
@@ -113,21 +168,27 @@ mod tests {
         assert_eq!(room(&st).unwrap().doors.len(), lines + 2);
     }
 
+    /// Your block's building and the lane tile over your line's door in its construct.
+    fn your_block(st: &AppState) -> (citygen::BuildingId, Pos) {
+        let block = st.home.unwrap().home.building;
+        let k = st.constructs.get(block).expect("your block's construct");
+        (block, your_line(k).offset(0, -1))
+    }
+
     #[test]
-    fn the_trunk_lands_on_your_block() {
+    fn the_trunk_lands_in_your_block_over_your_line() {
         let mut st = in_the_room();
         let trunk = room(&st).unwrap().trunk;
-        let landing = st.home.unwrap().landing;
         // the room's own floor is walked as any map
         assert!(step(&mut st, Pos::new(trunk.x, trunk.y - 2)).is_none());
         assert_eq!(st.player.as_ref().unwrap().place, Place::Rig);
         let line = step(&mut st, trunk).expect("the trunk leads out").unwrap();
-        assert_eq!(line, "the grid · your block");
+        assert_eq!(line, "down the line · your block");
+        let (block, lane) = your_block(&st);
+        let k = st.constructs.get(block).unwrap();
+        assert_eq!(lane, k.entry.offset(1, 0), "a step in from the gate");
         let p = st.player.as_ref().unwrap();
-        assert_eq!(
-            (p.place, p.pos),
-            (Place::Stratum(StratumKind::Net), landing)
-        );
+        assert_eq!((p.place, p.pos), (Place::Construct(block), lane));
         assert!(p.jacked_in(), "still jacked in");
         assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
     }
@@ -139,11 +200,116 @@ mod tests {
         let trunk = room(&st).unwrap().trunk;
         st.player.as_mut().unwrap().pos = Pos::new(trunk.x, trunk.y - 1);
         map.update(&mut st, &[key(KeyCode::Down)]);
+        let (block, lane) = your_block(&st);
         let p = st.player.as_ref().unwrap();
-        assert_eq!(
-            (p.place, p.pos),
-            (Place::Stratum(StratumKind::Net), st.home.unwrap().landing)
+        assert_eq!((p.place, p.pos), (Place::Construct(block), lane));
+    }
+
+    #[test]
+    fn your_lines_door_takes_you_back_up() {
+        let mut st = in_the_room();
+        let mut map = MapScreen::walking(&mut st);
+        let trunk = room(&st).unwrap().trunk;
+        down_the_line(&mut st).unwrap();
+        // out by a backdoor and round to your block: the route home has a relay
+        let b = hold_a_backdoor(&mut st, 0);
+        st.backdoors.start_route(Some(b));
+        map.update(&mut st, &[key(KeyCode::Down)]);
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Rig, trunk.offset(0, -1)));
+        assert!(p.jacked_in());
+        assert!(
+            st.log.iter().any(|e| e.text == "up the line · your rig"),
+            "{:?}",
+            st.log.iter().last().map(|e| &e.text)
         );
+        assert_eq!(
+            st.backdoors.route,
+            Some(crate::backdoors::Route::default()),
+            "home: the route empties"
+        );
+        // and down again: the trunk still leads out
+        map.update(&mut st, &[key(KeyCode::Down)]);
+        assert_eq!(
+            st.player.as_ref().unwrap().place,
+            Place::Construct(your_block(&st).0)
+        );
+    }
+
+    #[test]
+    fn your_line_lays_the_room_out_again_when_its_gone() {
+        let mut st = in_the_room();
+        down_the_line(&mut st).unwrap();
+        st.constructs.rig = None;
+        let (block, lane) = your_block(&st);
+        let door = lane.offset(0, 1);
+        assert_eq!(st.player.as_ref().unwrap().place, Place::Construct(block));
+        let line = door_step(&mut st, door).expect("your line's door").unwrap();
+        assert_eq!(line, "up the line · your rig");
+        let trunk = room(&st).expect("laid out again").trunk;
+        let p = st.player.as_ref().unwrap();
+        assert_eq!((p.place, p.pos), (Place::Rig, trunk.offset(0, -1)));
+    }
+
+    #[test]
+    fn your_line_is_shut_unless_you_jacked_in_at_your_rig() {
+        let mut st = in_the_room();
+        down_the_line(&mut st).unwrap();
+        let (_, lane) = your_block(&st);
+        let here = st.player.as_ref().map(|p| (p.place, p.pos));
+        // the body jacked in somewhere else: on the street by your block
+        let street = (
+            Place::Stratum(StratumKind::Street),
+            st.home.unwrap().landing,
+        );
+        st.player.as_mut().unwrap().body = Some(street);
+        let refused = door_step(&mut st, lane.offset(0, 1)).expect("your line's door");
+        assert_eq!(
+            refused,
+            Err("your line · your rig isn't jacked in".to_string())
+        );
+        assert_eq!(st.player.as_ref().map(|p| (p.place, p.pos)), here);
+    }
+
+    #[test]
+    fn only_your_block_has_your_line() {
+        let mut st = in_the_room();
+        // in your own, only the door tile is it
+        down_the_line(&mut st).unwrap();
+        let (_, lane) = your_block(&st);
+        assert!(door_step(&mut st, lane.offset(1, 0)).is_none());
+        // in another block's, that tile is wall
+        let b = hold_a_backdoor(&mut st, 0);
+        let city = st.city.clone().unwrap();
+        let k = st.constructs.ensure(&city, b).unwrap();
+        let (lane, door) = (k.entry.offset(1, 0), your_line(k));
+        crate::constructs::land(&mut st, Place::Construct(b), lane);
+        assert!(door_step(&mut st, door).is_none(), "another block's wall");
+    }
+
+    #[test]
+    fn every_constructs_line_tile_is_wall_under_its_lane() {
+        let st = at_the_rig();
+        let city = st.city.as_ref().unwrap();
+        let mut seen = 0;
+        for b in &city.buildings {
+            let Some(k) = citygen::construct::generate_construct(city, b.id) else {
+                continue;
+            };
+            let door = your_line(&k);
+            let lane = k.tiles[k.entry.offset(1, 0)].terrain;
+            assert_eq!(lane, citygen::Terrain::NetLane, "{:?}", b.id);
+            let wall = k.tiles.get(door).map(|t| t.terrain);
+            assert_eq!(wall, Some(citygen::Terrain::NetWall), "{:?}", b.id);
+            assert!(
+                door.y < k.size.h as i32 - 1,
+                "inside the border: {:?}",
+                b.id
+            );
+            assert!(k.node_at(door).is_none() && k.guard_at(door).is_none());
+            seen += 1;
+        }
+        assert!(seen > 10, "{seen}");
     }
 
     #[test]
@@ -167,10 +333,10 @@ mod tests {
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, flat, "back at the rig");
         assert!(st.backdoors.trace.is_none(), "inside your own firewall");
-        // out on your block the run's route is traced as ever
+        // down in your block the run's route is traced as ever
         st.net.cooling_until = None;
         crate::net::jack_in_here(&mut st).unwrap();
-        to_the_grid(&mut st).unwrap();
+        down_the_line(&mut st).unwrap();
         crate::net::dump(&mut st, "the failsafe pulled you out");
         assert!(st.backdoors.trace.is_some());
     }
@@ -352,12 +518,12 @@ mod tests {
     #[test]
     fn the_line_is_the_rooms_alone() {
         let mut st = at_the_rig();
-        assert!(to_the_grid(&mut st).is_err(), "not jacked in");
+        assert!(down_the_line(&mut st).is_err(), "not jacked in");
         let b = hold_a_backdoor(&mut st, 0);
         crate::net::jack_in_here(&mut st).unwrap();
         crate::net::leave_by_backdoor(&mut st, b).unwrap();
         let spent = st.backdoors.held(b).unwrap().spent;
-        assert!(to_the_grid(&mut st).is_err(), "out on the grid already");
+        assert!(down_the_line(&mut st).is_err(), "out on the grid already");
         assert!(crate::net::leave_by_backdoor(&mut st, b).is_err());
         assert_eq!(st.backdoors.held(b).unwrap().spent, spent);
     }

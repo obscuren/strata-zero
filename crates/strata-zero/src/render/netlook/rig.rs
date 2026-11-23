@@ -410,7 +410,7 @@ fn hall(c: &mut Canvas, view: &RigView) {
         }
     }
     let out = Pos::new(t.x + 2, last);
-    c.text(out, "▸ the grid · your block", ICE_BLUE, VOID, false);
+    c.text(out, "▸ your block", ICE_BLUE, VOID, false);
 }
 
 /// SEATS: a box per core seat, a job's lit with what it works on and how it's going, a
@@ -720,7 +720,7 @@ mod tests {
             "held · keepalive",
             "TERMINAL",
             "[r] shell",
-            "▸ the grid · your block",
+            "▸ your block",
         ] {
             assert!(text.contains(want), "{want}\n{text}");
         }

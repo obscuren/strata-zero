@@ -30,8 +30,9 @@ The look and its rules were settled over five rounds of the mock.
 - **Backdoors are exits.** Walk through a held backdoor's door and you come out at that
   building's gate on the grid, as picking it from today's landing list does (a hotel's or
   office's lands you on its `L` hub). The landing list goes.
-- **LINE** (the line sled) is the trunk out of the bottom of the room to the grid. Take
-  it and you come out at your own block.
+- **LINE** (the line sled) is the trunk out of the bottom of the room. Take it and you
+  come out in your own block's construct, at your line's door. That door takes you back
+  up the line into the room.
 - **SEATS** (the core) is a room down the east side with a seat for each of the core's
   seats. A running job sits in one, drawn with its name, what it works on and its state;
   a free seat is dim. A job that works on a backdoor (`sniff`, `keepalive`) draws a
@@ -139,7 +140,6 @@ The look and its rules were settled over five rounds of the mock.
 
 ## Not in this spec
 
-- Coming back into the room from the grid without jacking in again.
 - Defending the room: a trace or a corp counter-op reaching into it (#74's part C).
 - Deck programs on chips or shards (summoned into the PROGRAMS slots); the reader takes
   only the kinds in the summon table.
@@ -201,7 +201,7 @@ the core's seats, as the mock draws it:
 - **The hall** in the middle: `READER · N slots` at its top, the slots in a row under it
   (a box each, the thing's glyph inside, its name and state under), and the `LINE` trunk
   at its foot: `LINE <sled> · <days>d`, the trunk through the wall and the firewall, and
-  `▸ the grid · your block` past it.
+  `▸ your block` past it.
 - **SEATS** down the east side, titled with the core (`SEATS`, `Tinman 2X · 2`): a box
   per seat. A job's box shows `◉ <job>`, what it works on and its state (`▰▰▰▱▱ 4h`
   for sift, `noise 3 of 36` for sniff and keepalive, `¤6/h` for rent); a free seat is a
@@ -227,12 +227,54 @@ only the layout is built on entry.
   same honeypot, `Landing::of` (a site's `L` hub or the city gate), and the route home
   starts with that backdoor as its first relay. A refused door says why in the log and
   you stay. A free line's door is a wall.
-- **The LINE trunk.** Step onto its end and you come out at your block on the grid
-  (`HomeRig.landing`), as `your block` did.
+- **The LINE trunk.** Step onto its end and you come out inside your block's construct,
+  beside your line's door (Your line's door, below). With no construct for your block,
+  you come out on the grid beside its gate (`HomeRig.landing`), as `your block` did.
 - **Jacking in at home** always lands you in the room; the JACK IN list goes
   (`wants_landing_list` is false at home). Street terminals are unchanged.
 - **Jacking out** (`J`) from the room, and being dumped in it, work as anywhere on the
   Net; a dump in the room starts no trace (there's no route yet).
+
+### Your line's door
+
+Added after play. The trunk led out to the grid, and the only way back into the room was
+to jack out and in again. Your block's gate leads into its own construct, as every
+block's does, and stays that way.
+
+- **Where.** In your block's construct (`Place::Construct` of the home building), your
+  line's door is the wall tile one step in from the gate and one row under the lane
+  (`entry + (1, 1)`). That tile is always wall in a generated construct: side rooms start
+  two columns in, so it never holds a room, a door, a node or ICE. The gate guard's post
+  is `entry + (2, 0)`.
+- **Look.** It's drawn as the trunk is in the room: `▯` in the trunk's ice blue, with
+  `║` under it down through the wall to the construct's edge. Only your own block's
+  construct has it.
+- **In.** A step onto it from the lane takes you up your line into the room, onto the
+  hall's floor over the trunk's end (`trunk + (0, -1)`), logged `up the line · your rig`.
+  It's a step like the gate's, under the same rules. The room is laid out again only if
+  it's gone (a run reopened outside it). Otherwise it's the room you left, MASTIFF as you
+  left it. The route home empties, since you're home.
+- **Out.** The trunk lands you on the lane tile above the door (`entry + (1, 0)`),
+  between the gate and the gate guard's post, logged `down the line · your block`. The
+  gate is a step west.
+- **Only from your rig.** The door opens only while you're jacked in at your rig, with
+  your body at its desk. Jacked in anywhere else, it's shut:
+  `your line · your rig isn't jacked in`.
+- **Alert.** Your block on alert closes its gate but not your line. The trunk still
+  lands you inside, and the door still takes you up.
+- **Saves.** Nothing new is saved. The door is a position worked out from the construct,
+  so a construct saved before this has the door too.
+
+Approaches considered:
+
+- **A door in your block's construct (chosen).** Your flat's line runs through your
+  block's own network, so the way home goes through your block, both out and in.
+- **Your line's end on the grid.** A tile beside your block's gate that takes you back
+  up. It's the cheapest, but it's a door on the open grid that only you can use, and it
+  doesn't go through your block.
+- **A residents' subnet.** Your block's construct gets a hall of its residents' lines,
+  yours open and your neighbours' locked. There's nothing to put behind the neighbours'
+  doors yet, and your door can become that hall's door later.
 
 ### The reader
 
@@ -373,7 +415,7 @@ mock draws it (round 5's frame 1):
 
 - `ZENBO · your rig`, the rack (`Civitas cabinet · 4 bays`), `FIREWALL ▮▯▯ sandbag`;
 - `LINES 3/5 · hold 5 days`, a row per line (`▯ Kiroflux Mart  net · 2d`, `key · 6h`,
-  `net · held` under keepalive; `free line` dim), then `▸ the grid  your block`;
+  `net · held` under keepalive; `free line` dim), then `▸ your block`;
 - `READER 2/3`, a row per slot (`¤ Credchip  ¤340`, `▣ Locked credchip  2 locks`,
   `◆ Black credchip  MASTIFF`, `· free slot`);
 - `SEATS 2/2 · Tinman 2X`, a row per job (`◉ sift · Paydata shard  4h`);
@@ -407,9 +449,10 @@ mock draws it (round 5's frame 1):
   slots, seats and the terminal on their tiles, the room walkable from where you land to
   every door, slot, seat front and the trunk); jacking in at home lands in `Place::Rig`;
   each door leaves as `land_at` did (a site's hub, a gate, a refused key); the trunk
-  lands on `HomeRig.landing`; summon for each kind; crack odds and lock counts; MASTIFF's
-  turn (mark, then bite), the leash regrowth, plates broken from your side, the core's two
-  hits, a seat's attack, losing resets; the terminal opens the JACK window on the rig;
+  lands beside your line's door in your block's construct, and the door takes you back
+  up; summon for each kind; crack odds and lock counts; MASTIFF's turn (mark, then
+  bite), the leash regrowth, plates broken from your side, the core's two hits, a seat's
+  attack, losing resets; the terminal opens the JACK window on the rig;
   `run`/`kill` in it show in the room's drawing; a save inside reopens inside.
 - Shots (`screens/shots.rs`): the room as the mock's round 5 frame 1, a summon, the
   locked chip, the fight at turn 4 with a bite marked, after it, and the shell over the
@@ -436,7 +479,8 @@ mock draws it (round 5's frame 1):
 9. The JACK IN list goes; the doors and the trunk replace it.
 10. The room isn't saved; a fight isn't either, and a run reopened mid-fight finds
     MASTIFF asleep and whole.
-11. No coming back into the room from the grid without jacking in again.
+11. Back into the room through your line's door in your block's construct, and only
+    while you're jacked in at your rig; the trunk comes out at that door.
 12. The HOLO card over the map pane rather than the screen's middle in the room.
 13. The JACK window in the room is titled `ZENBO`, not the home block's name.
 14. A story shard read from the reader goes back to the pack when its card closes, so the
@@ -472,7 +516,7 @@ mock draws it (round 5's frame 1):
 ## What done looks like
 
 Jack in at your rig: you're in the room, your rig's parts round you, every backdoor a
-door that takes you to its building and the trunk to your block. Put a credchip, a
+door that takes you to its building and the trunk to your block, whose door takes you back. Put a credchip, a
 locked one, a black one and a story shard in the reader at the desk, jack in, and summon
 the cash, crack the lock, wake and break MASTIFF with a seat beside you, read the shard;
 open the shell with `r`, `kill` and `run` a job, and watch its seat and its line change.

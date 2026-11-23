@@ -2953,6 +2953,15 @@ impl MapScreen {
             // it as well (its firewall's gate, which lets you out once every lock is
             // broken, else holds you on it).
             Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                // Your line's door in your block: up into your rig's room.
+                if let Some(result) = crate::rigroom::ways::door_step(st, target) {
+                    let crossed = result.is_ok();
+                    report(st, result);
+                    if crossed {
+                        self.follow_player(st);
+                    }
+                    return Some(ScreenCmd::Stay);
+                }
                 let k = st.constructs.get(b)?;
                 let onto = k.is_site() && k.entry == target;
                 if !onto && !crate::constructs::leads_out(k, here, target) {
@@ -8776,7 +8785,8 @@ mod tests {
         let at = beside_rig(&st);
         stand(&mut st, &mut s, home, at);
         jack_in(&mut st, &mut s);
-        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
+        crate::rigroom::ways::down_the_line(&mut st).unwrap();
+        crate::constructs::leave_construct(&mut st).unwrap();
         s.update(&mut st, &[]);
         assert_eq!(s.place, Place::Stratum(StratumKind::Net));
         crate::net::engage(&mut st, Place::Stratum(StratumKind::Net), true);
@@ -8869,16 +8879,27 @@ mod tests {
         let at = beside_rig(&st);
         stand(&mut st, &mut s, home, at);
         jack_in(&mut st, &mut s);
-        // into your rig's room, then down its trunk onto your block
+        // into your rig's room, then down its trunk into your block
         let room = crate::rigroom::room(&st).expect("the room").clone();
         assert_eq!(player(&st), (Place::Rig, room.land));
         assert_eq!(s.place, Place::Rig);
         assert_eq!(last(&st), Some("jacked in · your rig"));
         st.player.as_mut().unwrap().pos = room.trunk.step(Dir::N);
         s.update(&mut st, &[key(KeyCode::Char('j'))]);
-        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
-        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
-        assert_eq!(last(&st), Some("the grid · your block"));
+        let block = Place::Construct(rig.home.building);
+        let k = st
+            .constructs
+            .get(rig.home.building)
+            .expect("your block's construct");
+        let door = crate::rigroom::ways::your_line(k);
+        assert_eq!(player(&st), (block, door.step(Dir::N)));
+        assert_eq!(s.place, block);
+        assert_eq!(last(&st), Some("down the line · your block"));
+        // and back up your line's door under you
+        s.update(&mut st, &[key(KeyCode::Char('j'))]);
+        assert_eq!(player(&st), (Place::Rig, room.trunk.step(Dir::N)));
+        assert_eq!(s.place, Place::Rig);
+        assert_eq!(last(&st), Some("up the line · your rig"));
         jack_out(&mut st, &mut s);
         assert_eq!(player(&st), (home, at));
         assert_eq!(s.place, home);
@@ -15057,10 +15078,11 @@ mod tests {
     fn jacking_in_at_your_block_from_the_rig_starts_an_empty_route() {
         let (mut st, _s) = home_screen();
         crate::net::jack_in_here(&mut st).unwrap();
-        crate::rigroom::ways::to_the_grid(&mut st).unwrap();
+        crate::rigroom::ways::down_the_line(&mut st).unwrap();
         let p = st.player.as_ref().unwrap();
         assert!(p.jacked_in());
-        assert_eq!(p.pos, st.home.unwrap().landing, "at your block");
+        let block = st.home.unwrap().home.building;
+        assert_eq!(p.place, Place::Construct(block), "in your block");
         assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
         // the same at a street port starts none
         let mut st = state8();
