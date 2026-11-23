@@ -192,6 +192,12 @@ impl Foe {
     pub fn hunting(&self) -> bool {
         matches!(self.mode, FoeMode::Hunting { .. })
     }
+
+    /// A standing foe that fights with a gun or its fists: a guard or a goon, never a
+    /// dummy, a turret or ICE. What a turret you hold fires on, and what fires back.
+    pub fn fighter(&self) -> bool {
+        self.standing() && !self.inert && self.turret.is_none() && self.ice.is_none()
+    }
 }
 
 /// A tile nothing is seen or shot through.

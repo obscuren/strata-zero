@@ -722,7 +722,7 @@ pub(crate) fn fire_at_you_with(st: &mut AppState, foe: usize, lead: Option<&str>
 /// on a turret that's turned on it. The shooter's gun, its reflex, the distance; each
 /// round that hits meets a turret target's plate first, else wounds. A turret shooter
 /// fires what its magazine holds, a round at a time; with it empty, nothing (its own
-/// turn says it clicks dry). The target, if it holds a post and stands, turns to hunt
+/// turn says it clicks dry). The target, if it fights (`Foe::fighter`), turns to hunt
 /// the shooter. The line is led by what the shooter did first.
 pub(crate) fn fire_on_foe(st: &mut AppState, shooter: usize, target: usize, lead: Option<&str>) {
     let (Some(s), Some(t)) = (st.foes.get(shooter), st.foes.get(target)) else {
@@ -764,12 +764,12 @@ pub(crate) fn fire_on_foe(st: &mut AppState, shooter: usize, target: usize, lead
         }
         shots.push(round_at_foe(st, &aim, k));
     }
-    // A guard that stands turns on whoever fired; a turret shot at wakes as it does for you.
+    // A guard or goon that stands turns on whoever fired; a turret shot at wakes as it
+    // does for you.
     if st.foes[target].turret.is_some() {
         crate::turrets::shot_at(st, target, from);
     } else if let Some(f) = st.foes.get_mut(target)
-        && f.post.is_some()
-        && f.standing()
+        && f.fighter()
     {
         f.mode = foes::FoeMode::Hunting {
             seen: from,

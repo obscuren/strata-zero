@@ -168,4 +168,47 @@ mod tests {
         let i = turret(&st);
         assert_eq!(crate::turrets::state(&st.foes[i]), Some(TurretState::Yours));
     }
+
+    /// The turret taken over from its Net, you back on the lot, the goon moved to `goon`
+    /// and a fight on the street.
+    fn yours_in_a_fight(goon: citygen::Pos) -> (AppState, usize, usize) {
+        let mut st = turret_lot();
+        held(&mut st);
+        crate::holds::use_verb(&mut st, 'i').unwrap();
+        crate::net::jack_out(&mut st).unwrap();
+        let (t, g) = (
+            turret(&st),
+            (st.foes.iter().position(|f| f.name == "goon")).unwrap(),
+        );
+        st.foes[g].pos = goon;
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Street), true);
+        (st, t, g)
+    }
+
+    fn logged(st: &AppState, needle: &str) -> bool {
+        st.log.iter().any(|l| l.text.contains(needle))
+    }
+
+    #[test]
+    fn the_turret_you_hold_fires_on_the_goon_in_its_field() {
+        // South-east of it, in the field it faces, three tiles off.
+        let (mut st, t, g) = yours_in_a_fight(citygen::Pos::new(5, 5));
+        assert!(crate::turrets::seated(&st, t));
+        assert_eq!(crate::turrets::plan_word(&st, t), "fires");
+        st.force_hit = Some(true);
+        crate::turrets::step(&mut st, t);
+        assert!(logged(&st, "turret fires on goon"));
+        assert!(st.foes[g].hp < crate::foes::GOON_HP);
+    }
+
+    #[test]
+    fn the_goon_fires_back_on_the_turret_when_it_is_nearer_than_you() {
+        let (mut st, t, g) = yours_in_a_fight(citygen::Pos::new(5, 5));
+        assert_eq!(crate::turrets::guard_mark(&st, g), Some(t));
+        let you = st.player.as_ref().unwrap().pos;
+        st.foes[g].mode = crate::foes::FoeMode::Hunting { seen: you, lost: 0 };
+        st.force_hit = Some(true);
+        crate::foes::step(&mut st, g, true, true);
+        assert!(logged(&st, "goon fires on turret"));
+    }
 }

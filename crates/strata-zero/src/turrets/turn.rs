@@ -92,25 +92,22 @@ pub fn target(st: &AppState, i: usize) -> Option<Pos> {
         .map(|me| me.pos)
 }
 
-/// The guard turret `i`, yours, fires on: the nearest standing foe with a post on its
+/// The foe turret `i`, yours, fires on: the nearest fighter (`Foe::fighter`) on its
 /// place it has a clear line to, by distance then index.
 fn mark(st: &AppState, i: usize) -> Option<usize> {
     let f = st.foes.get(i).filter(|f| super::is_yours(f))?;
     let map = foes::map_of(st, f.place)?;
     (foes::standing(st, f.place).into_iter())
-        .filter(|j| st.foes[*j].post.is_some())
+        .filter(|j| st.foes[*j].fighter())
         .filter(|j| foes::line_clear(&map, f.pos, st.foes[*j].pos))
         .min_by_key(|j| (f.pos.chebyshev(st.foes[*j].pos), *j))
 }
 
-/// The turret you hold that guard `i` fires on: the nearest standing one on its place
-/// within its weapon's range, with a clear line, that it sees. None for a foe with no
-/// post.
+/// The turret you hold that foe `i` fires on: the nearest standing one on its place
+/// within its weapon's range, with a clear line, that it sees. None for a foe that
+/// doesn't fight (`Foe::fighter`).
 pub fn guard_mark(st: &AppState, i: usize) -> Option<usize> {
-    let g = st
-        .foes
-        .get(i)
-        .filter(|g| g.standing() && g.post.is_some())?;
+    let g = st.foes.get(i).filter(|g| g.fighter())?;
     let map = foes::map_of(st, g.place)?;
     let reach = foes::weapon_range(st, g);
     (super::allies(st, g.place).into_iter())
