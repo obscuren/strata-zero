@@ -107,7 +107,7 @@ The arrowhead's colour says what it is doing:
 | green | yours, held with Turncoat |
 | dark grey | wrecked |
 
-A turret sleeps until it sees you, until a camera of its building sees you, or until the building's alarm goes off. An awake or hunting one shows its field, a wedge of floor in front of it, 8 tiles deep and a quarter as wide, in red (green when it's yours). Step into the field, near or in the light, with a clear line, and it has you. A sleeping, blind or wrecked turret shows no field.
+A turret sleeps until it sees you, until a camera of its building sees you, or until the building's alarm goes off. An awake or hunting one shows its field, a wedge of floor in front of it, 8 tiles deep and a quarter as wide, in red (green when it's yours). Step into the field with a clear line, indoors near it or in the light, and it has you; on the street the dark doesn't hide you from it. A sleeping, blind or wrecked turret shows no field.
 
 A turret blocks the way, standing or wrecked. The ways past it:
 

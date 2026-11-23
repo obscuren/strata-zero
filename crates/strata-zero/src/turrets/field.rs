@@ -67,17 +67,24 @@ pub fn in_field(at: Pos, facing: Dir, p: Pos) -> bool {
     cameras::in_cone_at(at, facing, p)
 }
 
-/// Whether a turret sees `p`: in its field, a clear line, and near or lit.
+/// Whether a turret sees `p`: in its field with a clear line, and on a floor near or lit.
+/// Off a floor (the street) the light doesn't count, as for anyone on foot there
+/// (`foes::sees`).
 pub fn sees(map: &MapRef, at: Pos, facing: Dir, p: Pos) -> bool {
-    in_field(at, facing, p)
-        && citygen::sight::sees(
-            at,
-            p,
-            cameras::DARK_REACH,
-            |q| map.tile(q).is_none_or(foes::blocks_sight),
-            |q| foes::floor_light(map, q),
-            |_| false,
-        )
+    if !in_field(at, facing, p) {
+        return false;
+    }
+    if map.floor().is_none() {
+        return foes::line_clear(map, at, p);
+    }
+    citygen::sight::sees(
+        at,
+        p,
+        cameras::DARK_REACH,
+        |q| map.tile(q).is_none_or(foes::blocks_sight),
+        |q| foes::floor_light(map, q),
+        |_| false,
+    )
 }
 
 /// The tiles of its field it has a clear line to.

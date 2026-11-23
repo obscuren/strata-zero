@@ -211,4 +211,40 @@ mod tests {
         crate::foes::step(&mut st, g, true, true);
         assert!(logged(&st, "goon fires on turret"));
     }
+
+    #[test]
+    fn once_the_hold_runs_out_it_starts_a_fight_with_you_and_fires() {
+        let mut st = turret_lot();
+        held(&mut st);
+        crate::holds::use_verb(&mut st, 'i').unwrap();
+        crate::net::jack_out(&mut st).unwrap();
+        let t = turret(&st);
+        // The hold's hour and a minute.
+        crate::guards::testutil::advance(&mut st, 61 * 300);
+        crate::turrets::tick(&mut st);
+        assert_eq!(crate::turrets::state(&st.foes[t]), Some(TurretState::Awake));
+        // Facing you, three tiles off, after dark.
+        st.foes[t].turret.as_mut().unwrap().facing = TURRET_FACING;
+        st.player.as_mut().unwrap().pos = citygen::Pos::new(5, 5);
+        assert!(crate::foes::look_all(&mut st));
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Street), false);
+        let e = st.net.engaged.as_ref().unwrap();
+        assert!(e.order.contains(&crate::net::Actor::Foe(t)));
+        assert_eq!(crate::turrets::plan_word(&st, t), "fires");
+    }
+
+    #[test]
+    fn on_the_street_it_sees_you_in_its_field_after_dark() {
+        for minutes in [0, 3 * 60] {
+            let mut st = turret_lot();
+            crate::guards::testutil::advance(&mut st, minutes * 300);
+            let map = crate::foes::map_of(&st, Place::Stratum(StratumKind::Street)).unwrap();
+            // In its field, past the reach it has in the dark.
+            let you = citygen::Pos::new(5, 6);
+            assert!(
+                crate::turrets::field::sees(&map, TURRET, TURRET_FACING, you),
+                "{minutes} min on"
+            );
+        }
+    }
 }
