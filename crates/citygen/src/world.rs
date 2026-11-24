@@ -307,7 +307,8 @@ impl StrataSpan {
     }
 }
 
-/// Where a map is: a stratum of the city, or a floor inside a building.
+/// Where a map is: a stratum of the city, a floor inside a building, a building's
+/// construct, or your rig's own Net.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Place {
     Stratum(StratumKind),
@@ -322,13 +323,16 @@ pub enum Place {
         building: BuildingId,
         level: i32,
     },
+    /// Inside your rig's own Net, jacked in at home: no stratum and no building's
+    /// construct, so building-keyed code leaves it alone.
+    Rig,
 }
 
 impl Place {
     pub fn stratum(self) -> Option<StratumKind> {
         match self {
             Place::Stratum(k) => Some(k),
-            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } => None,
+            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => None,
         }
     }
 
@@ -336,7 +340,7 @@ impl Place {
     pub fn construct(self) -> Option<BuildingId> {
         match self {
             Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(b),
-            Place::Stratum(_) | Place::Floor { .. } => None,
+            Place::Stratum(_) | Place::Floor { .. } | Place::Rig => None,
         }
     }
 

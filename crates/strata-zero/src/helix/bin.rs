@@ -312,18 +312,7 @@ impl AppIo<'_> {
         };
         let on = jobs::target(self.st, &kind);
         let n = jobs::start(self.st, kind.clone())?;
-        let (what, noise) = match kind {
-            JobKind::Sniff(_) => (
-                format!("sniff on {on} · listening for door codes"),
-                Some("noise: high · every hour leaves a line in their auth.log"),
-            ),
-            JobKind::Keepalive(_) => (
-                format!("keepalive on {on} · its hold stays full while it runs"),
-                Some("noise: low · their admins read the logs on Sundays"),
-            ),
-            JobKind::Sift { .. } => (format!("sift on {on} · digging"), None),
-            JobKind::Rent => (format!("rent on {on} · selling them by the hour"), None),
-        };
+        let (what, noise) = jobs::begun(&kind, &on);
         let mut out = vec![format!("{n} · {what}")];
         out.extend(noise.map(str::to_string));
         Ok(lines(out))

@@ -4,7 +4,7 @@ Over the city runs the Net: the systems behind every lock, lift, camera, lamp an
 
 ## Jacking in
 
-You jack in from a terminal. On the street, stand on or next to a public terminal (`▣`) and press `space`, then `j Jack in`. At home, your rig does the same and is never locked down. Out on open ground, any terminal or vending machine with a signal will do.
+You jack in from a terminal. On the street, stand on or next to a public terminal (`▣`) and press `space`, then `j Jack in`. At home, your rig does the same and is never locked down; it lands you in your rig's own Net (Your rig's Net, below). Out on open ground, any terminal or vending machine with a signal will do.
 
 Inside a hotel or office, the terminals are set in the walls (`◇`): a kiosk in the lobby, and desk terminals in some of the staff's rooms. The switch box of a line of turnstiles (`▪`) takes you too. Stand beside one, on its own side of the wall, and press `space`, then `j Jack in`. You start on its node, on the building's own Net (A building's own Net, below).
 
@@ -116,11 +116,63 @@ Being dumped is worse: your FOCUS is gone and your deck has to cool for ten minu
 
 ## Backdoors
 
-A backdoor planted on a server lasts as long as your rig's line sled holds: three days on the stock one. From your rig, `j` lists your backdoors as well as your own block: pick one and you land at that building's gate. From a server you hold, you can **hop** to another backdoor's gate. Your rig keeps as many as its relay sled holds: three on the stock one.
+A backdoor planted on a server lasts as long as your rig's line sled holds: three days on the stock one. From your rig, each backdoor is a door in your rig's Net (Your rig's Net, below): step onto it and you land at that building's gate. From a server you hold, you can **hop** to another backdoor's gate. Your rig keeps as many as its relay sled holds: three on the stock one.
 
 A backdoor on a hotel's or office's server lands you on its `L` hub instead, past the firewall and beside the server, and so does a hop to it.
 
 If you're dumped on a run that started at your rig, a trace follows your hops home, burning each backdoor it passes. If it reaches your door, your rig is seized for a day and every backdoor burns. A killswitch firewall wipes the rig instead: the backdoors burn, but nothing is seized. Jobs running on your backdoors end with them.
+
+## Your rig's Net
+
+Jack in at your rig and you land in the rig's own Net, a room of its own; the HUD's place line reads `zenbo · your rig`. Each part of the rig is a room of it, and a red wall round the whole is your firewall, titled with its tier (`FIREWALL · sandbag ▮▯▯`). A rig with no firewall sled has no wall. Inside it there is no trace and no alarm. The panel beside the room lists the rig, its LINES, the READER, the SEATS, your `BODY` and what's under you.
+
+| Mark | What it is |
+|---|---|
+| `▯` | a door in PORTS' west wall: one for each line. Lit, it is a backdoor you hold; dim, a free line |
+| `¤` | a credchip in the reader |
+| `▣` | a locked credchip |
+| `◆` | a black credchip, guarded by MASTIFF |
+| `λ` | a rig program shard |
+| `≡` | paydata or a vault dump |
+| `¶` | a story shard |
+| `◉` | a job running in a seat |
+| `◇` | your rig's terminal (`TERMINAL`) |
+| `×` | a tile MASTIFF bites next turn |
+
+### Ports, the trunk and the seats
+
+- **PORTS**, the relay, is the room down the west side. Each standing backdoor is a lit door, named for its building with the time it has left. Step onto it and you land at that building's gate, or on the hub of a hotel's or office's `L`, as a hop does. A door whose backdoor burned, sprang or ran out goes dark and is a free line again, named `free line`; stepping onto a free line's door goes nowhere and says `a free line · nothing on it`.
+- **The trunk**, the line sled, ends in the floor of the room. Step onto its end and you go down your line into your own block's Net. You come out at the end of your rig's line, beside its door on the edge of the block. The line is a corridor in the trunk's blue, labelled `your rig's line`, running out of the room that holds your block's server (`◆`). Walk up it into that room and along the lane to the gate to reach the grid. Coming home, walk down your line and step onto its door (`▯`) to go back up into your rig's room. It only opens while you're jacked in at your rig.
+- **SEATS**, the core, is the room down the east side, a seat for each of the core's seats. A running job sits in one with its name and what it works on, drawn with `◉`; a free seat is dim.
+- **The terminal** (`◇ TERMINAL`) sits in the SEATS room. `r` anywhere in the room, or `space` beside it, opens your rig's shell, titled `◇ JACK · ZENBO`; `esc` goes back to your rig. A `run` or `kill` there shows in the seats at once. It won't open while MASTIFF is awake.
+
+### The reader
+
+The **reader** is the hall between PORTS and SEATS: one slot for each of the rack's reader slots, which you fill at the desk (The rig and HELIX). Stand within a step of a slot's box and press `space` to open its popup.
+
+| In the slot | What the popup offers |
+|---|---|
+| a credchip `¤` | `Summon · +¤340`: the cash comes to you and the chip is gone |
+| a program shard `λ` | `Install keepalive`, and if a seat is free, a pick of your backdoors for it to work on; `Run keepalive` once it's installed |
+| paydata or a vault dump `≡` | `Sift it · 6h` (10h for a vault dump); greyed `every seat is busy` with no seat free |
+| a story shard `¶` | opens its reading over the map; closing it puts the shard back in your pack |
+| a locked credchip `▣` | `Crack a lock`, with your odds on its next lock (`· 62%`) |
+| a black credchip `◆` | `Wake MASTIFF` |
+
+A locked credchip has locks by its sum: 1 under ¤500, 2 under ¤2,000, 3 above. Each try takes a minute and runs your loaded Crack against the lock. A miss says `the lock holds` and the minute is still spent; the locks you've cracked stay cracked for the next try. There is no trace, no ICE and no alarm. Break the last lock and the chip is a plain credchip in its slot. With no deck, or no Crack loaded, the popup refuses and keeps the chip.
+
+### MASTIFF
+
+**MASTIFF** is the black ICE that guards a black credchip, found now and then in the safes of guarded offices and hotels. Asleep it lies coiled round the chip and does nothing. `Wake MASTIFF` puts the room on turns, as any fight on the Net: you, each free seat, then MASTIFF, down the turn column. You step a tile a key, as on the open grid; on the act half the number keys are your programs and your strikes.
+
+- **The coat.** MASTIFF is a 3×3 with 8 plates round a core that takes 2 hits. Your Attack breaks the plate nearest you, then the core.
+- **The leash.** The red ground in front of its slot is as far as it reaches. Off the leash you're out of the fight both ways: your Attack and your seats refuse with `off the leash · out of reach`, and at the end of your turn off it, MASTIFF grows a plate back.
+- **The bite.** On its turn MASTIFF takes two steps toward you, then marks the tiles beside it with `×`. Where it can't get beside you, on the red ground beside or above its slot, it lunges and marks the tiles round you instead. Its line in the ICE list reads `bites × next turn` while they're marked. Next turn it bites the marked tiles as a black ICE hit does: 7, less your deck's rating and your feedback resistance. A shield soaks it. The failsafe dumps you; with the failsafe off, it can kill you.
+- **Your seats.** A free seat runs your Attack at MASTIFF while you're on the leash, at your chance scaled by the core's speed, up to 95%: it breaks a plate, then the core, as yours does. Off the leash a seat sits out and reads `idle`; with no Attack loaded the seats sit out of the turns.
+- **Programs and strikes.** Shield works in the room. Mask refuses, since nothing in your rig hunts by sight, and so does any program with nothing to run against. A strike lands on MASTIFF as on a piece of ICE, from the leash and within reach: a hit breaks a plate, then the core, and one that stuns ICE stuns MASTIFF, which passes its next turn.
+- **Doors, the trunk and the reader** refuse while it's awake (`not in a fight`), and so does the terminal. Jacking out, or being dumped, ends the fight and MASTIFF is whole again next time.
+
+Break the core and MASTIFF goes to grit, and the chip opens to a credchip with its sum. A run saved mid-fight reopens with MASTIFF asleep and whole.
 
 ## A building's own Net
 

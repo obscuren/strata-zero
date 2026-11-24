@@ -238,7 +238,7 @@ fn separator(width: u16) -> Line<'static> {
 /// where its panel does.
 fn here_cap(v: &SidebarView) -> u16 {
     match &v.map {
-        MapRef::Construct(m) if m.level.is_some() => SITE_HERE_CAP,
+        MapRef::Construct(m) if m.level.is_some() || m.rig => SITE_HERE_CAP,
         _ if on_the_net(v) => NET_HERE_CAP,
         _ => HERE_CAP,
     }
@@ -692,6 +692,15 @@ mod tests {
             citygen::Place::Stratum(StratumKind::Street),
         );
         assert_eq!(here_cap(&street), HERE_CAP);
+    }
+
+    #[test]
+    fn your_rigs_room_gets_a_sites_here_cap() {
+        let st = crate::rigroom::testutil::in_the_room();
+        let pos = st.player.as_ref().unwrap().pos;
+        let v = view(&st, pos, citygen::Place::Rig);
+        assert!(matches!(&v.map, MapRef::Construct(m) if m.rig));
+        assert_eq!(here_cap(&v), SITE_HERE_CAP);
     }
 
     #[test]

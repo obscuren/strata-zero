@@ -313,7 +313,12 @@ mod tests {
         let map = MapRef::stratum_of(c, StratumKind::Net);
         let area = Rect::new(0, 0, c.size.w as u16, c.size.h as u16);
         let mut buf = Buffer::empty(area);
-        NetLook { view, keep: None }.draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
+        NetLook {
+            view,
+            keep: None,
+            rig: None,
+        }
+        .draw(&map, Pos::new(0, 0), area, 0, &mut buf, &style);
         buf
     }
 
@@ -444,6 +449,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: None,
+            rig: None,
         }
         .draw(&map, Pos::new(0, 0), whole_area, 0, &mut whole, &style);
         let origin = Pos::new(fp.x + fp.w / 2, fp.y - 2);
@@ -452,6 +458,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: None,
+            rig: None,
         }
         .draw(&map, origin, area, 0, &mut half, &style);
         for p in fp.iter().filter(|p| p.x >= origin.x && p.x < origin.x + 40) {
@@ -481,6 +488,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: Some(&keep),
+            rig: None,
         }
         .draw(&map, Pos::new(-20, 0), area, 0, &mut buf, &style);
         for x in 0..40u16 {
@@ -519,6 +527,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: None,
+            rig: None,
         }
         .draw(&map, Pos::new(-20, -20), area, 0, &mut buf, &style);
         assert_eq!(buf[(3, 2)].bg, VOID.to_color());

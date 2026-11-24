@@ -3546,6 +3546,234 @@ fn net_open() {
     );
 }
 
+/// Jacked in at home: your rig's room as the mock's round 5 first draws it
+/// (`docs/superpowers/specs/2026-11-18-rig-construct-mock`): a Civitas cabinet, three
+/// backdoors held of its five lines, sift and keepalive in the seats, keepalive's line to
+/// the door it holds, a credchip in the reader; you on the landing under it.
+#[test]
+#[ignore]
+fn rig_room() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, _) = crate::rigroom::testutil::the_mocks_rig();
+    two_hours_on(&mut st);
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    // keepalive's pulse out over the reader, where the mock has it.
+    let beats = st.tick / crate::render::netlook::packets::PACKET_TICKS;
+    st.tick += (24 - beats % 24) * crate::render::netlook::packets::PACKET_TICKS;
+    let you = st.player.as_ref().unwrap().pos;
+    for (name, size) in [("rig_room", (120, 40)), ("rig_room_small", (100, 30))] {
+        // A frame to size the map's pane, then the camera on you inside it.
+        let _ = draw_stack(&st, &[&map], size);
+        map.jump_to(&st, you);
+        write_svg(&dir, name, &st, &draw_stack(&st, &[&map], size), false);
+    }
+}
+
+/// Down the LINE trunk from the mock's rig: your block's construct, you at the end of
+/// your rig's line beside its door on the edge, the line running back up into the
+/// server's room, its label past the door.
+#[test]
+#[ignore]
+fn rig_your_line() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, _) = crate::rigroom::testutil::the_mocks_rig();
+    crate::rigroom::ways::down_the_line(&mut st).unwrap();
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    room_shot(&dir, "rig_your_line", &st, &mut map, &[]);
+}
+
+/// Two hours on in the mock's rig: sift a third of the way through its shard, and the key
+/// an hour old, as fresh as the mock's.
+fn two_hours_on(st: &mut AppState) {
+    let (city, world) = (st.city.as_ref().unwrap(), st.world.as_mut().unwrap());
+    world.catch_up(city, world.tick() + 2 * 60 * sim::TICKS_PER_MINUTE);
+    crate::net::tick_backdoors(st);
+    let now = st.net.now(st);
+    for d in &mut st.backdoors.list {
+        if matches!(d.kind, crate::backdoors::Kind::Key { .. }) {
+            d.planted = now - 60;
+        }
+    }
+}
+
+/// The room at 120x40 as `rig_room` frames it, the camera on you, `over` on top.
+fn room_shot(dir: &str, name: &str, st: &AppState, map: &mut MapScreen, over: &[&dyn Screen]) {
+    let size = (120, 40);
+    let _ = draw_stack(st, &[&*map], size);
+    map.jump_to(st, st.player.as_ref().unwrap().pos);
+    let mut stack: Vec<&dyn Screen> = vec![&*map];
+    stack.extend_from_slice(over);
+    write_svg(dir, name, st, &draw_stack(st, &stack, size), false);
+}
+
+/// The mock's round 3 before the fight (`rig-construct-round3.html`, frame 1): MASTIFF
+/// coiled round the black chip, its leash tinted round the slot; you at the locked chip
+/// beside it, the panel on its locks.
+#[test]
+#[ignore]
+fn rig_locked_chip() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = crate::rigroom::testutil::the_round_three_rig();
+    two_hours_on(&mut st);
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    room_shot(&dir, "rig_locked_chip", &st, &mut map, &[]);
+}
+
+/// The mock's round 3 fight at turn 4 (`rig-construct-round3.html`, frame 2): MASTIFF
+/// three tiles under its slot with its west side's three plates broken, its bite marked
+/// on the tiles west of it and you on them, 14 off your body from the bites so far;
+/// sift in seat 1, seat 2 in the fight.
+fn the_fight_at_turn_four() -> (AppState, MapScreen) {
+    use crate::rigroom::testutil::{BLACK_SLOT, the_round_three_rig};
+    let mut st = the_round_three_rig();
+    two_hours_on(&mut st);
+    let slot = crate::rigroom::room(&st).unwrap().slots[BLACK_SLOT];
+    st.player.as_mut().unwrap().pos = crate::rigroom::layout::front(slot);
+    crate::rigroom::mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+    let m = (st.constructs.rig.as_mut())
+        .and_then(|r| r.mastiff.as_mut())
+        .unwrap();
+    m.pos = m.pos.offset(0, 3);
+    m.plates = [false, true, true, true, true, true, false, false];
+    m.bite = Some(citygen::Rect::new(m.pos.x - 3, m.pos.y, 3, 3));
+    let you = m.pos.offset(-3, 1);
+    st.player.as_mut().unwrap().pos = you;
+    st.character.hp = st.character.hp_max(&st.content) - 14;
+    st.net.engaged.as_mut().unwrap().round = 4;
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    (st, map)
+}
+
+/// The fight at turn 4: on seat 2's turn, its beam out at MASTIFF through the SEATS
+/// wall; and on your move half, the prompt on the bite with the deck's keys.
+#[test]
+#[ignore]
+fn rig_mastiff() {
+    use crate::net::{Actor, Phase};
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = the_fight_at_turn_four();
+    let now = st.clock_tick();
+    let e = st.net.engaged.as_mut().unwrap();
+    e.turn = (e.order.iter())
+        .position(|a| *a == Actor::Seat(1))
+        .expect("seat 2 in the fight");
+    (e.moves, e.ap, e.acting_since) = (0, 1, now);
+    room_shot(&dir, "rig_mastiff", &st, &mut map, &[]);
+    let e = st.net.engaged.as_mut().unwrap();
+    (e.turn, e.moves, e.ap, e.phase) = (0, 3, 2, Phase::Move);
+    room_shot(&dir, "rig_mastiff_your_turn", &st, &mut map, &[]);
+}
+
+/// The fight won (`rig-construct-round3.html`, frame 3): grit where MASTIFF broke, the
+/// black chip a plain credchip of ¤4,800, the bites still on your body.
+#[test]
+#[ignore]
+fn rig_mastiff_after() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, mut map) = the_fight_at_turn_four();
+    let at = (crate::rigroom::room(&st))
+        .and_then(|r| r.mastiff.as_ref())
+        .map(|m| m.pos)
+        .unwrap();
+    for _ in 0..10 {
+        if st.net.engaged.is_none() {
+            break;
+        }
+        if let Some(line) = crate::rigroom::mastiff::hit(&mut st, at.offset(-3, 1)) {
+            st.say(line);
+        }
+    }
+    assert!(st.net.engaged.is_none(), "the fight is won");
+    st.player.as_mut().unwrap().pos = at.offset(1, -1);
+    // The log's newest line typed out.
+    pass(&mut st, 20);
+    map.update(&mut st, &[]);
+    room_shot(&dir, "rig_mastiff_after", &st, &mut map, &[]);
+}
+
+/// The mock's round 4 (`rig-construct-round4.html`, frame 1): the credchip summoned, its
+/// ¤340 rising off you and the ¤ up top at 660; a Keepalive shard waiting in slot 2, seat
+/// 2 free.
+#[test]
+#[ignore]
+fn rig_summon() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, _) = crate::rigroom::testutil::the_mocks_rig();
+    two_hours_on(&mut st);
+    let keepalive = (st.backdoors.jobs.running.iter())
+        .find(|j| j.kind.name() == "keepalive")
+        .map(|j| j.n)
+        .unwrap();
+    crate::rig::jobs::kill(&mut st, keepalive).unwrap();
+    st.backdoors.jobs.programs.remove("keepalive");
+    let c = st.content.clone();
+    let shard = ItemId::new("prog_keepalive");
+    st.character.give_item(&c, shard.clone(), 1);
+    st.character.put_item_in_reader(&c, 1, &shard).unwrap();
+    st.character.credits = 320;
+    let slot = crate::rigroom::room(&st).unwrap().slots[0];
+    st.player.as_mut().unwrap().pos = crate::rigroom::layout::front(slot);
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    crate::rigroom::summon::summon(&mut st, 0).unwrap();
+    // The log's line typed out, the ¤ halfway up off you.
+    pass(&mut st, 20);
+    for fx in &mut st.fx {
+        if matches!(fx.fx, game::Fx::Number { .. }) {
+            fx.started = st.tick - 6;
+        }
+    }
+    map.update(&mut st, &[]);
+    room_shot(&dir, "rig_summon", &st, &mut map, &[]);
+}
+
+/// The mock's round 5 (`rig-construct.html`, frame 2): the rig's shell opened from the
+/// room's terminal over the room, after `ps`, `kill 2` and `run sniff` on Hextek.
+#[test]
+#[ignore]
+fn rig_shell() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let (mut st, [_, hextek, _]) = crate::rigroom::testutil::the_mocks_rig();
+    two_hours_on(&mut st);
+    st.backdoors.jobs.programs.insert("sniff".to_string());
+    for m in &mut st.journal.mails {
+        m.read = true;
+    }
+    let mut map = MapScreen::walking(&mut st);
+    map.update(&mut st, &[]);
+    let at = crate::rigroom::room(&st).unwrap().terminal;
+    let mut term = Terminal::open(&mut st, HostId::Rig, (Place::Rig, at));
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    let host = crate::helix::hosts::building_hostname(&st, hextek);
+    type_lines(
+        &mut st,
+        &mut term,
+        &["ps", "kill 2", &format!("run sniff {host}")],
+    );
+    st.tick += 10_000;
+    term.update(&mut st, &[]);
+    room_shot(&dir, "rig_shell", &st, &mut map, &[&term]);
+}
+
 /// Inside the first black construct with a vault (seed 8), standing in its first room
 /// beside the door.
 #[test]

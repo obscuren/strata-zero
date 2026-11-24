@@ -359,7 +359,7 @@ fn fixture_at(
                 key,
             })
         }
-        Place::Construct(_) | Place::SiteNet { .. } => None,
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => None,
     }
 }
 

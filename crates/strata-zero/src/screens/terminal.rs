@@ -139,9 +139,24 @@ impl Terminal {
 
     /// The jack window's edges: the host's place, and who you are there with the hold's
     /// time left when a held terminal seats you.
-    fn jack_labels(&self, st: &AppState) -> (String, String) {
+    fn jack_labels(&self, st: &AppState) -> (String, String, String) {
         let host = self.shell.host;
-        let place = access::place_label(st, host);
+        // Your rig's own room: the rig's maker on the edge, and the way back is its door.
+        let in_room = host == HostId::Rig
+            && st
+                .player
+                .as_ref()
+                .is_some_and(|p| p.place == citygen::Place::Rig);
+        let place = if in_room {
+            "ZENBO".to_string()
+        } else {
+            access::place_label(st, host)
+        };
+        let back = if in_room {
+            "esc · back to your rig"
+        } else {
+            "esc · back to the grid"
+        };
         let owner = match host {
             HostId::Building(b) => Some(crate::owners::Owner::Building(b)),
             HostId::District(d) => Some(crate::owners::Owner::District(d)),
@@ -161,7 +176,7 @@ impl Terminal {
             Some(m) => format!("{} · HELD {}m", self.shell.user, m.max(1)),
             None => self.shell.user.clone(),
         };
-        (place, right)
+        (place, right, back.to_string())
     }
 
     /// Powers on with a given look: logged in on `origin` as your standing allows.
@@ -420,7 +435,7 @@ fn rig_news(st: &mut AppState) -> Vec<String> {
         let shard = game::ItemId::new(&format!("prog_{prog}"));
         if st.character.count(&shard) > 0 && !st.backdoors.jobs.programs.contains(prog) {
             game::remove_from_pack(&mut st.character, &shard, 1);
-            st.backdoors.jobs.programs.insert(prog.to_string());
+            crate::rig::jobs::install(st, prog);
             out.push(format!("INSTALLED {prog} FROM SHARD"));
         }
     }
@@ -530,7 +545,9 @@ impl Screen for Terminal {
         let jack = self.jacked().then(|| self.jack_labels(st));
         let buf = f.buffer_mut();
         let screen = match &jack {
-            Some((title, right)) => device::jack(buf, r, title, right, led, &self.look),
+            Some((title, right, back)) => {
+                device::jack(buf, r, (title, right, back), led, &self.look)
+            }
             None => device::crt(buf, r, &self.badge(), led, &self.look),
         };
         // nano or HELIX mail owns the glass while open; the bezel, LED and scanlines stay.
@@ -806,6 +823,31 @@ mod tests {
         assert!(st.backdoors.jobs.programs.contains("sniff"));
         let again = Terminal::open(&mut st, HostId::Rig, KEY_B);
         assert!(!again.text(st.tick).join("\n").contains("INSTALLED"));
+    }
+
+    #[test]
+    fn a_shard_installed_at_boot_is_in_opt_jobs() {
+        let mut st = crate::jobs::testutil::state_home();
+        // A shell seen before, so the host and its `/opt/jobs` are already there.
+        let mut t = Terminal::open(&mut st, HostId::Rig, KEY_A);
+        say(&mut t, &mut st, "ls /opt/jobs");
+        assert!(!reply(&t, &st, "ls /opt/jobs").contains("keepalive"));
+        st.character
+            .give_item(&st.content, game::ItemId::new("prog_keepalive"), 1);
+        for key in [KEY_A, KEY_B] {
+            let mut t = Terminal::open(&mut st, HostId::Rig, key);
+            // In step as it installs, before the shell looks.
+            let fs = &st.helix.hosts[&HostId::Rig].fs;
+            assert!(
+                fs.resolve("/", "/", "/opt/jobs/keepalive").is_ok(),
+                "{key:?}"
+            );
+            say(&mut t, &mut st, "ls /opt/jobs");
+            let ls = reply(&t, &st, "ls /opt/jobs");
+            assert!(ls.contains("keepalive"), "{key:?}: {ls}");
+        }
+        let text = (st.log.iter().map(|e| e.text.clone())).collect::<Vec<_>>();
+        assert!(st.backdoors.jobs.programs.contains("keepalive"), "{text:?}");
     }
 
     #[test]

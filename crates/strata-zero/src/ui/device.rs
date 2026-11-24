@@ -271,7 +271,13 @@ impl Look {
 /// glass, the host on its top edge, who you are on the right, the way out below, a
 /// faint lattice behind the text. A refusal turns the frame red while it types. The
 /// glass inside is where `crt` puts it, so a page holds the same lines.
-pub fn jack(buf: &mut Buffer, area: Rect, title: &str, right: &str, led: Led, look: &Look) -> Rect {
+pub fn jack(
+    buf: &mut Buffer,
+    area: Rect,
+    (title, right, back): (&str, &str, &str),
+    led: Led,
+    look: &Look,
+) -> Rect {
     let glass = look.glass();
     let edge = match led {
         Led::Fail => DENY,
@@ -343,13 +349,7 @@ pub fn jack(buf: &mut Buffer, area: Rect, title: &str, right: &str, led: Led, lo
     if at > area.x + 2 + head.chars().count() as u16 {
         put(at, area.y, &right, JACK_SEAT, false);
     }
-    put(
-        area.x + 2,
-        b,
-        " esc · back to the grid ",
-        look.text_dim(),
-        false,
-    );
+    put(area.x + 2, b, &format!(" {back} "), look.text_dim(), false);
     screen
 }
 

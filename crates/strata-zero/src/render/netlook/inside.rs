@@ -2,13 +2,15 @@
 //! lit by what they hold (the vault amber), the spine a beam, the ICE in its own
 //! colours and the stretch of spine each piece watches tinted.
 
-use super::{AMBER, NetLookView, ROOM, TERMINAL, Tier, VOID, WHITE, ice_colour, node_colour, put};
+use super::{
+    AMBER, ICE_BLUE, NetLookView, ROOM, TERMINAL, Tier, VOID, WHITE, ice_colour, node_colour, put,
+};
 use crate::render::Rgb;
 use crate::render::map::ConstructMap;
 use crate::render::overlay::SIGNAL;
 use crate::render::style::StylePack;
 use crate::render::tileset::{DOUBLE, LIGHT, node_glyph};
-use crate::render::viewport::screen_to_tile;
+use crate::render::viewport::{screen_to_tile, tile_to_screen};
 use citygen::{Construct, Feature, IceGrade, NodeKind, Pos, Terrain};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -64,6 +66,11 @@ pub(super) fn draw(
     let tier = Tier::of(k.security);
     let body = tier.colour();
     let vault = k.vault_room();
+    // In your own block's, your rig's line drawn as the trunk in your rig's room is: out
+    // of the server's room to its door on the edge.
+    let line = (view.home == Some(k.building) && !k.is_site())
+        .then(|| crate::rigroom::ways::your_line(k))
+        .flatten();
     for sy in area.y..area.bottom() {
         for sx in area.x..area.right() {
             let p = screen_to_tile(area, origin, (sx, sy));
@@ -131,6 +138,12 @@ pub(super) fn draw(
                 }
                 _ => {}
             }
+            if let Some(l) = &line
+                && l.holds(p)
+            {
+                let door = p == l.door;
+                (ch, fg, bold) = (if door { '▯' } else { '║' }, ICE_BLUE, door);
+            }
             if let Some(grade) = view.watch.get(&p)
                 && !matches!(t.feature, Some(Feature::Ice(_)))
             {
@@ -138,6 +151,17 @@ pub(super) fn draw(
                 bg = bg.mix(tint, f);
             }
             put(buf, sx, sy, ch, fg, bg, bold);
+        }
+    }
+    // Past the door, in the void, the line runs on a step and says whose it is.
+    if let Some(l) = &line {
+        let past = l.door.offset(0, l.dy);
+        let label = (crate::rigroom::ways::LINE_LABEL.chars().enumerate())
+            .map(|(i, c)| (past.offset(2 + i as i32, 0), c));
+        for (p, c) in std::iter::once((past, '║')).chain(label) {
+            if let Some((sx, sy)) = tile_to_screen(area, origin, p) {
+                put(buf, sx, sy, c, ICE_BLUE, VOID, false);
+            }
         }
     }
 }
@@ -190,9 +214,15 @@ mod tests {
             0,
         )
         .unwrap();
-        let area = Rect::new(0, 0, k.size.w as u16 + 4, k.size.h as u16 + 2);
+        // The void round it, with room on the right for your line's label.
+        let area = Rect::new(0, 0, k.size.w as u16 + 24, k.size.h as u16 + 2);
         let mut buf = Buffer::empty(area);
-        NetLook { view, keep: None }.draw(&map, Pos::new(-2, -1), area, 0, &mut buf, &style);
+        NetLook {
+            view,
+            keep: None,
+            rig: None,
+        }
+        .draw(&map, Pos::new(-2, -1), area, 0, &mut buf, &style);
         buf
     }
 
@@ -237,6 +267,38 @@ mod tests {
         assert_eq!(cell(&buf, floor).bg, VOID.mix(AMBER, 0.16).to_color());
         let piece = k.guards[1].pos;
         assert_eq!(cell(&buf, piece).symbol(), "◈");
+    }
+
+    #[test]
+    fn your_blocks_construct_draws_your_line() {
+        let c = city();
+        let home = citygen::home(c).expect("a home").building;
+        let k = citygen::construct::generate_construct(c, home).expect("your block's construct");
+        let line = crate::rigroom::ways::your_line(&k).expect("your line");
+        let view = NetLookView {
+            home: Some(home),
+            ..NetLookView::default()
+        };
+        let buf = paint(c, &k, &view);
+        assert_eq!(cell(&buf, line.door).symbol(), "▯");
+        assert_eq!(cell(&buf, line.door).fg, ICE_BLUE.to_color());
+        // the line runs from the server's room out to the door
+        assert!(!line.tiles.is_empty(), "a line to walk: {line:?}");
+        for p in &line.tiles {
+            assert_eq!(cell(&buf, *p).symbol(), "║", "{p:?}");
+            assert_eq!(cell(&buf, *p).fg, ICE_BLUE.to_color(), "{p:?}");
+        }
+        // and past the door, in the void, it says whose it is
+        let past = line.door.offset(0, line.dy);
+        assert_eq!(cell(&buf, past).symbol(), "║");
+        let label: String = (0..15)
+            .map(|i| cell(&buf, past.offset(2 + i, 0)).symbol().to_string())
+            .collect();
+        assert_eq!(label, "your rig's line");
+        // drawn as anyone's block, it's wall
+        let plain = paint(c, &k, &NetLookView::default());
+        assert_ne!(cell(&plain, line.door).symbol(), "▯");
+        assert_ne!(cell(&plain, past.offset(2, 0)).symbol(), "y");
     }
 
     #[test]

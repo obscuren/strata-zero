@@ -214,8 +214,8 @@ pub fn ensure_host(st: &mut AppState, id: HostId) -> &mut Host {
 }
 
 /// Keeps the rig's `/opt/jobs` in step with its programs: a file for each one
-/// installed.
-fn sync_rig_jobs(st: &mut AppState) {
+/// installed. Nothing until the rig's host is first made, which runs it.
+pub(crate) fn sync_rig_jobs(st: &mut AppState) {
     let me = rig_user(st);
     let names: Vec<String> = st.backdoors.jobs.programs.iter().cloned().collect();
     let Some(host) = st.helix.hosts.get_mut(&HostId::Rig) else {

@@ -98,7 +98,9 @@ impl Player {
             Place::Stratum(StratumKind::Undercity) => RADIUS_UNDER,
             Place::Stratum(StratumKind::Net) => RADIUS_NET,
             Place::Stratum(_) => RADIUS_STREET,
-            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } => RADIUS_INSIDE,
+            Place::Floor { .. } | Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => {
+                RADIUS_INSIDE
+            }
         }
     }
 
@@ -117,10 +119,11 @@ impl Player {
         self.body.is_some()
     }
 
-    /// The Net has no light rule: on its stratum and in a construct (a site's Net too)
-    /// every tile is seen.
+    /// The Net has no light rule: on its stratum, in a construct (a site's Net too) and
+    /// in your rig's room every tile is seen.
     pub fn sees_all(&self) -> bool {
-        self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct()
+        matches!(self.place, Place::Stratum(StratumKind::Net) | Place::Rig)
+            || self.place.in_construct()
     }
 
     /// The port of a terminal on this tile or an 8-neighbour that serves this stratum.
@@ -328,12 +331,9 @@ impl Player {
     }
 }
 
-/// The log line for a jack-in from a body at `from`: home, or a named port.
-pub fn jacked_in_line(city: &City, from: Place, port: Pos) -> String {
-    match from {
-        Place::Floor { .. } => "jacked in from home".to_string(),
-        _ => format!("jacked in at `{}`", port_name(city, port)),
-    }
+/// The log line for a jack-in at a named port (at home the rig's room has its own).
+pub fn jacked_in_line(city: &City, port: Pos) -> String {
+    format!("jacked in at `{}`", port_name(city, port))
 }
 
 /// What a port is called in the status line: its building, else its district.

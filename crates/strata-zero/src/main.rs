@@ -45,6 +45,7 @@ mod render;
 mod rest;
 mod ride;
 mod rig;
+mod rigroom;
 mod runs;
 mod save;
 mod screens;

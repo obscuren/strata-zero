@@ -33,6 +33,8 @@ pub enum What {
     Cash((u32, u32)),
     /// A sum range and the percent of chips that are locked.
     Chip((u32, u32), u8),
+    /// A black credchip with a sum in this range, for a rig to crack.
+    BlackChip((u32, u32)),
     Item(String, (u32, u32)),
     Card,
 }
@@ -140,7 +142,9 @@ impl Tables {
                     return Err(format!("{who}: a line has no weight"));
                 }
                 let range = match &l.what {
-                    What::Cash(r) | What::Chip(r, _) | What::Item(_, r) => Some(*r),
+                    What::Cash(r) | What::Chip(r, _) | What::BlackChip(r) | What::Item(_, r) => {
+                        Some(*r)
+                    }
                     What::Card => None,
                 };
                 if let Some((lo, hi)) = range
@@ -220,6 +224,10 @@ pub fn roll(tables: &Tables, key: &TableKey, security: u8, seed: u64) -> Vec<Loo
                     credits: scaled(base),
                     locked,
                 });
+            }
+            What::BlackChip((lo, hi)) => {
+                let base = *lo as u64 + next() % (*hi - *lo + 1) as u64;
+                out.push(Loot::BlackChip(scaled(base)));
             }
             What::Item(id, (lo, hi)) => {
                 let qty = lo + (next() % (*hi - *lo + 1) as u64) as u32;
@@ -328,6 +336,28 @@ mod tests {
             assert!(roll(&t, &key(None), 10, s).is_empty());
         }
         assert!(!roll(&t, &key(None), 200, 1).is_empty());
+    }
+
+    #[test]
+    fn black_chips_roll_from_their_line() {
+        let c = game::Content::load().unwrap();
+        let t = one(&format!(
+            "{}Table(kind: Locker, site: None, guarded: false, empty: 0, count: (1, 1), lines: [Line(weight: 1, what: BlackChip((2000, 6000)))]),",
+            fallbacks(true).replace(
+                "Table(kind: Locker, site: None, guarded: false",
+                "Table(kind: Locker, site: Some(\"fb\"), guarded: false"
+            )
+        ));
+        t.check(&c).unwrap();
+        for (security, pct) in [(10, 100), (100, 150), (200, 220)] {
+            for s in 0..20 {
+                let got = roll(&t, &key(None), security, s);
+                let [Loot::BlackChip(n)] = got[..] else {
+                    panic!("one black chip, got {got:?}");
+                };
+                assert!((2000 * pct / 100..=6000 * pct / 100).contains(&n), "{n}");
+            }
+        }
     }
 
     #[test]

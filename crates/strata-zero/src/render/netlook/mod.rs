@@ -9,6 +9,7 @@ pub mod inside;
 pub mod mini;
 pub mod packets;
 pub mod plate;
+pub mod rig;
 pub mod tower;
 
 use crate::anim::effects::pulse;
@@ -169,6 +170,8 @@ pub struct NetLook<'a> {
     /// The cells of the city's Net the look draws: all with none; where other areas
     /// share the view, the cells the city owns.
     pub keep: Option<&'a dyn Fn(Pos) -> bool>,
+    /// In your rig's room, the rig as it stands (`rigroom::view`).
+    pub rig: Option<&'a rig::RigView<'a>>,
 }
 
 /// What the look draws the Net of: a map in its own frame, the city whose Net it is
@@ -212,6 +215,11 @@ impl Overlay for NetLook<'_> {
                     keep: self.keep,
                 };
                 grid::draw(net, self.view, origin, area, buf, style)
+            }
+            MapRef::Construct(m) if m.rig => {
+                if let Some(rig) = self.rig {
+                    rig::draw(buf, area, rig);
+                }
             }
             MapRef::Construct(m) => match self.view.site.as_ref() {
                 Some(site) if m.construct.is_site() => {

@@ -114,11 +114,12 @@ pub struct WhichWay {
 }
 
 /// Something the fire cursor can point at: a foe on foot, a piece of ICE in a
-/// construct.
+/// construct, MASTIFF awake in your rig's room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Enemy {
     Foe(usize),
     Ice(usize),
+    Mastiff,
 }
 
 /// One entry of the act half's `ACT` list: an ability to fire or a throwable to arm.
@@ -332,7 +333,14 @@ fn open_at(st: &AppState, place: Place, to: Pos) -> bool {
             walked_map(st, city, place, beyond.as_ref()).walkable(to)
         }
         Place::Floor { .. } => crate::foes::map_of(st, place).is_some_and(|m| m.walkable(to)),
+        // On the Net's inside maps steps are the Net's own.
         Place::Construct(_) | Place::SiteNet { .. } => false,
+        // Your rig's room on turns is stepped as on foot: its floor, round MASTIFF.
+        Place::Rig => {
+            (crate::rigroom::room(st))
+                .is_some_and(|r| r.construct.tiles.get(to).is_some_and(|t| t.is_walkable()))
+                && crate::rigroom::mastiff::blocks(st, to).is_none()
+        }
     }
 }
 
@@ -463,6 +471,12 @@ fn say_why_not(st: &mut AppState, dir: Dir) {
         return;
     };
     let to = p.pos.step(dir);
+    if p.place == Place::Rig {
+        if let Some(why) = crate::rigroom::mastiff::blocks(st, to) {
+            st.warn(why);
+        }
+        return;
+    }
     if !p.place.is_street() || p.jacked_in() {
         return;
     }
@@ -1011,6 +1025,13 @@ impl MapScreen {
                 out.sort_by_key(|(_, at)| at.chebyshev(p.pos));
                 out
             }
+            // Your rig's room is all in view: MASTIFF, while it's awake.
+            Place::Rig => (crate::rigroom::room(st))
+                .and_then(|r| r.mastiff.as_ref())
+                .filter(|_| crate::rigroom::mastiff::awake(st))
+                .map(|m| (Enemy::Mastiff, crate::rigroom::mastiff::nearest(m, p.pos)))
+                .into_iter()
+                .collect(),
             _ => crate::foes::in_sight(st)
                 .into_iter()
                 .map(|i| (Enemy::Foe(i), st.foes[i].pos))
@@ -1027,6 +1048,10 @@ impl MapScreen {
                 .get(b)
                 .and_then(|k| k.guard_at(at))
                 .map(Enemy::Ice),
+            Place::Rig => (crate::rigroom::room(st))
+                .and_then(|r| r.mastiff.as_ref())
+                .filter(|m| m.body().contains(at) && crate::rigroom::mastiff::awake(st))
+                .map(|_| Enemy::Mastiff),
             place => crate::foes::foe_at(st, place, at).map(Enemy::Foe),
         }
     }
@@ -1041,6 +1066,7 @@ impl MapScreen {
                 .and_then(|p| st.net.ice.get(&p.place.construct()?))
                 .and_then(|states| states.get(i))
                 .is_some_and(|ice| matches!(ice.mode, crate::net::IceMode::Awake { .. })),
+            Enemy::Mastiff => crate::rigroom::mastiff::awake(st),
         }
     }
 
@@ -1097,23 +1123,37 @@ impl MapScreen {
                 let text = format!(" {name} · {left} · {} tiles · {odds} ", me.chebyshev(at));
                 (text, None)
             }
+            Enemy::Mastiff => {
+                let Some(m) = crate::rigroom::room(st).and_then(|r| r.mastiff.as_ref()) else {
+                    return (String::new(), None);
+                };
+                let odds = match crate::rigroom::mastiff::attack_chance(st) {
+                    Ok(c) => format!("{c}%"),
+                    Err(why) => why,
+                };
+                let at = crate::rigroom::mastiff::nearest(m, me);
+                let coat = crate::rigroom::mastiff::coat_line(st);
+                let text = format!(" MASTIFF · {coat} · {} tiles · {odds} ", me.chebyshev(at));
+                (text, None)
+            }
         }
     }
 
-    /// In the Net: a construct, or the open Net, where the deck's programs are the
-    /// number keys and nothing of the meat's (no throws, no pushes) works.
+    /// In the Net: a construct, the open Net or your rig's room, where the deck's
+    /// programs are the number keys and nothing of the meat's (no throws, no pushes)
+    /// works.
     fn in_net(st: &AppState) -> bool {
         st.player.as_ref().is_some_and(|p| Self::net_place(p.place))
     }
 
     fn net_place(place: Place) -> bool {
-        place.in_construct() || place == Place::Stratum(StratumKind::Net)
+        place.in_construct() || matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig)
     }
 
     /// What the act half offers, in key order: the fight's abilities (strikes,
     /// boosts, marks, Vanish; content order), then the throwables in the pack; at most ten,
-    /// for `1`-`9` and `0`. In a construct only what works in the net (a strike that
-    /// does not push, a boost), and no throwables.
+    /// for `1`-`9` and `0`. In the Net (a construct, the open Net, your rig's room) only
+    /// what works there (a strike that does not push, a boost), and no throwables.
     fn act_list(st: &AppState) -> Vec<Act> {
         use game::{AbilityKind::Active, Active as A};
         let net = Self::in_net(st);
@@ -1360,6 +1400,14 @@ impl MapScreen {
                             Err(why) => st.warn(why),
                         }
                     }
+                    // MASTIFF takes the deck's attack.
+                    Some(Enemy::Mastiff) => {
+                        self.last_enemy = Some(Enemy::Mastiff);
+                        match crate::combat::attack_mastiff(st) {
+                            Ok(slot) => self.program_flash = Some((slot, st.tick)),
+                            Err(why) => st.warn(why),
+                        }
+                    }
                     // In a construct space keeps its other jobs: a run in flight
                     // rolls, a node opens.
                     None if Self::net_place(place) => return None,
@@ -1412,6 +1460,11 @@ impl MapScreen {
             ) => {
                 self.last_enemy = enemy;
                 crate::casts::strike_ice(st, id, b, i)
+            }
+            // MASTIFF takes a strike as a piece of ICE does, through its coat.
+            (Active(A::Strike { .. }), Some(Enemy::Mastiff), Place::Rig) => {
+                self.last_enemy = enemy;
+                crate::casts::strike_mastiff(st, id)
             }
             (Active(A::Mark { .. }), Some(Enemy::Foe(foe)), _) => {
                 self.last_enemy = enemy;
@@ -1492,8 +1545,11 @@ impl MapScreen {
     /// and the trace walking home, wherever you stand.
     fn route_parts(&self, st: &AppState, jacked: bool) -> (String, Option<String>) {
         let name = |b| crate::helix::hosts::building_hostname(st, b);
+        // Your rig's room is where the route starts: no hops yet, and the room keeps the
+        // pane's every row.
+        let in_room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
         let route = match st.backdoors.route.as_ref() {
-            Some(r) if jacked => {
+            Some(r) if jacked && !in_room => {
                 let names: Vec<String> = r.relays.iter().map(|b| name(*b)).collect();
                 crate::backdoors::route_line(&names)
             }
@@ -1525,6 +1581,7 @@ impl MapScreen {
                     format!("{} · {district}", crate::net::building_name(st, b))
                 }
             }
+            (true, Some(Place::Rig)) => crate::rigroom::PLACE_LINE.to_string(),
             (true, Some(_)) => {
                 // off the live city's cells, the Net is named as HERE names it
                 let pos = st.player.as_ref().map(|q| q.pos).unwrap_or(Pos::new(0, 0));
@@ -1559,6 +1616,8 @@ impl MapScreen {
                     }
                     t
                 }
+                // Inside your own firewall nothing traces you.
+                Place::Rig => format!("TRACE {} 0", crate::net::trace_bar(0)),
                 _ => match st.net.nearest_trace(city, p.pos) {
                     Some((b, heat)) => format!(
                         "TRACE {} {heat} · {}",
@@ -1580,8 +1639,10 @@ impl MapScreen {
             {
                 crate::net::run_readout(st, b, run)
             }
-            (true, Some(run), Some(Place::Stratum(StratumKind::Net))) if !tethered => {
-                crate::net::run_readout_at(st, crate::net::Scene::Outside, run)
+            (true, Some(run), Some(place @ (Place::Stratum(StratumKind::Net) | Place::Rig)))
+                if !tethered =>
+            {
+                (crate::net::scene_of(place)).and_then(|s| crate::net::run_readout_at(st, s, run))
             }
             _ => None,
         };
@@ -1594,6 +1655,7 @@ impl MapScreen {
                             .is_some_and(|v| *v != crate::render::Visibility::Unseen)
                     })
                 }
+                Place::Rig => crate::rigroom::mastiff::ice_line(st).into_iter().collect(),
                 _ => Vec::new(),
             },
             (false, Some(p)) => {
@@ -1685,31 +1747,29 @@ impl MapScreen {
             ));
         }
         let e = st.net.engaged.as_ref()?;
+        // Off a construct's map (the street, a floor, the open Net, your rig's room) you
+        // step a tile a key; in a construct you aim and walk. Jacked in, the number keys
+        // are the deck's programs and space attacks with it; in the meat they're the ACT
+        // list and space fires.
         let on_foot = crate::net::engaged_on_foot(st);
         Some(match e.actor() {
-            Actor::You if on_foot => match e.phase {
-                Phase::Move => (
+            Actor::You => match e.phase {
+                Phase::Move if on_foot => (
                     "YOUR TURN · MOVE".to_string(),
                     "hjkl step · g aims a path · enter walks it · space stays".to_string(),
+                ),
+                Phase::Move => (
+                    "YOUR TURN · MOVE".to_string(),
+                    "arrows aim · space or enter walks · space on yourself stays".to_string(),
                 ),
                 Phase::Act if self.armed.is_some() => (
                     "THROW".to_string(),
                     "hjkl aim · space throw · esc back".to_string(),
                 ),
-                Phase::Act => (
-                    "AIM".to_string(),
-                    "hjkl target · t next · space fire · 1-9 act · . end turn".to_string(),
-                ),
-            },
-            Actor::You => match e.phase {
-                Phase::Move => (
-                    "YOUR TURN · MOVE".to_string(),
-                    "arrows aim · space or enter walks · space on yourself stays".to_string(),
-                ),
-                // Act: the cursor on a piece and space attacks it; a program's key
-                // picks a program (and a target when several fit) and space runs
-                // it, an action point each; `.` ends the turn.
-                Phase::Act => (
+                // In the Net: the cursor on a piece and space attacks it; a program's key
+                // picks a program (and a target when several fit) and space runs it, an
+                // action point each; `.` ends the turn.
+                Phase::Act if Self::in_net(st) => (
                     "AIM".to_string(),
                     match st
                         .net
@@ -1724,6 +1784,10 @@ impl MapScreen {
                         None => "hjkl target · t next · space attack · 1-5 program · . end turn"
                             .to_string(),
                     },
+                ),
+                Phase::Act => (
+                    "AIM".to_string(),
+                    "hjkl target · t next · space fire · 1-9 act · . end turn".to_string(),
                 ),
             },
             Actor::Ice(i) => {
@@ -1753,6 +1817,8 @@ impl MapScreen {
                     .unwrap_or_else(|| "BOT".to_string());
                 (format!("YOUR {name} MOVES"), "wait".to_string())
             }
+            Actor::Seat(n) => (format!("SEAT {} ATTACKS", n + 1), "wait".to_string()),
+            Actor::Mastiff => ("MASTIFF ACTS".to_string(), "wait".to_string()),
         })
     }
 
@@ -1887,6 +1953,7 @@ impl MapScreen {
             (Place::Stratum(k), _) => k.label().to_string(),
             (Place::Floor { level, .. }, _) => citygen::FloorPlan::label(level),
             (Place::Construct(_) | Place::SiteNet { .. }, _) => "construct".to_string(),
+            (Place::Rig, _) => "your rig".to_string(),
         }
     }
 
@@ -2133,6 +2200,18 @@ impl MapScreen {
         })
     }
 
+    /// The rig's shell from its room's terminal; not while the room is on turns.
+    fn open_rig_shell(&mut self, st: &mut AppState) -> ScreenCmd {
+        if st.net.engaged.is_some() {
+            st.warn("not in a fight");
+            return ScreenCmd::Stay;
+        }
+        ScreenCmd::Push {
+            to: crate::rigroom::open_shell(st),
+            fx: TransitionKind::None,
+        }
+    }
+
     /// A verb key jacked in: a line logged, the hijack's picker, or a held terminal's
     /// shell; out of reach or spent, a warning.
     fn verb_key(st: &mut AppState, c: char) -> ScreenCmd {
@@ -2151,6 +2230,19 @@ impl MapScreen {
         let Some((place, pos)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             return ScreenCmd::Stay;
         };
+        // In your rig's room the Attack's key runs at MASTIFF while it's awake.
+        if place == Place::Rig && crate::rigroom::mastiff::awake(st) {
+            let attack = (st.character.loaded.get(n - 1))
+                .and_then(|id| st.content.item(id)?.program)
+                .is_some_and(|p| p.op == game::Op::Attack);
+            if attack {
+                match crate::combat::attack_mastiff(st) {
+                    Ok(slot) => self.program_flash = Some((slot, st.tick)),
+                    Err(why) => st.warn(why),
+                }
+                return ScreenCmd::Stay;
+            }
+        }
         let Some(scene) = crate::net::scene_of(place) else {
             st.warn("programs run on the Net");
             return ScreenCmd::Stay;
@@ -2166,6 +2258,11 @@ impl MapScreen {
         let Some(spec) = st.content.item(&id).and_then(|i| i.program) else {
             return ScreenCmd::Stay;
         };
+        // A program that means nothing here says why (a Mask in your rig's room).
+        if let Some(why) = crate::net::refusal_in(scene, spec.op) {
+            st.warn(format!("{} · {why}", spec.op.label()));
+            return ScreenCmd::Stay;
+        }
         // Your turn's move half: programs wait for the act half.
         if crate::net::phase(st) == Some(crate::net::Phase::Move) {
             st.warn("move first · space to stay");
@@ -2671,6 +2768,12 @@ impl MapScreen {
                 }
                 crate::venues::Meets::Nothing => None,
             },
+            // In your rig's room the trunk's end leads out onto the grid.
+            Place::Rig => {
+                let result = crate::rigroom::ways::step(st, target)?;
+                report(st, result);
+                Some(ScreenCmd::Stay)
+            }
         }
     }
 
@@ -2850,6 +2953,15 @@ impl MapScreen {
             // it as well (its firewall's gate, which lets you out once every lock is
             // broken, else holds you on it).
             Place::Construct(b) | Place::SiteNet { building: b, .. } => {
+                // Your line's door in your block: up into your rig's room.
+                if let Some(result) = crate::rigroom::ways::door_step(st, target) {
+                    let crossed = result.is_ok();
+                    report(st, result);
+                    if crossed {
+                        self.follow_player(st);
+                    }
+                    return Some(ScreenCmd::Stay);
+                }
                 let k = st.constructs.get(b)?;
                 let onto = k.is_site() && k.entry == target;
                 if !onto && !crate::constructs::leads_out(k, here, target) {
@@ -2935,6 +3047,7 @@ impl MapScreen {
         if let Some(city) = st.city.as_ref() {
             let view = self.last_map.get();
             if view.width > 0 && view.height > 0 {
+                self.room_under_the_column(st, view.height);
                 if !carries_on(st, self.place) {
                     self.cam
                         .clamp_to(self.cam_bounds(st, city), view.width, view.height);
@@ -2942,6 +3055,29 @@ impl MapScreen {
                 self.cam.settle();
             }
         }
+    }
+
+    /// The rows the turn column takes over your rig's room while it's on turns; none
+    /// elsewhere and in calm.
+    fn column_over_the_room(&self, st: &AppState) -> Option<i32> {
+        let fight = (st.net.engaged.as_ref()).is_some_and(|e| e.place == Place::Rig);
+        if self.place != Place::Rig || !fight {
+            return None;
+        }
+        crate::net::turn_view(st).map(|v| i32::from(crate::render::turns::rows(&v)))
+    }
+
+    /// Your rig's room on turns sits under the turn column: the camera holds the void
+    /// above the room under it, not the room's top (the SEATS header), as long as you
+    /// stay a sixth of the view off its bottom; past that it follows you down.
+    fn room_under_the_column(&mut self, st: &AppState, view_h: u16) {
+        let (Some(rows), Some(p)) = (self.column_over_the_room(st), st.player.as_ref()) else {
+            return;
+        };
+        let (h, half) = (i32::from(view_h), i32::from(view_h) / 2);
+        let top = half - rows;
+        let low = p.pos.y + 1 + (h / 6).max(1) - (h - half);
+        self.cam.ty = top.max(low);
     }
 
     /// What the camera keeps the view inside on this place: on a site's Net the open
@@ -2952,6 +3088,17 @@ impl MapScreen {
             && let Some(k) = st.constructs.site(building)
         {
             return crate::render::netlook::tower::bounds(k, level);
+        }
+        // Your rig's room with room either side for the backdoors' lanes running out.
+        if self.place == Place::Rig
+            && let Some(room) = crate::rigroom::room(st)
+        {
+            let size = room.construct.size;
+            let lanes = crate::rigroom::LANES;
+            // On turns, the void above it for the turn column (`room_under_the_column`).
+            let up = self.column_over_the_room(st).unwrap_or(0);
+            let (w, h) = (size.w as i32 + 2 * lanes, size.h as i32 + up);
+            return TileRect::new(-lanes, -up, w, h);
         }
         let size = TileMap::size(&self.map(st, city));
         TileRect::new(0, 0, size.w as i32, size.h as i32)
@@ -3029,17 +3176,25 @@ impl MapScreen {
     /// The path from the player to the aim and how many tiles the moves left cover;
     /// `None` when nothing reaches the aim. An aim off the map past the entry is
     /// the gate: the path runs to the entry and one tile out.
-    /// The tiles you would walk over a stratum or a floor from `from` to `to`, after
-    /// your own: the shortest way over walkable tiles round standing foes; on a floor
-    /// never onto an exit or a door shut to you (`route::shut_to_you`).
+    /// The tiles you would walk over a stratum, a floor or your rig's room from `from` to
+    /// `to`, after your own: the shortest way over walkable tiles round standing foes; on
+    /// a floor never onto an exit or a door shut to you (`route::shut_to_you`); in your
+    /// rig's room round MASTIFF and short of its doors (`open_at`).
     fn street_path(&self, st: &AppState, from: Pos, to: Pos) -> Option<Vec<Pos>> {
         let city = st.city.as_ref()?;
         let place = st.player.as_ref()?.place;
-        if !matches!(place, Place::Stratum(_) | Place::Floor { .. }) {
+        if !matches!(place, Place::Stratum(_) | Place::Floor { .. } | Place::Rig) {
             return None;
         }
         if from == to {
             return Some(Vec::new());
+        }
+        // Your rig's room on turns: over its floor, round MASTIFF, short of the doors.
+        if place == Place::Rig {
+            let size = crate::rigroom::room(st)?.construct.size;
+            let path =
+                citygen::pathing::astar(size, from, to, |_, n| open_at(st, place, n).then_some(1))?;
+            return Some(path.into_iter().filter(|p| *p != from).collect());
         }
         if let Place::Floor { .. } = place {
             let map = crate::foes::map_of(st, place)?;
@@ -3119,8 +3274,8 @@ impl MapScreen {
         ScreenCmd::Stay
     }
 
-    /// One tile of an aimed walk over a stratum or a floor: a move spent, sight
-    /// refreshed, the act half opening on the last move.
+    /// One tile of an aimed walk over a stratum, a floor or your rig's room: a move
+    /// spent, sight refreshed, the act half opening on the last move.
     fn street_walk_step(&mut self, st: &mut AppState, next: Pos) {
         let Some((place, here)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
             self.walking = None;
@@ -3201,11 +3356,12 @@ impl MapScreen {
             self.walking = None;
             return;
         };
-        if st
-            .player
-            .as_ref()
-            .is_some_and(|p| matches!(p.place, Place::Stratum(_) | Place::Floor { .. }))
-        {
+        if (st.player.as_ref()).is_some_and(|p| {
+            matches!(
+                p.place,
+                Place::Stratum(_) | Place::Floor { .. } | Place::Rig
+            )
+        }) {
             self.street_walk_step(st, next);
             return;
         }
@@ -3411,6 +3567,22 @@ impl MapScreen {
                 }
                 return Some(ScreenCmd::Stay);
             }
+            // In your rig's room, by the terminal, space opens the rig's shell.
+            if crate::rigroom::at_terminal(st) {
+                return Some(self.open_rig_shell(st));
+            }
+            // By a reader slot, space summons what it holds; not mid-fight, where it
+            // would cost no AP (the black chip's own popup has nothing for it either).
+            if let Some(popup) = crate::rigroom::summon::interact(st) {
+                if st.net.engaged.is_some() {
+                    st.warn("not in a fight");
+                    return Some(ScreenCmd::Stay);
+                }
+                return Some(ScreenCmd::Push {
+                    to: Box::new(popup),
+                    fx: TransitionKind::None,
+                });
+            }
             // By another city's node jacked in, space is still this city's window (your
             // tile's Jack out and Look, the verbs held): the look cursor and a program
             // are what act on that node, and they say it's out of your body's reach.
@@ -3499,6 +3671,11 @@ impl MapScreen {
                 None => st.warn(format!("nothing in slot {n}")),
             }
             return Some(ScreenCmd::Stay);
+        }
+        // In your rig's room `r` is its terminal's shell, from anywhere in it.
+        if k.code == KeyCode::Char('r') && st.player.as_ref().is_some_and(|p| p.place == Place::Rig)
+        {
+            return Some(self.open_rig_shell(st));
         }
         // A verb key on the Net: the verb of the held node nearest you.
         if jacked
@@ -3958,7 +4135,10 @@ impl Screen for MapScreen {
         match (self.mode, &st.player, crate::missions::scene::camera(st)) {
             // A scene holding a tile of this map: the camera centres on it.
             (Mode::Walk, _, Some((place, pos))) if place == self.place => self.cam.target(pos),
-            (Mode::Walk, Some(p), _) => self.cam.follow(p.pos, map.width, map.height),
+            (Mode::Walk, Some(p), _) => {
+                self.cam.follow(p.pos, map.width, map.height);
+                self.room_under_the_column(st, map.height);
+            }
             _ => self.cam.follow(self.cursor, map.width, map.height),
         }
         // The camera is bound by the map it shows, not the city: a floor or a construct
@@ -4074,9 +4254,10 @@ impl Screen for MapScreen {
             if st.net.engaged.is_some() {
                 crate::net::pace(st);
             } else {
-                // Calm: a fuse burns down on every beat; on the open Net, a run in
-                // flight rolls on it.
-                let rolling = st.net.run.is_some() && place == Place::Stratum(StratumKind::Net);
+                // Calm: a fuse burns down on every beat; on the open Net and in your
+                // rig's room, a run in flight rolls on it.
+                let rolling = st.net.run.is_some()
+                    && matches!(place, Place::Stratum(StratumKind::Net) | Place::Rig);
                 if (!st.live.is_empty() || rolling)
                     && st.clock_tick() >= st.net.beat + crate::net::BEAT_TICKS
                 {
@@ -4101,12 +4282,18 @@ impl Screen for MapScreen {
             self.aim = None;
             st.say("the walk stops");
         }
-        if inside.is_none() {
+        // Off the Net a program's pick no longer points anywhere; on the open Net and in
+        // your rig's room it stays up for space as it does in a construct.
+        if st
+            .player
+            .as_ref()
+            .is_none_or(|p| crate::net::scene_of(p.place).is_none())
+        {
             self.targeting = None;
-            if !crate::net::engaged_on_foot(st) {
-                self.aim = None;
-                self.walking = None;
-            }
+        }
+        if inside.is_none() && !crate::net::engaged_on_foot(st) {
+            self.aim = None;
+            self.walking = None;
         }
         // The turn left you while you were picking: nothing to confirm now.
         if self.targeting.is_some() && !crate::net::your_turn(st) {
@@ -4144,6 +4331,10 @@ impl Screen for MapScreen {
         }
         self.last_phase = phase;
         self.refresh_placement(st);
+        // Your rig's room keeps step with the backdoors you hold before it's drawn.
+        if st.player.as_ref().is_some_and(|p| p.place == Place::Rig) {
+            crate::rigroom::refresh(st);
+        }
         // A save asked for, or five minutes of play since the last.
         crate::runs::when::frame(st);
         ScreenCmd::Stay
@@ -4287,11 +4478,19 @@ impl Screen for MapScreen {
                 false => Vec::new(),
             },
         };
+        // In your rig's room, the rig as it stands, through the same camera.
+        let rig_view = (self.place == Place::Rig)
+            .then(|| crate::rigroom::view(st))
+            .flatten()
+            .map(|v| crate::render::netlook::rig::RigView { origin, ..v });
         let net_look = crate::render::netlook::NetLook {
             view: &net_view,
             keep,
+            rig: rig_view.as_ref(),
         };
-        if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
+        if matches!(self.place, Place::Stratum(StratumKind::Net) | Place::Rig)
+            || self.place.in_construct()
+        {
             overlays.push(&net_look);
         }
         // The cord: the way back to where you jacked in (Settings can hide it), walked
@@ -4778,11 +4977,16 @@ impl Screen for MapScreen {
                 && let Some((sx, sy)) = tile_to_screen(map_area, origin, p.pos)
             {
                 // On the Net and in a construct you are blue on a blue glow, apart
-                // from the greens and cyans around you; elsewhere white.
+                // from the greens and cyans around you (in your rig's room on the red of
+                // MASTIFF's marks when you stand on one); elsewhere white.
+                let glow = match crate::rigroom::room(st).filter(|_| p.place == Place::Rig) {
+                    Some(room) => crate::render::netlook::rig::you_glow(room, p.pos),
+                    None => crate::render::netlook::YOU_GLOW,
+                };
                 let style = if p.sees_all() {
                     Style::default()
                         .fg(crate::render::netlook::YOU.to_color())
-                        .bg(crate::render::netlook::YOU_GLOW.to_color())
+                        .bg(glow.to_color())
                 } else {
                     Style::default().fg(Color::Rgb(255, 255, 255))
                 };
@@ -4981,7 +5185,8 @@ impl Screen for MapScreen {
             Place::Construct(b)
             | Place::SiteNet { building: b, .. }
             | Place::Floor { building: b, .. } => Some(b),
-            Place::Stratum(_) => None,
+            // No building's alarm reaches your rig's Net.
+            Place::Stratum(_) | Place::Rig => None,
         };
         if alert_building.is_some_and(|b| st.net.alert(b, st.net.now(st))) {
             location = format!("ALERT · {location}");
@@ -4990,14 +5195,13 @@ impl Screen for MapScreen {
             Paragraph::new(hud::location_line(&location, st.clock(), rw)),
             r.band_r[0],
         );
-        let exposure =
-            if self.place == Place::Stratum(StratumKind::Net) || self.place.in_construct() {
-                crate::exposure::net_text(self.place, crate::net::hunted(st))
-            } else if matches!(self.place, Place::Stratum(_)) {
-                crate::exposure::text(&crate::exposure::of(st))
-            } else {
-                String::new()
-            };
+        let exposure = if Self::net_place(self.place) {
+            crate::exposure::net_text(self.place, crate::net::hunted(st))
+        } else if matches!(self.place, Place::Stratum(_)) {
+            crate::exposure::text(&crate::exposure::of(st))
+        } else {
+            String::new()
+        };
         f.render_widget(
             Paragraph::new(hud::exposure_row(&exposure, rw)),
             r.band_r[2],
@@ -5060,6 +5264,9 @@ impl Screen for MapScreen {
             card: match (self.place, st.player.as_ref()) {
                 (Place::SiteNet { building, .. }, Some(p)) if p.place == self.place => {
                     crate::sitenet::panel_lines(st, building)
+                }
+                (Place::Rig, Some(p)) if p.place == self.place => {
+                    crate::rigroom::panel::panel_lines(st)
                 }
                 (Place::Construct(b), Some(p)) if p.place == self.place => {
                     crate::net::card_lines(st, b, None)
@@ -8368,6 +8575,302 @@ mod tests {
     }
 
     #[test]
+    fn space_at_the_reader_in_the_room_opens_the_slots_popup() {
+        let mut st = state_home();
+        let c = st.content.clone();
+        st.character.give_item(&c, game::ItemId::new("credchip"), 1);
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        let copy = (st.character.inventory.iter())
+            .find(|x| x.item.0 == "credchip")
+            .and_then(|x| x.copy_id())
+            .unwrap();
+        st.character.put_in_reader(&c, 0, copy).unwrap();
+        let slot = crate::rigroom::room(&st).unwrap().slots[0];
+        let front = crate::rigroom::layout::front(slot);
+        st.player.as_mut().unwrap().pos = front;
+        let cmd = s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let ScreenCmd::Push { to, .. } = cmd else {
+            panic!("space at the slot opens its popup")
+        };
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("Credchip"), "{drawn}");
+    }
+
+    /// The home's room jacked into, on a rack of seats and a reader, with its screen.
+    fn the_room() -> (AppState, MapScreen) {
+        let mut st = state_home();
+        let c = st.content.clone();
+        crate::rig::fit_new_rack(&mut st.character, &c, "rack_civitas");
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        (st, s)
+    }
+
+    /// `r` in the room: the pushed shell, powered on and past its boot.
+    fn shell_from_the_room(st: &mut AppState, s: &mut MapScreen) -> Box<dyn Screen> {
+        let ScreenCmd::Push { mut to, .. } = s.update(st, &[key(KeyCode::Char('r'))]) else {
+            panic!("r opens the shell")
+        };
+        st.tick += 10_000;
+        to.update(st, &[]);
+        to
+    }
+
+    fn say_in(term: &mut dyn Screen, st: &mut AppState, line: &str) {
+        let keys: Vec<_> = line
+            .chars()
+            .map(|c| key(KeyCode::Char(c)))
+            .chain(std::iter::once(key(KeyCode::Enter)))
+            .collect();
+        term.update(st, &keys);
+        st.tick += 10_000;
+        term.update(st, &[]);
+    }
+
+    #[test]
+    fn r_opens_the_rigs_shell_anywhere_in_the_room() {
+        let (mut st, mut s) = the_room();
+        let room = crate::rigroom::room(&st).unwrap().clone();
+        assert!(!crate::rigroom::at_terminal(&st), "the landing is far off");
+        assert_ne!(room.land, room.terminal);
+        let term = shell_from_the_room(&mut st, &mut s);
+        let drawn = draw_screen(&*term, &st, 120, 40);
+        assert!(drawn.contains("◇ JACK · ZENBO"), "{drawn}");
+        assert!(drawn.contains("esc · back to your rig"), "{drawn}");
+        assert!(drawn.contains("@zenbo:~$ "), "{drawn}");
+    }
+
+    #[test]
+    fn space_at_the_terminal_opens_it_too() {
+        let (mut st, mut s) = the_room();
+        let at = crate::rigroom::room(&st).unwrap().terminal;
+        st.player.as_mut().unwrap().pos = at.step(Dir::S);
+        let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Char(' '))]) else {
+            panic!("space at the terminal opens the shell")
+        };
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("◇ JACK · ZENBO"), "{drawn}");
+        let here = crate::rigroom::panel::here_lines(&st);
+        let here: Vec<String> = here.iter().map(|l| l.to_string()).collect();
+        assert!(here[0].contains("TERMINAL · your rig's shell"), "{here:?}");
+        assert!(
+            here[1].contains("r opens it from anywhere here"),
+            "{here:?}"
+        );
+        assert!(
+            here[2].contains("yours: no crack, no hold to run out"),
+            "{here:?}"
+        );
+    }
+
+    #[test]
+    fn the_shell_installs_from_the_pack_as_the_desk_does() {
+        let (mut st, mut s) = the_room();
+        let c = st.content.clone();
+        st.character
+            .give_item(&c, game::ItemId::new("prog_sniff"), 1);
+        let ScreenCmd::Push { to, .. } = s.update(&mut st, &[key(KeyCode::Char('r'))]) else {
+            panic!("r opens the shell")
+        };
+        st.tick += 100_000;
+        let drawn = draw_screen(&*to, &st, 120, 40);
+        assert!(drawn.contains("INSTALLED sniff FROM SHARD"), "{drawn}");
+        assert!(st.backdoors.jobs.programs.contains("sniff"));
+    }
+
+    #[test]
+    fn run_and_kill_show_in_the_room() {
+        let (mut st, mut s) = the_room();
+        let mut term = shell_from_the_room(&mut st, &mut s);
+        say_in(&mut *term, &mut st, "run rent");
+        let room = draw_screen(&s, &st, 180, 50);
+        assert!(room.contains("◉ rent"), "{room}");
+        say_in(&mut *term, &mut st, "kill 1");
+        let room = draw_screen(&s, &st, 180, 50);
+        assert!(!room.contains("◉ rent"), "{room}");
+        assert!(room.contains("free seat"), "{room}");
+    }
+
+    /// The ground under your `@` as the room's screen draws it.
+    fn your_ground(st: &AppState, s: &MapScreen) -> Color {
+        let buf = crate::screens::shots::draw_stack(st, &[s], (120, 40));
+        let mut at = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .filter(|&p| buf[p].symbol() == "@");
+        let p = at.next().expect("your @");
+        assert_eq!(at.next(), None, "one @");
+        buf[p].bg
+    }
+
+    /// MASTIFF awake in the room with Crack, Attack and Shield loaded, in that order.
+    fn mastiff_awake() -> (AppState, MapScreen) {
+        use crate::rigroom::testutil::{BLACK_SLOT, a_black_chip, load};
+        let mut st = a_black_chip();
+        st.character.loaded.clear();
+        for id in ["crack", "attack", "shield"] {
+            load(&mut st, id);
+        }
+        crate::rigroom::mastiff::wake(&mut st, BLACK_SLOT).unwrap();
+        let s = MapScreen::walking(&mut st);
+        (st, s)
+    }
+
+    #[test]
+    fn the_rooms_fight_prompts_as_the_nets_and_lists_the_bite_with_the_ice() {
+        let (mut st, mut s) = mastiff_awake();
+        let glow = crate::render::netlook::YOU_GLOW.to_color();
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            drawn.contains("▣ MASTIFF · black ICE · coat 8/8"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("bites ×"), "no bite marked yet: {drawn}");
+        assert_eq!(your_ground(&st, &s), glow);
+        crate::rigroom::mastiff::turn(&mut st);
+        let drawn = draw_screen(&s, &st, 120, 40);
+        // The bite where a piece of ICE reads what it's up to: its line in the ICE list.
+        assert!(
+            drawn.contains("▣ MASTIFF · black ICE · bites × next turn · coat 8/8"),
+            "{drawn}"
+        );
+        // You on a mark: your `@` on the bite's red ground; off the marks, your glow.
+        let bite = (crate::rigroom::room(&st))
+            .and_then(|r| r.mastiff.as_ref()?.bite)
+            .expect("a bite marked");
+        assert!(bite.contains(st.player.as_ref().unwrap().pos));
+        assert_eq!(your_ground(&st, &s), Color::Rgb(0x4a, 0x0c, 0x18));
+        let you = st.player.as_ref().unwrap().pos;
+        st.player.as_mut().unwrap().pos = Pos::new(bite.x - 1, bite.y + 1);
+        assert_eq!(your_ground(&st, &s), glow);
+        st.player.as_mut().unwrap().pos = you;
+        // The Net's prompt as the open Net reads it: stepping on the move half...
+        assert!(
+            drawn.contains(
+                "YOUR TURN · MOVE   hjkl step · g aims a path · enter walks it · space stays"
+            ),
+            "{drawn}"
+        );
+        // ...the deck's keys on the act half.
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            drawn.contains("AIM   hjkl target · t next · space attack · 1-5 program · . end turn"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+    }
+
+    #[test]
+    fn the_open_nets_fight_prompts_programs_not_acts() {
+        let mut st = state_home();
+        let mut s = MapScreen::walking(&mut st);
+        let rig = st.home.unwrap();
+        let home = Place::Floor {
+            building: rig.home.building,
+            level: rig.home.level,
+        };
+        let at = beside_rig(&st);
+        stand(&mut st, &mut s, home, at);
+        jack_in(&mut st, &mut s);
+        crate::rigroom::ways::down_the_line(&mut st).unwrap();
+        crate::constructs::leave_construct(&mut st).unwrap();
+        s.update(&mut st, &[]);
+        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
+        crate::net::engage(&mut st, Place::Stratum(StratumKind::Net), true);
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(drawn.contains("YOUR TURN · MOVE   hjkl step"), "{drawn}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(
+            drawn.contains("AIM   hjkl target · t next · space attack · 1-5 program · . end turn"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+    }
+
+    #[test]
+    fn the_rooms_fight_draws_the_turn_column() {
+        let (mut st, mut s) = mastiff_awake();
+        for (w, h) in [(120, 40), (100, 30)] {
+            // A frame to size the pane, then the camera settles as frames go by.
+            let _ = draw_screen(&s, &st, w, h);
+            for _ in 0..40 {
+                s.update(&mut st, &[]);
+            }
+            let drawn = draw_screen(&s, &st, w, h);
+            // The column, as a site's fight draws it, and the footer's turn row.
+            assert!(drawn.contains(" TURN 1 "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains(" ▶ YOU            "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   seat 1         "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   seat 2         "), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("   MASTIFF    8/8 "), "{w}x{h}: {drawn}");
+            assert!(
+                drawn.contains("TURN 1  YOU › seat 1 › seat 2 › MASTIFF"),
+                "{w}x{h}: {drawn}"
+            );
+            // The room's SEATS header still reads, out from under it.
+            assert!(drawn.contains("SEATS"), "{w}x{h}: {drawn}");
+            assert!(drawn.contains("Tinman 2X · 2"), "{w}x{h}: {drawn}");
+        }
+    }
+
+    #[test]
+    fn the_rooms_act_half_says_programs_not_acts() {
+        let (mut st, mut s) = mastiff_awake();
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert_eq!(crate::net::phase(&st), Some(crate::net::Phase::Act));
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(!drawn.contains("1-9 act"), "{drawn}");
+        assert!(drawn.contains("1-5 program"), "{drawn}");
+    }
+
+    #[test]
+    fn strikes_in_the_rooms_act_list_land_on_mastiff() {
+        let (mut st, mut s) = mastiff_awake();
+        for a in ["static", "redline", "shove"] {
+            st.character.abilities.push(game::AbilityId::new(a));
+        }
+        let list = MapScreen::act_list(&st);
+        let ability = |s: &str| Act::Ability(game::AbilityId::new(s));
+        assert!(list.contains(&ability("static")), "{list:?}");
+        assert!(list.contains(&ability("redline")), "a boost: {list:?}");
+        assert!(
+            !list.contains(&ability("shove")),
+            "no push in the Net: {list:?}"
+        );
+        // The act half, the cursor on MASTIFF: the strike's key strikes it.
+        st.force_hit = Some(true);
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        let n = list.iter().position(|a| *a == ability("static")).unwrap() as u32;
+        let digit = char::from_digit((MapScreen::act_base(&st) + n) % 10, 10).unwrap();
+        let drawn = draw_screen(&s, &st, 120, 40);
+        assert!(drawn.contains(&format!("{digit} static")), "{drawn}");
+        s.update(&mut st, &[key(KeyCode::Char(digit))]);
+        let m = crate::rigroom::room(&st).unwrap().mastiff.clone().unwrap();
+        assert_eq!(m.coat(), 7, "{:?}", last(&st));
+        assert_eq!(last(&st), Some("MASTIFF stunned"));
+        assert!(logged(&st, "static · MASTIFF · a plate breaks · coat 7/8"));
+        assert_eq!(st.net.engaged.as_ref().unwrap().ap, 0, "static costs two");
+    }
+
+    #[test]
     fn jacking_in_from_the_home_rig_and_back() {
         let mut st = state_home();
         let mut s = MapScreen::walking(&mut st);
@@ -8379,9 +8882,28 @@ mod tests {
         let at = beside_rig(&st);
         stand(&mut st, &mut s, home, at);
         jack_in(&mut st, &mut s);
-        assert_eq!(player(&st), (Place::Stratum(StratumKind::Net), rig.landing));
-        assert_eq!(s.place, Place::Stratum(StratumKind::Net));
-        assert_eq!(last(&st), Some("jacked in from home"));
+        // into your rig's room, then down its trunk into your block
+        let room = crate::rigroom::room(&st).expect("the room").clone();
+        assert_eq!(player(&st), (Place::Rig, room.land));
+        assert_eq!(s.place, Place::Rig);
+        assert_eq!(last(&st), Some("jacked in · your rig"));
+        st.player.as_mut().unwrap().pos = room.trunk.step(Dir::N);
+        s.update(&mut st, &[key(KeyCode::Char('j'))]);
+        let block = Place::Construct(rig.home.building);
+        let k = st
+            .constructs
+            .get(rig.home.building)
+            .expect("your block's construct");
+        let line = crate::rigroom::ways::your_line(k).expect("your line");
+        assert_eq!(player(&st), (block, line.landing));
+        assert_eq!(s.place, block);
+        assert_eq!(last(&st), Some("down the line · your block"));
+        // and back up through your line's door beside you
+        let toward = if line.dy > 0 { 'j' } else { 'k' };
+        s.update(&mut st, &[key(KeyCode::Char(toward))]);
+        assert_eq!(player(&st), (Place::Rig, room.trunk.step(Dir::N)));
+        assert_eq!(s.place, Place::Rig);
+        assert_eq!(last(&st), Some("up the line · your rig"));
         jack_out(&mut st, &mut s);
         assert_eq!(player(&st), (home, at));
         assert_eq!(s.place, home);
@@ -11934,6 +12456,66 @@ mod tests {
     }
 
     #[test]
+    fn a_program_keys_pick_stays_up_on_the_open_net() {
+        let (mut st, _) = crate::net::tests::under_kiroflux();
+        let mut s = MapScreen::explore(0);
+        let city = st.city.clone().unwrap();
+        // A wall camera and a tile beside it that reaches it.
+        let (cam, cam_at, here) = city
+            .net
+            .nodes
+            .iter()
+            .filter(|n| n.kind == citygen::NodeKind::Camera && n.building.is_some())
+            .find_map(|n| {
+                n.cyber.neighbors8().find_map(|q| {
+                    crate::net::targets_outside(&st, q)
+                        .iter()
+                        .any(|(t, _)| *t == game::HackTarget::Node(n.id))
+                        .then_some((n.id, n.cyber, q))
+                })
+            })
+            .expect("a wall camera with a tile beside it");
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Net), here);
+        st.net.force_roll = Some(10);
+        // The key picks; the frames after it keep the pick up until space.
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        s.update(&mut st, &[]);
+        let t = s.targeting.as_ref().expect("the pick stays up");
+        assert!(
+            t.candidates
+                .iter()
+                .any(|(target, at, _)| *target == game::HackTarget::Node(cam) && *at == cam_at),
+            "the camera beside you is a pick"
+        );
+        assert!(st.net.run.is_none(), "nothing runs until space");
+        let text = draw_screen(&s, &st, 140, 40);
+        assert!(text.contains("CRACK › "), "{text}");
+        assert!(text.contains("space runs it"), "{text}");
+        s.update(&mut st, &[key(KeyCode::Char(' '))]);
+        assert!(s.targeting.is_none());
+        assert!(st.net.run.is_some(), "space runs it: {:?}", last(&st));
+        assert!(
+            last(&st).is_some_and(|l| l.starts_with("crack ")),
+            "{:?}",
+            last(&st)
+        );
+    }
+
+    #[test]
+    fn a_pick_goes_when_you_leave_the_net() {
+        let mut st = state8();
+        let mut s = MapScreen::explore(0);
+        let (_, _) = lock_run(&mut st, &mut s);
+        s.update(&mut st, &[key(KeyCode::Char('1'))]);
+        assert!(s.targeting.is_some(), "the pick is up");
+        // Carried out of the Net with the pick up: it no longer points anywhere.
+        let at = player(&st).1;
+        stand(&mut st, &mut s, Place::Stratum(StratumKind::Street), at);
+        s.update(&mut st, &[]);
+        assert!(s.targeting.is_none(), "no pick off the Net");
+    }
+
+    #[test]
     fn shell_opens_a_held_terminal_from_the_net() {
         let (mut st, mut s) = street_terminal_held();
         let cmd = s.update(&mut st, &[key(KeyCode::Char('r'))]);
@@ -14496,7 +15078,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rig_offers_landings_and_lands_at_a_gate() {
+    fn the_rig_jacks_into_its_room_and_a_backdoor_lands_at_its_gate() {
         let (mut st, mut s) = home_screen();
         let h = st.home.unwrap();
         let seed = st.city.as_ref().unwrap().seed;
@@ -14506,27 +15088,20 @@ mod tests {
         else {
             panic!("space opens the popup")
         };
-        // jack in opens the landing list in its place
-        let ScreenCmd::Replace { to: mut list, .. } = fire_row(&mut st, &mut *popup, "Jack in")
-        else {
-            panic!("jack in replaces the popup with the landings")
-        };
-        st.tick += 40;
-        let text = draw_screen(&*list, &st, 120, 40);
+        // jack in lands you in your rig's room, with no landing list in between
+        let cmd = fire_row(&mut st, &mut *popup, "Jack in");
         assert!(
-            text.contains("JACK IN") && text.contains("your block"),
-            "{text}"
+            matches!(cmd, ScreenCmd::Pop { .. }),
+            "no list replaces the popup"
         );
-        let row = format!("{} · root · STABLE", crate::net::building_name(&st, other));
-        assert!(text.contains(&row), "{text}");
-        // land through the list
-        let cmd = fire_row(&mut st, &mut *list, &row);
-        assert!(matches!(cmd, ScreenCmd::Pop { .. }));
-        assert!(
-            last(&st).unwrap().contains("via your backdoor"),
-            "{:?}",
-            last(&st)
-        );
+        assert_eq!(last(&st), Some("jacked in · your rig"));
+        let p = st.player.as_ref().unwrap();
+        assert_eq!(p.place, Place::Rig);
+        assert_eq!(p.body.map(|(pl, _)| pl), Some(h.place()));
+        crate::net::jack_out(&mut st).unwrap();
+        // a backdoor still lands you at its gate from the rig
+        let line = crate::net::land_at(&mut st, other).unwrap();
+        assert!(line.contains("via your backdoor"), "{line}");
         let p = st.player.as_ref().unwrap();
         assert_eq!(p.place, Place::Stratum(StratumKind::Net));
         assert_eq!(
@@ -14567,7 +15142,11 @@ mod tests {
     fn jacking_in_at_your_block_from_the_rig_starts_an_empty_route() {
         let (mut st, _s) = home_screen();
         crate::net::jack_in_here(&mut st).unwrap();
-        assert!(st.player.as_ref().unwrap().jacked_in());
+        crate::rigroom::ways::down_the_line(&mut st).unwrap();
+        let p = st.player.as_ref().unwrap();
+        assert!(p.jacked_in());
+        let block = st.home.unwrap().home.building;
+        assert_eq!(p.place, Place::Construct(block), "in your block");
         assert_eq!(st.backdoors.route, Some(crate::backdoors::Route::default()));
         // the same at a street port starts none
         let mut st = state8();

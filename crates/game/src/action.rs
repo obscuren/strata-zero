@@ -1134,6 +1134,19 @@ mod tests {
     }
 
     #[test]
+    fn a_black_chip_refuses_in_the_pack() {
+        let (c, mut ch, mut g, at) = setup();
+        let k = ch.give_credchip(&c, &id("credchip_black"), 3000);
+        let before = ch.credits;
+        assert_eq!(
+            apply(&mut ch, &mut g, &c, at, 0, Action::UseCopy(k)).unwrap_err(),
+            "locked · crack it at your rig"
+        );
+        assert_eq!(ch.credits, before);
+        assert_eq!(ch.count(&id("credchip_black")), 1);
+    }
+
+    #[test]
     fn a_copy_saved_before_credits_reads_none() {
         #[derive(serde::Serialize)]
         struct OldCopy {

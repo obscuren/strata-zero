@@ -77,6 +77,10 @@ pub enum Actor {
     Foe(usize),
     /// A bot out with you, by the site and socket it docks in.
     Bot(game::Site, usize),
+    /// MASTIFF, awake in your rig's room.
+    Mastiff,
+    /// A free core seat of your rig, by its index, running your Attack at MASTIFF.
+    Seat(u8),
 }
 
 /// Your turn in two halves: you move (or stay), then you act.
@@ -210,30 +214,42 @@ impl TryFrom<EchoRead> for RollEcho {
     }
 }
 
-/// Where a run is worked: inside a construct, or out on the open Net.
+/// Where a run is worked: inside a construct, out on the open Net, or in your rig's room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Scene {
     Inside(BuildingId),
     Outside,
+    /// Your rig's own room, behind your firewall: nobody's trace, no noise. It holds no
+    /// node: a program there runs on yourself (MASTIFF takes the deck's Attack alone).
+    Rig,
 }
 
 /// The scene of a place: a construct's inside (a site's Net is its building's), the open
-/// Net; none off the Net.
+/// Net, your rig's room; none off the Net.
 pub fn scene_of(place: Place) -> Option<Scene> {
     match place {
         Place::Construct(b) | Place::SiteNet { building: b, .. } => Some(Scene::Inside(b)),
         Place::Stratum(StratumKind::Net) => Some(Scene::Outside),
+        Place::Rig => Some(Scene::Rig),
         _ => None,
     }
 }
 
 /// What a program can run against where you stand: in a construct, its nodes beside
-/// you and its ICE in reach; on the open Net, the nodes on your tile or beside it.
+/// you and its ICE in reach; on the open Net, the nodes on your tile or beside it; in
+/// your rig's room, yourself.
 pub fn targets_at(st: &AppState, scene: Scene, pos: Pos) -> Vec<(HackTarget, String)> {
     match scene {
         Scene::Inside(b) => targets_near(st, b, pos),
         Scene::Outside => targets_outside(st, pos),
+        Scene::Rig => vec![(HackTarget::Deck, "yourself".to_string())],
     }
+}
+
+/// Why a program `op` does nothing in `scene`, when it isn't for want of a target: in
+/// your rig's room a Mask, as nothing there hunts by sight (MASTIFF knows where you are).
+pub fn refusal_in(scene: Scene, op: Op) -> Option<&'static str> {
+    (scene == Scene::Rig && op == Op::Mask).then_some("nothing in your rig hunts by sight")
 }
 
 /// The nodes a program reaches from the open Net at `pos`: on its tile or beside it, on
@@ -361,6 +377,7 @@ pub fn kind_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Target
             }
             HackTarget::Guard { .. } | HackTarget::Site(_) => None,
         },
+        Scene::Rig => (target == HackTarget::Deck).then_some(Target::Deck),
     }
 }
 
@@ -381,6 +398,9 @@ pub fn pos_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<Pos> {
             }
             HackTarget::Guard { .. } => None,
         },
+        Scene::Rig => (target == HackTarget::Deck)
+            .then(|| st.player.as_ref().map(|p| p.pos))
+            .flatten(),
     }
 }
 
@@ -396,6 +416,8 @@ pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate
             Some(crate::owners::Owner::Building(n.building))
         }
         (Scene::Outside, _) => None,
+        // Behind your own firewall nothing traces you.
+        (Scene::Rig, _) => None,
     }
 }
 
@@ -403,7 +425,7 @@ pub fn owner_at(st: &AppState, scene: Scene, target: HackTarget) -> Option<crate
 pub fn odds_at(st: &AppState, scene: Scene, run: &Run) -> Option<u8> {
     match scene {
         Scene::Inside(b) => run_odds(st, b, run),
-        Scene::Outside => {
+        Scene::Outside | Scene::Rig => {
             let spec = st.content.item(&run.program)?.program?;
             let kind = kind_at(st, scene, run.target)?;
             if kind == Target::Deck {
@@ -902,7 +924,8 @@ pub fn building_here(st: &AppState) -> Option<BuildingId> {
         Place::Construct(b)
         | Place::SiteNet { building: b, .. }
         | Place::Floor { building: b, .. } => Some(b),
-        Place::Stratum(_) => None,
+        // Your rig's Net is no building's construct.
+        Place::Stratum(_) | Place::Rig => None,
     }
 }
 
@@ -970,6 +993,9 @@ pub fn start_run(st: &mut AppState, program: ItemId, target: HackTarget) -> Resu
     }
     if !applies(spec.op, kind) {
         return Err(format!("{} does nothing there", item.name));
+    }
+    if let Some(why) = refusal_in(scene, spec.op) {
+        return Err(format!("{} · {why}", spec.op.label()));
     }
     let now = st.net.now(st);
     if spec.op == Op::Copy && st.net.copied(target, now) {
@@ -1615,12 +1641,16 @@ pub fn dump(st: &mut AppState, why: &str) {
 /// Dumped, with the deck cooling for a given stretch.
 pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
     st.net.engaged = None;
+    // MASTIFF goes back to sleep whole: the fight is lost.
+    crate::rigroom::mastiff::reset(st);
     let now = st.net.now(st);
     st.net.run = None;
     st.net.cooling_until = Some(now + cooling);
     st.character.focus = 0;
     // A dump on a rig run starts the trace home from the relay nearest you. The rig's
     // route is your body's city's: held as you left it when your Net self walked out.
+    // Inside your rig's room you're behind your own firewall: nothing traces you.
+    let in_the_room = st.player.as_ref().is_some_and(|p| p.place == Place::Rig);
     let firewall = crate::rig::of(st).firewall;
     let trace = |doors: &mut crate::backdoors::Backdoors, city: Option<&City>| {
         doors.route.as_ref()?;
@@ -1633,7 +1663,9 @@ pub fn dump_for(st: &mut AppState, why: &str, cooling: u64) {
             None => "trace running · straight to your door".to_string(),
         })
     };
-    let line = if st.backdoors.route.is_some() {
+    let line = if in_the_room {
+        None
+    } else if st.backdoors.route.is_some() {
         trace(&mut st.backdoors, st.city.as_ref())
     } else {
         crate::outside::body_stay_mut(st).and_then(|s| trace(&mut s.backdoors, Some(&s.city)))
@@ -1727,6 +1759,8 @@ pub fn jack_out(st: &mut AppState) -> Result<(), &'static str> {
     }
     st.net.mask = 0;
     st.backdoors.end_route();
+    // Out of your rig's room: MASTIFF asleep and whole again, the fight over.
+    crate::rigroom::mastiff::reset(st);
     Ok(())
 }
 
@@ -1748,48 +1782,10 @@ pub fn lock_down(st: &mut AppState, b: BuildingId) {
     st.warn(line);
 }
 
-/// The not-burned backdoors as landing rows: `Hollis Court · root · STABLE`.
-pub fn landings(st: &AppState) -> Vec<(BuildingId, String)> {
-    let now = st.net.now(st);
-    st.backdoors
-        .standing()
-        .map(|d| {
-            (
-                d.building,
-                format!(
-                    "{} · {} · {}",
-                    building_name(st, d.building),
-                    d.user_label(),
-                    d.health(now).label()
-                ),
-            )
-        })
-        .collect()
-}
-
-/// Whether Space on the rig should offer the landing list rather than jack in.
-pub fn wants_landing_list(st: &AppState) -> bool {
-    jack_in_refusal(st).is_none()
-        && st
-            .home
-            .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
-        && !landings(st).is_empty()
-}
-
-/// The landing list: your block, then each backdoor you hold.
-pub fn landing_popup(st: &AppState) -> crate::screens::popup::Popup {
-    use crate::screens::popup::{Choice, Pick, Popup, WorldAct};
-    let mut choices = vec![Choice::new(
-        'a',
-        "your block",
-        Pick::World(WorldAct::JackIn),
-    )];
-    let mut letters = "bcdefgimnoprsuvwxyz".chars();
-    for (b, label) in landings(st) {
-        let Some(k) = letters.next() else { break };
-        choices.push(Choice::new(k, label, Pick::World(WorldAct::Land(b))));
-    }
-    Popup::verbs("JACK IN", choices, st.tick)
+/// Whether you stand in your flat, where the rig is the port.
+fn at_home(st: &AppState) -> bool {
+    st.home
+        .is_some_and(|h| st.player.as_ref().is_some_and(|p| p.place == h.place()))
 }
 
 /// A rig run begins: an empty route from your block, or one relay when you landed
@@ -1868,44 +1864,37 @@ impl Landing {
     }
 }
 
-/// Jack in from the rig and land at a backdoor's gate; a site's backdoor lands you on
-/// its G hub.
-pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
-    if let Some(why) = jack_in_refusal(st) {
-        return Err(why);
+/// Out of your rig's room by a backdoor's door, still jacked in: the backdoor's checks
+/// and spend, a site's `L` hub or the building's gate on the grid, and the route home
+/// starting with that backdoor as its first relay. Nothing is spent when it can't land.
+pub fn leave_by_backdoor(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let player = st.player.as_ref().ok_or("no body")?;
+    if !player.jacked_in() || player.place != Place::Rig {
+        return Err("only your rig's room has backdoors for doors".to_string());
     }
     // Everything that can stop the landing is settled before the key is used.
-    let home = st.home;
-    let city = st.city.as_ref().ok_or("no city")?;
-    let player = st.player.as_ref().ok_or("no body")?;
-    if player.jacked_in() {
-        return Err("already jacked in".to_string());
-    }
-    if !home.is_some_and(|h| h.place() == player.place) {
-        return Err("only the rig lands you at a backdoor".to_string());
-    }
-    let port = player
-        .terminal_in_reach(city, home.as_ref())
-        .ok_or("no terminal within reach")?;
-    if !city.walkable(StratumKind::Net, port) {
-        return Err("the port is dead".to_string());
-    }
     let landing = Landing::of(st, b)?;
     let trap = use_backdoor(st, b)?;
-    let bonus = st.sight_bonus();
-    let city = st.city.as_ref().ok_or("no city")?;
-    let player = st.player.as_mut().ok_or("no body")?;
-    let from = player.place;
-    player
-        .jack_in(city, home.as_ref(), bonus)
-        .map_err(|e| e.to_string())?;
     let there = landing.land(st, b)?;
-    after_jack_in(st, from, Some(b));
+    if st.backdoors.route.is_none() {
+        st.backdoors.start_route(None);
+    }
+    st.backdoors.hop(b);
     st.repaint = true;
     if trap {
         spring(st, b);
     }
     Ok(format!("jacked in · {there} · via your backdoor"))
+}
+
+/// A test's way out of the rig by a backdoor from the desk: jack in, leave by its door.
+/// A refusal leaves you jacked out at the desk, as the old landing list did.
+#[cfg(test)]
+pub fn land_at(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    jack_in_here(st)?;
+    leave_by_backdoor(st, b).inspect_err(|_| {
+        let _ = jack_out(st);
+    })
 }
 
 /// From the server of a construct you hold, onto another backdoor's gate; a site's
@@ -2274,10 +2263,12 @@ pub fn budgets(grade: IceGrade) -> (u8, u8) {
 /// The order of an engagement. In a construct: you by your Net, each standing
 /// piece by its grade (on a site's Net, each of your level's). On foot: you by your
 /// Reflex, each standing foe in your sight memory by its own. Higher first, ties to
-/// you, then by index.
+/// you, then by index. In your rig's room: you, the free seats, MASTIFF
+/// (`rigroom::mastiff::order`).
 pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
     let mut scored: Vec<(i32, u16, Actor)> = Vec::new();
     match place {
+        Place::Rig => return crate::rigroom::mastiff::order(st),
         Place::Construct(b) | Place::SiteNet { building: b, .. } => {
             scored.push((
                 st.character.attribute(&st.content, game::Attribute::Net) as i32,
@@ -2324,10 +2315,11 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
 }
 
 /// Tiles you may walk in a turn at `place`: on foot your chrome's move counts, at
-/// least one; in a construct your avatar isn't your meat, and walks `BASE_MOVE`.
+/// least one; in a construct and in your rig's room your avatar isn't your meat, and
+/// walks `BASE_MOVE`.
 pub fn you_move(st: &AppState, place: Place) -> u8 {
     match place {
-        Place::Construct(_) | Place::SiteNet { .. } => BASE_MOVE,
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => BASE_MOVE,
         _ => {
             let moves = BASE_MOVE as i32 + st.character.move_bonus(&st.content);
             moves.clamp(1, u8::MAX as i32) as u8
@@ -2350,6 +2342,9 @@ fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
             None => (crate::foes::GOON_MOVE, crate::foes::GOON_AP),
         },
         (Actor::Bot(site, n), _) => (crate::bots::moves(st, (site, n)), 0),
+        // MASTIFF walks and then marks or bites; a seat fires once.
+        (Actor::Mastiff, _) => (crate::rigroom::mastiff::MOVES, 1),
+        (Actor::Seat(_), _) => (0, 1),
     }
 }
 
@@ -2385,6 +2380,8 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
     });
     let line = if manual {
         "engaged".to_string()
+    } else if place == Place::Rig {
+        "ENGAGED · MASTIFF wakes".to_string()
     } else if place.in_construct() {
         "ENGAGED · the ICE is on you".to_string()
     } else {
@@ -2453,10 +2450,11 @@ pub fn seat_foes(st: &mut AppState) {
 }
 
 /// Something still hunts you on the map on turns: awake ICE in a construct, a
-/// hunting foe on foot.
+/// hunting foe on foot, MASTIFF awake in your rig's room.
 pub fn hunting(st: &AppState) -> bool {
     match st.net.engaged.as_ref().map(|e| e.place) {
         Some(place) if place.in_construct() => any_awake(st, place),
+        Some(Place::Rig) => crate::rigroom::mastiff::awake(st),
         Some(place) => crate::foes::any_hunting(st, place),
         None => false,
     }
@@ -2620,6 +2618,10 @@ pub fn end_turn(st: &mut AppState) {
     if leaving == Actor::You && st.cloak.as_ref().is_some_and(|c| c.waiting) {
         crate::cloak::end(st, crate::cloak::End::Fight);
     }
+    // In your rig's room, off MASTIFF's leash, a plate grows back.
+    if leaving == Actor::You && place == Place::Rig {
+        crate::rigroom::mastiff::end_of_your_turn(st);
+    }
     let mut turn = turn + 1;
     let mut round = round;
     if turn >= len {
@@ -2636,6 +2638,8 @@ pub fn end_turn(st: &mut AppState) {
                 seat_foes(st);
                 mask_wears_outside(st);
             }
+            // Your rig's room seats nobody new mid-fight.
+            Place::Rig => {}
             _ => seat_foes(st),
         }
         if st.net.engaged.is_none() {
@@ -2692,6 +2696,8 @@ fn start_turn(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::turn_start(st, i),
         (Actor::Bot(site, n), _) => crate::bots::turn_start(st, (site, n)),
+        (Actor::Mastiff, _) => crate::rigroom::mastiff::turn_start(st),
+        (Actor::Seat(_), _) => true,
         (Actor::Ice(_), _) => false,
         (Actor::You, _) => return,
     };
@@ -2722,6 +2728,12 @@ pub fn pace(st: &mut AppState) {
         }
         (Actor::Foe(i), _) => crate::foes::step(st, i, moves > 0, ap > 0),
         (Actor::Bot(site, n), _) => crate::bots::step(st, (site, n), moves > 0),
+        // MASTIFF walks a tile a beat, then marks or bites; a seat's turn is one shot.
+        (Actor::Mastiff, _) => crate::rigroom::mastiff::step(st, moves > 0, ap > 0),
+        (Actor::Seat(n), _) => {
+            crate::rigroom::mastiff::seat_turn(st, n);
+            Step::Nothing
+        }
         _ => Step::Nothing,
     };
     let now = st.clock_tick();
@@ -2842,6 +2854,16 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     acting: actor == *a,
                 }
             }
+            Actor::Seat(n) => Chip {
+                name: format!("seat {}", n + 1),
+                hp: String::new(),
+                acting: actor == *a,
+            },
+            Actor::Mastiff => Chip {
+                name: "MASTIFF".to_string(),
+                hp: crate::rigroom::mastiff::coat_line(st),
+                acting: actor == *a,
+            },
         };
         chips.push(chip);
     }
@@ -2856,11 +2878,11 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
         Actor::You => None,
         // What an unseen foe is up to isn't yours to read.
         Actor::Foe(i) if crate::foes::unseen(st, i) => None,
-        Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) => {
-            let verb = if matches!(actor, Actor::Ice(_)) {
-                "hits"
-            } else {
-                "fires"
+        Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) | Actor::Mastiff | Actor::Seat(_) => {
+            let verb = match actor {
+                Actor::Ice(_) => "hits",
+                Actor::Mastiff => "bites",
+                _ => "fires",
             };
             Some(match (e.moves, e.ap) {
                 (0, 0) => "done".to_string(),
@@ -2896,6 +2918,8 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         Actor::Bot(site, n) => {
             crate::bots::name(st, (site, n)).unwrap_or_else(|| "bot".to_string())
         }
+        Actor::Seat(n) => format!("seat {}", n + 1),
+        Actor::Mastiff => "MASTIFF".to_string(),
     };
     let mut parts = Vec::new();
     for n in 0..e.order.len() {
@@ -2915,14 +2939,19 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         let mut s = name(a);
         if n == 0 {
             match a {
-                Actor::Ice(_) => {
+                Actor::Ice(_) | Actor::Mastiff => {
+                    let verb = if a == Actor::Mastiff {
+                        " bites"
+                    } else {
+                        " hits"
+                    };
                     if e.moves > 0 {
                         s.push_str(&format!(" moves {}", e.moves));
                     } else if e.ap > 0 {
-                        s.push_str(" hits");
+                        s.push_str(verb);
                     }
                 }
-                Actor::Foe(_) => {
+                Actor::Foe(_) | Actor::Seat(_) => {
                     if e.moves > 0 {
                         s.push_str(&format!(" moves {}", e.moves));
                     } else if e.ap > 0 {
@@ -2966,20 +2995,12 @@ pub(crate) fn hit_by(
     from: Pos,
     owner: crate::owners::Owner,
 ) {
-    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
-        let colour = if grade == IceGrade::Black {
-            BOLT_BLACK
-        } else {
-            BOLT_HIT
-        };
-        bolt(st, from, me, colour, ROLL_TICKS);
-        if st.net.shield > 0 {
-            mark(st, me, MARK_SHIELD, MARK_TICKS);
-        }
-    }
-    if st.net.shield > 0 {
-        st.net.shield -= 1;
-        st.say("shield absorbs the hit");
+    let colour = if grade == IceGrade::Black {
+        BOLT_BLACK
+    } else {
+        BOLT_HIT
+    };
+    if soaked(st, from, colour) {
         return;
     }
     let armour = st
@@ -2992,11 +3013,6 @@ pub(crate) fn hit_by(
     // The number lifts off you when the bolt lands, in its colour.
     let me = st.player.as_ref().map(|p| p.pos);
     let landed = st.tick + ROLL_TICKS;
-    let colour = if grade == IceGrade::Black {
-        BOLT_BLACK
-    } else {
-        BOLT_HIT
-    };
     match grade {
         IceGrade::White => {
             let heat = crate::owners::heat(st, owner).saturating_add(5);
@@ -3029,40 +3045,86 @@ pub(crate) fn hit_by(
             }
         }
         IceGrade::Black => {
-            // The deep end: half the damage through the jack, a failsafe that waits
-            // for an eighth, and a short cooling after.
-            let deep = st.character.flags(&st.content).contains("deep_end");
-            let mut damage = game::resisted(
-                (6 + security.saturating_sub(230) as u32 / 5)
-                    .saturating_sub(armour)
-                    .max(1),
-                feedback,
+            let death = format!("black ICE at {}", crate::owners::name(st, owner));
+            black_through(
+                st,
+                6 + security.saturating_sub(230) as u32 / 5,
+                "black ICE hits",
+                &death,
             );
-            if deep {
-                damage = (damage / 2).max(1);
-            }
-            st.character.hp = st.character.hp.saturating_sub(damage);
-            let hp = st.character.hp;
-            st.warn(format!("black ICE hits · hp {hp}"));
-            if let Some(me) = me {
-                number(st, me, format!("-{damage}"), Some(colour), landed);
-            }
-            let hp_max = st.character.hp_max(&st.content);
-            let line = if deep { hp_max / 8 } else { hp_max / 4 };
-            let cooling = if deep {
-                DEEP_END_COOLING
-            } else {
-                FAILSAFE_COOLING
-            };
-            if st.net.failsafe {
-                if hp <= line {
-                    dump_for(st, "the failsafe pulled you out", cooling);
-                }
-            } else if hp == 0 {
-                st.net.run = None;
-                st.net.death = Some(format!("black ICE at {}", crate::owners::name(st, owner)));
-            }
         }
+    }
+}
+
+/// The hit's bolt from `from` to you, in `colour`; a shield charge soaks it, marked on
+/// you. Whether it was soaked.
+fn soaked(st: &mut AppState, from: Pos, colour: (u8, u8, u8)) -> bool {
+    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
+        bolt(st, from, me, colour, ROLL_TICKS);
+        if st.net.shield > 0 {
+            mark(st, me, MARK_SHIELD, MARK_TICKS);
+        }
+    }
+    if st.net.shield > 0 {
+        st.net.shield -= 1;
+        st.say("shield absorbs the hit");
+        return true;
+    }
+    false
+}
+
+/// What a black ICE hit of `base` takes from your HP: the deck's rating off it, then your
+/// feedback resistance, halved in the deep end; never below 1.
+pub(crate) fn black_damage(st: &AppState, base: u32) -> u32 {
+    let armour = st
+        .character
+        .deck(&st.content)
+        .map(|(_, d)| d.rating as u32)
+        .unwrap_or(0);
+    let feedback = st.character.resist(&st.content, game::Harm::Feedback);
+    let damage = game::resisted(base.saturating_sub(armour).max(1), feedback);
+    if st.character.flags(&st.content).contains("deep_end") {
+        (damage / 2).max(1)
+    } else {
+        damage
+    }
+}
+
+/// A black ICE hit that isn't a piece's, `base` from `from`: MASTIFF's bite. Shield
+/// soaks it, and the rest goes as a piece's black hit does (`black_through`).
+pub(crate) fn black_hit(st: &mut AppState, base: u32, from: Pos, what: &str, death: &str) {
+    if !soaked(st, from, BOLT_BLACK) {
+        black_through(st, base, what, death);
+    }
+}
+
+/// A black ICE hit of `base` through the jack (`black_damage`), logged as `what` and
+/// your HP left: the failsafe pulls you out at a quarter of your HP (an eighth in the
+/// deep end, with a short cooling); with it off, at nothing left `death` killed you.
+fn black_through(st: &mut AppState, base: u32, what: &str, death: &str) {
+    let deep = st.character.flags(&st.content).contains("deep_end");
+    let damage = black_damage(st, base);
+    st.character.hp = st.character.hp.saturating_sub(damage);
+    let hp = st.character.hp;
+    st.warn(format!("{what} · hp {hp}"));
+    if let Some(me) = st.player.as_ref().map(|p| p.pos) {
+        let landed = st.tick + ROLL_TICKS;
+        number(st, me, format!("-{damage}"), Some(BOLT_BLACK), landed);
+    }
+    let hp_max = st.character.hp_max(&st.content);
+    let line = if deep { hp_max / 8 } else { hp_max / 4 };
+    let cooling = if deep {
+        DEEP_END_COOLING
+    } else {
+        FAILSAFE_COOLING
+    };
+    if st.net.failsafe {
+        if hp <= line {
+            dump_for(st, "the failsafe pulled you out", cooling);
+        }
+    } else if hp == 0 {
+        st.net.run = None;
+        st.net.death = Some(death.to_string());
     }
 }
 
@@ -3358,7 +3420,7 @@ pub fn tether_view(st: &AppState, place: Place) -> Option<crate::render::tether:
     let vis = p.vis();
     let inside = match scene {
         Scene::Inside(b) => st.constructs.get(b),
-        Scene::Outside => None,
+        Scene::Outside | Scene::Rig => None,
     };
     let keep = inside
         .map(|k| {
@@ -3458,12 +3520,15 @@ pub fn jack_in_refusal(st: &AppState) -> Option<String> {
 }
 
 /// Jacks in at the terminal in reach (on a site's floor its terminal or gate switch,
-/// `sitenet::jack_in_on_floor`): the refusal when the port refuses, else the line the log
-/// reads.
+/// `sitenet::jack_in_on_floor`; at home the rig, into its own room, `rigroom::ways::enter`):
+/// the refusal when the port refuses, else the line the log reads.
 pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     // It asks the port itself.
     if on_a_sites_floor(st) {
         return crate::sitenet::jack_in_on_floor(st);
+    }
+    if at_home(st) {
+        return crate::rigroom::ways::enter(st);
     }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
@@ -3476,9 +3541,9 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     let from = player.place;
     let line = player
         .jack_in(city, home.as_ref(), bonus)
-        .map(|port| crate::walker::jacked_in_line(city, from, port))
+        .map(|port| crate::walker::jacked_in_line(city, port))
         .map_err(|e| e.to_string())?;
-    // From the rig, the run has a route home: empty, until you hop.
+    // A street port: the cloak goes, and the rig's route is left alone.
     after_jack_in(st, from, None);
     Ok(line)
 }
@@ -3538,7 +3603,8 @@ pub fn piece_in_reach(st: &AppState, b: BuildingId, index: usize) -> bool {
     d <= 1 || (d <= ATTACK_RANGE && line_clear_in(k, player.pos, g.pos))
 }
 
-/// The Net tile you jacked in at: your rig's landing when the body is at home, else the
+/// The Net tile you jacked in at: your rig's landing when the body is at home (where the
+/// trunk out of your rig's room comes out, in the room or past it), else the
 /// port beside the body; in a city your Net self has walked out of, that city's port,
 /// in this frame (`outside::held_port`); off the cells every city owns, where a port of
 /// the open ground put you (`ground_port`), or the body's own cell while the Net round it

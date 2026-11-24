@@ -28,3 +28,21 @@ pub mod slab;
 pub mod stickers;
 pub mod talents;
 pub mod transition;
+
+/// A number with `sep` between each three digits from the right: `1,240`, `12 500`.
+pub fn grouped(n: u64, sep: char) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(sep);
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A sum as the game writes it, its thousands set off with commas: `4,800`.
+pub fn commas(n: u32) -> String {
+    grouped(u64::from(n), ',')
+}

@@ -60,6 +60,10 @@ pub struct ReadCard {
     head: String,
     lines: Vec<Line<'static>>,
     close: String,
+    /// Read from the rig's reader: the slot the shard came from, and the card is laid
+    /// over the map pane so the rig's panel stays readable. Closing it pulls the shard
+    /// into the pack.
+    from_slot: Option<usize>,
 }
 
 impl ReadCard {
@@ -78,11 +82,19 @@ impl ReadCard {
             head: fill(st, &r.head),
             lines: r.rows.iter().flat_map(|row| lines(st, item, row)).collect(),
             close: fill(st, &r.close),
+            from_slot: None,
         };
         if tells {
             st.missions.read.insert(item.0.clone());
         }
         Some(card)
+    }
+
+    /// The card of a shard read in the rig's reader slot `slot`: over the map pane, and
+    /// closing it puts the shard in the pack.
+    pub fn read_in_reader(mut self, slot: usize) -> ReadCard {
+        self.from_slot = Some(slot);
+        self
     }
 
     /// The card's box in `frame`: sized to its rows, at most `MAX_W` wide, centred two
@@ -177,7 +189,10 @@ fn ledger(st: &AppState, item: &ItemId, shown: u32, total: u32) -> Vec<Line<'sta
             };
             Line::from(vec![
                 Span::styled(
-                    format!("{month:02}.{day:02}  ¤{:>6}  ", grouped(amount)),
+                    format!(
+                        "{month:02}.{day:02}  ¤{:>6}  ",
+                        crate::ui::grouped(amount, ' ')
+                    ),
                     plain(TEXT),
                 ),
                 Span::styled(format!("{bar:<BAR_W$}"), plain(FAINT)),
@@ -194,25 +209,16 @@ fn ledger(st: &AppState, item: &ItemId, shown: u32, total: u32) -> Vec<Line<'sta
     out
 }
 
-/// An amount with a space before each three digits from the right: `12 500`.
-fn grouped(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(' ');
-        }
-        out.push(c);
-    }
-    out
-}
-
 impl Screen for ReadCard {
-    fn update(&mut self, _st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
+    fn update(&mut self, st: &mut AppState, keys: &[KeyEvent]) -> ScreenCmd {
         if keys
             .iter()
             .any(|k| matches!(k.code, KeyCode::Char(' ') | KeyCode::Esc))
         {
+            if let Some(slot) = self.from_slot.take() {
+                // The story finds the shard in the pack, where it looks for it.
+                let _ = st.character.pull_from_reader(slot);
+            }
             return ScreenCmd::Pop {
                 fx: TransitionKind::None,
             };
@@ -221,7 +227,11 @@ impl Screen for ReadCard {
     }
 
     fn draw(&self, st: &AppState, f: &mut Frame) {
-        let r = self.area(f.area());
+        let frame = match self.from_slot {
+            Some(_) => crate::screens::explore::layout(f.area(), false).map,
+            None => f.area(),
+        };
+        let r = self.area(frame);
         if r.width < 24 || r.height < CHROME_H {
             return;
         }

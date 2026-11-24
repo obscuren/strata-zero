@@ -1040,6 +1040,7 @@ mod tests {
         NetLook {
             view: &view,
             keep: None,
+            rig: None,
         }
         .draw(&map, origin, area, 0, &mut buf, &st.style);
         (buf, origin)
@@ -1197,6 +1198,7 @@ mod tests {
             city,
             construct: k,
             level: Some(site.open),
+            rig: false,
         };
         let r = bounds(k, site.open);
         let area = Rect::new(0, 0, r.w as u16, r.h as u16);

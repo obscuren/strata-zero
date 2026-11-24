@@ -103,6 +103,12 @@ impl Backdoor {
         }
     }
 
+    /// Minutes it has left at `now` on the nominal clock (what `health` reads).
+    pub fn left(&self, now: u64) -> u64 {
+        let gone = now.saturating_sub(self.planted) + self.spent;
+        self.nominal.saturating_sub(gone)
+    }
+
     /// The minute it really stops working.
     pub(crate) fn real_end(&self) -> u64 {
         (self.planted + self.nominal * self.factor as u64 / 100).saturating_sub(self.spent)

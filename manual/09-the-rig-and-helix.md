@@ -4,7 +4,7 @@ Every terminal in the city runs HELIX, a command line. Your rig at home runs it 
 
 ## Opening a terminal
 
-Stand next to a terminal and press `space`, then `i Interact: Terminal`. A street terminal logs you in as a guest on its district's host; your rig logs you in as yourself. On the Net, `r` on a terminal you hold opens a shell on its host from where you stand.
+Stand next to a terminal and press `space`, then `i Interact: Terminal`. A street terminal logs you in as a guest on its district's host; your rig logs you in as yourself. On the Net, `r` on a terminal you hold opens a shell on its host from where you stand, and `r` in your rig's own Net opens the rig's shell.
 
 Type a command and press `enter`. `pgup` and `pgdn` scroll back, and `esc` closes the terminal.
 
@@ -60,23 +60,25 @@ The stock rig is a Zenbo half-rack with a ZB-8 core (1 seat), an R-3 relay (3 li
 
 | Key | What it does |
 |---|---|
-| `↑↓` | move between the frame and the bays |
+| `↑↓` | move between the frame, the bays and the reader |
 | `space` | what fits here; in the list, fit it |
 | `x` | pull the sled into your pack |
 | `esc` | back, then stand up |
+
+The rows under the bays, `READER 1` and on, are the reader's slots. On a small screen the rows the desk has no room for come into view as you move down to them, with `↓` where there are more. `space` on one lists what the reader takes from your pack: a credchip, a locked or black credchip, a rig program shard, paydata or a vault dump, a story shard. A filled row shows its glyph and what `space` there does in your rig's Net (Your rig's Net, in The Net); `x` pulls it back to your pack. The slots come with the rack.
 
 Fitting or pulling takes ten minutes. A swap puts the old sled in your pack. Pull a core, or swap to one with fewer seats, and the newest jobs over the new count are killed; the log says which. Lowering your lines burns nothing, but you can't plant until you're under.
 
 ### Racks
 
-| Rack | Bays |
-|---|---|
-| Zenbo half-rack | core, relay, line |
-| Civitas cabinet | core, relay, line, firewall |
-| Lotus tower | core, core, relay, line |
-| Halcyon server frame | core, core, relay, line, firewall |
+| Rack | Bays | Reader slots |
+|---|---|---|
+| Zenbo half-rack | core, relay, line | 1 |
+| Civitas cabinet | core, relay, line, firewall | 3 |
+| Lotus tower | core, core, relay, line | 2 |
+| Halcyon server frame | core, core, relay, line, firewall | 4 |
 
-Racks are items: spare ones ride in your pack and weigh nothing. `space` on FRAME shows the racks in your pack. Change racks and your sleds move to the new bays of their kind; the old rack goes to your pack, with any sleds left over. Your terminal wears its rack's look from then on, but the rig is still called `zenbo`.
+Racks are items: spare ones ride in your pack and weigh nothing. `space` on FRAME shows the racks in your pack. Change racks and your sleds move to the new bays of their kind; the old rack goes to your pack, with any sleds left over. Change racks with fewer reader slots while the reader is full and the extras go to your pack. Your terminal wears its rack's look from then on, but the rig is still called `zenbo`.
 
 ### Firewalls
 

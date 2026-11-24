@@ -407,6 +407,27 @@ pub fn after_restore(st: &mut AppState, mut lost: Vec<String>) {
             st.warn(format!("lost in the update · {line}"));
         }
     }
+    // Your block's construct saved before your rig's line ran through it gets the line.
+    crate::rigroom::ways::lay_your_line(st);
+    // Your rig's room isn't saved: a run reopened in it has it laid out again from the
+    // rig, as jacking in does (`Constructs.rig`). A fight with MASTIFF isn't either: the
+    // room is never on turns reopened, MASTIFF asleep and whole round its chip.
+    if st
+        .player
+        .as_ref()
+        .is_some_and(|p| p.place == citygen::Place::Rig)
+    {
+        crate::rigroom::build(st);
+        crate::rigroom::mastiff::reset(st);
+        match crate::rigroom::room(st) {
+            None => {
+                let _ = crate::net::jack_out(st);
+                st.warn("your rig is gone · jacked out");
+            }
+            // A backdoor burned while you stood in the room can rebuild it smaller.
+            Some(_) => crate::rigroom::keep_player(st),
+        }
+    }
     crate::track::refollow(st);
     // The overworld is skipped by the save: made again from its params, and you back
     // in the city if what you stood on out there is gone.

@@ -62,9 +62,13 @@ pub fn place_line(st: &AppState) -> String {
     let (Some(city), Some(p)) = (st.city.as_ref(), st.player.as_ref()) else {
         return String::new();
     };
-    if let Place::SiteNet { building, level } = p.place {
-        let name = crate::net::building_name(st, building);
-        return format!("{name}'s Net · {}", FloorPlan::label(level));
+    match p.place {
+        Place::SiteNet { building, level } => {
+            let name = crate::net::building_name(st, building);
+            return format!("{name}'s Net · {}", FloorPlan::label(level));
+        }
+        Place::Rig => return "in your rig's Net".to_string(),
+        _ => {}
     }
     if p.body.is_some() {
         return "on the Net".to_string();
@@ -91,9 +95,11 @@ pub fn place_line(st: &AppState) -> String {
                 .is_some_and(|r| r.place() == p.place && r.home.rect.contains(p.pos));
             if home { format!("{at} · at home") } else { at }
         }
-        Place::Construct(_) | Place::SiteNet { .. } | Place::Stratum(StratumKind::Net) => {
-            "on the Net".to_string()
-        }
+        // Your rig's Net and a site's are named above, jacked in.
+        Place::Construct(_)
+        | Place::SiteNet { .. }
+        | Place::Rig
+        | Place::Stratum(StratumKind::Net) => "on the Net".to_string(),
         Place::Stratum(k) => city
             .tile(k, p.pos)
             .and_then(|t| t.district)
@@ -146,15 +152,7 @@ pub fn lasted(minutes: u64) -> String {
 
 /// Money: `¤ 1,240`.
 pub fn credits(n: u32) -> String {
-    let digits = n.to_string();
-    let mut out = String::from("¤ ");
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+    format!("¤ {}", crate::ui::commas(n))
 }
 
 /// When a run was saved, against `now` (both Unix seconds): `today 10:44` on the same
@@ -362,5 +360,8 @@ mod tests {
             level: home.level,
         };
         assert_eq!(place_line(&st), format!("{name}'s Net · {floor}"));
+
+        st.player.as_mut().unwrap().place = Place::Rig;
+        assert_eq!(place_line(&st), "in your rig's Net");
     }
 }

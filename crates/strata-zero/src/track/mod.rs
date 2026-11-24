@@ -391,7 +391,7 @@ fn in_building(st: &AppState, place: Place, pos: Pos, b: BuildingId) -> bool {
                     && x.span.contains(k)
                     && x.footprint.grow(1).contains(pos)
             }),
-        Place::Construct(_) | Place::SiteNet { .. } => false,
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => false,
     }
 }
 
@@ -443,10 +443,12 @@ pub fn next_now(st: &AppState) -> Option<&str> {
     st.track.as_ref()?.walk.next.as_deref()
 }
 
-/// You are in the net, where no leg is made: in a construct or on its grid.
+/// You are in the net, where no leg is made: in a construct, on its grid or in your
+/// rig's room.
 pub fn jacked_in(st: &AppState) -> bool {
-    (st.player.as_ref())
-        .is_some_and(|p| p.place.in_construct() || p.place == Place::Stratum(StratumKind::Net))
+    (st.player.as_ref()).is_some_and(|p| {
+        p.place.in_construct() || matches!(p.place, Place::Stratum(StratumKind::Net) | Place::Rig)
+    })
 }
 
 /// The pulses on the track's leg.
@@ -691,6 +693,8 @@ pub(crate) fn district_at(st: &AppState, place: Place, pos: Pos) -> Option<Strin
         Place::Floor { building, .. }
         | Place::Construct(building)
         | Place::SiteNet { building, .. } => city.building_opt(building)?.district,
+        // Your rig's Net is your home's.
+        Place::Rig => city.building_opt(st.home?.home.building)?.district,
     };
     city.district_opt(id).map(|d| d.name.clone())
 }
@@ -731,6 +735,12 @@ pub(crate) mod tests {
 
     fn job_source(job: JobId, objective: usize) -> Source {
         Source::Job { job, objective }
+    }
+
+    #[test]
+    fn your_rigs_room_is_jacked_in() {
+        let st = crate::rigroom::testutil::in_the_room();
+        assert!(jacked_in(&st));
     }
 
     #[test]

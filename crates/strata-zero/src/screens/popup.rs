@@ -19,8 +19,6 @@ use ratatui::text::{Line, Span};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldAct {
     JackIn,
-    /// Jack in from the rig and land at this building's gate.
-    Land(citygen::BuildingId),
     JackOut,
     Up,
     Down,
@@ -115,6 +113,19 @@ pub enum Pick {
     Read {
         item: game::ItemId,
         at: crate::missions::ReadAt,
+    },
+    /// Summons what the rig's reader slot holds: cashes a chip, installs or runs a
+    /// program shard, sifts data, opens a story shard's card.
+    Summon(usize),
+    /// Runs your loaded Crack at a locked chip in the rig's reader slot: one try.
+    CrackChip(usize),
+    /// Wakes the MASTIFF guarding the black chip in the rig's reader slot: the room goes
+    /// on turns.
+    WakeMastiff(usize),
+    /// Starts a program of the rig on a backdoor.
+    RunOn {
+        prog: &'static str,
+        b: citygen::BuildingId,
     },
     /// Takes the story's tray's piece at this index, on the tab; held out from a
     /// chair, then sits in it.
@@ -407,11 +418,6 @@ impl Popup {
         (if self.subtitle.is_some() { 2 } else { 0 }) + self.body_rows(inner_w)
     }
 
-    /// Whether this is the landing list a rig offers before it jacks in.
-    pub fn is_landing(&self) -> bool {
-        self.header.as_ref().is_some_and(|h| h.name == "JACK IN")
-    }
-
     /// Applies a world act to the player and returns the transition to pop with.
     fn world(&self, st: &mut AppState, act: WorldAct) -> TransitionKind {
         if let WorldAct::Climb(up) = act {
@@ -447,10 +453,9 @@ impl Popup {
             }
             return TransitionKind::None;
         }
-        // The two jacks from here: the port in reach, or a backdoor's gate from the rig.
+        // The jack from here: the port in reach.
         let jacked = match act {
             WorldAct::JackIn => Some(crate::net::jack_in_here(st)),
-            WorldAct::Land(b) => Some(crate::net::land_at(st, b)),
             _ => None,
         };
         if let Some(result) = jacked {
@@ -484,7 +489,6 @@ impl Popup {
                 (Some(city), Some(player)) => match act {
                     // Taken above.
                     WorldAct::JackIn => Err("no terminal within reach".to_string()),
-                    WorldAct::Land(_) => Err("not from here".to_string()),
                     WorldAct::JackOut => Err("not jacked in".to_string()),
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),
@@ -606,14 +610,6 @@ impl Popup {
                     fx: TransitionKind::None,
                 }
             }
-            Pick::World(WorldAct::JackIn)
-                if !self.is_landing() && crate::net::wants_landing_list(st) =>
-            {
-                ScreenCmd::Replace {
-                    to: Box::new(crate::net::landing_popup(st)),
-                    fx: TransitionKind::None,
-                }
-            }
             Pick::World(act) => {
                 let fx = self.world(st, act);
                 ScreenCmd::Pop { fx }
@@ -706,6 +702,68 @@ impl Popup {
                     None => ScreenCmd::Pop {
                         fx: TransitionKind::None,
                     },
+                }
+            }
+            Pick::Summon(slot) => match crate::rigroom::summon::summon(st, slot) {
+                Ok(crate::rigroom::summon::Summoned::Installed(prog, true)) => ScreenCmd::Replace {
+                    to: Box::new(crate::rigroom::summon::host_popup(st, prog)),
+                    fx: TransitionKind::None,
+                },
+                Ok(crate::rigroom::summon::Summoned::Read(item)) => {
+                    match crate::rigroom::summon::card(st, slot, &item) {
+                        Some(card) => {
+                            crate::missions::settle(st);
+                            ScreenCmd::Replace {
+                                to: Box::new(card),
+                                fx: TransitionKind::None,
+                            }
+                        }
+                        None => ScreenCmd::Pop {
+                            fx: TransitionKind::None,
+                        },
+                    }
+                }
+                Ok(_) => ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                },
+                Err(why) => {
+                    st.warn(why);
+                    ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    }
+                }
+            },
+            Pick::CrackChip(slot) => {
+                let result = crate::rigroom::crack::crack(st, slot);
+                let opened = (st.character.reader.get(slot))
+                    .and_then(|s| s.as_ref())
+                    .is_some_and(|s| s.item.0 == "credchip_locked");
+                let failed = result.is_err();
+                report(st, result);
+                // A lock left: the popup comes back with the locks and chance as they stand.
+                match crate::rigroom::summon::interact(st).filter(|_| opened && !failed) {
+                    Some(again) => ScreenCmd::Replace {
+                        to: Box::new(again),
+                        fx: TransitionKind::None,
+                    },
+                    None => ScreenCmd::Pop {
+                        fx: TransitionKind::None,
+                    },
+                }
+            }
+            Pick::WakeMastiff(slot) => {
+                if let Err(why) = crate::rigroom::mastiff::wake(st, slot) {
+                    st.warn(why);
+                }
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
+                }
+            }
+            Pick::RunOn { prog, b } => {
+                let result = crate::rigroom::summon::run_on(st, prog, b);
+                report(st, result);
+                ScreenCmd::Pop {
+                    fx: TransitionKind::None,
                 }
             }
             Pick::Chair { building, level } => sit(st, building, level),

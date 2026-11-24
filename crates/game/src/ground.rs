@@ -140,6 +140,7 @@ mod tests {
             stickers: vec![],
             charge: None,
             credits: 0,
+            cracked: 0,
         };
         assert!(c.item(&deck).is_some());
         g.put(
@@ -192,6 +193,7 @@ mod tests {
                     stickers: vec![],
                     charge: None,
                     credits: 0,
+                    cracked: 0,
                 }),
             },
         );
@@ -281,6 +283,7 @@ mod tests {
                 stickers: Vec::new(),
                 charge: None,
                 credits: 0,
+                cracked: 0,
             }),
         };
         g.put(k, p, copy(0));

@@ -148,7 +148,7 @@ pub fn leg_from(st: &AppState, place: Place, from: Pos, target: Target) -> Resul
     match place {
         Place::Stratum(k) => on_stratum(st, &map, k, from, target),
         Place::Floor { building, level } => on_floor(st, &map, building, level, from, target),
-        Place::Construct(_) | Place::SiteNet { .. } => Err(NoLeg::JackedIn),
+        Place::Construct(_) | Place::SiteNet { .. } | Place::Rig => Err(NoLeg::JackedIn),
     }
 }
 

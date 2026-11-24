@@ -108,7 +108,8 @@ pub fn text(e: &Exposure) -> String {
 /// The HUD's words on the Net, where nothing is lit or dark: the place, then whether
 /// ICE hunts you: `grid · unseen`, `construct · hunted`.
 pub fn net_text(place: Place, hunted: bool) -> String {
-    let at = if place.in_construct() {
+    // Your rig's room reads as a construct: an inside of the Net.
+    let at = if place.in_construct() || place == Place::Rig {
         "construct"
     } else {
         "grid"
@@ -136,6 +137,7 @@ mod tests {
             net_text(Place::Construct(BuildingId(3)), true),
             "construct · hunted"
         );
+        assert_eq!(net_text(Place::Rig, false), "construct · unseen");
     }
     use crate::render::map::{MapRef, TileMap};
     use citygen::{GenParams, Generator, SizePreset};
