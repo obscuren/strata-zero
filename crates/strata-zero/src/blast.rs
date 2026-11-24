@@ -93,6 +93,10 @@ fn you_are_chrome(st: &AppState) -> bool {
 
 /// An idle, live foe turns to hunt toward `seen`.
 fn wake(st: &mut AppState, foe: usize, seen: Pos) {
+    if st.foes.get(foe).is_some_and(|f| f.turret.is_some()) {
+        crate::turrets::shot_at(st, foe, seen);
+        return;
+    }
     if let Some(f) = st.foes.get_mut(foe)
         && f.standing()
         && !f.inert
@@ -1106,5 +1110,46 @@ mod tests {
         );
         assert!(!logged(&st, "AMBUSH"));
         assert_eq!(st.foes[i].hp, foes::GOON_HP - 12, "the blast's own");
+    }
+
+    #[test]
+    fn a_blast_leaves_a_blind_turret_blind_and_idle() {
+        let mut st = crate::turrets::testutil::lot_turret(Pos::new(22, 8), citygen::Dir::W);
+        st.foes[0].turret.as_mut().unwrap().hacked = crate::turrets::Hacked::Blind;
+        let (frag, fx, name) = thrown(&st, "frag");
+        detonate(
+            &mut st,
+            STREET,
+            Pos::new(20, 8),
+            frag,
+            &fx,
+            &name,
+            500,
+            None,
+        );
+        assert!(st.foes[0].hp < 40, "it still takes the blast");
+        assert_eq!(st.foes[0].turret.as_ref().unwrap().arm, 4, "no plate roll");
+        assert_eq!(st.foes[0].mode, foes::FoeMode::Idle);
+        assert!(!st.foes[0].turret.as_ref().unwrap().awake);
+    }
+
+    #[test]
+    fn a_blast_wakes_a_hostile_turret_hunting() {
+        let mut st = crate::turrets::testutil::lot_turret(Pos::new(22, 8), citygen::Dir::W);
+        let (frag, fx, name) = thrown(&st, "frag");
+        detonate(
+            &mut st,
+            STREET,
+            Pos::new(20, 8),
+            frag,
+            &fx,
+            &name,
+            500,
+            None,
+        );
+        assert_eq!(
+            crate::turrets::state(&st.foes[0]),
+            Some(crate::turrets::TurretState::Hunting)
+        );
     }
 }

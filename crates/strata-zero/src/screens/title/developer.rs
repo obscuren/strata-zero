@@ -107,14 +107,11 @@ impl Developer {
                 self.sites[t].0 = step(self.sites[t].0, 1);
             }
             (KeyCode::Tab, Row::Site(t)) => self.sites[t].1 = !self.sites[t].1,
-            (
-                KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l'),
-                Row::Combat,
-            ) => {
-                self.combat = match self.combat {
-                    CombatMap::Net => CombatMap::Street,
-                    CombatMap::Street => CombatMap::Net,
-                };
+            (KeyCode::Left | KeyCode::Char('h'), Row::Combat) => {
+                self.combat = combat_step(self.combat, -1);
+            }
+            (KeyCode::Right | KeyCode::Char('l'), Row::Combat) => {
+                self.combat = combat_step(self.combat, 1);
             }
             (KeyCode::Esc | KeyCode::Char('q'), _) => return Some(Pick::Back),
             (KeyCode::Enter, Row::Site(t)) => {
@@ -145,7 +142,7 @@ impl Developer {
 
     /// The menu from row `y` of `area`, centred with its picks: a column after the labels
     /// holds each type's `SMALL · MEDIUM · LARGE  PLAIN · MISSION` and COMBAT's
-    /// `NET · STREET`, each row's once it has typed itself in.
+    /// `NET · STREET · TURRET`, each row's once it has typed itself in.
     pub(super) fn draw(&self, area: Rect, y: u16, tick: u64, f: &mut Frame) {
         let labels = (self.menu.items.iter())
             .map(|l| l.chars().count() as u16)
@@ -190,13 +187,24 @@ impl Developer {
                     );
                 }
                 Row::Combat => {
-                    let street = self.combat == CombatMap::Street;
-                    draw_pick(buf, area, picks, ry, &["NET", "STREET"], street.into());
+                    let picked = COMBAT_MAPS.iter().position(|m| *m == self.combat);
+                    let labels = ["NET", "STREET", "TURRET"];
+                    draw_pick(buf, area, picks, ry, &labels, picked.unwrap_or(0));
                 }
                 Row::SiteNet | Row::LoadCity => {}
             }
         }
     }
+}
+
+/// COMBAT's maps in the order its row draws them.
+const COMBAT_MAPS: [CombatMap; 3] = [CombatMap::Net, CombatMap::Street, CombatMap::Turret];
+
+/// The map `by` steps on from `map`, round from TURRET to NET and back.
+fn combat_step(map: CombatMap, by: isize) -> CombatMap {
+    let n = COMBAT_MAPS.len() as isize;
+    let at = COMBAT_MAPS.iter().position(|m| *m == map).unwrap_or(0) as isize;
+    COMBAT_MAPS[(at + by).rem_euclid(n) as usize]
 }
 
 /// The size `by` steps on from `size`, round from LARGE to SMALL and back.

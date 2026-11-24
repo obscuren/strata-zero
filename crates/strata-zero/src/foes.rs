@@ -59,6 +59,9 @@ pub struct Foe {
     /// defaults: a foe they hold has none.
     #[serde(default)]
     pub post: Option<Post>,
+    /// A turret's own state: a foe saved before is no turret.
+    #[serde(default)]
+    pub turret: Option<crate::turrets::Turret>,
 }
 
 /// A guard's post in a mission's copy: whose it is, its zone (the card it carries), its
@@ -154,6 +157,7 @@ impl Foe {
             marked: false,
             ice: None,
             post: None,
+            turret: None,
         }
     }
 
@@ -177,6 +181,7 @@ impl Foe {
             marked: false,
             ice: None,
             post: None,
+            turret: None,
         }
     }
 
@@ -186,6 +191,12 @@ impl Foe {
 
     pub fn hunting(&self) -> bool {
         matches!(self.mode, FoeMode::Hunting { .. })
+    }
+
+    /// A standing foe that fights with a gun or its fists: a guard or a goon, never a
+    /// dummy, a turret or ICE. What a turret you hold fires on, and what fires back.
+    pub fn fighter(&self) -> bool {
+        self.standing() && !self.inert && self.turret.is_none() && self.ice.is_none()
     }
 }
 
@@ -232,21 +243,24 @@ pub fn sees(map: &MapRef, foe: &Foe, to: Pos) -> bool {
     if map.floor().is_none() {
         return line_clear(map, foe.pos, to);
     }
-    let lit = |p: Pos| {
-        if map.light(p) >= GUARD_LIT {
-            citygen::lighting::tuning::LIT_SIGHT
-        } else {
-            0
-        }
-    };
     citygen::sight::sees(
         foe.pos,
         to,
         GUARD_DARK_REACH,
         |p| map.tile(p).is_none_or(blocks_sight),
-        lit,
+        |p| floor_light(map, p),
         |_| false,
     )
+}
+
+/// What a standing watcher takes from the light on a floor tile: far sight where it is
+/// lit (`GUARD_LIT`), none where it is dark.
+pub(crate) fn floor_light(map: &MapRef, p: Pos) -> u8 {
+    if map.light(p) >= GUARD_LIT {
+        citygen::lighting::tuning::LIT_SIGHT
+    } else {
+        0
+    }
 }
 
 /// Whether a foe with `post` (a guard's; None for any other foe) may step from `from`
@@ -319,12 +333,15 @@ pub fn unseen(st: &AppState, i: usize) -> bool {
     !known(st, Visibility::Remembered).contains(&i)
 }
 
-/// The standing guards of `place` that hunt, by index: on a floor each takes a seat
-/// on turns, seen or not.
+/// The standing guards and hostile turrets of `place` that hunt, by index: on a floor
+/// each takes a seat on turns, seen or not.
 pub fn hunting_on(st: &AppState, place: Place) -> Vec<usize> {
     standing(st, place)
         .into_iter()
-        .filter(|i| st.foes[*i].post.is_some() && st.foes[*i].hunting())
+        .filter(|i| {
+            let f = &st.foes[*i];
+            (f.post.is_some() || crate::turrets::hostile(f)) && f.hunting()
+        })
         .collect()
 }
 
@@ -347,6 +364,10 @@ pub fn any_hunting(st: &AppState, place: Place) -> bool {
 /// where. Returns whether it hunts after looking. A stunned or down foe sees nothing,
 /// and nobody on foot sees you cloaked (`cloak::hidden`): no hunt, no spotting.
 pub fn look(st: &mut AppState, i: usize) -> bool {
+    // A turret sees only its own field (`turrets::look`).
+    if st.foes.get(i).is_some_and(|f| f.turret.is_some()) {
+        return crate::turrets::look(st, i);
+    }
     let Some(me) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return false;
     };
@@ -426,7 +447,9 @@ pub fn look_all(st: &mut AppState) -> bool {
 
 /// One step along the shortest path from `from` to `goal` that a foe with `post` may
 /// walk (`can_step`), never onto a tile in `avoid` (the player's, other foes') unless
-/// it is the goal itself.
+/// it is the goal itself. A goal nobody stands on (a turret's tile) is reached beside
+/// it: the way runs to its nearest neighbour the foe can walk to, and beside it there
+/// is no step.
 pub fn step_toward(
     map: &MapRef,
     from: Pos,
@@ -437,10 +460,16 @@ pub fn step_toward(
     if from == goal {
         return None;
     }
+    let beside = !map.walkable(goal);
     let path = astar(map.size(), from, goal, |p, n| {
+        if beside && n == goal {
+            return Some(1);
+        }
         (can_step(map, post, p, n) && (!avoid.contains(&n) || n == goal)).then_some(1)
     })?;
-    path.into_iter().find(|p| *p != from)
+    path.into_iter()
+        .find(|p| *p != from)
+        .filter(|p| *p != goal || !beside)
 }
 
 /// A foe's turn begins: a stun counts down and the turn passes (a guard's call to make
@@ -461,6 +490,9 @@ pub fn turn_start(st: &mut AppState, i: usize) -> bool {
         let name = foe.name.clone();
         st.say(format!("{name} · stunned"));
         return false;
+    }
+    if foe.turret.is_some() {
+        return crate::turrets::turn_start(st, i);
     }
     radio(st, i);
     look(st, i)
@@ -485,7 +517,7 @@ fn radio(st: &mut AppState, i: usize) {
 }
 
 /// The weapon a foe carries: its reach, for the turn; nothing unarmed.
-fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
+pub(crate) fn weapon_range(st: &AppState, foe: &Foe) -> i32 {
     foe.weapon
         .as_ref()
         .and_then(|id| st.content.item(id))
@@ -522,12 +554,18 @@ fn step_out(st: &AppState, i: usize, seen: Pos, live: &[(Pos, i32)]) -> Option<P
         .or_else(|| free.iter().copied().max_by_key(|p| ring(*p)))
 }
 
-/// One action of a foe's turn: out of a live blast's footprint first, then a shot
-/// when it hunts you in range with a clear line, else a step toward where it saw
-/// you; at that tile without sight it loses you. Outside every footprint it never
-/// steps into one: it holds at the edge, and that loses it nothing.
+/// One action of a foe's turn: out of a live blast's footprint first, then a guard's
+/// shot at a turret you hold (`turrets::guard_mark`) when it can't reach you or the
+/// turret is nearer, then a shot when it hunts you in range with a clear line, else a
+/// step toward where it saw you (beside it, when nobody stands there); there without
+/// sight it loses you. Outside every footprint it never steps into one: it holds at
+/// the edge, and that loses it nothing.
 pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate::net::Step {
     use crate::net::Step;
+    // A turret's whole turn is one action of its own (`turrets::step`).
+    if st.foes.get(i).is_some_and(|f| f.turret.is_some()) {
+        return crate::turrets::step(st, i);
+    }
     let Some((me_place, me)) = st.player.as_ref().map(|p| (p.place, p.pos)) else {
         return Step::Nothing;
     };
@@ -566,6 +604,17 @@ pub fn step(st: &mut AppState, i: usize, can_move: bool, can_hit: bool) -> crate
         && map
             .as_ref()
             .is_some_and(|m| line_clear(m, foe.pos, me) && sees(m, &foe, me));
+    // A guard with a turret you hold in its reach fires on that when it can't reach you,
+    // or when the turret is the nearer.
+    if let Some(j) = crate::turrets::guard_mark(st, i)
+        && (!in_reach || foe.pos.chebyshev(st.foes[j].pos) < foe.pos.chebyshev(me))
+    {
+        if can_hit {
+            crate::combat::fire_on_foe(st, i, j, None);
+            return Step::Hit;
+        }
+        return Step::Nothing;
+    }
     // In reach it fires, and with its shots gone it holds where it stands: no
     // point closing in on what it can already hit.
     if in_reach {
@@ -645,6 +694,7 @@ pub fn lines(st: &AppState, seen: impl Fn(Pos) -> bool) -> Vec<String> {
     foes.into_iter()
         .map(|f| {
             let mode = match (f.hunting(), f.post.as_ref().and_then(|p| p.call.as_ref())) {
+                _ if f.turret.is_some() => crate::turrets::mode_word(f),
                 (true, _) => "hunting",
                 (false, Some(Call::Answer { .. })) => "answering",
                 (false, Some(Call::Sweep { .. })) => "sweeping",
@@ -874,6 +924,20 @@ mod tests {
     }
 
     #[test]
+    fn step_toward_a_tile_nobody_stands_on_ends_beside_it() {
+        use crate::guards::testutil::*;
+        let st = ward();
+        let map = map_of(&st, on(0)).unwrap();
+        // The wall between the halls stands in for a turret's tile.
+        let wall = Pos::new(15, 2);
+        assert_eq!(
+            step_toward(&map, Pos::new(10, 2), wall, &[], None),
+            Some(Pos::new(11, 2))
+        );
+        assert_eq!(step_toward(&map, Pos::new(14, 2), wall, &[], None), None);
+    }
+
+    #[test]
     fn in_sight_is_nearest_first() {
         let mut st = testutil::lot(Pos::new(14, 8));
         st.foes.push(Foe::goon(STREET, Pos::new(9, 8)));
@@ -916,6 +980,16 @@ mod tests {
         );
         assert!(lines(&st, |_| false).is_empty());
         assert!(any_hunting(&st, STREET));
+    }
+
+    #[test]
+    fn a_turrets_line_reads_its_state() {
+        let mut st = crate::guards::testutil::ward();
+        crate::turrets::testutil::turret_in_ward(&mut st, 0, Pos::new(10, 3), citygen::Dir::W);
+        assert_eq!(
+            lines(&st, |_| true),
+            vec!["▣ turret · asleep · 40/40 · 4 tiles"]
+        );
     }
 
     fn hunting_from(st: &mut AppState, seen: Pos) {

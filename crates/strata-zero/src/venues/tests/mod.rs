@@ -975,3 +975,68 @@ fn guards_are_awake_foes_at_their_posts() {
     crate::combat::wound_foe(&mut st, i, 255);
     assert!(st.foes[i].down, "{:?}", st.foes[i]);
 }
+
+#[test]
+fn a_copy_stands_a_turret_on_each_turret_device_facing_its_rooms_door() {
+    let (st, b, _) = crate::turrets::testutil::turret_copy();
+    let layer = st.interiors.copy(b).unwrap().layer.clone().unwrap();
+    let devices: Vec<(i32, Pos)> = (layer.devices.iter())
+        .filter(|d| d.kind == citygen::venue::DeviceKind::Turret)
+        .map(|d| (d.level, d.at))
+        .collect();
+    let turrets: Vec<&crate::foes::Foe> = st.foes.iter().filter(|f| f.turret.is_some()).collect();
+    assert_eq!(turrets.len(), devices.len());
+    for f in turrets {
+        let t = f.turret.as_ref().unwrap();
+        assert!(devices.contains(&(t.node.level, f.pos)) && t.node.at == f.pos);
+        assert_eq!(t.arm, crate::turrets::arm_for(layer.inputs.security));
+        let (_, floor) = st.interiors.floor(b, t.node.level).unwrap();
+        assert_eq!(
+            floor.tiles.get(f.pos).unwrap().feature,
+            Some(citygen::Feature::Turret)
+        );
+        assert_eq!(t.facing, crate::venues::door_facing(floor, f.pos));
+        assert_eq!(
+            crate::turrets::state(f),
+            Some(crate::turrets::TurretState::Asleep)
+        );
+    }
+}
+
+#[test]
+fn a_turret_faces_the_nearest_door_of_its_room() {
+    use citygen::{Dir, Rect, Room, RoomKind, Terrain, Tile};
+    // A 10x6 room at (1,1) with doors at (11,3) east and (3,0) north; a turret at (8,3).
+    let mut floor = crate::sitenet::testutil::tiny_room(12, 8);
+    floor.rooms.push(Room {
+        rect: Rect::new(1, 1, 10, 6),
+        kind: RoomKind::Office,
+        door: None,
+        private: false,
+        number: 0,
+        name: None,
+        zone: 0,
+    });
+    let doors = [Pos::new(11, 3), Pos::new(3, 0)];
+    for d in doors {
+        floor.tiles.set(d, Tile::new(Terrain::Door));
+    }
+    let at = Pos::new(8, 3);
+    assert_eq!(door_facing(&floor, at), Dir::E);
+    for d in doors {
+        floor.tiles.set(d, Tile::new(Terrain::Wall));
+    }
+    assert_eq!(door_facing(&floor, at), Dir::S);
+}
+
+#[test]
+fn a_copy_ending_takes_its_turrets_with_its_guards() {
+    let (mut st, b, _) = crate::turrets::testutil::turret_copy();
+    crate::sitenet::testutil::stand_outside(&mut st, b);
+    crate::venues::end(&mut st, b).unwrap();
+    assert!(
+        st.foes
+            .iter()
+            .all(|f| f.turret.as_ref().is_none_or(|t| t.node.building != b))
+    );
+}

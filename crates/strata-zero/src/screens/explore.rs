@@ -1032,8 +1032,10 @@ impl MapScreen {
                 .map(|m| (Enemy::Mastiff, crate::rigroom::mastiff::nearest(m, p.pos)))
                 .into_iter()
                 .collect(),
+            // A turret that's yours is no target.
             _ => crate::foes::in_sight(st)
                 .into_iter()
+                .filter(|i| !crate::turrets::is_yours(&st.foes[*i]))
                 .map(|i| (Enemy::Foe(i), st.foes[i].pos))
                 .collect(),
         }
@@ -4555,6 +4557,15 @@ impl Screen for MapScreen {
         if !container_looks.is_empty() {
             overlays.push(&container_overlay);
         }
+        // A site's turrets: the arrowhead on its steel, coloured by what it's doing.
+        let turret_looks = crate::turrets::looks(st, self.place);
+        let turret_overlay = crate::render::turrets::TurretLooks {
+            looks: &turret_looks,
+            vis,
+        };
+        if !turret_looks.is_empty() {
+            overlays.push(&turret_overlay);
+        }
         // On the ground, under whatever lies or stands on it: the scorch a blast left
         // and a live blast's shading.
         let force_bar = self.forcing.as_ref().and_then(|f| {
@@ -5504,6 +5515,22 @@ mod tests {
         s.update(&mut st, &[key(KeyCode::Char('l'))]);
         assert_eq!(st.player.as_ref().unwrap().pos, Pos::new(7, 3));
         assert_eq!(st.net.engaged.as_ref().unwrap().moves, moves - 1);
+    }
+
+    #[test]
+    fn the_fire_cursor_passes_over_a_turret_thats_yours() {
+        use crate::guards::testutil::*;
+        let mut st = ward();
+        let t = crate::turrets::testutil::turret_in_ward(&mut st, 0, Pos::new(10, 3), Dir::W);
+        let g = goon(&mut st, 0, Pos::new(8, 4));
+        let picks = |st: &AppState| -> Vec<Enemy> {
+            (MapScreen::enemies_in_sight(st).into_iter())
+                .map(|(e, _)| e)
+                .collect()
+        };
+        assert_eq!(picks(&st), vec![Enemy::Foe(g), Enemy::Foe(t)]);
+        st.foes[t].turret.as_mut().unwrap().hacked = crate::turrets::Hacked::Yours;
+        assert_eq!(picks(&st), vec![Enemy::Foe(g)]);
     }
 
     #[test]

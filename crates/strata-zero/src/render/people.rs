@@ -76,8 +76,11 @@ impl Overlay for PeopleOverlay<'_> {
                 Some(v) => v.get(f.pos).copied().unwrap_or(Visibility::Unseen),
             };
             let cell = &mut buf[(sx, sy)];
+            // A turret draws as `render::turrets::TurretLooks` says, standing or wrecked;
+            // only a mark's pulse and reticle go over it here.
+            let turret = f.turret.is_some();
             if f.down {
-                if seen != Visibility::Unseen {
+                if seen != Visibility::Unseen && !turret {
                     cell.set_char('%').set_fg(FOE_DOWN);
                 }
                 continue;
@@ -85,25 +88,27 @@ impl Overlay for PeopleOverlay<'_> {
             if seen != Visibility::Visible {
                 continue;
             }
-            // ICE on the grid in its grade's colour, as in a construct.
-            let fg = match (&f.ice, f.stunned > 0) {
-                (Some(ice), stunned) => {
-                    let c = crate::render::netlook::ice_colour(ice.grade, tick);
-                    if stunned { c.scale(0.5) } else { c }.to_color()
+            if !turret {
+                // ICE on the grid in its grade's colour, as in a construct.
+                let fg = match (&f.ice, f.stunned > 0) {
+                    (Some(ice), stunned) => {
+                        let c = crate::render::netlook::ice_colour(ice.grade, tick);
+                        if stunned { c.scale(0.5) } else { c }.to_color()
+                    }
+                    (None, true) => Rgb(255, 80, 80).scale(0.5).to_color(),
+                    (None, false) => FOE,
+                };
+                cell.set_char(f.glyph).set_fg(fg);
+                // A grid piece glows in its grade's colour, apart from the nodes around it.
+                if let Some(ice) = &f.ice {
+                    let glow = crate::render::netlook::ice_colour(ice.grade, tick).scale(0.32);
+                    cell.set_bg(glow.to_color());
                 }
-                (None, true) => Rgb(255, 80, 80).scale(0.5).to_color(),
-                (None, false) => FOE,
-            };
-            cell.set_char(f.glyph).set_fg(fg);
-            // A grid piece glows in its grade's colour, apart from the nodes around it.
-            if let Some(ice) = &f.ice {
-                let glow = crate::render::netlook::ice_colour(ice.grade, tick).scale(0.32);
-                cell.set_bg(glow.to_color());
-            }
-            if f.hunting() {
-                cell.modifier.insert(Modifier::BOLD);
-            } else {
-                cell.modifier.remove(Modifier::BOLD);
+                if f.hunting() {
+                    cell.modifier.insert(Modifier::BOLD);
+                } else {
+                    cell.modifier.remove(Modifier::BOLD);
+                }
             }
             if f.marked {
                 let bright = (tick / MARK_PULSE).is_multiple_of(2);
@@ -679,5 +684,45 @@ mod tests {
         assert_eq!(dim[(5, 3)].symbol(), "⌖");
         assert!(!dim[(5, 3)].modifier.contains(Modifier::BOLD));
         assert_eq!(draw(16)[(5, 4)].bg, MARK_BRIGHT);
+    }
+
+    #[test]
+    fn a_turret_is_left_to_its_own_look_but_a_mark_still_pulses_on_it() {
+        let c = city();
+        let w = World::seed(&c, &People::load().unwrap(), &SimParams::default(), 0, 0);
+        let map = MapRef::stratum_of(&c, StratumKind::Street);
+        let place = citygen::Place::Stratum(StratumKind::Street);
+        let at = citygen::Pos::new(5, 4);
+        let node = citygen::SiteNode {
+            building: citygen::BuildingId(0),
+            level: 0,
+            at,
+        };
+        let turret = crate::turrets::Turret::new(node, citygen::Dir::SE, 4);
+        let mut foe = crate::turrets::foe(place, at, turret);
+        foe.marked = true;
+        let area = Rect::new(0, 0, 12, 8);
+        let style = StylePack::load().unwrap();
+        let draw = |foe: &Foe| {
+            let mut buf = Buffer::empty(area);
+            PeopleOverlay {
+                world: &w,
+                night: false,
+                vis: None,
+                eyes: &[],
+                foes: std::slice::from_ref(foe),
+                bodies: &[],
+                keep: None,
+            }
+            .draw(&map, citygen::Pos::new(0, 0), area, 0, &mut buf, &style);
+            buf
+        };
+        let buf = draw(&foe);
+        assert_ne!(buf[(5, 4)].symbol(), "◢", "the arrowhead is TurretLooks'");
+        assert_ne!(buf[(5, 4)].fg, FOE);
+        assert_eq!(buf[(5, 4)].bg, MARK_BRIGHT);
+        assert_eq!(buf[(5, 3)].symbol(), "⌖");
+        foe.down = true;
+        assert_ne!(draw(&foe)[(5, 4)].symbol(), "%", "a wreck isn't a body");
     }
 }

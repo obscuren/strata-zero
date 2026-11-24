@@ -84,3 +84,5 @@ Jacked in, the map shows two of you. Your self on the Net is the blue `@`, and t
 Five trees, one for each attribute: MEAT, EDGE, WRENCH, STREET and ICE. You get a talent point at each level. A tree's later rows open as you put more points into it, and a talent may need the one before it at its best. Move with the arrows, `[ ]` change tree, and `space` puts a point into the talent under the cursor. Points can't be taken back.
 
 In STREET, three talents work with the cloak (Turns and fights): **Ghost** halves the trace a camera warms when it sees you, **Shadow step** grants Vanish, and **Blind spot** halves a cloak's drain while you stand still.
+
+In ICE, **Turncoat** sits under Black ICE: a turret you hold from the Net takes your side instead of going blind (The Net has the keys, Turns and fights has the fight). **The deep end** now sits under Turncoat, so it takes Black ICE and then Turncoat to reach it. A runner who already has The deep end keeps it.

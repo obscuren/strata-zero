@@ -1397,6 +1397,9 @@ pub fn flag_words(flag: &str) -> Option<&'static str> {
         "deep_end" => {
             "black ICE hits halved · the failsafe waits for an eighth · ten minutes cooling"
         }
+        "turncoat" => {
+            "a held turret takes your side: it fires on the guards in a fight on its floor"
+        }
         "ghost" => "cameras that see you warm the trace at half rate",
         "blind_spot" => "standing still, a cloak drains at half rate",
         _ => return None,
@@ -1685,7 +1688,7 @@ mod tests {
             c.item(&ItemId::new("copper_coil")).unwrap().kind,
             ItemKind::Component
         );
-        assert_eq!(c.talents_for(&SkillId::new("hacking")).count(), 4);
+        assert_eq!(c.talents_for(&SkillId::new("hacking")).count(), 5);
     }
 
     #[test]
@@ -2138,6 +2141,14 @@ mod tests {
     }
 
     #[test]
+    fn turncoat_has_its_words() {
+        assert_eq!(
+            flag_words("turncoat"),
+            Some("a held turret takes your side: it fires on the guards in a fight on its floor")
+        );
+    }
+
+    #[test]
     fn the_trees_are_grids() {
         let c = Content::load().unwrap();
         assert_eq!(c.trees.len(), 5);
@@ -2149,10 +2160,10 @@ mod tests {
                 t.name
             );
             // ICE runs a tier deeper, with Data surfer and Slipstream.
-            let n = if t.name == "ICE" { 14 } else { 12 };
+            let n = if t.name == "ICE" { 15 } else { 12 };
             assert_eq!(t.talents().count(), n, "{}", t.name);
         }
-        assert_eq!(c.talents.len(), 62);
+        assert_eq!(c.talents.len(), 63);
         assert_eq!(
             c.tree_of(&TalentId::new("data_surfer"))
                 .map(|(t, i, j)| (t.name.as_str(), i, j)),
@@ -2173,6 +2184,7 @@ mod tests {
         };
         assert_eq!(at("counter_cut"), Some(("EDGE", 2, 2)));
         assert_eq!(at("half_second"), Some(("EDGE", 4, 1)));
+        assert_eq!(at("turncoat"), Some(("ICE", 3, 2)));
         assert_eq!(at("deep_end"), Some(("ICE", 4, 2)));
         let req = |id: &str| {
             c.talent(&TalentId::new(id))
@@ -2181,6 +2193,8 @@ mod tests {
                 .as_ref()
                 .map(|r| r.0.clone())
         };
+        assert_eq!(req("turncoat").as_deref(), Some("black_ice"));
+        assert_eq!(req("deep_end").as_deref(), Some("turncoat"));
         assert_eq!(req("light_step"), None);
         assert_eq!(req("backstab").as_deref(), Some("light_step"));
         assert_eq!(c.creation.talent_points, 1);

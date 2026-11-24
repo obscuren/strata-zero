@@ -44,6 +44,7 @@ pub fn run(st: &mut AppState, world_ticks: Option<u64>, paths: usize) {
     crate::venues::tick(st);
     // The guards of a building you're in walk their rounds.
     crate::guards::tick(st, world_ticks.unwrap_or(1));
+    crate::turrets::tick(st);
     // A scrambler's cell fills back on the world clock; the free camera's holds it.
     crate::cloak::cell::recharge(st, world_ticks.unwrap_or(0));
     // Out in the world the city holds still for you: its cameras look at no one, and

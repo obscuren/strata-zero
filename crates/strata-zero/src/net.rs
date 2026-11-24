@@ -1377,7 +1377,7 @@ fn land(
             st.net.mask_fresh = true;
             format!("mask raised · {MASK_TURNS} turns")
         }
-        // A site's camera or terminal is held by `sitenet::landed`, above.
+        // A site's camera, terminal or turret is held by `sitenet::landed`, above.
         (Op::Crack | Op::Spoof, Target::Node(k)) if crate::holds::holdable(k) => match target {
             HackTarget::Node(id) => crate::holds::take(
                 st,
@@ -2304,9 +2304,16 @@ pub fn initiative(st: &AppState, place: Place) -> Vec<Actor> {
             for i in foe_seats(st, place) {
                 scored.push((st.foes[i].reflex as i32, 1 + i as u16, Actor::Foe(i)));
             }
-            // Your bots on the map, after foes of the same score.
-            for (i, (reflex, dock)) in crate::bots::seats(st, place).into_iter().enumerate() {
+            // Your bots on the map, after foes of the same score; the turrets you hold
+            // there after them.
+            let bots = crate::bots::seats(st, place);
+            let after = 1000 + bots.len() as u16;
+            for (i, (reflex, dock)) in bots.into_iter().enumerate() {
                 scored.push((reflex as i32, 1000 + i as u16, Actor::Bot(dock.0, dock.1)));
+            }
+            for (k, i) in crate::turrets::allies(st, place).into_iter().enumerate() {
+                let reflex = st.foes[i].reflex as i32;
+                scored.push((reflex, after + k as u16, Actor::Foe(i)));
             }
         }
     }
@@ -2337,6 +2344,9 @@ fn pools_for(st: &AppState, place: Place, actor: Actor) -> (u8, u8) {
             .map(|g| budgets(g.grade))
             .unwrap_or((0, 0)),
         (Actor::Ice(_), _) => (0, 0),
+        (Actor::Foe(i), _) if st.foes.get(i).is_some_and(|f| f.turret.is_some()) => {
+            (crate::turrets::TURRET_MOVE, crate::turrets::TURRET_AP)
+        }
         (Actor::Foe(i), _) => match st.foes.get(i).and_then(|f| f.ice.as_ref()) {
             Some(ice) => crate::grid::budgets(ice.grade),
             None => (crate::foes::GOON_MOVE, crate::foes::GOON_AP),
@@ -2400,7 +2410,9 @@ pub fn engage(st: &mut AppState, place: Place, manual: bool) {
 }
 
 /// The foes that take a seat at `place`: each standing in your sight memory, and on a
-/// floor every standing guard of it that hunts, seen or not (index order there).
+/// floor every standing guard or turret of it that hunts, seen or not (index order
+/// there). A turret only sits while it's `turrets::seated`; one you hold sits with your
+/// bots instead (`turrets::allies`).
 fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
     let mut seats = crate::foes::in_memory(st);
     if matches!(place, Place::Floor { .. }) {
@@ -2408,13 +2420,28 @@ fn foe_seats(st: &AppState, place: Place) -> Vec<usize> {
         seats.sort_unstable();
         seats.dedup();
     }
+    seats.retain(|i| !unseated_turret(st, *i) && !crate::turrets::is_yours(&st.foes[*i]));
     seats
+}
+
+/// Foe `i` is only heard on turns: one you haven't seen, its chip, plan and pace not
+/// yours to read. A turret you hold you know unseen, as you know your bots.
+fn heard_only(st: &AppState, i: usize) -> bool {
+    crate::foes::unseen(st, i) && !st.foes.get(i).is_some_and(crate::turrets::is_yours)
+}
+
+/// A turret that isn't `turrets::seated` now (asleep, awake, blind, or one that lost
+/// you): it takes no seat, and the column and the readout pass over one still in the
+/// order.
+fn unseated_turret(st: &AppState, i: usize) -> bool {
+    st.foes.get(i).is_some_and(|f| f.turret.is_some()) && !crate::turrets::seated(st, i)
 }
 
 /// Every standing foe in sight memory the order does not hold yet takes its place
 /// at the end: one that came hunting mid-fight. On a floor a guard that answered the
-/// alarm to it joins first (`guards::join_fight`), every calm guard of it looks, and every
-/// guard of it that hunts takes a seat, seen or not.
+/// alarm to it joins first (`guards::join_fight`), every calm guard and hostile turret of
+/// it looks, and every guard or turret of it that hunts takes a seat, seen or not. Then
+/// your bots out and the turrets you hold there that have no seat yet.
 pub fn seat_foes(st: &mut AppState) {
     let Some(place) = st.net.engaged.as_ref().map(|e| e.place) else {
         return;
@@ -2422,28 +2449,30 @@ pub fn seat_foes(st: &mut AppState) {
     if matches!(place, Place::Floor { .. }) {
         crate::guards::join_fight(st, place);
         for i in crate::foes::standing(st, place) {
-            if st.foes[i].post.is_some() && !st.foes[i].hunting() {
+            let f = &st.foes[i];
+            if (f.post.is_some() || crate::turrets::hostile(f)) && !f.hunting() {
                 crate::foes::look(st, i);
             }
         }
     }
     let known = foe_seats(st, place);
-    let bots = st
-        .net
-        .engaged
-        .as_ref()
-        .map(|e| crate::bots::seats(st, e.place))
-        .unwrap_or_default();
+    let bots = crate::bots::seats(st, place);
+    let allies = crate::turrets::allies(st, place);
     if let Some(e) = st.net.engaged.as_mut() {
         for i in known {
             if !e.order.contains(&Actor::Foe(i)) {
                 e.order.push(Actor::Foe(i));
             }
         }
-        // A bot that came out mid-fight sits at the end too.
+        // A bot that came out mid-fight sits at the end too, and a turret taken over.
         for (_, (site, n)) in bots {
             if !e.order.contains(&Actor::Bot(site, n)) {
                 e.order.push(Actor::Bot(site, n));
+            }
+        }
+        for i in allies {
+            if !e.order.contains(&Actor::Foe(i)) {
+                e.order.push(Actor::Foe(i));
             }
         }
     }
@@ -2716,7 +2745,7 @@ pub fn pace(st: &mut AppState) {
     if actor == Actor::You {
         return;
     }
-    let unseen = matches!(actor, Actor::Foe(i) if crate::foes::unseen(st, i));
+    let unseen = matches!(actor, Actor::Foe(i) if heard_only(st, i));
     if !unseen && st.clock_tick() < e.acting_since + PACE_TICKS {
         return;
     }
@@ -2788,8 +2817,14 @@ pub fn ice_card(st: &AppState, b: BuildingId, i: usize) -> Option<(String, Strin
 /// landed on the gate.
 pub fn start_in_net_lot(st: &mut AppState) -> Result<String, String> {
     let k = citygen::lot_construct();
-    let (b, entry) = (k.building, k.entry);
+    let b = k.building;
     st.constructs.insert(k);
+    onto_the_lots_net(st, b)
+}
+
+/// Into the lot's construct `b` at its gate, the body left where it stands.
+fn onto_the_lots_net(st: &mut AppState, b: BuildingId) -> Result<String, String> {
+    let entry = st.constructs.get(b).ok_or("no Net on the lot")?.entry;
     if let Some(k) = st.constructs.get(b) {
         st.net.ice_of(k);
     }
@@ -2833,14 +2868,18 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
             }
             Actor::Foe(i) => {
                 // One you haven't seen isn't read out: you hear it, no more.
-                let Some(f) =
-                    (st.foes.get(i)).filter(|f| f.standing() && !crate::foes::unseen(st, i))
+                let Some(f) = (st.foes.get(i))
+                    .filter(|f| f.standing() && !heard_only(st, i) && !unseated_turret(st, i))
                 else {
                     continue;
                 };
                 Chip {
                     name: f.name.clone(),
-                    hp: f.hp.to_string(),
+                    hp: if f.turret.is_some() {
+                        crate::turrets::chip_figure(f)
+                    } else {
+                        f.hp.to_string()
+                    },
                     acting: actor == *a,
                 }
             }
@@ -2877,7 +2916,11 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
     let theirs = match actor {
         Actor::You => None,
         // What an unseen foe is up to isn't yours to read.
-        Actor::Foe(i) if crate::foes::unseen(st, i) => None,
+        Actor::Foe(i) if heard_only(st, i) => None,
+        // A turret's turn is its own: turn, then fire (`turrets::plan_word`).
+        Actor::Foe(i) if st.foes.get(i).is_some_and(|f| f.turret.is_some()) => {
+            Some(crate::turrets::plan_word(st, i))
+        }
         Actor::Ice(_) | Actor::Foe(_) | Actor::Bot(..) | Actor::Mastiff | Actor::Seat(_) => {
             let verb = match actor {
                 Actor::Ice(_) => "hits",
@@ -2930,9 +2973,9 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
         {
             continue;
         }
-        // Nor a foe you haven't seen: you hear it, no more.
+        // Nor a foe you haven't seen: you hear it, no more. Nor a turret not seated.
         if let Actor::Foe(i) = a
-            && crate::foes::unseen(st, i)
+            && (heard_only(st, i) || unseated_turret(st, i))
         {
             continue;
         }
@@ -2950,6 +2993,9 @@ pub fn turn_readout(st: &AppState) -> Option<String> {
                     } else if e.ap > 0 {
                         s.push_str(verb);
                     }
+                }
+                Actor::Foe(i) if st.foes.get(i).is_some_and(|f| f.turret.is_some()) => {
+                    s.push_str(&format!(" {}", crate::turrets::plan_word(st, i)));
                 }
                 Actor::Foe(_) | Actor::Seat(_) => {
                     if e.moves > 0 {
@@ -3532,6 +3578,16 @@ pub fn jack_in_here(st: &mut AppState) -> Result<String, String> {
     }
     if let Some(why) = jack_in_refusal(st) {
         return Err(why);
+    }
+    // A lot has no city Net: its terminal opens onto the lot's own construct.
+    let lot = crate::turrets::lot::LOT;
+    let on_a_lot = (st.city.as_ref()).filter(|c| c.is_lot()).is_some_and(|c| {
+        st.player
+            .as_ref()
+            .is_some_and(|p| !p.jacked_in() && p.terminal_in_reach(c, None).is_some())
+    });
+    if on_a_lot && st.constructs.get(lot).is_some() {
+        return onto_the_lots_net(st, lot);
     }
     let bonus = st.sight_bonus();
     let home = st.home;

@@ -149,8 +149,8 @@ pub fn tick(st: &mut AppState) {
 
 /// Takes the copy: the plan cut to its floors, the floors dropped (drawn again with the
 /// layer as they're needed), the site's Net as the plain building had it dropped, the
-/// guards at their posts, the zone cards in the catalogue and those the layer leaves lying
-/// where it leaves them.
+/// guards at their posts and turrets on their devices, the zone cards in the catalogue
+/// and those the layer leaves lying where it leaves them.
 fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
     let Some(plan) = st.interiors.plan_of(b) else {
         return;
@@ -160,9 +160,11 @@ fn take(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
         return;
     };
     let cut = plan.kept(&copy.kept);
+    let turrets = super::turret_foes(layer, b, &cut);
     st.interiors.put_plan(cut);
     crate::sitenet::forget(st, b);
     st.foes.extend(super::guard_foes(layer, b));
+    st.foes.extend(turrets);
     crate::credentials::stock_zone_cards(st, b);
     let left: Vec<(Place, Pos, ItemId)> = (layer.cards.iter())
         .map(|c| {
@@ -198,8 +200,10 @@ fn finish(st: &mut AppState, b: BuildingId, copy: &MissionCopy) {
                 t.heat = t.heat.min(game::ALARM_HEAT / 2);
             }
         }
-        st.foes
-            .retain(|f| f.post.as_ref().is_none_or(|p| p.building != b));
+        st.foes.retain(|f| {
+            f.post.as_ref().is_none_or(|p| p.building != b)
+                && f.turret.as_ref().is_none_or(|t| t.node.building != b)
+        });
         for (place, at, id) in &copy.left {
             st.ground.take(*place, *at, id, 1);
         }

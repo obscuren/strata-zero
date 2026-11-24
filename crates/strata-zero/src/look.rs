@@ -771,10 +771,8 @@ pub fn look_card(
     };
 
     // A foe on the tile, standing or down, before whatever it stands on.
-    let foe = st
-        .foes
-        .iter()
-        .find(|f| live_cell && f.place == place && f.pos == pos && (visible || f.down));
+    let foe = (st.foes.iter())
+        .position(|f| live_cell && f.place == place && f.pos == pos && (visible || f.down));
     // A visitor the story put here, before people.
     let visitor = (visible && live_cell)
         .then(|| crate::missions::visitors::at(st, place, pos))
@@ -785,6 +783,10 @@ pub fn look_card(
         .bodies
         .iter()
         .find(|b| live_cell && b.place == place && b.pos == pos);
+    let turret = foe.and_then(|i| {
+        let f = &st.foes[i];
+        Some((i, f.turret.as_ref()?.facing, crate::turrets::state(f)?))
+    });
     if let (Some(b), None) = (body, foe) {
         set_head(
             &mut card,
@@ -794,7 +796,16 @@ pub fn look_card(
         card.second = Some("dead".to_string());
         card.body.push(b.look.clone());
         card.also.extend(stacks);
-    } else if let Some(f) = foe {
+    } else if let Some((i, facing, state)) = turret {
+        let (colour, _) = crate::render::turrets::colour(state);
+        set_head(
+            &mut card,
+            "Turret".to_string(),
+            Some((crate::turrets::field::glyph(facing), colour.to_color())),
+        );
+        card.second = Some(crate::turrets::look_line(st, i));
+        card.also.extend(stacks);
+    } else if let Some(f) = foe.map(|i| &st.foes[i]) {
         let colour = if f.down {
             crate::render::people::FOE_DOWN
         } else {
@@ -1775,5 +1786,31 @@ mod tests {
             );
             assert!(!card.body.is_empty(), "{kind:?} has no flavour line");
         }
+    }
+
+    #[test]
+    fn a_turret_reads_as_a_turret_by_its_state() {
+        use crate::guards::testutil::{on, ward};
+        let mut st = ward();
+        let i =
+            crate::turrets::testutil::turret_in_ward(&mut st, 0, Pos::new(10, 3), citygen::Dir::SE);
+        st.foes[i].turret.as_mut().unwrap().awake = true;
+        let map = crate::foes::map_of(&st, on(0)).unwrap();
+        let card = look_card(&st, &map, on(0), Pos::new(10, 3), &|_, _| None, &[]);
+        assert_eq!(card.header.as_deref(), Some("Turret"));
+        let awake = crate::render::turrets::AWAKE.to_color();
+        assert_eq!(card.glyph, Some(('◢', awake)));
+        assert_eq!(card.header_fg, awake);
+        assert_eq!(
+            card.second.as_deref(),
+            Some("facing SE · ARM 4 · HP 40 · 30 rounds")
+        );
+        // A wreck keeps its arrowhead, in the wreck's grey.
+        st.foes[i].down = true;
+        let map = crate::foes::map_of(&st, on(0)).unwrap();
+        let card = look_card(&st, &map, on(0), Pos::new(10, 3), &|_, _| None, &[]);
+        let wrecked = crate::render::turrets::WRECKED.to_color();
+        assert_eq!(card.glyph, Some(('◢', wrecked)));
+        assert_eq!(card.second.as_deref(), Some("wrecked"));
     }
 }

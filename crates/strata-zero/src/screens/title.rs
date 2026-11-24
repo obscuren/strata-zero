@@ -34,6 +34,8 @@ pub const SUBTITLE: &str = "h i g h   t e c h   ·   l o w   l i f e";
 pub enum CombatMap {
     Net,
     Street,
+    /// The lot with a street terminal, a turret and a goon (`turrets::lot`).
+    Turret,
 }
 
 /// A row of the title menu.
@@ -183,20 +185,9 @@ impl Title {
     /// and a dummy to shoot at.
     fn combat_game(&self, st: &mut AppState) -> ScreenCmd {
         use citygen::{Place, Pos, StratumKind};
-        st.character = game::Character::combat_runner(&st.content);
         let seed = Title::fresh_params(st, st.tick).seed;
-        st.enter_city_at(citygen::City::lot(seed), 18 * 60 + 15);
+        Title::onto_the_lot(st, citygen::City::lot(seed), Pos::new(6, 8));
         let place = Place::Stratum(StratumKind::Street);
-        let mut p = crate::walker::Player::at(place, Pos::new(6, 8));
-        let minute = st.minute_of_day();
-        let bonus = st.sight_bonus();
-        if let Some(city) = st.city.as_ref() {
-            p.update_fov(
-                &crate::render::map::MapRef::stratum_at(city, StratumKind::Street, minute),
-                bonus,
-            );
-        }
-        st.player = Some(p);
         // The goon in the lot's far corner, bottom right: a walk across the
         // road before it sees you.
         st.foes
@@ -208,6 +199,38 @@ impl Title {
             to: crate::screens::explore_screen(st),
             fx: TransitionKind::Glitch,
         }
+    }
+
+    /// COMBAT on TURRET: D'SHAWN on the lot at dusk beside a street terminal in its
+    /// bottom-left corner, a turret awake in its top-left corner and a goon in its
+    /// top-right; the terminal jacks into the lot's small Net with the turret's node on it.
+    fn turret_game(&self, st: &mut AppState) -> ScreenCmd {
+        let seed = Title::fresh_params(st, st.tick).seed;
+        let city = crate::turrets::lot::city(seed);
+        Title::onto_the_lot(st, city, crate::turrets::lot::START);
+        crate::turrets::lot::lay(st);
+        ScreenCmd::Switch {
+            to: crate::screens::explore_screen(st),
+            fx: TransitionKind::Glitch,
+        }
+    }
+
+    /// The COMBAT starts' D'SHAWN on lot `city` at dusk, on its street at `at`, seeing.
+    fn onto_the_lot(st: &mut AppState, city: citygen::City, at: citygen::Pos) {
+        use citygen::{Place, StratumKind};
+        st.character = game::Character::combat_runner(&st.content);
+        st.enter_city_at(city, 18 * 60 + 15);
+        let place = Place::Stratum(StratumKind::Street);
+        let mut p = crate::walker::Player::at(place, at);
+        let minute = st.minute_of_day();
+        let bonus = st.sight_bonus();
+        if let Some(city) = st.city.as_ref() {
+            p.update_fov(
+                &crate::render::map::MapRef::stratum_at(city, StratumKind::Street, minute),
+                bonus,
+            );
+        }
+        st.player = Some(p);
     }
 
     /// A DEVELOPER site row: NEW GAME (DEBUG)'s start, then a building away from home laid
@@ -270,6 +293,7 @@ impl Title {
             Pick::SiteNet => self.site_net_game(st),
             Pick::Combat(CombatMap::Street) => self.combat_game(st),
             Pick::Combat(CombatMap::Net) => self.net_game(st),
+            Pick::Combat(CombatMap::Turret) => self.turret_game(st),
             Pick::LoadCity => ScreenCmd::Push {
                 to: Box::new(Files::load(st)),
                 fx: TransitionKind::SlideUp,
@@ -530,9 +554,11 @@ pub(crate) fn combat_start(st: &mut AppState, map: CombatMap) -> ScreenCmd {
     down_to(&mut t, st, "DEVELOPER");
     t.update(st, &[key(KeyCode::Enter)]);
     down_to(&mut t, st, "COMBAT");
-    if map == CombatMap::Net {
-        t.update(st, &[key(KeyCode::Left)]);
-    }
+    match map {
+        CombatMap::Net => t.update(st, &[key(KeyCode::Left)]),
+        CombatMap::Turret => t.update(st, &[key(KeyCode::Right)]),
+        CombatMap::Street => ScreenCmd::Stay,
+    };
     t.update(st, &[key(KeyCode::Enter)])
 }
 
@@ -755,7 +781,10 @@ mod tests {
         let text = buffer_text(term.backend().buffer());
         let row = text.lines().position(|l| l.contains("COMBAT")).unwrap();
         assert!(
-            text.lines().nth(row).unwrap().contains("NET · STREET"),
+            text.lines()
+                .nth(row)
+                .unwrap()
+                .contains("NET · STREET · TURRET"),
             "the pick on COMBAT's row: {text}"
         );
         // STREET picked by default, in pink; NET in grey. Left flips them.
@@ -768,6 +797,17 @@ mod tests {
         assert_eq!(cell_of(&term, "NET "), UNPICKED);
         let combat = |t: &Title| t.developer.as_ref().unwrap().combat;
         to_row(&mut t, &mut st, "COMBAT");
+        // Right steps on to TURRET and round to NET; left steps back.
+        t.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(combat(&t), CombatMap::Turret);
+        term.draw(|f| t.draw(&st, f)).unwrap();
+        assert_eq!(cell_of(&term, "TURRET"), PICKED);
+        assert_eq!(cell_of(&term, "STREET"), UNPICKED);
+        t.update(&mut st, &[key(KeyCode::Right)]);
+        assert_eq!(combat(&t), CombatMap::Net);
+        t.update(&mut st, &[key(KeyCode::Left)]);
+        assert_eq!(combat(&t), CombatMap::Turret);
+        t.update(&mut st, &[key(KeyCode::Left)]);
         t.update(&mut st, &[key(KeyCode::Left)]);
         assert_eq!(combat(&t), CombatMap::Net);
         term.draw(|f| t.draw(&st, f)).unwrap();

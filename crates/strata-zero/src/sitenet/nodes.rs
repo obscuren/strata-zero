@@ -43,14 +43,14 @@ pub fn landed(
         (NodeKind::LiftCtrl, Op::Spoof) => {
             format!("lift control spoofed · {name} stops at every floor")
         }
-        (NodeKind::Camera | NodeKind::Terminal, Op::Crack | Op::Spoof) => {
+        (NodeKind::Camera | NodeKind::Terminal | NodeKind::Turret, Op::Crack | Op::Spoof) => {
             crate::holds::take(st, NetNode::Site(node), Owner::Building(b), now)
         }
         (NodeKind::Server, Op::Crack) => format!(
             "server cracked · root on `{}` for an hour",
             crate::net::building_name(st, b)
         ),
-        (NodeKind::Turret | NodeKind::Container, Op::Crack) => format!("{name} cracked"),
+        (NodeKind::Container, Op::Crack) => format!("{name} cracked"),
         // The same lock from the grid or from inside: broken for its hour, kept in
         // `NetState.firewalls` alone.
         (NodeKind::Firewall, Op::Crack) => {

@@ -220,6 +220,50 @@ fn drone_on_the_lot() {
     }
 }
 
+/// COMBAT on TURRET (dev mode): the lot a beat in, then jacked in at its terminal with
+/// space and `j`, on the lot's Net with the turret's node.
+#[test]
+#[ignore]
+fn turret_lot() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    let mut st = AppState::new();
+    st.unlock_dev();
+    let crate::app::ScreenCmd::Switch { to: mut map, .. } =
+        crate::screens::title::combat_start(&mut st, CombatMap::Turret)
+    else {
+        panic!("straight to the lot")
+    };
+    let beat = |st: &mut AppState, map: &mut Box<dyn Screen>| {
+        for _ in 0..60 {
+            st.tick += 1;
+            map.update(st, &[]);
+        }
+    };
+    beat(&mut st, &mut map);
+    for (w, h) in [(120, 40), (100, 30)] {
+        let buf = draw_stack(&st, &[&*map], (w, h));
+        write_svg(&dir, &format!("turret_lot_{w}x{h}"), &st, &buf, false);
+    }
+    // Space by the terminal opens its window; `j` jacks in.
+    let crate::app::ScreenCmd::Push { to: mut w, .. } =
+        map.update(&mut st, &[key(KeyCode::Char(' '))])
+    else {
+        panic!("space opens the terminal's window")
+    };
+    w.update(&mut st, &[key(KeyCode::Char('j'))]);
+    beat(&mut st, &mut map);
+    assert_eq!(
+        st.player.as_ref().map(|p| p.place),
+        Some(Place::Construct(crate::turrets::lot::LOT))
+    );
+    for (w, h) in [(120, 40), (100, 30)] {
+        let buf = draw_stack(&st, &[&*map], (w, h));
+        write_svg(&dir, &format!("turret_lot_net_{w}x{h}"), &st, &buf, false);
+    }
+}
+
 /// The COMBAT start on the Net (dev mode): jacked into a construct, a beat in.
 #[test]
 #[ignore]
@@ -7180,6 +7224,146 @@ fn guards_shot(dir: &str, name: &str, st: &mut AppState) {
     for (w, h) in [(120u16, 40u16), (100, 30)] {
         let buf = crate::sitenet::testutil::drawn(st, (w, h));
         write_svg(dir, &format!("guards_{name}_{w}x{h}"), st, &buf, false);
+    }
+}
+
+/// Turrets (#97) on the high-security office copy's floor, each at 120 x 40 and 100 x 30:
+/// `turret_asleep` you on its floor out of its field, the turret drawn; `turret_fight`
+/// you in its field with the fight on and its turn taken (the red field, its chip, the
+/// `turret ... fires` line); `turret_yours` taken over with Turncoat, a guard in its
+/// field and a fight on (the green field, `turret fires on guard`).
+#[test]
+#[ignore]
+fn turret_shots() {
+    use crate::guards::testutil::{logged, pace_once, settle};
+    use crate::owners::Owner;
+    use crate::render::map::TileMap;
+    use crate::sitenet::testutil::stand_on_floor;
+    use crate::turrets::field;
+    use crate::turrets::testutil::turret_copy;
+    use citygen::NetNode;
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    // A tile of turret `i`'s floor 3 to 5 tiles from it in a clear line, in its field or
+    // out of it, nobody there, nearest 4 tiles off.
+    let spot = |st: &AppState, i: usize, in_field: bool| -> Pos {
+        let f = &st.foes[i];
+        let facing = f.turret.as_ref().expect("a turret").facing;
+        let map = crate::foes::map_of(st, f.place).expect("drawn");
+        let (_, floor) = map.floor().expect("a floor");
+        (floor.tiles.iter())
+            .map(|(p, _)| p)
+            .filter(|p| map.walkable(*p) && floor.exit_at(*p).is_none())
+            .filter(|p| crate::foes::foe_at(st, f.place, *p).is_none())
+            .filter(|p| (3..=5).contains(&p.chebyshev(f.pos)))
+            .filter(|p| crate::foes::line_clear(&map, f.pos, *p))
+            .filter(|p| field::sees(&map, f.pos, facing, *p) == in_field)
+            .min_by_key(|p| (p.chebyshev(f.pos).abs_diff(4), p.y, p.x))
+            .expect("a tile by the turret")
+    };
+    let level_of = |st: &AppState, i: usize| match st.foes[i].place {
+        Place::Floor { building, level } => (building, level),
+        _ => unreachable!("a turret stands on a floor"),
+    };
+    // A few seconds on: the log's lines typed out whole, JOBS and the map folded away.
+    let tidy = |st: &mut AppState| {
+        st.tick += 300;
+        st.sidebar.set(crate::ui::sidebar::Section::Jobs, false);
+        st.sidebar.set(crate::ui::sidebar::Section::Map, false);
+    };
+
+    // Asleep: you out of its field, in its line of sight.
+    let (mut st, _, i) = turret_copy();
+    let (b, level) = level_of(&st, i);
+    let me = spot(&st, i, false);
+    stand_on_floor(&mut st, b, level, me);
+    assert!(!crate::foes::look_all(&mut st), "it sleeps");
+    turret_shot(&dir, "asleep", &mut st);
+
+    // A fight: you in its field. It wakes, the fight starts, its turn comes and it fires.
+    let (mut st, _, i) = turret_copy();
+    let (b, level) = level_of(&st, i);
+    let me = spot(&st, i, true);
+    stand_on_floor(&mut st, b, level, me);
+    assert!(crate::foes::look_all(&mut st));
+    let place = st.foes[i].place;
+    crate::net::engage(&mut st, place, false);
+    if crate::net::your_turn(&st) {
+        crate::net::end_turn(&mut st);
+    }
+    for _ in 0..80 {
+        if logged(&st, "turret fires") {
+            break;
+        }
+        pace_once(&mut st);
+    }
+    assert!(logged(&st, "turret fires"), "it fires");
+    settle(&mut st);
+    tidy(&mut st);
+    turret_shot(&dir, "fight", &mut st);
+
+    // Yours: taken over with Turncoat, a guard in its field, a fight on.
+    let (mut st, _, i) = turret_copy();
+    let (b, level) = level_of(&st, i);
+    let place = st.foes[i].place;
+    let node = st.foes[i].turret.as_ref().unwrap().node;
+    let now = st.net.now(&st);
+    st.net.holds.push(crate::holds::Hold {
+        node: NetNode::Site(node),
+        owner: Owner::Building(b),
+        until: now + game::HACK_MINUTES,
+        used: Vec::new(),
+    });
+    st.character
+        .talents
+        .insert(game::TalentId::new("turncoat"), 1);
+    assert_eq!(
+        crate::turrets::take_over(&mut st, node),
+        Ok("turret's yours".to_string())
+    );
+    let g = (st.foes.iter())
+        .position(|f| f.post.is_some() && f.standing() && f.turret.is_none())
+        .expect("a guard");
+    let at = spot(&st, i, true);
+    let me = (st.foes[i].pos.neighbors8())
+        .find(|p| {
+            crate::foes::map_of(&st, place).is_some_and(|m| m.walkable(*p))
+                && crate::foes::foe_at(&st, place, *p).is_none()
+                && *p != at
+        })
+        .expect("a tile beside the turret");
+    stand_on_floor(&mut st, b, level, me);
+    st.foes[g].place = place;
+    st.foes[g].pos = at;
+    st.foes[g].mode = crate::foes::FoeMode::Hunting { seen: me, lost: 0 };
+    crate::net::engage(&mut st, place, true);
+    st.force_hit = Some(true);
+    for _ in 0..80 {
+        if logged(&st, "turret fires on guard") {
+            break;
+        }
+        if crate::net::your_turn(&st) {
+            crate::net::end_turn(&mut st);
+        }
+        pace_once(&mut st);
+    }
+    assert!(
+        logged(&st, "turret fires on guard"),
+        "it fires on the guard"
+    );
+    st.force_hit = None;
+    settle(&mut st);
+    tidy(&mut st);
+    turret_shot(&dir, "yours", &mut st);
+}
+
+/// The screen where you stand as `turret_{name}_{w}x{h}`, at 120 x 40 and 100 x 30, the
+/// camera landed on you (`sitenet::testutil::drawn`).
+fn turret_shot(dir: &str, name: &str, st: &mut AppState) {
+    for (w, h) in [(120u16, 40u16), (100, 30)] {
+        let buf = crate::sitenet::testutil::drawn(st, (w, h));
+        write_svg(dir, &format!("turret_{name}_{w}x{h}"), st, &buf, false);
     }
 }
 

@@ -1,6 +1,6 @@
 //! Held nodes and their verbs. A crack or a spoof that lands on a camera, an ad board,
-//! a lamp grid or a terminal holds it for an hour, from outside a construct or from
-//! inside; while you hold it, its kind offers verbs on single keys, and the run's
+//! a lamp grid, a terminal or a site's turret holds it for an hour, from outside a
+//! construct or from inside; while you hold it, its kind offers verbs on single keys, and the run's
 //! tether stays on it as a dock. Spec
 //! `docs/superpowers/specs/2026-11-04-net-nodes-design.md`, "Held nodes and their verbs".
 
@@ -35,14 +35,16 @@ pub enum Verb {
     Decoy,
     LightsOut,
     Shell,
+    Blind,
+    TakeOver,
 }
 
 impl Verb {
     pub fn key(self) -> char {
         match self {
             Verb::Tap => 'f',
-            Verb::Loop | Verb::LightsOut => 'o',
-            Verb::Hijack => 'i',
+            Verb::Loop | Verb::LightsOut | Verb::Blind => 'o',
+            Verb::Hijack | Verb::TakeOver => 'i',
             Verb::Decoy => 'z',
             Verb::Shell => 'r',
         }
@@ -56,13 +58,15 @@ impl Verb {
             Verb::Decoy => "decoy",
             Verb::LightsOut => "lights out",
             Verb::Shell => "shell",
+            Verb::Blind => "blind",
+            Verb::TakeOver => "take over",
         }
     }
 
     /// A verb you may use again while the hold lasts (the feed toggles, the shell
-    /// opens again); the others are spent once.
+    /// opens again, a turret goes blind or yours and back); the others are spent once.
     fn again(self) -> bool {
-        matches!(self, Verb::Tap | Verb::Shell)
+        matches!(self, Verb::Tap | Verb::Shell | Verb::Blind | Verb::TakeOver)
     }
 }
 
@@ -76,6 +80,7 @@ pub fn verbs(kind: NodeKind) -> &'static [Verb] {
         NodeKind::AdBoard => &[Verb::Hijack, Verb::Decoy],
         NodeKind::LampGrid => &[Verb::LightsOut],
         NodeKind::Terminal => &[Verb::Shell],
+        NodeKind::Turret => &[Verb::Blind, Verb::TakeOver],
         _ => &[],
     }
 }
@@ -286,6 +291,10 @@ pub fn node_pos(st: &AppState, place: Place, node: NetNode) -> Option<Pos> {
                 {
                     st.constructs.site(building)?.device(n).map(|d| d.at)
                 }
+                // A construct with no levels that carries the device (the turret lot's).
+                Place::Construct(building) if building == n.building => {
+                    st.constructs.get(building)?.device(n).map(|d| d.at)
+                }
                 _ => None,
             };
         }
@@ -422,6 +431,13 @@ pub fn use_verb(st: &mut AppState, key: char) -> Result<VerbDone, String> {
                 .as_ref()
                 .map_or(Place::Stratum(StratumKind::Net), |p| p.place);
             VerbDone::Shell(host, (place, at))
+        }
+        Verb::Blind | Verb::TakeOver => {
+            let node = node.site().ok_or("nothing answers there")?;
+            VerbDone::Said(match verb {
+                Verb::Blind => crate::turrets::blind(st, node)?,
+                _ => crate::turrets::take_over(st, node)?,
+            })
         }
     };
     Ok(done)

@@ -24,6 +24,7 @@ MAT = {
     "b": "#c8d2dc",  # blade steel
     "r": "#ff3b5c",  # red
     "o": "#ff8a3c",  # orange heat
+    "n": "#00e5ff",  # net cyan
 }
 
 # The trees' colours: the attributes' as the deck draws them.
@@ -444,6 +445,20 @@ ICONS = {
                       "ckkkkc",
                       ".ckkc.",
                       "..cc.."],
+        # a lane of traffic, a step along it
+        "data_surfer": ["......",
+                        "c..c..",
+                        ".c..c.",
+                        "nnnnnn",
+                        ".c..c.",
+                        "c..c.."],
+        # riding the traffic, the wake behind
+        "slipstream": ["..cccc",
+                       ".c....",
+                       "nnnnnn",
+                       ".c....",
+                       "..cccc",
+                       "......"],
         # a jaw closing on a signal
         "trace_eater": ["GGGGGG",
                         "G.G.G.",
@@ -465,6 +480,13 @@ ICONS = {
                      "C.cc.C",
                      "C....C",
                      "CCCCCC"],
+        # a gun on its swivel, turned round
+        "turncoat": ["..cc..",
+                     ".cGGc.",
+                     "cGkkGc",
+                     "..gg..",
+                     ".gggg.",
+                     "gggggg"],
     },
 }
 

@@ -147,8 +147,13 @@ fn cameras_at(st: &AppState, place: Place) -> Vec<Camera> {
 /// Whether a tile lies in a camera's cone: up to `CONE_DEPTH` out, and at each step
 /// out one more tile to each side.
 pub fn in_cone(cam: &Camera, p: Pos) -> bool {
-    let (dx, dy) = cam.facing.delta();
-    let (ox, oy) = (p.x - cam.at.x, p.y - cam.at.y);
+    in_cone_at(cam.at, cam.facing, p)
+}
+
+/// Whether a tile lies in the cone of something at `at` facing `facing`.
+pub fn in_cone_at(at: Pos, facing: Dir, p: Pos) -> bool {
+    let (dx, dy) = facing.delta();
+    let (ox, oy) = (p.x - at.x, p.y - at.y);
     let depth = ox * dx + oy * dy;
     let side = (ox * dy - oy * dx).abs();
     (1..=CONE_DEPTH).contains(&depth) && side <= depth
@@ -169,16 +174,22 @@ pub fn floor_cone(floor: &Floor, cam: &Camera) -> Vec<Pos> {
 
 /// The cone's tiles that `blocks` leaves open, with a clear line from the camera.
 fn cone_by(cam: &Camera, blocks: impl Fn(Pos) -> bool) -> Vec<Pos> {
+    cone_at(cam.at, cam.facing, blocks)
+}
+
+/// The cone's tiles, from `at` facing `facing`, that `blocks` leaves open with a clear
+/// line.
+pub fn cone_at(at: Pos, facing: Dir, blocks: impl Fn(Pos) -> bool) -> Vec<Pos> {
     let r = CONE_DEPTH;
     let mut out = Vec::new();
-    for y in cam.at.y - r..=cam.at.y + r {
-        for x in cam.at.x - r..=cam.at.x + r {
+    for y in at.y - r..=at.y + r {
+        for x in at.x - r..=at.x + r {
             let p = Pos::new(x, y);
-            if in_cone(cam, p)
+            if in_cone_at(at, facing, p)
                 && !blocks(p)
-                && citygen::pathing::bresenham(cam.at, p)
+                && citygen::pathing::bresenham(at, p)
                     .into_iter()
-                    .filter(|q| *q != cam.at && *q != p)
+                    .filter(|q| *q != at && *q != p)
                     .all(|q| !blocks(q))
             {
                 out.push(p);
@@ -253,6 +264,9 @@ pub fn tick(st: &mut AppState) {
         .filter(|c| matches!(c.place, Place::Floor { .. }))
     {
         crate::guards::place_you_here(st, c.building);
+        if let Some(at) = st.player.as_ref().map(|p| p.pos) {
+            crate::turrets::told(st, c.place, at);
+        }
     }
     let mut buildings: Vec<BuildingId> = seen.iter().map(|c| c.building).collect();
     buildings.sort();
@@ -282,7 +296,8 @@ pub enum ConeLook {
     Tapped,
 }
 
-/// The cones to draw on `place` (the street, or a site's floor) now, with how each looks.
+/// The cones to draw on `place` (the street, or a site's floor) now, with how each looks:
+/// the cameras', then the turrets' fields (`turrets::cones`).
 pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     let Some(city) = st.city.as_ref() else {
         return Vec::new();
@@ -293,7 +308,7 @@ pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
     };
     let now = st.net.now(st);
     let seeing = seeing(st);
-    cameras_at(st, place)
+    let mut out: Vec<(Vec<Pos>, ConeLook)> = cameras_at(st, place)
         .into_iter()
         .filter_map(|c| {
             let look = if seeing.contains(&c) {
@@ -311,7 +326,9 @@ pub fn cones(st: &AppState, place: Place) -> Vec<(Vec<Pos>, ConeLook)> {
             };
             Some((tiles, look))
         })
-        .collect()
+        .collect();
+    out.extend(crate::turrets::cones(st, place));
+    out
 }
 
 /// The cones as backgrounds on the street's or a floor's map.
