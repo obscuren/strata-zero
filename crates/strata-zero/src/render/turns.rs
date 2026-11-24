@@ -35,17 +35,6 @@ pub struct Chip {
     /// `18`, `4/6`; nothing for you.
     pub hp: String,
     pub acting: bool,
-    /// On your side: you, your bots, a turret you hold.
-    pub ours: bool,
-}
-
-/// A chip's colours: acting, yours in yours and the others' in theirs; dim otherwise.
-fn colours(chip: &Chip) -> (Color, Color) {
-    match (chip.acting, chip.ours) {
-        (true, true) => (CYAN, YOURS),
-        (true, false) => (FOE, THEIRS),
-        (false, _) => (DIM, BLACK),
-    }
 }
 
 /// What the column reads this frame.
@@ -56,8 +45,7 @@ pub struct TurnView {
     /// Your pools while you act: (moves, moves max, ap, ap max) and whether the
     /// act half is on.
     pub yours: Option<(u8, u8, u8, u8, bool)>,
-    /// What the acting actor other than you is up to: `moves 2 › fires`, drawn on its
-    /// chip's band.
+    /// What the acting enemy is up to: `moves 2 › fires`.
     pub theirs: Option<String>,
 }
 
@@ -147,9 +135,12 @@ impl Overlay for TurnOverlay<'_> {
             let mark = if chip.acting { "▶" } else { " " };
             let name: String = chip.name.chars().take(9).collect();
             let line = row(&format!(" {mark} {name:<9}{:>5} ", chip.hp));
-            // Your pools show under you alone; a bot's or a turret's plan under it.
             let yours = chip.name == "YOU";
-            let (fg, bg) = colours(chip);
+            let (fg, bg) = match (chip.acting, yours) {
+                (true, true) => (CYAN, YOURS),
+                (true, false) => (FOE, THEIRS),
+                (false, _) => (DIM, BLACK),
+            };
             put(buf, area, x0, y, &line, fg, bg, chip.acting);
             y += 1;
             if !chip.acting {
@@ -173,7 +164,7 @@ impl Overlay for TurnOverlay<'_> {
                     y,
                     &row(&format!("   {doing}")),
                     TEXT,
-                    bg,
+                    THEIRS,
                     false,
                 );
                 y += 1;
@@ -188,23 +179,6 @@ mod tests {
 
     fn width(s: &str) -> usize {
         unicode_width::UnicodeWidthStr::width(s)
-    }
-
-    fn chip(name: &str, acting: bool, ours: bool) -> Chip {
-        Chip {
-            name: name.to_string(),
-            hp: String::new(),
-            acting,
-            ours,
-        }
-    }
-
-    #[test]
-    fn an_acting_chip_on_your_side_takes_your_colours() {
-        assert_eq!(colours(&chip("YOU", true, true)), (CYAN, YOURS));
-        assert_eq!(colours(&chip("turret", true, true)), (CYAN, YOURS));
-        assert_eq!(colours(&chip("turret", true, false)), (FOE, THEIRS));
-        assert_eq!(colours(&chip("turret", false, true)), (DIM, BLACK));
     }
 
     #[test]

@@ -30,7 +30,7 @@ On its turn it turns one eighth toward you, the shorter way round, and fires if 
 
 Shots at a turret go through its plate first: it has 4 plate at middle security, 6 at high. Each round that would hit rolls the plate, a 10% chance a point of `ARM`. A turned round sparks off and does no damage, but costs the plate a point (`you fire · … · plate 6 → 4`); the rest take its HP. At 0 HP it is wrecked (`turret wrecked`) and stays in the way. A blast hurts it as it hurts any foe, an EMP puck hurts it in full, and a stun costs it its turn. A hostile turret you shoot at wakes and hunts you, asleep or not; a blind one or one that's yours doesn't change.
 
-One that's yours (`turret's yours`, The Net) sits on your side of the order, in your colours, in a fight on its floor. It never fires on you: on its turn it turns on the nearest guard or goon it has a clear line to and shoots (`turret fires on guard · …`). They shoot back at it, at whichever of you is nearer. A fight that ends takes your turret out of the order, and out of a fight it does nothing.
+One that's yours (`turret's yours`, The Net) sits on your side of the order in a fight on its floor. It never fires on you: on its turn it turns on the nearest guard or goon it has a clear line to and shoots (`turret fires on guard · …`). They shoot back at it, at whichever of you is nearer. A fight that ends takes your turret out of the order, and out of a fight it does nothing.
 
 ## Your turn
 

@@ -542,15 +542,8 @@ mod tests {
         crate::net::engage(&mut st, on(0), true);
         let e = st.net.engaged.as_ref().unwrap();
         assert!(e.order.contains(&crate::net::Actor::Foe(t)));
-        let chip = |st: &AppState| {
-            crate::net::turn_view(st)
-                .unwrap()
-                .chips
-                .into_iter()
-                .find(|c| c.name == "turret")
-                .unwrap()
-        };
-        assert!(chip(&st).ours);
+        let view = crate::net::turn_view(&st).unwrap();
+        assert!(view.chips.iter().any(|c| c.name == "turret"));
         st.force_hit = Some(true);
         step(&mut st, t);
         assert!(logged(&st, "turret fires on guard"));

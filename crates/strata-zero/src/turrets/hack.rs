@@ -233,7 +233,6 @@ mod tests {
             view.chips.into_iter().find(|c| c.name == "turret")
         };
         let its = chip(&st).expect("its chip");
-        assert!(its.ours);
         assert_eq!(its.hp, "4·40", "its plate, then its hit points");
         // The hold runs out.
         crate::sitenet::testutil::pass_minutes(&mut st, 2);
@@ -255,7 +254,6 @@ mod tests {
         assert_eq!(seats(&st, i), 1, "the seat it had, no second");
         let view = crate::net::turn_view(&st).expect("the turn column");
         assert_eq!(view.chips.iter().filter(|c| c.name == "turret").count(), 1);
-        assert!(!chip(&st).expect("its chip").ours);
         assert!(crate::net::turn_readout(&st).is_some());
     }
 

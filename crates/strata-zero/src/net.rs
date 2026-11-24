@@ -2852,7 +2852,6 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                 name: "YOU".to_string(),
                 hp: String::new(),
                 acting: actor == Actor::You,
-                ours: true,
             },
             Actor::Ice(i) => {
                 let Some((g, ice)) = k
@@ -2865,7 +2864,6 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     name: format!("{} ICE", g.label()),
                     hp: format!("{}/{}", ice.integrity, g.grade.integrity()),
                     acting: actor == *a,
-                    ours: false,
                 }
             }
             Actor::Foe(i) => {
@@ -2883,7 +2881,6 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                         f.hp.to_string()
                     },
                     acting: actor == *a,
-                    ours: crate::turrets::is_yours(f),
                 }
             }
             Actor::Bot(site, n) => {
@@ -2894,7 +2891,6 @@ pub fn turn_view(st: &AppState) -> Option<crate::render::turns::TurnView> {
                     name,
                     hp: String::new(),
                     acting: actor == *a,
-                    ours: true,
                 }
             }
             Actor::Seat(n) => Chip {
