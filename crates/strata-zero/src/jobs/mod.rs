@@ -19,12 +19,16 @@ use std::collections::BTreeMap;
 
 /// Standing at or under which a fixer refuses you.
 pub const REFUSE_AT: i32 = -3;
-/// Standing from which a fixer offers Copy work.
-pub const COPY_AT: i32 = 2;
-/// Standing from which a fixer offers Plant work.
-pub const PLANT_AT: i32 = 4;
-/// Standing from which a Copy may be a vault.
-pub const VAULT_AT: i32 = 6;
+// The standing tiers are how a fixer sees you, not the work they open: `standing_word`
+// names them, and `opens_at` says which work each one opens.
+/// Known: a fixer offers Copy work.
+pub const KNOWN_AT: i32 = 2;
+/// Trusted: Plant work and small site jobs.
+pub const TRUSTED_AT: i32 = 4;
+/// Inner circle: a Copy may be a vault, and site jobs are medium.
+pub const INNER_AT: i32 = 6;
+/// Family: site jobs are large.
+pub const FAMILY_AT: i32 = 9;
 pub const GAIN_DONE: i32 = 1;
 pub const LOSS_DROP: i32 = -1;
 pub const LOSS_LATE: i32 = -2;
@@ -262,10 +266,11 @@ pub fn standing_word(standing: i32) -> &'static str {
     match standing {
         s if s <= REFUSE_AT => "refuses you",
         s if s < 0 => "cold",
-        s if s < COPY_AT => "new",
-        s if s < PLANT_AT => "known",
-        s if s < VAULT_AT => "trusted",
-        _ => "inner circle",
+        s if s < KNOWN_AT => "new",
+        s if s < TRUSTED_AT => "known",
+        s if s < INNER_AT => "trusted",
+        s if s < FAMILY_AT => "inner circle",
+        _ => "family",
     }
 }
 
@@ -283,9 +288,9 @@ pub fn has_deck(st: &crate::app::AppState) -> bool {
 pub fn opens_at(kind: KindTag, vault: bool) -> i32 {
     match kind {
         KindTag::Fetch | KindTag::Deliver => REFUSE_AT + 1,
-        KindTag::Copy if vault => VAULT_AT,
-        KindTag::Copy => COPY_AT,
-        KindTag::Plant | KindTag::Site => PLANT_AT,
+        KindTag::Copy if vault => INNER_AT,
+        KindTag::Copy => KNOWN_AT,
+        KindTag::Plant | KindTag::Site => TRUSTED_AT,
     }
 }
 
@@ -393,10 +398,10 @@ impl Jobs {
             return Vec::new();
         }
         let mut out = vec![KindTag::Fetch, KindTag::Deliver];
-        if standing >= COPY_AT {
+        if standing >= KNOWN_AT {
             out.push(KindTag::Copy);
         }
-        if standing >= PLANT_AT {
+        if standing >= TRUSTED_AT {
             out.push(KindTag::Plant);
             out.push(KindTag::Site);
         }
@@ -930,11 +935,11 @@ mod tests {
     fn allowed_kinds_open_with_standing() {
         assert_eq!(Jobs::allowed(0), vec![KindTag::Fetch, KindTag::Deliver]);
         assert_eq!(
-            Jobs::allowed(COPY_AT),
+            Jobs::allowed(KNOWN_AT),
             vec![KindTag::Fetch, KindTag::Deliver, KindTag::Copy]
         );
         assert_eq!(
-            Jobs::allowed(PLANT_AT),
+            Jobs::allowed(TRUSTED_AT),
             vec![
                 KindTag::Fetch,
                 KindTag::Deliver,
@@ -1171,7 +1176,7 @@ mod tests {
     fn a_server_copy_and_a_backdoor_tick_their_jobs() {
         let mut st = state_home();
         let fx = a_fixer(&st);
-        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        st.jobs.fixer_mut(fx).standing = TRUSTED_AT;
         let copy = crate::jobs::generate(&mut st, fx, KindTag::Copy, 0).unwrap();
         let Kind::Copy { building: cb, .. } = copy.kind else {
             panic!()
@@ -1299,7 +1304,7 @@ mod tests {
                 "known",
                 "trusted",
                 "inner circle",
-                "inner circle"
+                "family"
             ]
         );
     }
@@ -1320,7 +1325,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(opens_at(KindTag::Copy, true), VAULT_AT);
+        assert_eq!(opens_at(KindTag::Copy, true), INNER_AT);
     }
 
     #[test]
@@ -1423,7 +1428,7 @@ mod tests {
     fn work_done_before_taking_counts() {
         let mut st = state_home();
         let fx = a_fixer(&st);
-        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        st.jobs.fixer_mut(fx).standing = TRUSTED_AT;
         // The shard fetched while the job was only on offer.
         let fetch = crate::jobs::generate(&mut st, fx, KindTag::Fetch, 0).unwrap();
         let Kind::Fetch {
@@ -1467,7 +1472,7 @@ mod tests {
     fn a_sites_server_copied_before_taking_counts() {
         let (mut st, b) = crate::sitenet::testutil::office_plain();
         let fx = a_fixer(&st);
-        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        st.jobs.fixer_mut(fx).standing = TRUSTED_AT;
         let mut job = (0..40)
             .find_map(|n| crate::jobs::generate(&mut st, fx, KindTag::Copy, n))
             .expect("a copy job");

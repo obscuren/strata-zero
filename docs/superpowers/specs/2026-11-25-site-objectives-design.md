@@ -120,8 +120,10 @@ A Wipe job is *done* by the purge, but pays half **(call)**: the fixer wanted it
 - **Which building:** a hotel or office (a venue whose type has the kind) in the city, not
   your home building, not one already holding a copy, that can hold the size. Stations
   wait for #101 to place them.
-- **Size by standing (call):** Small from the standing Plant needs today; Medium a step
-  up; Large at the top. Security is the building's subnet's.
+- **Size by standing (call):** Small once a fixer trusts you (4); Medium from the inner
+  circle (6); Large once you're family (9), a new tier named on 2026-11-25 when the
+  thresholds were renamed after the standing tiers (known, trusted, inner circle,
+  family) rather than the work they open. Security is the building's subnet's.
 - **Pay** scales with size and security, above a Copy of the same security
   **(call: tune by playing)**.
 - **Taking it** calls `venues::begin`; the building's doors flag. If begin refuses (it

@@ -104,7 +104,9 @@ fn next_line(st: &AppState, job: &super::Job, next: String) -> Line<'static> {
     }
 }
 
-use super::{COPY_AT, Event, Kind, PLANT_AT, REFUSE_AT, Say, VAULT_AT, handin_item, handin_sifted};
+use super::{
+    Event, INNER_AT, KNOWN_AT, Kind, REFUSE_AT, Say, TRUSTED_AT, handin_item, handin_sifted,
+};
 use crate::screens::popup::{Choice, Header, Pick, Popup};
 use crate::ui::hud::AMBER;
 use citygen::BuildingId;
@@ -367,21 +369,21 @@ pub fn rig_rewards(
     let mut got: Vec<ItemId> = Vec::new();
     let mut racks: Vec<ItemId> = Vec::new();
     let r = &mut st.character.rig_rewards;
-    if crossed(COPY_AT)
+    if crossed(KNOWN_AT)
         && let Some(sled) = KNOW_SLEDS.get(r.sleds as usize)
         && r.paid.insert(format!("know:{name}"))
     {
         r.sleds += 1;
         got.push(ItemId::new(sled));
     }
-    if crossed(PLANT_AT)
+    if crossed(TRUSTED_AT)
         && let Some(rack) = TRUST_RACKS.get(r.racks as usize)
         && r.paid.insert(format!("trust:{name}"))
     {
         r.racks += 1;
         racks.push(ItemId::new(rack));
     }
-    if crossed(VAULT_AT) && !r.halcyon && r.paid.insert(format!("inner:{name}")) {
+    if crossed(INNER_AT) && !r.halcyon && r.paid.insert(format!("inner:{name}")) {
         r.halcyon = true;
         racks.push(ItemId::new("rack_halcyon"));
     }
@@ -665,27 +667,27 @@ mod tests {
 
     #[test]
     fn knowing_you_pays_a_sled_once() {
-        use crate::jobs::COPY_AT;
+        use crate::jobs::KNOWN_AT;
         let mut st = state_home();
         let (a, b) = two_fixers(&st);
-        let got = rig_rewards(&mut st, a, COPY_AT - 1, COPY_AT, &fetch());
+        let got = rig_rewards(&mut st, a, KNOWN_AT - 1, KNOWN_AT, &fetch());
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, ItemId::new("sled_tinman"));
         assert_eq!(sleds_in_pack(&st, "sled_tinman"), 1);
-        let got = rig_rewards(&mut st, b, COPY_AT - 1, COPY_AT, &fetch());
+        let got = rig_rewards(&mut st, b, KNOWN_AT - 1, KNOWN_AT, &fetch());
         assert_eq!(got[0].0, ItemId::new("sled_switchback"));
         // Same fixer again, or a drop and a climb back, pays nothing.
-        assert!(rig_rewards(&mut st, a, COPY_AT - 1, COPY_AT, &fetch()).is_empty());
-        assert!(rig_rewards(&mut st, a, COPY_AT, COPY_AT + 1, &fetch()).is_empty());
+        assert!(rig_rewards(&mut st, a, KNOWN_AT - 1, KNOWN_AT, &fetch()).is_empty());
+        assert!(rig_rewards(&mut st, a, KNOWN_AT, KNOWN_AT + 1, &fetch()).is_empty());
         assert_eq!(st.character.rig_rewards.sleds, 2);
     }
 
     #[test]
     fn the_first_trust_sends_the_civitas() {
-        use crate::jobs::PLANT_AT;
+        use crate::jobs::TRUSTED_AT;
         let mut st = state_home();
         let (a, b) = two_fixers(&st);
-        let got = rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        let got = rig_rewards(&mut st, a, TRUSTED_AT - 1, TRUSTED_AT, &fetch());
         assert!(got.iter().any(|(i, _)| *i == ItemId::new("rack_civitas")));
         assert_eq!(racks_in_pack(&st), vec!["rack_civitas"]);
         assert!(
@@ -705,18 +707,18 @@ mod tests {
             mail.body
         );
         assert!(!mail.read);
-        rig_rewards(&mut st, b, PLANT_AT - 1, PLANT_AT, &fetch());
+        rig_rewards(&mut st, b, TRUSTED_AT - 1, TRUSTED_AT, &fetch());
         assert_eq!(racks_in_pack(&st), vec!["rack_civitas", "rack_lotus"]);
         // A third fixer, or the same one again, sends nothing more.
         let mails = st.journal.mails.len();
-        rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        rig_rewards(&mut st, a, TRUSTED_AT - 1, TRUSTED_AT, &fetch());
         assert_eq!(racks_in_pack(&st).len(), 2);
         assert_eq!(st.journal.mails.len(), mails);
     }
 
     #[test]
     fn a_rack_earned_while_away_comes_with_you() {
-        use crate::jobs::PLANT_AT;
+        use crate::jobs::TRUSTED_AT;
         let mut st = state_home();
         let (a, _) = two_fixers(&st);
         // Home set aside, as in another city: its journal goes with it.
@@ -724,7 +726,7 @@ mod tests {
         st.away = crate::outside::set_aside(&mut home).map(Box::new);
         let mails = st.journal.mails.len();
         let home_mails = st.away.as_ref().unwrap().journal.mails.len();
-        rig_rewards(&mut st, a, PLANT_AT - 1, PLANT_AT, &fetch());
+        rig_rewards(&mut st, a, TRUSTED_AT - 1, TRUSTED_AT, &fetch());
         assert_eq!(racks_in_pack(&st), vec!["rack_civitas"], "in the pack");
         assert_eq!(st.journal.mails.len(), mails + 1, "the mail here");
         let journal = &st.away.as_ref().unwrap().journal;
@@ -733,14 +735,14 @@ mod tests {
 
     #[test]
     fn inner_circle_sends_the_halcyon_once() {
-        use crate::jobs::VAULT_AT;
+        use crate::jobs::INNER_AT;
         let mut st = state_home();
         let (a, b) = two_fixers(&st);
-        rig_rewards(&mut st, a, VAULT_AT - 1, VAULT_AT, &fetch());
+        rig_rewards(&mut st, a, INNER_AT - 1, INNER_AT, &fetch());
         assert!(racks_in_pack(&st).contains(&"rack_halcyon".to_string()));
         assert!(st.character.rig_rewards.halcyon);
         let n = racks_in_pack(&st).len();
-        rig_rewards(&mut st, b, VAULT_AT - 1, VAULT_AT, &fetch());
+        rig_rewards(&mut st, b, INNER_AT - 1, INNER_AT, &fetch());
         assert_eq!(sleds_in_pack(&st, "rack_halcyon"), 1);
         assert!(racks_in_pack(&st).len() <= n + 1);
     }

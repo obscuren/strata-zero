@@ -4,9 +4,9 @@
 
 use super::ui::{district_of_fixer, fixer_name, hand_in_now};
 use super::{
-    COPY_AT, Corner, GAIN_DONE, Job, JobId, Jobs, Kind, LOSS_DROP, LOSS_LATE, PLANT_AT, REFUSE_AT,
-    Say, State, VAULT_AT, clock_text, corner, day_minute, hours_text, in_shift, opens_at, shift_of,
-    shift_turn, standing_word,
+    Corner, FAMILY_AT, GAIN_DONE, INNER_AT, Job, JobId, Jobs, KNOWN_AT, Kind, LOSS_DROP, LOSS_LATE,
+    REFUSE_AT, Say, State, TRUSTED_AT, clock_text, corner, day_minute, hours_text, in_shift,
+    opens_at, shift_of, shift_turn, standing_word,
 };
 use crate::app::AppState;
 use crate::backdoors::{Health, State as DoorState};
@@ -908,17 +908,22 @@ fn offer_card(st: &AppState, job: &Job, width: usize, way: &Way) -> Vec<Line<'st
     out
 }
 
-/// The standing ladder from REFUSE_AT to 8: the thresholds marked and named, you on
-/// it, and what moves it. "refuses" goes left of the bar when it would run into "fetch".
+/// The standing ladder from REFUSE_AT to past family: the tiers marked and named, you
+/// on it, what the next tier opens, and what moves it. "refuses" goes left of the bar
+/// when it would run into "cold".
 fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
-    const HI: i32 = 8;
+    const HI: i32 = FAMILY_AT + 1;
     let steps = (HI - REFUSE_AT) as usize;
+    // The tiers, as `standing_word` names them; they take turns on two rows so that
+    // neighbours never crowd each other out.
     let marks = [
         (REFUSE_AT, "refuses"),
-        (REFUSE_AT + 1, "fetch"),
-        (COPY_AT, "copy"),
-        (PLANT_AT, "plant"),
-        (VAULT_AT, "vault"),
+        (REFUSE_AT + 1, "cold"),
+        (0, "new"),
+        (KNOWN_AT, "known"),
+        (TRUSTED_AT, "trusted"),
+        (INNER_AT, "inner circle"),
+        (FAMILY_AT, "family"),
     ];
     let mut step = (width.saturating_sub(4) / steps).max(2);
     let aside = step < "refuses".len() + 1;
@@ -944,11 +949,10 @@ fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
         }
     }
     let len = lead + steps * step + 1;
-    let mut labels = vec![' '; len];
-    for (v, name) in marks {
-        if aside && v == REFUSE_AT {
-            continue;
-        }
+    let mut labels = [vec![' '; len], vec![' '; len]];
+    let shown = marks.iter().filter(|(v, _)| !(aside && *v == REFUSE_AT));
+    for (n, &(v, name)) in shown.enumerate() {
+        let labels = &mut labels[n % 2];
         let x = lead + (v - REFUSE_AT) as usize * step;
         let free = (x..x + name.len()).all(|i| labels.get(i) == Some(&' '))
             && labels.get(x.wrapping_sub(1)).is_none_or(|c| *c == ' ');
@@ -960,16 +964,21 @@ fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
     }
     let mut you = vec![' '; len];
     you[lead + (standing.clamp(REFUSE_AT, HI) - REFUSE_AT) as usize * step] = '▲';
-    let mut out = vec![
-        row(bar, Vec::new(), width),
-        plain(labels.iter().collect::<String>().trim_end(), FAINT, width),
-        plain(you.iter().collect::<String>().trim_end(), WHITE, width),
-        plain(
-            format!("  done {GAIN_DONE:+} · dropped {LOSS_DROP} · late {LOSS_LATE}"),
-            FAINTER,
-            width,
-        ),
-    ];
+    let mut out = vec![row(bar, Vec::new(), width)];
+    for l in &labels {
+        out.push(plain(l.iter().collect::<String>().trim_end(), FAINT, width));
+    }
+    out.push(plain(
+        you.iter().collect::<String>().trim_end(),
+        WHITE,
+        width,
+    ));
+    out.push(plain(format!("  {}", next_tier(standing)), DIM, width));
+    out.push(plain(
+        format!("  done {GAIN_DONE:+} · dropped {LOSS_DROP} · late {LOSS_LATE}"),
+        FAINTER,
+        width,
+    ));
     if !deck {
         out.push(plain(
             "  copy, plant and vault: needs a deck on your waist",
@@ -978,6 +987,23 @@ fn ladder(standing: i32, deck: bool, width: usize) -> Vec<Line<'static>> {
         ));
     }
     out
+}
+
+/// What the next standing tier opens, from `standing`.
+fn next_tier(standing: i32) -> String {
+    let next = [
+        (REFUSE_AT + 1, "fetch and deliver"),
+        (KNOWN_AT, "copy jobs"),
+        (TRUSTED_AT, "plants, small site jobs"),
+        (INNER_AT, "vaults, medium site jobs"),
+        (FAMILY_AT, "large site jobs"),
+    ]
+    .into_iter()
+    .find(|(at, _)| standing < *at);
+    match next {
+        Some((at, opens)) => format!("{} at {at}: {opens}", standing_word(at)),
+        None => "family: every job they have".to_string(),
+    }
 }
 
 /// The last thing a fixer said to you: the line for the latest take or ending of their
@@ -1262,16 +1288,25 @@ mod tests {
     fn the_ladder_names_each_threshold_once_and_marks_you() {
         for width in [56, 68] {
             let t = text(&ladder(7, true, width));
-            for name in ["refuses", "fetch", "copy", "plant", "vault"] {
+            for name in [
+                "refuses",
+                "cold",
+                "new",
+                "known",
+                "trusted",
+                "inner circle",
+                "family",
+            ] {
                 assert_eq!(
                     t.iter().map(|l| l.matches(name).count()).sum::<usize>(),
                     1,
                     "{name} at {width}: {t:?}"
                 );
             }
-            assert_eq!(t[2].matches('▲').count(), 1);
+            assert_eq!(t[3].matches('▲').count(), 1);
             assert!(t.iter().all(|l| l.chars().count() <= width), "{t:?}");
-            assert_eq!(t[3], "  done +1 · dropped -1 · late -2");
+            assert_eq!(t[4], "  family at 9: large site jobs");
+            assert_eq!(t[5], "  done +1 · dropped -1 · late -2");
         }
     }
 
@@ -1288,7 +1323,7 @@ mod tests {
 
     fn offered(st: &mut AppState, k: KindTag) -> JobId {
         let fx = a_fixer(st);
-        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        st.jobs.fixer_mut(fx).standing = TRUSTED_AT;
         let job = (0..40)
             .find_map(|n| generate(st, fx, k, n))
             .expect("a job of the kind");

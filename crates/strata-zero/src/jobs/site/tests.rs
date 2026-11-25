@@ -1,7 +1,7 @@
 use super::*;
 use crate::containers::state::Opened;
 use crate::jobs::testutil::a_fixer;
-use crate::jobs::{PLANT_AT, take_job};
+use crate::jobs::{TRUSTED_AT, take_job};
 
 /// A plain office away from home, a fixer who trusts you, and a small site job asking
 /// `kind` on its first objective that offers it, taken: its copy live, you on the street
@@ -9,7 +9,7 @@ use crate::jobs::{PLANT_AT, take_job};
 fn taken(kind: ObjectiveKind) -> (AppState, JobId, BuildingId) {
     let (mut st, b) = crate::sitenet::testutil::office_plain();
     let fixer = a_fixer(&st);
-    st.jobs.fixer_mut(fixer).standing = PLANT_AT;
+    st.jobs.fixer_mut(fixer).standing = TRUSTED_AT;
     let plan = crate::interiors::plan_now(&st, b).unwrap().into_owned();
     let layout = plan.venue.as_deref().unwrap();
     let pack = VenuePack::builtin();
@@ -79,9 +79,9 @@ fn at_objective(st: &mut AppState, b: BuildingId) -> (Place, Pos) {
 
 #[test]
 fn sizes_follow_standing_and_fit_the_window_and_the_pay() {
-    assert_eq!(size_at(PLANT_AT), MissionSize::Small);
-    assert_eq!(size_at(MEDIUM_AT), MissionSize::Medium);
-    assert_eq!(size_at(LARGE_AT), MissionSize::Large);
+    assert_eq!(size_at(TRUSTED_AT), MissionSize::Small);
+    assert_eq!(size_at(INNER_AT), MissionSize::Medium);
+    assert_eq!(size_at(FAMILY_AT), MissionSize::Large);
     assert_eq!(
         [MissionSize::Small, MissionSize::Medium, MissionSize::Large].map(hours),
         [12, 18, 24]
@@ -96,9 +96,9 @@ fn sizes_follow_standing_and_fit_the_window_and_the_pay() {
 fn a_trusted_fixer_offers_a_site_job_with_three_stops() {
     let mut st = crate::jobs::testutil::state_home();
     let fixer = a_fixer(&st);
-    st.jobs.fixer_mut(fixer).standing = PLANT_AT;
-    assert!(Jobs::allowed_for(PLANT_AT, false).contains(&KindTag::Site));
-    assert!(!Jobs::allowed_for(PLANT_AT - 1, true).contains(&KindTag::Site));
+    st.jobs.fixer_mut(fixer).standing = TRUSTED_AT;
+    assert!(Jobs::allowed_for(TRUSTED_AT, false).contains(&KindTag::Site));
+    assert!(!Jobs::allowed_for(TRUSTED_AT - 1, true).contains(&KindTag::Site));
     let j = (0..20)
         .find_map(|n| crate::jobs::generate::generate(&mut st, fixer, KindTag::Site, n))
         .expect("a site job");

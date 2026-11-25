@@ -4,7 +4,9 @@
 //! fails late, when an alarm purges the vault before a copy, or when a Take's item is
 //! lost. Spec: `docs/superpowers/specs/2026-11-25-site-objectives-design.md`.
 
-use super::{Event, Job, JobId, Jobs, Kind, KindTag, LOSS_LATE, Objective, Say, State, VAULT_AT};
+use super::{
+    Event, FAMILY_AT, INNER_AT, Job, JobId, Jobs, Kind, KindTag, LOSS_LATE, Objective, Say, State,
+};
 use crate::app::AppState;
 use crate::containers::ContainerAt;
 use citygen::rng::hash64;
@@ -20,19 +22,17 @@ use sim::PersonId;
 const SALT_SITE: u64 = 0x10B_0098;
 /// Buildings a site job tries before giving up on the kind.
 const SITE_TRIES: usize = 6;
-/// Standing from which a site job is medium; large from `LARGE_AT`. Small from Plant's.
-pub const MEDIUM_AT: i32 = VAULT_AT;
-pub const LARGE_AT: i32 = VAULT_AT + 3;
 /// Net minutes from an alarm until a vault purges itself.
 pub const PURGE_MINUTES: u64 = 5;
 /// The device a Plant hands you with the job.
 pub const TAP: &str = "tap";
 
-/// The size a fixer offers at this standing.
+/// The size a fixer offers at this standing: small from trusted, medium from the inner
+/// circle, large from family.
 pub fn size_at(standing: i32) -> MissionSize {
-    if standing >= LARGE_AT {
+    if standing >= FAMILY_AT {
         MissionSize::Large
-    } else if standing >= MEDIUM_AT {
+    } else if standing >= INNER_AT {
         MissionSize::Medium
     } else {
         MissionSize::Small

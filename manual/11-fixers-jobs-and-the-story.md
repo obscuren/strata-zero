@@ -29,7 +29,7 @@ Miss the deadline and the job fails. The fixer hears of it.
 
 ## Site jobs
 
-A fixer who trusts you offers site jobs: a hotel or office across the city, its doors flagged while the job is on, with guards, cameras, turrets and locks between the way in and what you came for. The job's spot is marked `◎` on its floor; a Take's is the container itself. A site job is small from a fixer who trusts you, medium from the inner circle, and large once they've known you a while; the bigger it is, the more floors, locks and guards, the longer the window (12, 18 or 24 hours) and the better the pay.
+A fixer who trusts you offers site jobs: a hotel or office across the city, its doors flagged while the job is on, with guards, cameras, turrets and locks between the way in and what you came for. The job's spot is marked `◎` on its floor; a Take's is the container itself. A site job is small from a fixer who trusts you, medium from the inner circle, and large once you're family; the bigger it is, the more floors, locks and guards, the longer the window (12, 18 or 24 hours) and the better the pay.
 
 | Asks you to | What you do |
 |---|---|
@@ -50,7 +50,7 @@ When a site job ends, whether handed in, dropped or failed, the building goes ba
 
 ## Standing
 
-Each fixer keeps count of you. A job done raises your standing, a job dropped lowers it, a job left late lowers it twice as far. As it rises, a fixer goes from new to known, trusted, and inner circle, and the better work opens up: copying first, then planting and site jobs, then vaults. Let it sink far enough and they won't deal with you at all. After a raid on your rig, the fixers keep quiet for a day.
+Each fixer keeps count of you. A job done raises your standing, a job dropped lowers it, a job left late lowers it twice as far. As it rises, a fixer goes from new to known, trusted, inner circle and family, and the better work opens up: copying once they know you, planting and small site jobs once they trust you, vaults and medium site jobs in the inner circle, and large site jobs once you're family. The ladder on the fixer's card names each tier and says what the next one opens. Let it sink far enough and they won't deal with you at all. After a raid on your rig, the fixers keep quiet for a day.
 
 Standing also pays in hardware for your rig, once each, across the whole run, straight into your pack with the hand-in. A fixer who comes to know you pays a tier-two sled. The first fixer to trust you pays a Civitas cabinet, the second a Lotus tower, and the first to take you into the inner circle a Halcyon server frame. The first Plant you finish pays the `sniff` program and the first Copy pays `keepalive`. The hand-in line says what came. See the rig chapter for what they do.
 

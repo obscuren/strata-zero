@@ -3,9 +3,9 @@
 use super::ui::{district_of_fixer, fixer_name};
 use super::{
     DELIVER_MIN_RANGE, DELIVER_ON_SHIFT, FETCH_RANGE, HOURS_COPY, HOURS_DELIVER, HOURS_FETCH,
-    HOURS_PLANT, Job, JobId, Jobs, Kind, KindTag, Objective, PAY_COPY_PER_SECURITY,
+    HOURS_PLANT, INNER_AT, Job, JobId, Jobs, Kind, KindTag, Objective, PAY_COPY_PER_SECURITY,
     PAY_DELIVER_BASE, PAY_FETCH, PAY_PLANT_BASE, PAY_PLANT_PER_SECURITY, PAY_VAULT_PER_SECURITY,
-    PLANT_AT, State, VAULT_AT,
+    State, TRUSTED_AT,
 };
 use crate::app::AppState;
 use citygen::construct::{GREY_THRESHOLD, ICE_THRESHOLD};
@@ -324,9 +324,9 @@ fn servers_in_band(st: &AppState, standing: i32) -> Vec<BuildingId> {
         .collect();
     out.retain(|b| {
         let s = crate::access::security_of(st, *b);
-        if standing < PLANT_AT {
+        if standing < TRUSTED_AT {
             s < ICE_THRESHOLD
-        } else if standing < VAULT_AT {
+        } else if standing < INNER_AT {
             s < GREY_THRESHOLD
         } else {
             true
@@ -384,7 +384,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
                 return None;
             }
             let vault =
-                standing >= VAULT_AT && roll(seed, fixer, counter, SALT_VAULT).is_multiple_of(3);
+                standing >= INNER_AT && roll(seed, fixer, counter, SALT_VAULT).is_multiple_of(3);
             let pool: Vec<BuildingId> = if vault {
                 servers
                     .iter()
@@ -631,8 +631,8 @@ mod tests {
     use crate::app::AppState;
     use crate::jobs::testutil::{a_fixer, state_home};
     use crate::jobs::{
-        COPY_AT, Kind, KindTag, PAY_COPY_PER_SECURITY, PAY_DELIVER_BASE, PAY_FETCH, PAY_PLANT_BASE,
-        PAY_PLANT_PER_SECURITY, PLANT_AT, State,
+        KNOWN_AT, Kind, KindTag, PAY_COPY_PER_SECURITY, PAY_DELIVER_BASE, PAY_FETCH,
+        PAY_PLANT_BASE, PAY_PLANT_PER_SECURITY, State, TRUSTED_AT,
     };
     use citygen::Place;
     use game::ItemId;
@@ -695,7 +695,7 @@ mod tests {
     fn copy_and_plant_pick_servers_in_the_standing_band() {
         let mut st = state_home();
         let fx = a_fixer(&st);
-        st.jobs.fixer_mut(fx).standing = COPY_AT;
+        st.jobs.fixer_mut(fx).standing = KNOWN_AT;
         let j = generate(&mut st, fx, KindTag::Copy, 0).expect("a copy");
         let Kind::Copy { building, vault } = j.kind else {
             panic!()
@@ -704,7 +704,7 @@ mod tests {
         let sec = crate::access::security_of(&st, building);
         assert!(sec < citygen::construct::ICE_THRESHOLD, "{sec}");
         assert_eq!(j.pay, sec as u32 * PAY_COPY_PER_SECURITY);
-        st.jobs.fixer_mut(fx).standing = PLANT_AT;
+        st.jobs.fixer_mut(fx).standing = TRUSTED_AT;
         let p = generate(&mut st, fx, KindTag::Plant, 0).expect("a plant");
         let Kind::Plant { building } = p.kind else {
             panic!()
@@ -723,7 +723,7 @@ mod tests {
         // Every kind hands in the same way.
         st.jobs.fixer_mut(fx).standing = 0;
         for k in [KindTag::Fetch, KindTag::Copy, KindTag::Deliver] {
-            st.jobs.fixer_mut(fx).standing = COPY_AT;
+            st.jobs.fixer_mut(fx).standing = KNOWN_AT;
             let j = generate(&mut st, fx, k, 0).expect("a job");
             assert_eq!(
                 j.objectives.last().unwrap().text,
@@ -1081,11 +1081,11 @@ mod tests {
     fn no_net_jobs_without_a_deck() {
         let mut st = state_home();
         let fx = a_fixer(&st);
-        st.jobs.fixer_mut(fx).standing = crate::jobs::VAULT_AT;
+        st.jobs.fixer_mut(fx).standing = crate::jobs::INNER_AT;
         st.character.equipment.remove(&game::BodyPart::Waist);
         assert!(!crate::jobs::has_deck(&st));
         assert_eq!(
-            Jobs::allowed_for(crate::jobs::VAULT_AT, false),
+            Jobs::allowed_for(crate::jobs::INNER_AT, false),
             vec![KindTag::Fetch, KindTag::Deliver, KindTag::Site]
         );
         for _ in 0..12 {
@@ -1112,9 +1112,9 @@ mod tests {
             .insert(game::BodyPart::Waist, ItemId::new("pawnshop_deck"));
         assert!(crate::jobs::has_deck(&st));
         assert_eq!(
-            Jobs::allowed_for(crate::jobs::VAULT_AT, true),
-            Jobs::allowed(crate::jobs::VAULT_AT)
+            Jobs::allowed_for(crate::jobs::INNER_AT, true),
+            Jobs::allowed(crate::jobs::INNER_AT)
         );
-        assert!(Jobs::allowed_for(crate::jobs::VAULT_AT, true).contains(&KindTag::Plant));
+        assert!(Jobs::allowed_for(crate::jobs::INNER_AT, true).contains(&KindTag::Plant));
     }
 }
