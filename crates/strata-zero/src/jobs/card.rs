@@ -358,6 +358,7 @@ pub fn stop_place(st: &AppState, job: &Job) -> String {
             crate::helix::hosts::building_hostname(st, *building)
         }
         Kind::Deliver { to, .. } => person_called(st, *to),
+        Kind::Site { building, .. } => crate::net::building_name(st, *building),
     }
 }
 
@@ -488,9 +489,29 @@ fn target_stop(st: &AppState, job: &Job, done: bool, faint: bool) -> Stop {
                 vec![(under, DIM)],
             )
         }
+        Kind::Site { building, .. } => {
+            let (text, todo, did) = super::site::stop_words(st, job);
+            let mut under = vec![(
+                format!(
+                    "{} job · security {}",
+                    super::site::size_of(job).label(),
+                    super::site::security_of_job(job)
+                ),
+                DIM,
+            )];
+            if done {
+                under = vec![match job.objectives.get(1).is_some_and(|o| o.done) {
+                    true => (format!("out of {}", name(*building)), DONE),
+                    false => (format!("now get out of {}", name(*building)), AMBER),
+                }];
+            } else if let Some(m) = super::site::purge_left(st, *building) {
+                under.push((format!("the vault purges in {m}m"), MAGENTA));
+            }
+            (text, todo, did, under)
+        }
     };
     let keep_under = match job.kind {
-        Kind::Plant { .. } => true,
+        Kind::Plant { .. } | Kind::Site { .. } => true,
         _ => !done,
     };
     let under = if keep_under { under } else { Vec::new() };

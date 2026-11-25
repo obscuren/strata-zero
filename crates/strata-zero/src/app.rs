@@ -101,6 +101,9 @@ pub struct AppState {
     pub look_at: Option<citygen::Pos>,
     /// A container panel asked the map to start forcing it; the map takes it.
     pub force_at: Option<crate::containers::ContainerAt>,
+    /// The interact row asked the map to work a site job's objective by hand (plant the
+    /// tap, force the rack) at this tile; the map takes it.
+    pub work_at: Option<crate::containers::ContainerAt>,
     /// The console's `target`: a Street tile the free camera should jump to.
     pub jump_to: Option<citygen::Pos>,
     /// A level gained and not yet played: the map plays its upload on you the first
@@ -345,6 +348,7 @@ impl AppState {
             at_desk: false,
             look_at: None,
             force_at: None,
+            work_at: None,
             jump_to: None,
             levelled: None,
             content,
@@ -544,6 +548,7 @@ impl AppState {
     pub fn clear_screens(&mut self) {
         self.look_at = None;
         self.force_at = None;
+        self.work_at = None;
         self.jump_to = None;
         self.levelled = None;
         self.save_due = false;

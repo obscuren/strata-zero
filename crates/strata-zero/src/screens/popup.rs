@@ -29,6 +29,8 @@ pub enum WorldAct {
     /// Through a crawl's grille: in from the city tile outside a building (the building
     /// and which of its crawls), or out from the grille under the player (`None`).
     Crawl(Option<(citygen::BuildingId, usize)>),
+    /// A site job's objective worked by hand: the map runs its bar (#98).
+    Work(crate::containers::ContainerAt),
 }
 
 /// What a row does when fired.
@@ -427,6 +429,10 @@ impl Popup {
             }
             return TransitionKind::None;
         }
+        if let WorldAct::Work(at) = act {
+            st.work_at = Some(at);
+            return TransitionKind::None;
+        }
         if let WorldAct::Crawl(into) = act {
             let result = match into {
                 Some((b, way)) => crate::interiors::crawl_in(st, b, way),
@@ -493,6 +499,7 @@ impl Popup {
                     WorldAct::Lift(_) => Err("no lift here".to_string()),
                     WorldAct::Climb(_) => Err("no stairs here".to_string()),
                     WorldAct::Crawl(_) => Err("no crawl here".to_string()),
+                    WorldAct::Work(_) => Err("nothing to work here".to_string()),
                     WorldAct::Up | WorldAct::Down => {
                         let up = act == WorldAct::Up;
                         match player.use_connector(city, up) {

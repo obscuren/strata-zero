@@ -4,12 +4,14 @@
 pub mod card;
 pub mod flavor;
 pub mod generate;
+pub mod site;
 pub mod ui;
 
 pub use flavor::*;
 pub use generate::*;
 
 use crate::app::AppState;
+use citygen::venue::{MissionInputs, MissionSize, ObjectiveKind};
 use citygen::{BuildingId, Place, Pos};
 use game::ItemId;
 use sim::PersonId;
@@ -72,6 +74,18 @@ pub enum Kind {
     Plant { building: BuildingId },
     /// Put `item` into this person's hands.
     Deliver { to: PersonId, item: ItemId },
+    /// A site job (#98): objective `objective` of the building's venue type, asked as
+    /// `kind`, in a copy of `size` laid at `security` from mission seed `seed`; `item` is
+    /// what the hand-in takes, when it takes one.
+    Site {
+        building: BuildingId,
+        objective: usize,
+        kind: ObjectiveKind,
+        size: MissionSize,
+        security: u8,
+        seed: u64,
+        item: Option<ItemId>,
+    },
 }
 
 impl Kind {
@@ -81,6 +95,32 @@ impl Kind {
             Kind::Copy { .. } => KindTag::Copy,
             Kind::Plant { .. } => KindTag::Plant,
             Kind::Deliver { .. } => KindTag::Deliver,
+            Kind::Site { .. } => KindTag::Site,
+        }
+    }
+
+    /// A site job's building, and the inputs its copy is laid from.
+    pub fn site(&self) -> Option<(BuildingId, MissionInputs)> {
+        match *self {
+            Kind::Site {
+                building,
+                objective,
+                kind,
+                size,
+                security,
+                seed,
+                ..
+            } => Some((
+                building,
+                MissionInputs {
+                    size,
+                    objective,
+                    security,
+                    seed,
+                    kind,
+                },
+            )),
+            _ => None,
         }
     }
 }
@@ -162,6 +202,14 @@ pub enum Event {
     Handed {
         job: JobId,
     },
+    /// A site's objective was met (#98).
+    Met {
+        building: BuildingId,
+    },
+    /// You got out of a site whose objective was met, with what the job wants carried.
+    Out {
+        building: BuildingId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +231,7 @@ pub fn handin_item(kind: &Kind) -> Option<ItemId> {
         Kind::Fetch { .. } | Kind::Copy { vault: false, .. } => Some(ItemId::new("paydata")),
         Kind::Copy { vault: true, .. } => Some(ItemId::new("vault_data")),
         Kind::Plant { .. } | Kind::Deliver { .. } => None,
+        Kind::Site { item, .. } => item.clone(),
     }
 }
 
@@ -191,7 +240,11 @@ pub fn handin_sifted(kind: &Kind) -> Option<ItemId> {
     match kind {
         Kind::Fetch { .. } | Kind::Copy { vault: false, .. } => Some(ItemId::new("paydata_sifted")),
         Kind::Copy { vault: true, .. } => Some(ItemId::new("vault_data_sifted")),
-        Kind::Plant { .. } | Kind::Deliver { .. } => None,
+        Kind::Site {
+            kind: ObjectiveKind::Copy,
+            ..
+        } => Some(ItemId::new("vault_data_sifted")),
+        Kind::Plant { .. } | Kind::Deliver { .. } | Kind::Site { .. } => None,
     }
 }
 
@@ -232,7 +285,7 @@ pub fn opens_at(kind: KindTag, vault: bool) -> i32 {
         KindTag::Fetch | KindTag::Deliver => REFUSE_AT + 1,
         KindTag::Copy if vault => VAULT_AT,
         KindTag::Copy => COPY_AT,
-        KindTag::Plant => PLANT_AT,
+        KindTag::Plant | KindTag::Site => PLANT_AT,
     }
 }
 
@@ -345,6 +398,7 @@ impl Jobs {
         }
         if standing >= PLANT_AT {
             out.push(KindTag::Plant);
+            out.push(KindTag::Site);
         }
         out
     }
@@ -434,6 +488,7 @@ impl Jobs {
                 Kind::Fetch { .. } | Kind::Copy { .. } => "the shard is not yet yours",
                 Kind::Plant { .. } => "the backdoor is not planted yet",
                 Kind::Deliver { .. } => "the package is not delivered",
+                Kind::Site { .. } => "the job is not done yet",
             }
             .to_string());
         }
@@ -481,16 +536,35 @@ impl Jobs {
                 ) => building == b && vault == v,
                 (Kind::Plant { building }, Event::Planted { building: b }) => building == b,
                 (Kind::Deliver { .. }, Event::Handed { job }) => *job == j.id,
+                (
+                    Kind::Site {
+                        building,
+                        kind: ObjectiveKind::Copy,
+                        ..
+                    },
+                    Event::Copied {
+                        building: b,
+                        vault: true,
+                    },
+                ) => building == b,
+                (Kind::Site { building, .. }, Event::Met { building: b }) => building == b,
                 _ => false,
             };
-            if hit
-                && let Some(o) = j.objectives.first_mut()
+            // Out of a site: its second objective, once the first is done.
+            let out_of = matches!(
+                (&j.kind, &ev),
+                (Kind::Site { building, .. }, Event::Out { building: b }) if building == b
+            );
+            let k = usize::from(out_of);
+            if (hit || out_of)
+                && (k == 0 || j.objectives.first().is_some_and(|o| o.done))
+                && let Some(o) = j.objectives.get_mut(k)
                 && !o.done
             {
                 o.done = true;
                 out.push(Change::Ticked {
                     job: j.id,
-                    objective: 0,
+                    objective: k,
                 });
             }
         }
@@ -548,6 +622,7 @@ pub fn send(st: &mut AppState, ev: Event) {
 
 /// The job clock: late jobs fail, the fixer writes.
 pub fn tick(st: &mut AppState) {
+    site::tick(st);
     let now = st.net.now(st);
     for Late { job } in st.jobs.minute(now) {
         let Some(j) = st.jobs.get(job).cloned() else {
@@ -616,7 +691,7 @@ fn credit_done_work(st: &mut AppState, id: JobId) {
                 send(st, Event::Copied { building, vault });
             }
         }
-        Kind::Deliver { .. } => {}
+        Kind::Deliver { .. } | Kind::Site { .. } => {}
     }
 }
 
@@ -626,6 +701,11 @@ pub fn take_job(st: &mut AppState, id: JobId) -> Result<String, String> {
     let Some(j) = st.jobs.get(id).cloned() else {
         return Err("no such job".into());
     };
+    if st.jobs.get(id).is_none_or(|j| j.state != State::Offered) {
+        return Err("not on offer".into());
+    }
+    // A site job's copy takes its building first: refused, nothing is taken.
+    site::begin(st, &j.kind)?;
     if !st.jobs.take(id, now) {
         return Err("not on offer".into());
     }

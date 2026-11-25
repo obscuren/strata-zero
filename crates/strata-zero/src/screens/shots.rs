@@ -726,6 +726,7 @@ fn container_shots() {
         from: st.tick,
         ticks,
         stand,
+        work: None,
     });
     st.tick += ticks / 2;
     map.update(&mut st, &[]);

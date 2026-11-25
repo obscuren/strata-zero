@@ -35,6 +35,12 @@ pub struct MissionCopy {
     /// with the copy.
     #[serde(default)]
     pub containers: BTreeMap<(i32, Pos), crate::containers::state::ContainerState>,
+    /// The Net minute its data vault purges itself, once an alarm has started it (#98).
+    #[serde(default)]
+    pub purge: Option<u64>,
+    /// Its data vault is wiped: by the purge, a Wipe on the Net or a forced rack.
+    #[serde(default)]
+    pub wiped: bool,
 }
 
 /// What a venue's door on the city map shows.
@@ -91,6 +97,8 @@ pub fn begin(st: &mut AppState, b: BuildingId, inputs: MissionInputs) -> Result<
         left: Vec::new(),
         layer: Some(layer),
         containers: BTreeMap::new(),
+        purge: None,
+        wiped: false,
     };
     st.interiors.set_copy(b, Some(copy));
     tick(st);

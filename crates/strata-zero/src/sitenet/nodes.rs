@@ -51,6 +51,8 @@ pub fn landed(
             crate::net::building_name(st, b)
         ),
         (NodeKind::Container, Op::Crack) => format!("{name} cracked"),
+        // A site job's vault: a Wipe's, or one already wiped (#98).
+        (NodeKind::DataVault, Op::Copy) => crate::jobs::site::vault_copied(st, b)?,
         // The same lock from the grid or from inside: broken for its hour, kept in
         // `NetState.firewalls` alone.
         (NodeKind::Firewall, Op::Crack) => {

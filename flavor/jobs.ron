@@ -1,12 +1,14 @@
 // The fixers' work: titles, briefs and what they say. Slots in braces are filled
 // from the job: {building} {floor} {number} {how} {host} {security} {name}
-// {profession} {place} {hours} {district}.
+// {profession} {place} {hours} {district}; a site job's {objective} (where in the
+// building) and {task} (what to do there, a sentence).
 Jobs(
     titles: [
         (Fetch,   ["The {building} shard", "A flat on {floor}", "Somebody's quarter"]),
         (Copy,    ["{host}, copied", "What {host} keeps", "A quiet read"]),
         (Plant,   ["A door into {host}", "Leave it open", "{host}, later"]),
         (Deliver, ["A parcel for {name}", "Across town", "No questions"]),
+        (Site,    ["Inside {building}", "{building}, deep", "A walk through {building}"]),
     ],
     briefs: [
         (Fetch, [
@@ -32,6 +34,12 @@ Jobs(
              "Package into their hands. Not a counter, not a colleague. Hands."],
             ["Find {name}. {profession}, {place}, {hours}.",
              "They're expecting it. Don't open it. Don't be late."],
+        ]),
+        (Site, [
+            ["{building}. {objective}, {floor}. Security {security}, and they mean it.",
+             "{task} Then get out, and find me."],
+            ["There's a job on in {building}: {objective}, {floor}.",
+             "{task} Walk out on your own feet. That's the part I pay for."],
         ]),
     ],
     how: (card: "the lobby desk keeps a card", server: "the server knows the code"),

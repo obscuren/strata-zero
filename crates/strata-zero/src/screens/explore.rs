@@ -965,10 +965,30 @@ impl MapScreen {
                             from: st.tick,
                             ticks,
                             stand,
+                            work: None,
                         });
                     }
                     Err(why) => st.warn(why),
                 }
+            }
+            return None;
+        }
+        if let Some(at) = st.work_at.take()
+            && self.mode == Mode::Walk
+        {
+            let stand = st.player.as_ref().map(|p| (p.place, p.pos));
+            match (crate::jobs::site::can_work(st, at), stand) {
+                (Ok((work, ticks)), Some(stand)) => {
+                    self.forcing = Some(crate::containers::force::Forcing {
+                        at,
+                        from: st.tick,
+                        ticks,
+                        stand,
+                        work: Some(work),
+                    });
+                }
+                (Err(why), _) => st.warn(why),
+                _ => {}
             }
             return None;
         }
@@ -982,8 +1002,12 @@ impl MapScreen {
         if !f.done(st.tick) {
             return None;
         }
-        let at = f.at;
+        let (at, work) = (f.at, f.work);
         self.forcing = None;
+        if let Some(work) = work {
+            crate::jobs::site::finish_work(st, at, work);
+            return None;
+        }
         crate::containers::force::finish(st, at);
         Some(ScreenCmd::Push {
             to: Box::new(crate::screens::container::ContainerPanel::open(st, at)),

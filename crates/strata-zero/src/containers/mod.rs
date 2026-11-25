@@ -100,8 +100,10 @@ pub fn find(st: &AppState, at: ContainerAt) -> Option<Container> {
     } else {
         None
     };
+    // A Take's container is the job's too, though the plain level furnished it (#98).
     let guarded = crate::sitenet::layer_of(st, at.building)
-        .is_some_and(|l| (l.containers.iter()).any(|c| c.level == at.level && c.at == at.at));
+        .is_some_and(|l| (l.containers.iter()).any(|c| c.level == at.level && c.at == at.at))
+        || crate::jobs::site::take_container(st, at.building) == Some(at);
     let layout = layout_of(st, at.building);
     let zone = layout.and_then(|v| zone_at(v, at.level, front.unwrap_or(at.at)));
     let site = layout.map_or("plain", |v| v.type_id.as_str()).to_string();
@@ -280,8 +282,12 @@ pub fn look_line(st: &AppState, c: &Container) -> String {
     s
 }
 
-/// The roll a container makes when it is opened; pure.
+/// The roll a container makes when it is opened; pure. A Take's container holds the
+/// job's item and nothing else (#98).
 fn rolled(st: &AppState, c: &Container) -> Vec<Loot> {
+    if let Some(item) = crate::jobs::site::take_item(st, c.at) {
+        return vec![Loot::Item { item, qty: 1 }];
+    }
     let b = c.at.building;
     let deeper = c.zone.and_then(|z| {
         let zones = layout_of(st, b)?.zones.len();

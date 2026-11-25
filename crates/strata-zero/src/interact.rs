@@ -489,6 +489,19 @@ pub fn gather(
         }
     }
 
+    // A site job's objective worked by hand beside you: plant the tap, force the rack.
+    if let Some((spot, at, verb)) = crate::jobs::site::work_row(st) {
+        let head = header("Objective", mark_tile(st, &map, spot));
+        let row = Choice::on(
+            'i',
+            "Interact",
+            verb,
+            MAGENTA,
+            Pick::World(WorldAct::Work(at)),
+        );
+        add(&mut subs, &mut here, spot, Some(head), None, vec![row]);
+    }
+
     // Your own bed beside you, in your flat: sleep in it.
     if let Some(rig) = st.home.as_ref()
         && place == rig.place()

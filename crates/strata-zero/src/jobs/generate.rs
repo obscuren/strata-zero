@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 const SALT_KIND: u64 = 0x10B_0001;
 const SALT_TARGET: u64 = 0x10B_0002;
 const SALT_FLAT: u64 = 0x10B_0003;
-const SALT_TEXT: u64 = 0x10B_0004;
+pub(crate) const SALT_TEXT: u64 = 0x10B_0004;
 const SALT_VAULT: u64 = 0x10B_0005;
 /// Buildings a Fetch tries before giving up on the kind.
 const FETCH_TRIES: usize = 4;
@@ -197,7 +197,7 @@ pub fn where_line(st: &AppState, fixer: PersonId) -> String {
     ])
 }
 
-fn blank(fixer: PersonId, kind: Kind, hours: u64, pay: u32, now: u64) -> Job {
+pub(crate) fn blank(fixer: PersonId, kind: Kind, hours: u64, pay: u32, now: u64) -> Job {
     Job {
         id: JobId(0),
         fixer,
@@ -216,7 +216,7 @@ fn blank(fixer: PersonId, kind: Kind, hours: u64, pay: u32, now: u64) -> Job {
 }
 
 /// Every job's last objective: the fixer's corner and their hours on it.
-fn handin_text(st: &AppState, fixer: PersonId) -> String {
+pub(crate) fn handin_text(st: &AppState, fixer: PersonId) -> String {
     let hours =
         super::shift_of(st, fixer).map_or_else(String::new, |s| format!(" · {}", hours_text(s)));
     format!(
@@ -465,6 +465,7 @@ pub fn generate(st: &mut AppState, fixer: PersonId, kind: KindTag, counter: u32)
             ];
             Some(job)
         }
+        KindTag::Site => super::site::generate(st, fixer, counter, now),
         KindTag::Deliver => {
             let world = st.world.as_ref()?;
             let city = st.city.as_ref()?;

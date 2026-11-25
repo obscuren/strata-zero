@@ -45,6 +45,8 @@ pub struct Forcing {
     pub from: u64,
     pub ticks: u64,
     pub stand: (Place, Pos),
+    /// A site job's objective worked by hand at `at` instead of a lock (#98).
+    pub work: Option<crate::jobs::site::Work>,
 }
 
 impl Forcing {

@@ -109,6 +109,11 @@ impl Ground {
     }
 
     /// Every pile on one map.
+    /// Whether any of `item` lies anywhere.
+    pub fn holds(&self, item: &ItemId) -> bool {
+        self.piles.values().flatten().any(|s| &s.item == item)
+    }
+
     pub fn on(&self, place: Place) -> impl Iterator<Item = (Pos, &[Stack])> {
         self.piles
             .iter()

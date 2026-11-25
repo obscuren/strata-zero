@@ -503,6 +503,20 @@ fn resolve_job(st: &AppState, id: JobId, objective: usize) -> Resolved {
         },
         Kind::Copy { building, .. } | Kind::Plant { building } => Target::Building(building),
         Kind::Deliver { to, .. } => Target::Person(to),
+        // Inside the site, its objective; out of it, the building (#98).
+        Kind::Site { building, .. } => {
+            let inside = st.player.as_ref().is_some_and(
+                |p| matches!(p.place, Place::Floor { building: b, .. } if b == building),
+            );
+            match crate::jobs::site::objective(st, building) {
+                Some((_, place, pos, _)) if inside => Target::Spot {
+                    place,
+                    pos,
+                    radius: 1,
+                },
+                _ => Target::Building(building),
+            }
+        }
     })
 }
 
@@ -772,6 +786,7 @@ pub(crate) mod tests {
                     Target::Building(building)
                 }
                 Kind::Deliver { to, .. } => Target::Person(to),
+                Kind::Site { building, .. } => Target::Building(building),
             };
             assert_eq!(resolve(&st, &job_source(id, 0)), Resolved::Target(want));
         }

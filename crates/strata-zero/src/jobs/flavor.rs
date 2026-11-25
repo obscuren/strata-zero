@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DEFAULT: &str = include_str!("../../../../flavor/jobs.ron");
-const SLOTS: [&str; 12] = [
+const SLOTS: [&str; 14] = [
     "building",
     "floor",
     "number",
@@ -17,6 +17,8 @@ const SLOTS: [&str; 12] = [
     "hours",
     "district",
     "start",
+    "objective",
+    "task",
 ];
 
 /// A job's kind without its target.
@@ -26,14 +28,16 @@ pub enum KindTag {
     Copy,
     Plant,
     Deliver,
+    Site,
 }
 
 impl KindTag {
-    pub const ALL: [KindTag; 4] = [
+    pub const ALL: [KindTag; 5] = [
         KindTag::Fetch,
         KindTag::Copy,
         KindTag::Plant,
         KindTag::Deliver,
+        KindTag::Site,
     ];
 
     pub fn label(self) -> &'static str {
@@ -42,6 +46,7 @@ impl KindTag {
             KindTag::Copy => "copy",
             KindTag::Plant => "plant",
             KindTag::Deliver => "deliver",
+            KindTag::Site => "site",
         }
     }
 }
