@@ -188,7 +188,11 @@ Hotels and offices are venues: each is laid out from a type in `flavor/sites.ron
   type is gone. A guard's post in the layer carries its `stop` on another level
   (`GuardPost.stop`, `#[serde(default)]`), drawn last from a stream of its own and saved
   with the rest: a layer saved before guards took stops has none, and its guards walk
-  their own level.
+  their own level. The inputs carry the objective's `kind` (`ObjectiveKind`,
+  `#[serde(default)]`: a copy laid before objectives had kinds reads as Reach), and the
+  copy its vault's `purge` minute and `wiped` (both `#[serde(default)]`). A site job
+  (`jobs::Kind::Site`, #98) saves the same inputs, and its copy is the one whose inputs
+  match them.
 - **What a copy keeps.** While it's live the building's plan is the layout cut to the
   kept levels (`FloorPlan::kept`) and its floors are drawn with the layer on them; both
   are saved as any plan and floor are. The rest is play state saved where it always is:
