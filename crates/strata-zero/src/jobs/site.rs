@@ -699,5 +699,40 @@ pub fn security_of_job(job: &Job) -> u8 {
     job.kind.site().map_or(0, |(_, i)| i.security)
 }
 
+/// What the Look says of a site job's objective on tile `pos` of `place`: where it is and
+/// what the job asks, `done` once met. A Take's container says it too.
+pub fn look_line(st: &AppState, place: Place, pos: Pos) -> Option<String> {
+    let Place::Floor { building, level } = place else {
+        return None;
+    };
+    let (kind, at_place, at, met) = objective(st, building)?;
+    let here = (at_place == place && at == pos)
+        || take_container(st, building)
+            == Some(ContainerAt {
+                building,
+                level,
+                at: pos,
+            });
+    if !here {
+        return None;
+    }
+    let (j, inputs) = taken_on(st, building)?;
+    let name =
+        def(st, building, &inputs).map_or_else(|| "the objective".into(), |d| d.name.clone());
+    let ask = match (kind, &j.kind) {
+        (ObjectiveKind::Take, Kind::Site { item: Some(i), .. }) => {
+            format!("take the {}", item_name(st, i))
+        }
+        (ObjectiveKind::Copy, _) => "copy the vault".to_string(),
+        (ObjectiveKind::Wipe, _) => "wipe the vault".to_string(),
+        (ObjectiveKind::Plant, _) => "plant the tap".to_string(),
+        _ => "get in".to_string(),
+    };
+    Some(match met {
+        true => format!("{name} · your job · done"),
+        false => format!("{name} · your job: {ask}"),
+    })
+}
+
 #[cfg(test)]
 mod tests;

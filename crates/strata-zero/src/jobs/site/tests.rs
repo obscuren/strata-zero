@@ -320,3 +320,38 @@ fn the_card_names_the_deed_and_then_the_way_out() {
     tick(&mut st);
     assert!(card(&st).contains("now get out of"), "{}", card(&st));
 }
+
+#[test]
+fn the_look_and_sitenet_name_the_job() {
+    let (mut st, _, b) = taken(ObjectiveKind::Plant);
+    let (place, at) = at_objective(&mut st, b);
+    let line = look_line(&st, place, at).expect("the objective's line");
+    assert!(line.ends_with("your job: plant the tap"), "{line}");
+    assert!(
+        crate::sitenet::panel::job_lines(&st, b)[0].starts_with("plant · "),
+        "{:?}",
+        crate::sitenet::panel::job_lines(&st, b)
+    );
+}
+
+#[test]
+fn tracking_leads_to_the_building_then_to_the_objective() {
+    let (mut st, id, b) = taken(ObjectiveKind::Reach);
+    let src = crate::track::Source::Job {
+        job: id,
+        objective: 0,
+    };
+    assert_eq!(
+        crate::track::resolve(&st, &src),
+        crate::track::Resolved::Target(crate::track::Target::Building(b))
+    );
+    let (place, at) = at_objective(&mut st, b);
+    assert_eq!(
+        crate::track::resolve(&st, &src),
+        crate::track::Resolved::Target(crate::track::Target::Spot {
+            place,
+            pos: at,
+            radius: 1
+        })
+    );
+}

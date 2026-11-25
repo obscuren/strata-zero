@@ -1018,6 +1018,18 @@ pub fn look_card(
         }
         card.body.push(note.clone());
     }
+    // A site job's objective, or the container a Take keeps its item in (#98).
+    if visible
+        && live_cell
+        && let Some(line) = crate::jobs::site::look_line(st, place, pos)
+    {
+        card.second = Some(match card.second.take() {
+            Some(s) if tile.feature.is_some_and(|f| f.container().is_some()) => {
+                format!("{s} · {line}")
+            }
+            _ => line,
+        });
+    }
     // A code a mission's copy left on the tile, its own paragraph too.
     if visible
         && live_cell

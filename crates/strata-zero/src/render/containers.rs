@@ -72,6 +72,34 @@ impl Overlay for ContainerLooks<'_> {
     }
 }
 
+/// A site job's objective once met: its `◎` dimmed (#98). Hidden on unseen tiles.
+pub struct ObjectiveMet<'a> {
+    pub at: Pos,
+    pub vis: Option<&'a Grid<Visibility>>,
+}
+
+impl Overlay for ObjectiveMet<'_> {
+    fn draw(
+        &self,
+        _map: &MapRef,
+        origin: Pos,
+        area: Rect,
+        _tick: u64,
+        buf: &mut Buffer,
+        _style: &StylePack,
+    ) {
+        if let Some(v) = self.vis
+            && v.get(self.at).copied().unwrap_or(Visibility::Unseen) == Visibility::Unseen
+        {
+            return;
+        }
+        let Some((sx, sy)) = tile_to_screen(area, origin, self.at) else {
+            return;
+        };
+        buf[(sx, sy)].set_char('◎').set_fg(FAINTER);
+    }
+}
+
 /// Five cells on the row above `at` (below when that row is off the view), centred, filled
 /// `frac` of the way. Hidden when the container's tile isn't in sight.
 pub struct ForceBar<'a> {

@@ -589,7 +589,8 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
                 Some("copy") => crate::jobs::KindTag::Copy,
                 Some("plant") => crate::jobs::KindTag::Plant,
                 Some("deliver") => crate::jobs::KindTag::Deliver,
-                _ => return Err("job fetch|copy|plant|deliver".to_string()),
+                Some("site") => crate::jobs::KindTag::Site,
+                _ => return Err("job fetch|copy|plant|deliver|site".to_string()),
             };
             let from = st.player.as_ref().map(|p| p.pos).unwrap_or(Pos::new(0, 0));
             let fixer = crate::jobs::nearest_fixer(st, from).ok_or("no fixer in this city")?;
@@ -705,7 +706,7 @@ pub fn run(st: &mut AppState, focus: At, line: &str) -> Result<String, String> {
             Ok(line)
         }
         "help" => Ok(
-            "spawn <item> [qty] [sum] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · site <type> [size] [objective] [security] [seed] | end · clear · help"
+            "spawn <item> [qty] [sum] · drop <item> [qty] · give <credits> · heal · xp <points> · focus <points> · sp <points> · pts <points> · talent <id> · tpts <points> · program <id> · heat <0-100> · alarm · wake · engage · calm · ice · failsafe on|off · hp <points> · who · clock <hh:mm> (or time) · tp <x> <y> · trace · seize · backdoor <host> · job fetch|copy|plant|deliver|site · standing <n> · jobs · target <name> · eyes · light · ripper · foe [n] · dummy [n] · foes · throw <item> [n] · live · story [fire <mission> | scene <id> | skip | news <id> | feed | call] · track [off | <x> <y> | <name>] · wait · site <type> [size] [objective] [security] [seed] | end · clear · help"
                 .to_string(),
         ),
         "" => Err("type a command; help lists them".to_string()),

@@ -4581,6 +4581,18 @@ impl Screen for MapScreen {
         if !container_looks.is_empty() {
             overlays.push(&container_overlay);
         }
+        // A site job's objective, dimmed once met; a Take's container shows it open.
+        let objective_met = match self.place {
+            Place::Floor { building, .. } => crate::jobs::site::objective(st, building),
+            _ => None,
+        }
+        .filter(|&(kind, place, _, met)| {
+            met && place == self.place && kind != citygen::venue::ObjectiveKind::Take
+        })
+        .map(|(_, _, at, _)| crate::render::containers::ObjectiveMet { at, vis });
+        if let Some(o) = objective_met.as_ref() {
+            overlays.push(o);
+        }
         // A site's turrets: the arrowhead on its steel, coloured by what it's doing.
         let turret_looks = crate::turrets::looks(st, self.place);
         let turret_overlay = crate::render::turrets::TurretLooks {

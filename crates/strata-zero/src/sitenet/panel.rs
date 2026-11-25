@@ -160,7 +160,11 @@ pub fn job_lines(st: &AppState, b: BuildingId) -> Vec<String> {
     };
     let level = layer.objective.level;
     let label = FloorPlan::label(level);
-    let mut out = vec![format!("{} · {label}", def.name)];
+    // A site job's names what it asks there (#98).
+    let ask = crate::jobs::site::taken_on(st, b)
+        .map(|(_, i)| format!("{} · ", i.kind.verb()))
+        .unwrap_or_default();
+    let mut out = vec![format!("{ask}{} · {label}", def.name)];
     if super::net_of(st, b).is_some_and(|n| n.gap == Some(level)) {
         out.push(format!("{label} has its own Net: jack in there"));
     }

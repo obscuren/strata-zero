@@ -75,7 +75,7 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
             ),
             Span::styled(format!(" · {}", clock_text(left)), clock_style),
         ]),
-        plain(format!(" » {next}")),
+        next_line(st, job, next),
         Line::from(vec![
             Span::raw(" "),
             Span::styled("▰".repeat(done), Style::default().fg(CYAN)),
@@ -83,6 +83,25 @@ pub fn pane_lines(st: &AppState) -> Vec<Line<'static>> {
             Span::styled(format!(" {done}/{total}"), Style::default().fg(DIM)),
         ]),
     ]
+}
+
+/// The pane's next objective, and a site's vault purge counting down after it (#98).
+fn next_line(st: &AppState, job: &super::Job, next: String) -> Line<'static> {
+    let purge = job
+        .kind
+        .site()
+        .and_then(|(b, _)| super::site::purge_left(st, b))
+        .filter(|_| job.objectives.first().is_some_and(|o| !o.done));
+    match purge {
+        Some(m) => Line::from(vec![
+            Span::styled(format!(" » {next}"), Style::default().fg(TEXT)),
+            Span::styled(
+                format!(" · vault purges in {m}m"),
+                Style::default().fg(MAGENTA),
+            ),
+        ]),
+        None => plain(format!(" » {next}")),
+    }
 }
 
 use super::{COPY_AT, Event, Kind, PLANT_AT, REFUSE_AT, Say, VAULT_AT, handin_item, handin_sifted};

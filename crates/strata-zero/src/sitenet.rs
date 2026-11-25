@@ -16,7 +16,7 @@ use std::sync::Arc;
 mod firewall;
 mod locks;
 mod nodes;
-mod panel;
+pub(crate) mod panel;
 mod walk;
 mod ways;
 pub use firewall::*;
