@@ -939,7 +939,8 @@ mod tests {
                 KindTag::Fetch,
                 KindTag::Deliver,
                 KindTag::Copy,
-                KindTag::Plant
+                KindTag::Plant,
+                KindTag::Site
             ]
         );
         assert!(Jobs::allowed(REFUSE_AT).is_empty());

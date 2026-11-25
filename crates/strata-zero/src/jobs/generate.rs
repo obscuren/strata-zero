@@ -1086,7 +1086,7 @@ mod tests {
         assert!(!crate::jobs::has_deck(&st));
         assert_eq!(
             Jobs::allowed_for(crate::jobs::VAULT_AT, false),
-            vec![KindTag::Fetch, KindTag::Deliver]
+            vec![KindTag::Fetch, KindTag::Deliver, KindTag::Site]
         );
         for _ in 0..12 {
             let welcome: Vec<_> = st.jobs.list.iter().map(|j| j.id).collect();
@@ -1095,8 +1095,16 @@ mod tests {
             }
             st.jobs.list.retain(|j| j.state != State::Offered);
             if let Some(id) = offer(&mut st, fx) {
-                let k = st.jobs.get(id).unwrap().kind.tag();
-                assert!(matches!(k, KindTag::Fetch | KindTag::Deliver), "{k:?}");
+                let kind = &st.jobs.get(id).unwrap().kind;
+                let k = kind.tag();
+                assert!(
+                    matches!(k, KindTag::Fetch | KindTag::Deliver | KindTag::Site),
+                    "{k:?}"
+                );
+                // A site job without a deck never asks for a Copy, Net work.
+                if let Some((_, inputs)) = kind.site() {
+                    assert_ne!(inputs.kind, citygen::venue::ObjectiveKind::Copy);
+                }
             }
         }
         st.character
