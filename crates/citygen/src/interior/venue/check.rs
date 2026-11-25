@@ -48,6 +48,7 @@ impl VenueLayout {
         }
         (0..t.objectives.len()).any(|objective| {
             let inputs = MissionInputs {
+                kind: Default::default(),
                 size: rule.size,
                 objective,
                 security: u8::MAX,
@@ -328,7 +329,7 @@ pub fn validate_copy(
         let containers = (layer.containers.iter().filter(|c| c.level == level))
             .map(|c| (c.at, Feature::Furniture(c.kind.furniture())));
         let objective =
-            (layer.objective.level == level).then_some((layer.objective.at, Feature::Objective));
+            (layer.mark().filter(|o| o.level == level)).map(|o| (o.at, Feature::Objective));
         let steps: Vec<Pos> = floor.exits.iter().map(|e| floor.doorstep(e)).collect();
         for (at, f) in devices.chain(containers).chain(objective) {
             let t = (floor.tiles.get(at)).ok_or_else(|| format!("{on}: {f:?} off the floor"))?;
@@ -506,6 +507,7 @@ mod tests {
         let mut l = laid(0);
         let small = VenuePack::builtin().size(crate::interior::venue::MissionSize::Small);
         let inputs = MissionInputs {
+            kind: Default::default(),
             size: small.size,
             objective: 0,
             security: 255,
@@ -585,6 +587,7 @@ mod tests {
         let l = laid(0);
         let small = VenuePack::builtin().size(crate::interior::venue::MissionSize::Small);
         let inputs = MissionInputs {
+            kind: Default::default(),
             size: small.size,
             objective: 0,
             security: 255,

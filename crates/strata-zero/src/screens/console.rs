@@ -847,6 +847,7 @@ fn site(st: &mut AppState, focus: At, args: &[&str]) -> Result<String, String> {
             let b =
                 crate::venues::building_at_door(st, focus).ok_or("stand at a building's door")?;
             let inputs = MissionInputs {
+                kind: Default::default(),
                 size,
                 objective,
                 security,
@@ -1885,6 +1886,7 @@ mod tests {
                 other,
                 &id,
                 citygen::venue::MissionInputs {
+                    kind: Default::default(),
                     size: citygen::venue::MissionSize::Small,
                     objective: 0,
                     security: 128,

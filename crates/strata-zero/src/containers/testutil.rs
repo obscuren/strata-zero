@@ -13,6 +13,7 @@ pub(crate) fn plain_site(kind: BuildingKind, seed: u64) -> (AppState, BuildingId
         .for_kind(kind)
         .expect("a type builds it");
     let inputs = MissionInputs {
+        kind: Default::default(),
         size: MissionSize::Medium,
         objective: 0,
         security: 128,

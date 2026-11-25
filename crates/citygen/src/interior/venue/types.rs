@@ -351,6 +351,12 @@ pub struct ObjectiveDef {
     pub room: String,
     #[serde(default)]
     pub level: Option<String>,
+    /// What a job can ask here (#98). Copy and Wipe want a server room.
+    #[serde(default)]
+    pub kinds: Vec<super::ObjectiveKind>,
+    /// A Take's item, by content id: what the container on the spot holds.
+    #[serde(default)]
+    pub item: Option<String>,
 }
 
 /// The mission layer for one size.
@@ -640,6 +646,20 @@ impl VenueType {
         for o in &self.objectives {
             let what = format!("objective `{}`", o.id);
             room(&o.room, &what)?;
+            let take = o.kinds.contains(&super::ObjectiveKind::Take);
+            if take != o.item.is_some() {
+                return Err(format!(
+                    "{id}: {what} names an item if and only if it offers Take"
+                ));
+            }
+            let server = self
+                .room(&o.room)
+                .is_some_and(|r| r.kind == RoomKind::Server);
+            if o.kinds.iter().any(|k| k.on_the_vault()) && !server {
+                return Err(format!(
+                    "{id}: {what} offers Copy or Wipe off a server room"
+                ));
+            }
             if let Some(r) = &o.level {
                 role(r, &what)?;
             }

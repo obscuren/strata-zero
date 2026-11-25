@@ -88,7 +88,7 @@ pub fn draw_copy_level(layout: &VenueLayout, layer: &MissionLayer, level: i32) -
     });
     let containers = (layer.containers.iter().filter(|c| here(c.level)))
         .map(|c| (c.at, Feature::Furniture(c.kind.furniture())));
-    let objective = here(layer.objective.level).then_some((layer.objective.at, Feature::Objective));
+    let objective = (layer.mark().filter(|o| here(o.level))).map(|o| (o.at, Feature::Objective));
     for (at, f) in devices.chain(containers).chain(objective) {
         if let Some(t) = floor.tiles.get_mut(at) {
             t.feature = Some(f);

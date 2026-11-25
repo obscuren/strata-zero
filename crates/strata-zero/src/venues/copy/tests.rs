@@ -24,6 +24,7 @@ const STREET: Place = Place::Stratum(StratumKind::Street);
 
 fn inputs(size: MissionSize) -> MissionInputs {
     MissionInputs {
+        kind: Default::default(),
         size,
         objective: 0,
         security: 128,

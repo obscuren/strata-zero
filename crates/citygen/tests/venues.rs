@@ -60,6 +60,7 @@ fn copies(t: &VenueType, l: &VenueLayout, seed: u64, what: &str) {
         let mut errs = Vec::new();
         for k in 0..n {
             let inputs = MissionInputs {
+                kind: Default::default(),
                 size,
                 objective: (seed as usize + k) % n,
                 security: (seed * 37 % 256) as u8,
@@ -229,6 +230,7 @@ fn every_objective_holds_a_size() {
             for (k, o) in t.objectives.iter().enumerate() {
                 let holds = pack.sizes.iter().any(|rule| {
                     let inputs = MissionInputs {
+                        kind: Default::default(),
                         size: rule.size,
                         objective: k,
                         security: u8::MAX,
@@ -238,6 +240,39 @@ fn every_objective_holds_a_size() {
                         .is_ok_and(|layer| validate_copy(&l, &layer, rule).is_ok())
                 });
                 assert!(holds, "{} seed {seed}: {} holds no size", t.id, o.id);
+            }
+        }
+    }
+}
+
+/// Every kind each objective offers (#98) holds some size on the type's own frame, at
+/// every seed: a Take's container finds its spot, a Copy or Wipe its server room, and the
+/// copy passes the checks.
+#[test]
+fn every_objective_kind_holds_a_size() {
+    let pack = VenuePack::builtin();
+    for t in types() {
+        for seed in 0..SEEDS {
+            let l = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
+            for (k, o) in t.objectives.iter().enumerate() {
+                for &kind in &o.kinds {
+                    let holds = pack.sizes.iter().any(|rule| {
+                        let inputs = MissionInputs {
+                            kind,
+                            size: rule.size,
+                            objective: k,
+                            security: u8::MAX,
+                            seed,
+                        };
+                        MissionLayer::lay(&l, &t, rule, inputs)
+                            .is_ok_and(|layer| validate_copy(&l, &layer, rule).is_ok())
+                    });
+                    assert!(
+                        holds,
+                        "{} seed {seed}: {} {kind:?} holds no size",
+                        t.id, o.id
+                    );
+                }
             }
         }
     }

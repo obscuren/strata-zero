@@ -114,6 +114,7 @@ fn a_new_copy_rolls_fresh() {
     let b = c.at.building;
     let plain = seed(&st, &c);
     let inputs = |seed| citygen::venue::MissionInputs {
+        kind: Default::default(),
         size: citygen::venue::MissionSize::Medium,
         objective: 0,
         security: 128,

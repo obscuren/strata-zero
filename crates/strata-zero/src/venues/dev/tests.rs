@@ -17,6 +17,7 @@ fn an_open_building_and_a_held_one_stay_as_they_are() {
     let city = st.city.clone().unwrap();
     let id = &VenuePack::builtin().types[0].id;
     let inputs = MissionInputs {
+        kind: Default::default(),
         size: MissionSize::Small,
         objective: 0,
         security: 128,
@@ -84,6 +85,7 @@ fn a_mission_that_wont_lay_tries_other_seeds_and_objectives() {
     let lays = |i: MissionInputs| MissionLayer::lay(&layout, t, rule, i).is_ok();
     // An objective no lay finds: past the type's last.
     let asked = MissionInputs {
+        kind: Default::default(),
         size: MissionSize::Small,
         objective: t.objectives.len(),
         security: 128,

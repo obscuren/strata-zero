@@ -44,6 +44,7 @@ pub(crate) fn office_plain() -> (AppState, BuildingId) {
         .for_kind(BuildingKind::Office)
         .expect("a type builds offices");
     let inputs = MissionInputs {
+        kind: Default::default(),
         size: MissionSize::Medium,
         objective: 0,
         security: 128,

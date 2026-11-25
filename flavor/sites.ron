@@ -36,8 +36,10 @@
 // as (role, zone) where it asks for that zone's card, `dir` (`Up` or `Down` for one way) and
 // `alight: Ends` for a stair you can leave only at its ends. `crawls_in` come in from a
 // stratum and out in a zone. `objectives` name a room, on a level of the role in `level` when
-// one is given. `security` is a mission's layer per size: guard weights per zone, and ranges
-// of cameras, turrets (in `turret_zones`) and containers.
+// one is given, the `kinds` a job can ask there (`Reach`, `Take`, `Copy`, `Wipe`, `Plant`;
+// Copy and Wipe only in a `Server` room) and, with Take, the `item` its container holds.
+// `security` is a mission's layer per size: guard weights per zone, and ranges of cameras,
+// turrets (in `turret_zones`) and containers.
 // `terminals` name the rooms with a desk terminal on the site's Net; the ground floor's public
 // kiosk and a gapped level's terminal are by rule, not listed.
 // `sizes` is what a mission of each size keeps: floors, locks between a way in and its
@@ -138,9 +140,9 @@ Sites(
             ],
             crawls_in: [Crawl(stratum: Heights, zone: "staff"), Crawl(stratum: Undercity, zone: "staff")],
             objectives: [
-                Objective(id: "safe", name: "the penthouse safe", room: "office", level: Some("penthouse")),
-                Objective(id: "guest", name: "a guest's room", room: "guest room", level: Some("guest floor")),
-                Objective(id: "server", name: "the security office's server", room: "server room", level: Some("car park")),
+                Objective(id: "safe", name: "the penthouse safe", room: "office", level: Some("penthouse"), kinds: [Take], item: Some("sealed_case")),
+                Objective(id: "guest", name: "a guest's room", room: "guest room", level: Some("guest floor"), kinds: [Take, Plant, Reach], item: Some("ledger")),
+                Objective(id: "server", name: "the security office's server", room: "server room", level: Some("car park"), kinds: [Copy, Wipe, Plant]),
             ],
             security: [
                 Security(size: Small, guards: [("public", 1), ("staff", 1), ("secure", 2)], cameras: (2, 4), turrets: (0, 0),
@@ -221,9 +223,9 @@ Sites(
             ],
             crawls_in: [Crawl(stratum: Heights, zone: "staff")],
             objectives: [
-                Objective(id: "server", name: "the server room", room: "server room", level: Some("server basement")),
-                Objective(id: "executive", name: "the executive's office", room: "executive office", level: Some("executive floor")),
-                Objective(id: "desk", name: "a desk on the open plan", room: "open plan", level: Some("open-plan floor")),
+                Objective(id: "server", name: "the server room", room: "server room", level: Some("server basement"), kinds: [Copy, Wipe, Plant]),
+                Objective(id: "executive", name: "the executive's office", room: "executive office", level: Some("executive floor"), kinds: [Take, Plant], item: Some("prototype")),
+                Objective(id: "desk", name: "a desk on the open plan", room: "open plan", level: Some("open-plan floor"), kinds: [Take, Plant, Reach], item: Some("ledger")),
             ],
             security: [
                 Security(size: Small, guards: [("public", 1), ("staff", 2), ("secure", 1), ("executive", 1)], cameras: (3, 5),
@@ -323,9 +325,9 @@ Sites(
             // Up from the tunnels into the paid side, the staff doors still ahead.
             crawls_in: [Crawl(stratum: Undercity, zone: "paid")],
             objectives: [
-                Objective(id: "core", name: "the Line Control core", room: "line control", level: Some("service")),
-                Objective(id: "cash", name: "the cash room", room: "cash room", level: Some("concourse")),
-                Objective(id: "signal", name: "the signal box", room: "signal box", level: Some("upper platform")),
+                Objective(id: "core", name: "the Line Control core", room: "line control", level: Some("service"), kinds: [Copy, Wipe, Plant]),
+                Objective(id: "cash", name: "the cash room", room: "cash room", level: Some("concourse"), kinds: [Take], item: Some("sealed_case")),
+                Objective(id: "signal", name: "the signal box", room: "signal box", level: Some("upper platform"), kinds: [Plant, Reach]),
             ],
             security: [
                 Security(size: Small, guards: [("public", 1), ("paid", 1), ("staff", 2), ("secure", 1)], cameras: (3, 5),

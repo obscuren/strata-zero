@@ -40,6 +40,55 @@ pub struct MissionInputs {
     /// 0 to 255, the scale a subnet's security uses.
     pub security: u8,
     pub seed: u64,
+    /// What the objective asks: what the layer lays on its spot. A copy laid before
+    /// objectives had kinds reads as Reach.
+    #[serde(default)]
+    pub kind: ObjectiveKind,
+}
+
+/// What a site's objective asks of you (#98). Saved with a copy's inputs, so a new kind
+/// joins at the end.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum ObjectiveKind {
+    /// Step onto the spot.
+    #[default]
+    Reach,
+    /// Take the item from the container on the spot.
+    Take,
+    /// Copy the data vault on the spot.
+    Copy,
+    /// Wipe the data vault on the spot, on the Net or by forcing the rack.
+    Wipe,
+    /// Plant the job's device on the spot.
+    Plant,
+}
+
+impl ObjectiveKind {
+    pub const ALL: [ObjectiveKind; 5] = [
+        ObjectiveKind::Reach,
+        ObjectiveKind::Take,
+        ObjectiveKind::Copy,
+        ObjectiveKind::Wipe,
+        ObjectiveKind::Plant,
+    ];
+
+    /// The verb, lower case: "take", "copy".
+    pub fn verb(self) -> &'static str {
+        match self {
+            ObjectiveKind::Reach => "reach",
+            ObjectiveKind::Take => "take",
+            ObjectiveKind::Copy => "copy",
+            ObjectiveKind::Wipe => "wipe",
+            ObjectiveKind::Plant => "plant",
+        }
+    }
+
+    /// Whether the kind works the data vault, which stands only in a server room.
+    pub fn on_the_vault(self) -> bool {
+        matches!(self, ObjectiveKind::Copy | ObjectiveKind::Wipe)
+    }
 }
 
 /// What stands on the layer's spot `at` of `level`: a safe in a room of the type's
@@ -60,6 +109,37 @@ fn spot_kind(layout: &VenueLayout, level: i32, at: Pos) -> ContainerKind {
     } else {
         ContainerKind::Locker
     }
+}
+
+/// Where a Take's item is kept in room `room` of `level` as the plain level is furnished:
+/// the tile of its best container (a safe, a cabinet, a locker, a crate, then a drawer,
+/// nearest `near`), or the floor in front of a wall-set one. None when it has none.
+fn own_container(layout: &VenueLayout, level: i32, room: usize, near: Pos) -> Option<Pos> {
+    let floor = super::draw_level(layout, level)?;
+    let rect = layout.level(level)?.rooms.get(room)?.rect;
+    let rank = |k: ContainerKind| match k {
+        ContainerKind::Safe => 0,
+        ContainerKind::Cabinet => 1,
+        ContainerKind::Locker => 2,
+        ContainerKind::Crate => 3,
+        ContainerKind::Drawer => 4,
+    };
+    rect.grow(1)
+        .iter()
+        .filter_map(|p| {
+            let t = floor.tiles.get(p)?;
+            let kind = t.feature?.container()?;
+            let at = if t.terrain == crate::tile::Terrain::Wall {
+                crate::tile::wall_front(&floor.tiles, p).filter(|f| rect.contains(*f))?
+            } else if rect.contains(p) {
+                p
+            } else {
+                return None;
+            };
+            Some((rank(kind), p.manhattan(near), p.y, p.x, at))
+        })
+        .min()
+        .map(|(.., at)| at)
 }
 
 /// A tile on a level.
@@ -166,6 +246,13 @@ impl MissionLayer {
         let security = (t.security.iter())
             .find(|s| s.size == inputs.size)
             .ok_or_else(|| format!("{} has no {:?} security", t.id, inputs.size))?;
+        if inputs.kind != ObjectiveKind::Reach && !def.kinds.contains(&inputs.kind) {
+            return Err(format!(
+                "{} can't be asked to {}",
+                def.id,
+                inputs.kind.verb()
+            ));
+        }
         let objective = objective(layout, def, &mut rng)?;
         let kept = kept::keep(layout, rule, objective.level, &mut rng)?;
         let mut layer = MissionLayer {
@@ -193,7 +280,57 @@ impl MissionLayer {
         let mut stops =
             ChaCha8Rng::seed_from_u64(hash64(hash64(layout.seed, inputs.seed), STOP_SALT));
         layer.cross_floors(layout, &mut used, &mut stops);
+        if inputs.kind == ObjectiveKind::Take {
+            layer.stand_take(layout, &mut used)?;
+        }
         Ok(layer)
+    }
+
+    /// The objective's mark, `◎`, where one is drawn: none for a Take, whose container
+    /// stands on the spot.
+    pub fn mark(&self) -> Option<Placed> {
+        (self.inputs.kind != ObjectiveKind::Take).then_some(self.objective)
+    }
+
+    /// A Take's container: the objective room's own, as the plain level is furnished (a
+    /// safe first, then a cabinet, a locker, a crate, a drawer, nearest the objective),
+    /// with the objective moved onto it, or onto the floor in front of a wall-set one.
+    /// With none, one stands on the room's spot nearest the objective that a container can
+    /// stand on without cutting a way. Laid last and drawing nothing from the rng, so the
+    /// rest of the layer is a Reach's.
+    fn stand_take(
+        &mut self,
+        layout: &VenueLayout,
+        used: &mut BTreeSet<(i32, Pos)>,
+    ) -> Result<(), String> {
+        let o = self.objective;
+        let x = layout
+            .level(o.level)
+            .ok_or("the objective's level isn't laid out")?;
+        let room = room_holding(layout, o.level, o.at).ok_or("the objective stands in no room")?;
+        if let Some(at) = own_container(layout, o.level, room, o.at) {
+            self.objective = Placed { level: o.level, at };
+            return Ok(());
+        }
+        used.remove(&(o.level, o.at));
+        let walked: BTreeSet<(i32, Pos)> = (self.guards.iter())
+            .flat_map(|g| g.patrol.iter().map(move |p| (g.level, *p)))
+            .collect();
+        let mut blocked: BTreeSet<(i32, Pos)> = (self.guards.iter().map(|g| (g.level, g.at)))
+            .chain(self.devices.iter().map(|d| (d.level, d.at)))
+            .chain(self.containers.iter().map(|c| (c.level, c.at)))
+            .collect();
+        let mut spots: Vec<(i32, Pos)> = (x.rooms[room].spots.iter())
+            .map(|&p| (o.level, p))
+            .collect();
+        spots.sort_by_key(|&(_, p)| (p.manhattan(o.at), p.y, p.x));
+        let &(level, at) = (self.blockers(layout, &spots, 1, used, &walked, &mut blocked))
+            .first()
+            .ok_or("no room for the objective's container")?;
+        self.objective = Placed { level, at };
+        let kind = spot_kind(layout, level, at);
+        self.containers.push(ContainerSpot { level, at, kind });
+        Ok(())
     }
 
     /// About one guard in three gets a stop on another kept level: of the guards that can

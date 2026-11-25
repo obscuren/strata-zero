@@ -6767,6 +6767,7 @@ fn site_shots() {
         return;
     };
     let inputs = |size| MissionInputs {
+        kind: Default::default(),
         size,
         objective: 0,
         security: 128,

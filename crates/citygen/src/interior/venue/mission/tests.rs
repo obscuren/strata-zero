@@ -38,6 +38,7 @@ fn layers() -> &'static [Laid] {
                     let mut errs = Vec::new();
                     for objective in 0..t.objectives.len() {
                         let inputs = MissionInputs {
+                            kind: Default::default(),
                             size,
                             objective,
                             security,
@@ -77,6 +78,7 @@ fn builtin_layers() -> &'static [Laid] {
                     let rule = pack.size(size);
                     let laid = (0..t.objectives.len()).find_map(|objective| {
                         let inputs = MissionInputs {
+                            kind: Default::default(),
                             size,
                             objective,
                             security: 255,
@@ -404,6 +406,7 @@ fn a_key_lies_where_it_can_be_carried_back() {
     for seed in 0..20 {
         let layout = lay_out(&t, VenueFrame::own(&t), seed).unwrap();
         let inputs = MissionInputs {
+            kind: Default::default(),
             size: MissionSize::Small,
             objective: 0,
             security: 0,
@@ -648,6 +651,7 @@ fn a_cut_one_way_link_runs_its_way_still() {
         .collect();
     let layer = MissionLayer {
         inputs: MissionInputs {
+            kind: Default::default(),
             size: MissionSize::Large,
             objective: 0,
             security: 0,
@@ -698,6 +702,7 @@ fn a_layer_never_shuts_anyone_in() {
         for size in SIZES {
             for objective in 0..t.objectives.len() {
                 let inputs = MissionInputs {
+                    kind: Default::default(),
                     size,
                     objective,
                     security: 128,
@@ -852,6 +857,7 @@ fn a_spot_takes_its_kind_from_its_room() {
                 let lay = || {
                     (0..t.objectives.len()).find_map(|objective| {
                         let inputs = MissionInputs {
+                            kind: Default::default(),
                             size,
                             objective,
                             security: 200,

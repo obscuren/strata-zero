@@ -47,6 +47,7 @@ fn copies(security: u8) -> Vec<(&'static City, FloorPlan, &'static VenueType, Mi
             let layer = (0..t.objectives.len()).find_map(|objective| {
                 (0..8).find_map(|seed| {
                     let inputs = MissionInputs {
+                        kind: Default::default(),
                         size: MissionSize::Small,
                         objective,
                         security,

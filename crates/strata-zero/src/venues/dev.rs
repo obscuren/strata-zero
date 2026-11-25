@@ -68,6 +68,7 @@ pub fn dev_start(
     mission: bool,
 ) -> Result<BuildingId, String> {
     let inputs = MissionInputs {
+        kind: Default::default(),
         size,
         objective: 0,
         security: 128,
@@ -102,6 +103,7 @@ pub fn dev_site_net(st: &mut AppState, security: u8) -> Result<BuildingId, Strin
         .position(|o| t.room(&o.room).is_some_and(|r| r.kind == RoomKind::Server))
         .ok_or_else(|| format!("no {} job in a server room", t.name))?;
     let inputs = MissionInputs {
+        kind: Default::default(),
         size: MissionSize::Medium,
         objective,
         security,

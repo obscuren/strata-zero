@@ -939,6 +939,7 @@ fn guards_are_awake_foes_at_their_posts() {
         .flat_map(|rule| {
             (0..t.objectives.len()).map(move |objective| {
                 let inputs = MissionInputs {
+                    kind: Default::default(),
                     size: rule.size,
                     objective,
                     security: 128,
